@@ -173,3 +173,17 @@ regression to the mean alone, so G is compared with the concurrent C, never with
   `gnomon_harbor_h1.py` (H1's, byte-identical copy: `HOSTED_PATCH`, `GnomonV040Hosted.run`), `log-relay.mjs` (H3's
   copy), `run_h4lite.py`, `wiretest_h4.py`; `wiretest-h4lite.txt`; `mirror/v0.4.2/` (symlinks to G1gate's `dist/`).
 - During and after the run: `STATUS.txt`, `launch.log`, `runs/`, `jobs/`, `summary-h4lite.txt`.
+
+## Addendum 1 (2026-11-05T18:08Z, during wave 2; the run is not changed)
+
+Launched 17:20:24Z (runner pid 189994, mirror on 172.17.0.1:36867). Both arms billed model responses within the
+first minute of wave 1 (C and G slots), every cell installed `gnomon v0.4.2 ae17a1ae958d6ccf 4226bcaab04100a6`, and
+every G cell's policy.toml carries the gate line (C: none).
+
+Apparatus check after wave 1 (that the treatment was delivered), and what it showed about the instrument: the
+reviewer sub-turn's model calls are recorded in the audit trail with `depth: 1` and the gate-steered main calls with
+`via: "system"`; a review that passes is recorded only as the final `accept` record (its `ms` is the review's
+duration), and a review still running at the cap is invisible in the counters. `analyze_h4lite.py` therefore adds,
+as **descriptive** columns only: reviewer calls and reviewer model time (depth ≥ 1), gate-steered calls, whether the
+cell ended (or was capped) while the reviewer ran, and, for capped cells, the gate counters from the adapter's 20 s
+live copy of the partial record. The primary, secondary and decision rules are unchanged.

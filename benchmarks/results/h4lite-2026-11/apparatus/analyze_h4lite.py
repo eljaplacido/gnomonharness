@@ -61,6 +61,13 @@ def gate_of(agent: Path) -> dict:
         return None
 
     cg = find(task) if task else None
+    cg_src = "record" if cg else None
+    if cg is None:  # a capped cell: the adapter's 20 s live copy of the partial record
+        for f in sorted((agent / "audit-live").glob("*.record.json")) if (agent / "audit-live").exists() else []:
+            cg = find(jload(f))
+            if cg is not None:
+                cg_src = "live-record"
+                break
     recs, src = [], None
     for sub in ("audit", "audit-live"):
         d = agent / sub
@@ -81,7 +88,7 @@ def gate_of(agent: Path) -> dict:
             recs, src = rs, sub
             if rs:
                 break
-    out = {"gate_src": "record" if cg else (f"trail-{src}" if recs else "none"), "gate_actions": ">".join(
+    out = {"gate_src": cg_src if cg else (f"trail-{src}" if recs else "none"), "gate_actions": ">".join(
         f"{r.get('action')}" + (f"({r.get('findings')})" if r.get("action") == "review" else "") for r in recs)}
     if cg:
         out.update({f"gate_{k}": cg.get(k) for k in ("mode", "rounds", "checks", "reviews", "review_steps", "findings", "outcome")})
@@ -90,7 +97,36 @@ def gate_of(agent: Path) -> dict:
         out.update({"gate_mode": "review?", "gate_rounds": max((r.get("round") or 0) for r in recs) if any(a != "accept" for a in acts) else 0,
                     "gate_reviews": acts.count("review"), "gate_findings": sum(r.get("findings") or 0 for r in recs if r.get("action") == "review"),
                     "gate_outcome": next((r.get("outcome") for r in recs if r.get("action") == "accept"), "unfinished")})
+    out.update(trail_calls(agent, recs))
     return out
+
+
+def trail_calls(agent: Path, recs: list[dict]) -> dict:
+    """Addendum 1 (descriptive, added after wave 1): the reviewer's own model calls carry `depth: 1` in the audit
+    trail, and gate-steered main calls `via: "system"`. Counted from the final trail (audit/), else the live copy
+    (audit-live/, up to 20 s stale, the only trail a capped cell leaves)."""
+    for sub in ("audit", "audit-live"):
+        fs = sorted((agent / sub).glob("*.jsonl")) if (agent / sub).exists() else []
+        if fs:
+            break
+    else:
+        return {}
+    ev = []
+    for f in fs:
+        for line in f.read_text(errors="replace").splitlines():
+            try:
+                ev.append(json.loads(line))
+            except Exception:
+                pass
+    mc = [e for e in ev if e.get("kind") == "model_call"]
+    rev = [e for e in mc if (e.get("depth") or 0) >= 1]
+    first_gate = min((r.get("ts") for r in recs if r.get("ts")), default=None)
+    after = [e for e in mc if first_gate and e.get("ts", "") > first_gate]
+    return {"t_main_calls": len(mc) - len(rev), "t_review_calls": len(rev),
+            "t_review_model_s": round(sum(e.get("ms") or 0 for e in rev) / 1000, 1),
+            "t_steered_calls": sum(1 for e in mc if e.get("via") == "system"),
+            "t_calls_after_gate": len(after),
+            "t_review_at_end": bool(mc and (mc[-1].get("depth") or 0) >= 1)}
 
 
 def cell_row(arm: str, task: str) -> dict | None:
@@ -178,7 +214,9 @@ def main() -> int:
         f = lambda r: "—" if not r else (f"{r['frac']} {'S' if r['solved'] else '-'} {'CAP' if r['capped'] else ''}{'FF' if r['false_finish'] else ''}"  # noqa: E731
                                           f" {r['exec_s']}s {r['requests']}req ${r['wire_usd']}{'' if r['valid'] else ' INVALID'}")
         gate = "" if not g else f"gate[{g.get('gate_src')}: rounds={g.get('gate_rounds')} checks={g.get('gate_checks')} reviews={g.get('gate_reviews')} " \
-                                f"review_steps={g.get('gate_review_steps')} findings={g.get('gate_findings')} outcome={g.get('gate_outcome')}; {g.get('gate_actions')}]"
+                                f"review_steps={g.get('gate_review_steps')} findings={g.get('gate_findings')} outcome={g.get('gate_outcome')}; {g.get('gate_actions')}; " \
+                                f"trail: reviewer calls {g.get('t_review_calls')} ({g.get('t_review_model_s')} s model), steered main calls {g.get('t_steered_calls')}" \
+                                f"{', CAPPED WHILE THE REVIEWER RAN' if g['capped'] and g.get('t_review_at_end') else ''}]"
         p(f"  {t}{' (control)' if t in CONTROLS else ''} B41={B41_FRAC[t]}:  C {f(c)} | G {f(g)}  {gate}")
     p("")
 
@@ -228,7 +266,11 @@ def main() -> int:
       f"checks {sum(r.get('gate_checks') or 0 for r in gs)}, reviews {sum(r.get('gate_reviews') or 0 for r in gs)}, "
       f"review steps {sum(r.get('gate_review_steps') or 0 for r in gs)}, findings {sum(r.get('gate_findings') or 0 for r in gs)}; "
       f"outcomes {dict(sorted(Counter(str(r.get('gate_outcome')) for r in gs).items()))}")
-    cneg = [r for r in rows if r["arm"] == "C" and r.get("gate_src") not in (None, "none")]
+    p(f"  (addendum 1, descriptive) reviewer model calls {sum(r.get('t_review_calls') or 0 for r in gs)}, reviewer model time "
+      f"{sum(r.get('t_review_model_s') or 0 for r in gs):.0f} s; G cells with a reviewer sub-turn {sum((r.get('t_review_calls') or 0) > 0 for r in gs)}; "
+      f"G cells capped while the reviewer ran {sum(bool(r['capped'] and r.get('t_review_at_end')) for r in gs)}; "
+      f"C cells capped {sum(r['capped'] for r in rows if r['arm'] == 'C' and r['valid'])}")
+    cneg = [r for r in rows if r["arm"] == "C" and (r.get("gate_src") not in (None, "none") or (r.get("t_review_calls") or 0) > 0)]
     p(f"negative control: C cells with any gate counters/records: {len(cneg)}")
     p(f"spend (wire): C ${sum(r['wire_usd'] or 0 for r in rows if r['arm'] == 'C'):.4f}, G ${sum(r['wire_usd'] or 0 for r in rows if r['arm'] == 'G'):.4f}, "
       f"total ${sum(r['wire_usd'] or 0 for r in rows):.4f}")
