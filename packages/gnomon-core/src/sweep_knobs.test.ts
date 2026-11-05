@@ -9,7 +9,7 @@
  *   records.
  *
  * Every server here is a fake on 127.0.0.1; no model is called, and nothing
- * reaches the network (the package-index run puts a fake `curl` first on PATH).
+ * reaches the network (the package-index run calls a stub `./curl` by path).
  */
 import { describe, it, expect, afterEach, beforeAll, afterAll } from "vitest";
 import { createServer, type Server } from "node:http";
@@ -53,8 +53,10 @@ const REPO = join(__dirname, "../../..");
 const FIXTURE = JSON.parse(readFileSync(join(REPO, "conformance/sweep_knobs.json"), "utf-8"));
 
 /**
- * Hermetic: a stub `curl` and `wget` first on PATH for the whole file, so a
- * command the package-index allowlist admits runs and reaches nothing.
+ * A backstop: a stub `curl` and `wget` first on PATH for the whole file. Not
+ * what keeps the admitted-download test off the network -- Git Bash on
+ * Windows resolves PATH its own way and ran the real curl -- that test runs
+ * its stub by path (`./curl`), and no other test admits a command.
  */
 let stubBin = "";
 let realPath: string | undefined;
@@ -141,6 +143,8 @@ interface Extra {
   policy?: string;
   tools?: string[];
   files?: Record<string, string>;
+  /** Of `files`, the ones made executable. */
+  executable?: string[];
 }
 
 /** Each request body's sha256 (first 12 hex), the Windows platform note cut out. */
@@ -201,6 +205,7 @@ async function scripted(kind: Kind, extra: Extra = {}, steps: Step[] = STEPS) {
   );
   for (let i = 1; i <= 3; i++) writeFileSync(join(root, `f${i}.txt`), `hello ${i}\n`);
   for (const [f, body] of Object.entries(extra.files ?? {})) writeFileSync(join(root, f), body);
+  for (const f of extra.executable ?? []) chmodSync(join(root, f), 0o755);
   const rec = await runTask(loadConfig(root), "read f1.txt, fix its greeting and report", {
     role: "smol",
     yes: true,
@@ -509,7 +514,10 @@ describe("[context] env_snapshot", () => {
   });
 
   it("names the package-index allowlist when one is declared", async () => {
-    const r = await scripted("openai", { context: "env_snapshot = true\n", sandbox: `allow_package_index = ["pypi.org"]\n` });
+    // An answer and nothing else: no command here may reach a listed host.
+    const r = await scripted("openai", { context: "env_snapshot = true\n", sandbox: `allow_package_index = ["pypi.org"]\n` }, [
+      { answer: "done" },
+    ]);
     if (process.platform !== "linux" && r.rec.counters.bootstrap?.outcome === "failed") return; // see above
     expect(r.bodies[0]!.messages[0].content).toContain("package downloads (pip, uv or npm install or download, and curl or wget GET) from pypi.org are allowed");
   });
@@ -790,16 +798,25 @@ describe("[sandbox] allow_package_index", () => {
   });
 
   it("on the wire and in the records: an admitted download runs and is counted, a refused one names the allowlist", async () => {
-    // The stub curl (top of file) answers: the admitted command runs, and
-    // nothing leaves the machine.
+    // `./curl` is a stub in the scripted root, run by path: it reads as curl
+    // to the filter (programName), and no PATH lookup -- which Git Bash on
+    // Windows does its own way -- can put a real curl in its place.
     {
       const steps: Step[] = [
-        ["bash", { command: "curl -s https://pypi.org/simple/numpy/" }],
-        ["bash", { command: "curl -s https://example.com/x" }],
+        ["bash", { command: "./curl -s https://pypi.org/simple/numpy/" }],
+        ["bash", { command: "./curl -s https://example.com/x" }],
       ];
-      const r = await scripted("openai", { sandbox: `allow_package_index = ["pypi.org"]\n` }, steps);
+      const r = await scripted(
+        "openai",
+        {
+          sandbox: `allow_package_index = ["pypi.org"]\n`,
+          files: { curl: `#!/bin/sh\necho "local stub curl $*"\n` },
+          executable: ["curl"],
+        },
+        steps
+      );
       const results = r.bodies[2]!.messages.filter((m: any) => m.role === "tool").map((m: any) => m.content);
-      expect(results[0]).toContain("stub curl -s https://pypi.org/simple/numpy/");
+      expect(results[0]).toContain("local stub curl -s https://pypi.org/simple/numpy/");
       expect(results[1]).toContain("Refused:");
       expect(results[1]).toContain("The only exception is a package download from pypi.org");
       expect(r.rec.counters.package_index).toEqual({ admitted: 1, hosts: ["pypi.org"] });
