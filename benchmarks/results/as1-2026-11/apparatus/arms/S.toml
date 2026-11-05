@@ -1,0 +1,34 @@
+# Sampling = provider defaults: send no temperature and no top_p on the implementor's requests.
+# KNOB PENDING (feat/sweep-knobs, "sampling passthrough"): the key below is the proposal. If the PR instead makes an
+# absent key mean "provider default", replace this edit with two op = "delete" edits of temperature and top_p in
+# [roles.implementor]. Confirm, then set status = "ready".
+[arm]
+id = "S"
+family = "sampling"
+level = "provider-default"
+status = "pending-knob"
+branches = ["A", "B"]
+requires = ["sampling_passthrough"]
+title = "No temperature / top_p overrides (implementor)"
+hypothesis = "gnomon's 0.3 / 0.95 is the last untested request difference from opencode; DeepSeek benchmarks at 1.0 / 0.95"
+evidence = "p2g41 REPORT root cause 5; models-recipes.md §6.3 (grade B: every 2026 open-weights family recommends ~1.0 or 0.6-0.7)"
+cost_factor = 1.0
+
+[[edit]]
+file = "roles.toml"
+table = "roles.implementor"
+key = "sampling"
+value = "provider"
+
+[[expect]]   # gnomon's implementor temperature never reaches the wire
+on = "wire"
+path = "temperature"
+op = "not_equals"
+value = 0.3
+quantifier = "all"
+
+[[expect]]
+on = "wire"
+path = "temperature"
+op = "absent"
+quantifier = "any"

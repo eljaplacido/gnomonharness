@@ -1,0 +1,30 @@
+# Window: the model's published window instead of the release's 65,536-token trim.
+# "auto" cannot be measured behind the slot relay: GET <base>/models answers 404 there
+# (https://opencode.ai/inference/go/openai/v1/models -> 404, probed 2026-11-05), so "auto" would fall back to
+# [defaults] max_context_tokens with a context_window_unresolved degradation (CONTRACTS §24) and the arm would equal
+# the control. The arm therefore declares the number "auto" resolves to on the public listing
+# (https://opencode.ai/zen/go/v1/models: deepseek-v4.1-flash limit.context = 1,000,000, fetched 2026-11-05).
+# Branch B's control already declares it (H1 recipe), so W runs only under branch A.
+[arm]
+id = "W"
+family = "window"
+level = "1M"
+status = "ready"
+branches = ["A"]
+requires = []
+title = "Window = the model's published 1,000,000 tokens (what 'auto' resolves to)"
+hypothesis = "the 65k trim drops context the model needs on 50-150-call tasks; H1 recipe component"
+evidence = "harnesses.md #1 (grade A, gnomon-internal); models-recipes.md §6.4; opencode compacts only at ~85% of the window"
+cost_factor = 1.05
+
+[[edit]]
+file = "config.toml"
+table = "endpoints.bench"
+key = "max_context_tokens"
+value = 1000000
+
+[[expect]]
+on = "record"
+path = "counters.model_calls.window"
+op = "equals"
+value = 1000000

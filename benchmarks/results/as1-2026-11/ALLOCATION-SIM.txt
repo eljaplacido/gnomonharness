@@ -1,0 +1,67 @@
+AS1 allocation rule: offline simulation with planted effects (2026-11-05, sim_as1.py, 400 campaigns per row unless stated). Parameters = allocation.Params defaults:
+  {"seed": 20261107, "n_min": 4, "n_promote": 8, "n_max": 12, "tau0": 0.15, "sigma0": 0.3, "nu0": 8.0, "sigma_floor": 0.15, "delta_min": 0.05, "p_promote": 0.9, "p_futile": 0.1, "p_harm_primary": 0.95, "harm_p": 0.95, "harm_excess": 4, "warn_p": 0.85, "warn_excess": 3, "round_waves": 4, "ts_redraws": 100, "near_p": 0.85, "max_factors": 3, "min_factors_fill": 3, "int_tau_main": 0.15, "int_tau_inter": 0.1, "combo_p": 0.85, "int_reps": 4, "parsimony": 0.03}
+Outcome model (simulate.py): 17 screening tasks at P2G41 B41's fractions (shrunk 20% to 1/2), cell flips 15%, Gaussian noise 0.07, task-by-arm effect heterogeneity 50%, caps 30%, false finishes 45%.
+13 arms as in branch A: 4 planted positives, 6 nulls (one is the A/A arm), 3 harmful (primary, caps, false finishes).
+Realized mean effect on the screening set (after task ceilings and flips): P20 +0.145, P15 +0.117, P10 +0.082, P05 +0.043, H15 -0.124
+
+== Screening, planted scenario, cap $25 (columns: share of campaigns; cells = mean paired cells the arm got)
+arm                       truth  promoted  factor  guard   harm  futile   max  active  cells
+P20                     d=+0.20      0.41    0.51   0.06   0.00    0.03  0.01    0.49    7.7
+P15                     d=+0.15      0.23    0.38   0.01   0.00    0.06  0.00    0.69    6.6
+P10                     d=+0.10      0.13    0.26   0.02   0.00    0.05  0.00    0.80    6.1
+P05                     d=+0.05      0.05    0.12   0.01   0.01    0.10  0.00    0.82    5.1
+AA                      d=+0.00      0.02    0.00   0.01   0.03    0.17  0.00    0.78    4.9
+N1                      d=+0.00      0.03    0.07   0.01   0.01    0.18  0.00    0.77    5.2
+N2                      d=+0.00      0.01    0.06   0.01   0.01    0.19  0.00    0.77    5.1
+N3                      d=+0.00      0.02    0.06   0.00   0.01    0.15  0.00    0.81    4.9
+N4                      d=+0.00      0.04    0.07   0.00   0.03    0.14  0.00    0.81    5.0
+N5                      d=+0.00      0.01    0.04   0.02   0.01    0.15  0.00    0.81    4.7
+HFF             d=-0.02 ff+0.35      0.01    0.03   0.03   0.01    0.17  0.00    0.78    5.2
+HCAP           d=-0.03 cap+0.30      0.01    0.02   0.10   0.03    0.18  0.00    0.68    5.2
+H15                     d=-0.15      0.01    0.01   0.00   0.10    0.45  0.00    0.44    4.4
+budget $25: spent mean $24.15 (max $24.15), waves 35.0; null arms' per-pair SD of d 0.203; reps 400
+P(best planted arm is a factorial candidate) 0.51; P(ranked first) 0.36; P(any null or harmful arm is a candidate) 0.31
+
+== Screening, planted scenario, cap $35 (columns: share of campaigns; cells = mean paired cells the arm got)
+arm                       truth  promoted  factor  guard   harm  futile   max  active  cells
+P20                     d=+0.20      0.59    0.61   0.07   0.01    0.04  0.15    0.14    9.4
+P15                     d=+0.15      0.51    0.55   0.03   0.00    0.07  0.12    0.27    9.2
+P10                     d=+0.10      0.30    0.34   0.06   0.00    0.07  0.18    0.39    9.1
+P05                     d=+0.05      0.15    0.16   0.04   0.01    0.18  0.12    0.49    7.8
+AA                      d=+0.00      0.07    0.00   0.03   0.03    0.25  0.12    0.51    7.6
+N1                      d=+0.00      0.06    0.06   0.01   0.01    0.26  0.09    0.57    7.2
+N2                      d=+0.00      0.07    0.06   0.04   0.01    0.27  0.08    0.54    7.2
+N3                      d=+0.00      0.06    0.06   0.03   0.01    0.23  0.07    0.60    7.1
+N4                      d=+0.00      0.07    0.07   0.03   0.03    0.22  0.08    0.57    7.2
+N5                      d=+0.00      0.06    0.07   0.04   0.01    0.23  0.07    0.59    7.1
+HFF             d=-0.02 ff+0.35      0.05    0.04   0.09   0.02    0.26  0.07    0.53    7.2
+HCAP           d=-0.03 cap+0.30      0.02    0.02   0.21   0.03    0.28  0.04    0.42    6.6
+H15                     d=-0.15      0.01    0.01   0.01   0.11    0.63  0.01    0.24    5.2
+budget $35: spent mean $33.78 (max $33.81), waves 49.0; null arms' per-pair SD of d 0.217; reps 400
+P(best planted arm is a factorial candidate) 0.61; P(ranked first) 0.36; P(any null or harmful arm is a candidate) 0.33
+
+== Global null (13 null arms), cap $25: P(any arm promoted) 0.36; per-arm promotion rate 0.031; this is why screening is exploratory and the interaction stage re-tests on fresh cells
+
+== Global null (13 null arms), cap $35: P(any arm promoted) 0.57; per-arm promotion rate 0.069; this is why screening is exploratory and the interaction stage re-tests on fresh cells
+
+== A good-but-capping arm (GCAP: +0.15 fraction, +0.40 cap rate) replacing one null, cap $35: promoted 0.12 (clean P15: 0.47); dropped by the guard 0.55 (P15: 0.04); factorial candidate 0.12
+
+== End to end (screening $25 -> interaction stage -> choice), planted, 200 campaigns
+  P(nothing goes to confirmation) 0.45; P(chosen includes the best arm, P20) 0.36; P(only planted positives) 0.44; P(includes a null) 0.10; P(includes a harmful arm) 0.01
+  mean planted effect of the chosen combination +0.112 (sum of nominal deltas); mean factors 0.82
+  interaction stage spend: mean $4.46, max $9.66; routes factorial k=1 0.12, factorial k=2 0.22, factorial k=3 0.21, stop 0.45
+
+== End to end (screening $25 -> interaction stage -> choice), global null, 200 campaigns
+  P(nothing goes to confirmation) 0.94 (i.e. P(a null combination reaches confirmation) 0.06)
+  interaction stage spend: mean $2.21, max $9.66; routes factorial k=1 0.03, factorial k=2 0.01, factorial k=3 0.01, stop 0.94
+
+== End to end (screening $35 -> interaction stage -> choice), planted, 200 campaigns
+  P(nothing goes to confirmation) 0.33; P(chosen includes the best arm, P20) 0.42; P(only planted positives) 0.56; P(includes a null) 0.10; P(includes a harmful arm) 0.02
+  mean planted effect of the chosen combination +0.146 (sum of nominal deltas); mean factors 1.03
+  interaction stage spend: mean $5.60, max $9.66; routes factorial k=1 0.09, factorial k=2 0.27, factorial k=3 0.32, stop 0.33
+
+== End to end (screening $35 -> interaction stage -> choice), global null, 200 campaigns
+  P(nothing goes to confirmation) 0.90 (i.e. P(a null combination reaches confirmation) 0.10)
+  interaction stage spend: mean $3.16, max $9.66; routes factorial k=1 0.03, factorial k=2 0.03, factorial k=3 0.04, stop 0.90
+
+Reading: at these budgets the screen reliably surfaces only large effects (~+0.15 realized). A +0.08 effect is promoted in roughly a third of campaigns; smaller ones are not distinguishable from noise. Harmful arms get about the burn-in's cells and are almost never carried forward. Claims come only from the confirmatory stage.

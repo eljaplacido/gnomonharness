@@ -1,0 +1,33 @@
+# Control, branch A: the build's release defaults. Used when H3 adopts replay_reasoning as a default and v0.4.3
+# ships PR #153's default changes (replay on when the endpoint returns reasoning on a tool call; idle nudge off).
+# No edits: `gnomon init` + P2G's attempt-1 _PATCH, exactly as H3's R0 / P2G41's A41 ran their release.
+[arm]
+id = "CTL.A"
+family = "control"
+level = "release-defaults"
+status = "ready"
+branches = ["A"]
+requires = ["replay_default", "nudge_default_off"]
+title = "Control A: v0.4.3 release defaults (replay learned per endpoint, idle nudge off)"
+hypothesis = "none: the current best default, run in every wave"
+evidence = "h3-2026-11 decision rule; PR #153 changes 1 and 2; n1-2026-11 INTERIM (stop-futility)"
+cost_factor = 1.0
+
+[[expect]]   # the release window, not the 1M recipe window
+on = "record"
+path = "counters.model_calls.window"
+op = "equals"
+value = 65536
+
+[[expect]]   # PR #153: `gnomon init` scaffolds nudge_after_idle = 0 (off)
+on = "surface"
+path = "config.toml:turn.nudge_after_idle"
+op = "equals"
+value = 0
+
+[[expect]]   # replay is learned from the first tool reply that carries reasoning; behavioural, so a warning only
+on = "record"
+path = "counters.model_calls.replayed_calls"
+op = "gt"
+value = 0
+severity = "warn"

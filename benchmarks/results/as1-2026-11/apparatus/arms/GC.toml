@@ -1,0 +1,25 @@
+# Completion gate, checklist mode (PR #152, CONTRACTS §30): the first answer of a turn that changed the worktree is
+# handed back with a checklist built from the task's text; the next answer needs a bash command run since.
+[arm]
+id = "GC"
+family = "completion_gate"
+level = "checklist"
+status = "ready"
+branches = ["A", "B"]
+requires = ["completion_gate"]
+title = "[verify] completion_gate = \"checklist\""
+hypothesis = "B41 declared done with a median 996 s left and was wrong in 16 cells (5 near misses)"
+evidence = "p2g41 REPORT root cause 2; harnesses.md #2 (grade B: AHE finish hook +2.2 pp; KIRA, ForgeCode enforce, prompting did not)"
+cost_factor = 1.15
+
+[[edit]]
+file = "policy.toml"
+table = "verify"
+key = "completion_gate"
+value = "checklist"
+
+[[expect]]   # present whenever a gate is declared (CONTRACTS §30)
+on = "record"
+path = "counters.completion_gate.mode"
+op = "equals"
+value = "checklist"

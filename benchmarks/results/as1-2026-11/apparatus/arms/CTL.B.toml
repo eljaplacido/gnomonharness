@@ -1,0 +1,51 @@
+# Control, branch B: the build + H1's hosted recipe, declared. Used when H3 does NOT adopt replay as a default.
+# The recipe's three lines (h1-2026-11/apparatus/gnomon_harbor_h1.py HOSTED_PATCH), as surface edits. Declared
+# values do not depend on the build's defaults, so this control means the same thing on any build >= PR #153.
+[arm]
+id = "CTL.B"
+family = "control"
+level = "h1-recipe"
+status = "ready"
+branches = ["B"]
+requires = []
+title = "Control B: build + H1 hosted recipe (replay_reasoning, 1M window, idle nudge off)"
+hypothesis = "none: the current best default when H3 does not confirm, run in every wave"
+evidence = "h1-2026-11 (caps 3 -> 0); p2g41-2026-11 B41 - A41 +0.257 [+0.118, +0.407] hidden-test fraction"
+cost_factor = 1.0
+
+[[edit]]
+file = "config.toml"
+table = "endpoints.bench"
+key = "replay_reasoning"
+value = true
+
+[[edit]]
+file = "config.toml"
+table = "endpoints.bench"
+key = "max_context_tokens"
+value = 1000000
+
+[[edit]]
+file = "config.toml"
+table = "turn"
+key = "nudge_after_idle"
+value = 100000
+
+[[expect]]
+on = "record"
+path = "counters.model_calls.window"
+op = "equals"
+value = 1000000
+
+[[expect]]
+on = "surface"
+path = "config.toml:endpoints.bench.replay_reasoning"
+op = "equals"
+value = true
+
+[[expect]]
+on = "record"
+path = "counters.model_calls.replayed_calls"
+op = "gt"
+value = 0
+severity = "warn"

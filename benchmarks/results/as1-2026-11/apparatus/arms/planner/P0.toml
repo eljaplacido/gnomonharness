@@ -1,0 +1,34 @@
+# Planner-model ladder, a SEPARATE STRATUM with its own control (P0) in every wave: gnomon task --role plan, the
+# plan role on deepseek-v4.1-flash, delegating through its `task` tool to the implement role on deepseek-v4.1-flash.
+# Stratum base (identical in P0, PG, PK, so the plan model is the one variable):
+#   - steer_role = "user": Kimi K3.1 Pro's Go listing says system_updates = false (no late system messages);
+#   - sampling = provider on the plan role: Kimi K3.1 Pro's listing says temperature/top_p = false.
+# Go model listing (https://opencode.ai/zen/go/v1/models, fetched 2026-11-05): glm-5.3 $1.40/$4.40 per M (cache
+# read $0.26), kimi-k3.1-pro $2/$10 (cache read $0.20), deepseek-v4.1-flash $0.15/$0.60; only DeepSeek
+# lists the 2x weekday windows. OPTIONAL: runs only with AS1_PLANNER_APPROVED=yes, after a one-wave cost probe.
+[arm]
+id = "P0"
+family = "planner"
+level = "deepseek-v4.1-flash"
+status = "optional"
+branches = ["A", "B"]
+requires = ["sampling_passthrough", "steer_role"]
+title = "plan role = deepseek-v4.1-flash"
+hypothesis = "the stratum's control: the plan role on the same model as the builder"
+evidence = "models-recipes.md §1 and §6.9 (grade C)"
+cost_factor = 1.0
+
+[run]
+role = "plan"
+
+[[edit]]
+file = "config.toml"
+table = "endpoints.bench"
+key = "steer_role"
+value = "user"
+
+[[edit]]
+file = "roles.toml"
+table = "roles.plan"
+key = "sampling"
+value = "provider"

@@ -1,0 +1,25 @@
+# The one build every AS1 arm runs (benchmark arms use the current build). FILLED IN BEFORE LAUNCH, then committed:
+# run_as1.py refuses to run while status = "pending" or any value still holds a {{placeholder}}.
+#
+# Branch: "A" if H3 adopts replay_reasoning as a default (its pre-registered rule) and the build ships PR #153's
+#         default changes; "B" otherwise. The branch picks the control (arms/CTL.A.toml or arms/CTL.B.toml).
+# Build:  v0.4.3 as released, or a pinned master build (tarballs from `npm pack`, served from apparatus/build/<v>/
+#         on the docker bridge, source = "mirror"). Either way pinned three ways, as H3's adapter pins v0.4.2:
+#         SHA256SUMS hashes to sums_sha256; each of the four tarballs matches SHA256SUMS; gnomon-core's package.json
+#         gnomonBuild = build_stamp and `gnomon --version` = gnomon/<version>+<build_stamp>.
+# Knobs:  the knob names the build provides. An arm runs only if its `requires` are all listed here AND its fragment
+#         status is "ready" (the pre-launch wire test, wiretest_as1.py, proves each one on this build).
+[build]
+status = "pending"
+branch = "{{A_OR_B}}"
+version = "{{VERSION}}"                 # e.g. "0.4.3"
+commit = "{{COMMIT_SHA40}}"
+build_stamp = "{{GNOMON_BUILD}}"        # e.g. "v0.4.3-abcdef1"
+sums_sha256 = "{{SHA256_OF_SHA256SUMS}}"
+source = "release"                      # "release" (GitHub release assets) | "mirror" (apparatus/build/<version>/)
+budget_profile = "{{recommended_or_lean}}"  # "recommended" (35/12/65, k = 3) | "lean" (25/10/40, k = 2): PRE-REGISTRATION §8
+release_published = "{{ISO8601}}"
+knobs = []                              # e.g. ["replay_default", "nudge_default_off", "deadline", "completion_gate",
+                                        #       "reasoning_effort", "sampling_passthrough", "env_snapshot", "todo_gate",
+                                        #       "edit_variant", "package_index_allowlist", "steer_role"]
+wiretest = "{{wiretest-as1.txt sha256}}"  # the committed PASS output of wiretest_as1.py on this build and these arms

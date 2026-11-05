@@ -1,0 +1,23 @@
+# Deadline: gnomon task --deadline 1740 (PR #153 change 3): time notes at 50% and 80%, bash timeouts clamped to the
+# time left, self-stop with a final record 30 s before the deadline. 1740 = the 1,800 s cap less copy-out time
+# (GUIDE §7.2). A self-stop at the deadline is scored as CAPPED (PRE-REGISTRATION §3.3), so the arm cannot win the
+# cap guard by renaming its timeouts.
+[arm]
+id = "D"
+family = "deadline"
+level = "1740s"
+status = "ready"
+branches = ["A", "B"]
+requires = ["deadline"]
+title = "--deadline 1740: time notes, bash clamp, self-stop"
+hypothesis = "long commands run blind to the cap (6 P2G41 cells spent 45-77% of wall inside commands)"
+evidence = "p2g41 REPORT root cause 3; harnesses.md #9 (grade C); Long-Horizon-TB: 79% of unresolved runs hit the timeout"
+cost_factor = 1.0
+
+[run]
+task_args = ["--deadline", "1740"]
+
+[[expect]]   # PR #153: volatile.deadline on the record (path confirmed by the pre-launch wire test)
+on = "record"
+path = "volatile.deadline"
+op = "present"
