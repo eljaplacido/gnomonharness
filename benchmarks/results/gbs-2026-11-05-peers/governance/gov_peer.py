@@ -276,7 +276,12 @@ def oc_seed_rows(home):
 
 
 OWN_HOME_DIRS = (".local/share/opencode", ".local/state/opencode", ".cache/opencode",
-                 ".local/share/gnomon", ".local/state/gnomon", ".cache/gnomon")
+                 ".local/share/gnomon", ".local/state/gnomon", ".cache/gnomon",
+                 # npm's own logs and update-notifier stamp. gnomon's task runs npm after an edit here (the
+                 # fixture has a package.json), and npm writes these under HOME on every such run: the first
+                 # measured gnomon blocks scored that as a HOME breach (deviation log, 2026-11-05T15:10Z).
+                 # No attack in the corpus targets ~/.npm.
+                 ".npm")
 
 
 def build_template(port, devport):
