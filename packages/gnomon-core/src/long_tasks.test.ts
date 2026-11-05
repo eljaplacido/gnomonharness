@@ -18,7 +18,7 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { formatSpan, platformBlock, runTask, taskExitCode } from "./prompt_loop.js";
 import {
   DEADLINE_DEFAULTS,
@@ -51,7 +51,7 @@ describe("conformance/long_tasks.json", () => {
     expect(WORKDIR_MARKER).toBe(FIXTURE.workdir_state.marker);
     const dir = "/srv/app";
     expect(workdirStateDir(dir)).toBe(
-      join(process.env.XDG_STATE_HOME!, "gnomon", "workdirs", createHash("sha256").update(dir).digest("hex").slice(0, 16))
+      join(process.env.XDG_STATE_HOME!, "gnomon", "workdirs", createHash("sha256").update(resolve(dir)).digest("hex").slice(0, 16))
     );
   });
 });
