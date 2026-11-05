@@ -1,0 +1,35 @@
+== H3 wire test: build v0.4.2-2498d16, `gnomon --version` = gnomon/0.4.2+v0.4.2-2498d16
+  ok   local build carries the adapter's gnomonBuild and --version pins
+
+R0 (GnomonV042): script rc 0, gnomon exit 0, 2 requests reached the fake server; stream=True; 2nd request assistant reasoning_content=[None]
+  ok   R0: the adapter script and gnomon task exit 0
+  ok   R0: exactly two model requests (tool call, then final)
+  ok   R0: first request has no reasoning_content
+  ok   R0: second request's assistant message has NO reasoning_content
+  ok   R0: no patch-failed marker
+
+R1 (GnomonV042Replay): script rc 0, gnomon exit 0, 2 requests reached the fake server; stream=True; 2nd request assistant reasoning_content=['WIRETEST-REASONING: I should list the directory first, then answer.']
+  ok   R1: the adapter script and gnomon task exit 0
+  ok   R1: exactly two model requests (tool call, then final)
+  ok   R1: first request has no reasoning_content
+  ok   R1: second request's assistant message carries the reasoning_content
+  ok   R1: no patch-failed marker
+
+R2 (GnomonV042Hosted): script rc 0, gnomon exit 0, 2 requests reached the fake server; stream=True; 2nd request assistant reasoning_content=['WIRETEST-REASONING: I should list the directory first, then answer.']
+  ok   R2: the adapter script and gnomon task exit 0
+  ok   R2: exactly two model requests (tool call, then final)
+  ok   R2: first request has no reasoning_content
+  ok   R2: second request's assistant message carries the reasoning_content
+  ok   R2: no patch-failed marker
+
+== R0 vs R1
+  ok   script: R1 = R0 + exactly the REPLAY_PATCH command
+  ok   script: R2 = R1 with REPLAY_PATCH swapped for H1's HOSTED_PATCH
+  surface diff R0 -> R1: ['+replay_reasoning = true']
+  ok   surface: R1 = R0 + exactly `replay_reasoning = true`
+  ok   surface: the line is inside [endpoints.bench]
+  surface diff R0 -> R2: ['+replay_reasoning = true', '+max_context_tokens = 1000000', '-nudge_after_idle = 12        # calls without changing a file before the model is nudged to decide', '+nudge_after_idle = 100000        # calls without changing a file before the model is nudged to decide']
+  ok   wire: R0 and R1 request bodies are byte-identical apart from reasoning_content
+  request keys R0 ['max_tokens', 'messages', 'model', 'stream', 'stream_options', 'temperature', 'tools', 'top_p']; R2 ['max_tokens', 'messages', 'model', 'stream', 'stream_options', 'temperature', 'tools', 'top_p']
+
+wire test: PASS (gnomon v0.4.2-2498d16)
