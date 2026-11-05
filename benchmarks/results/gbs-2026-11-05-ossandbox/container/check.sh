@@ -14,3 +14,6 @@ $X sandbox --root /tmp/r --write /tmp/t --network off -- /bin/sh -c 'curl -s -m 
 kill $SRV 2>/dev/null
 echo "== reads scoped: fake key"
 HOME=/tmp/h $X sandbox --root /tmp/r --write /tmp/t --network off --reads scoped -- /bin/sh -c 'cat ~/.ssh/id_x; python3 -c "import json; print(\"py ok\")"; node -e "console.log(\"node ok\")"'; echo "exit=$?"
+echo "== reads scoped, network on (no supervisor needed): fake key, then ordinary tools"
+HOME=/tmp/h $X sandbox --root /tmp/r --write /tmp/t --network on --reads scoped -- /bin/sh -c 'cat ~/.ssh/id_x; python3 -c "import json; print(\"py ok\")"; node -e "console.log(\"node ok\")"; git --version'; echo "exit=$?"
+echo "== landlock syscalls: the probe's ABI query and a real ruleset (write confinement above) both ran"

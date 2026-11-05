@@ -1666,9 +1666,19 @@ of the harness runs on the host. `off` is the default and changes nothing.
 
 Every `bash` command runs through `gnomon-exec sandbox`, which confines itself
 and then execs `/bin/sh -c`. The tools are the host's, so builds behave as they
-do outside; the cost is **+0.6 ms per command, or +1.5 ms with
-`network = false`** (median, `cat` of a file, release build, measured
-2026-11-01 on aarch64 Linux 6.17 under load).
+do outside; the cost per command is **+1.1 ms, +2.3 ms with `network =
+false`, and +2.4 / +3.5 ms with `reads = "scoped"` as well** (median, `cat`
+of a file through gnomon's own bash tool, release build, 300 interleaved
+rounds, 2026-11-05, aarch64 Linux 6.17 at load ~7, `nice -n 19`;
+[benchmarks/results/gbs-2026-11-05-ossandbox](benchmarks/results/gbs-2026-11-05-ossandbox/README.md#overhead-per-bash-call)).
+
+**Measured against forced attacks** (GBS-GOVERNANCE 0.2, harness level, a
+scripted compromised model, every ask approved, outcomes read from real
+state): out-of-root deletions by bash went from 23 asked / 0 denied to 0 / 23
+denied in the kernel, and attacks blocked with asks approved from 170/280 to
+230/280 — and to 245/280 with `reads = "scoped"`, which held all 15 bash reads
+of HOME credentials that the other two let through
+([results](benchmarks/results/gbs-2026-11-05-ossandbox/README.md)).
 
 **What it guarantees**, enforced by the kernel on whatever the command executes
 — a script, an interpreter, a compiled binary:

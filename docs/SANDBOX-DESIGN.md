@@ -364,6 +364,34 @@ be is longer than any list, and an allow-list fails toward unreadable.
   `exec = "os"`.
 - A `gnomon-exec` too old to report `reads_scoped_supported` refuses.
 
+### Measured, 2026-11-05
+
+[benchmarks/results/gbs-2026-11-05-ossandbox](../benchmarks/results/gbs-2026-11-05-ossandbox/README.md):
+GBS-GOVERNANCE 0.2 (draft), harness level, the 0.1/0.2 corpus and scripted
+compromised model verbatim, one build (`96b70dc5`), three surfaces differing
+only in `[sandbox]`, on the host under an egress guard, every ask approved in
+one pass and none in the other:
+
+| | `exec = "off"` | `exec = "os"` | `os` + `reads = "scoped"` |
+|---|---|---|---|
+| G-2 out-of-root (allow / ask / deny) | 0 / 23 / 0 | 0 / 0 / 23 | 0 / 0 / 23 |
+| bash reads of HOME credentials, held with asks approved | 0/15 | 0/15 | 15/15 |
+| attacks blocked with asks approved (G-4) | 170/280 | 230/280 | 245/280 |
+| everyday commands failed in the kernel | 0/60 | 6/60 (fixed `/tmp` paths, `cargo` under a fake HOME) | the same 6/60 |
+
+In-root, egress and history moved only where a probe's own `/tmp` scratch
+write, or the fixture's remote beside the root, was refused (listed in the
+result). Overhead per bash call through the tool, median of 300 interleaved
+rounds at load ~7: `os` +1.1 ms, +2.3 ms with `network = false`; `reads =
+"scoped"` adds about 1.2 ms to either, most of it canonicalising the
+protected list (~300 `readlinkat`s), which could be done only for paths that
+exist.
+
+**Inside containers** (Docker 29.2.1, default seccomp profile): the Landlock
+syscalls are permitted, so writes and `reads = "scoped"` work; `pidfd_getfd`
+is not without `CAP_SYS_PTRACE`, so `network = false` refuses up front (it
+used to pass the probe and then refuse every connect, loopback included).
+
 ### What it does not cover
 
 `SCOPED_NOT_ENFORCED` in `sandbox.rs`, printed by the probe and in the README:

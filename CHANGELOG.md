@@ -41,8 +41,10 @@
   Linux uses Landlock, plus seccomp and a connect supervisor for the network.
   The supervisor performs a loopback connect itself, from its own copy of the
   address, so a racing thread cannot swap it after the check. macOS uses
-  `sandbox-exec` with a generated profile. It costs **+0.6 ms per command, or
-  +1.5 ms with `network = false`** (median, `cat` of a file, release build).
+  `sandbox-exec` with a generated profile. It costs **+1.1 ms per command, or
+  +2.3 ms with `network = false`** (median, `cat` of a file through the bash
+  tool, release build, measured 2026-11-05 at load ~7; #74 measured +0.6 /
+  +1.5 ms for `gnomon-exec` alone).
 
   Where it cannot be enforced (no `gnomon-exec`, no Landlock, Windows, or a
   container whose seccomp profile refuses `pidfd_getfd` under `network =
@@ -86,8 +88,12 @@
   is refused. It is an allow-list: `/etc` stays readable, and so do the root,
   the environment and agents reachable over unix sockets — the README lists
   what it does not cover. A misspelt value refuses rather than falling back to
-  `"all"`; macOS refuses `"scoped"` (not implemented). Measured in
-  GBS-GOVERNANCE host-side (`benchmarks/results/gbs-2026-11-05-ossandbox/`).
+  `"all"`; macOS refuses `"scoped"` (not implemented). GBS-GOVERNANCE
+  host-side (`benchmarks/results/gbs-2026-11-05-ossandbox/`), same build and
+  corpus, asks approved: bash reads of HOME credentials held 0/15 under
+  `exec = "off"` and `"os"`, 15/15 with `reads = "scoped"`; attacks blocked
+  170/280 (`off`), 230/280 (`os`), 245/280 (`os` + `scoped`). Costs about
+  +1 ms per call over `os` alone.
 - **`allow_package_index` admits nothing under `exec = "os"`**, as under
   `docker`: the `network = false` supervisor admits loopback only and has no
   per-host allow, so a download is refused up front with the answer the kernel
