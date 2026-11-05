@@ -244,6 +244,11 @@ export type AuditKind =
   // a trigger's precision can be measured against the outcome later without
   // the trigger ever having acted.
   | "stall_signal"
+  // One per end of a turn the completion gate (`[verify] completion_gate`,
+  // completion_gate.ts) judged: the round, what it did (checklist, no_check,
+  // review, accept), the budget left, findings and the clock. Its own kind
+  // because it is harness control, not a tool call and not the declared check.
+  | "completion_gate"
   // One per model request a turn made, when [audit] is on: what it carried
   // (gnomon's estimate, replayed reasoning, steering and its role, the trim
   // before it) and what came back (provider tokens, reasoning, code, clock).

@@ -1389,6 +1389,32 @@ enabled = true
 max_lines = 200
 ```
 
+**Opt-in: the completion gate.** Off unless declared. When a turn that changed
+the worktree first answers "done" with budget left, gnomon does not accept it:
+it hands the turn back with a checklist lifted from the task's own text (each
+stated requirement, path, command, value and format, edge cases, and the files
+the turn created, so stray ones can go) and accepts the next answer only after
+a bash command has run. With `"review"`, a fresh read-only sub-turn of the
+reviewer role then gets the task and the workspace, never the transcript, and
+tries to break the result; its findings go back to the main turn, which must
+fix each or say why it does not apply. The reviewer is offered only `read`,
+`glob`, `grep`, `compute`, `todo`, and `bash` only if its role declares a
+`bash_allow`, whatever the role lists. At most `completion_rounds` hand-backs,
+and none when less than `completion_min_remaining` of the step budget (or of a
+run deadline, when one is given) is left. Each round is in
+`counters.completion_gate` and the `completion_gate` audit record
+([CONTRACTS.md §30](CONTRACTS.md)). It costs steps and tokens on every turn
+that changes files, so turn it on where "almost right" is the failure you see.
+
+```toml
+# policy.toml: inside the existing [verify] block
+[verify]
+completion_gate = "review"        # "off" (default), "checklist", or "review"
+completion_rounds = 3             # hand-backs per turn, at most
+completion_min_remaining = 0.2    # skip with less than a fifth of the budget left
+completion_reviewer = "verifier"  # a read-only role (no write/edit; a bash_allow)
+```
+
 A declared chain is sequencing with a gate, not proof of quality: an ungated
 chain measured 48.7% against 56.6% without one, within noise
 ([README → Known Limits](../README.md#known-limits)). Full contract:
