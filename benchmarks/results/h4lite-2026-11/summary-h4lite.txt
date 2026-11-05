@@ -1,0 +1,91 @@
+H4-lite -- completion gate ("review") vs the hosted recipe, master ae17a1ae, deepseek-v4.1-flash, 1,800 s cap
+EXPLORATORY SCREEN, k = 1. Written 2026-11-05 ~20:15Z by the running session from analyze_h4lite.py (output below).
+
+Run: launched 17:20:24Z, 5 waves (14 tasks x 2 arms = 28 cells), done 20:07:20Z, before the 20:45Z deadline.
+Both arms billed model responses in the first minute of wave 1. All 28 cells valid; every cell installed the pinned
+build (gnomon v0.4.2 ae17a1ae958d6ccf, harness 4226bcaab04100a6); 14/14 G cells carry the gate line, 0/14 C cells;
+no C cell has gate counters, records or reviewer calls (negative control holds). Spend $2.92 of $10 (wire).
+
+HEADLINE
+- Primary (12 targets): paired G - C hidden-test fraction -0.102 [95% task-bootstrap -0.210, -0.014].
+  Mean C 0.604, G 0.502. Pre-registered screen decision: NO POSITIVE SIGNAL. The gate is not promoted to AS1 as is.
+- Solved: C 1 (atrx-vep-crispr), G 0 on the targets (McNemar p = 1.00); all 14: C 2, G 1. Control mvcc solved in
+  both; control shadow-relay capped in both (0.125): no control harm by the pre-registered rule.
+- Capped (targets): C 4, G 8. False finish: C 6, G 3. The gate removed false finishes by turning them into caps,
+  not solves. Wall (agent_execution) median C 1,418 s, G 1,800 s; paired +313 s.
+- Cost: G used +66% requests, +75% prompt tokens, +86% wire spend on the targets ($1.69 vs $0.91).
+
+GATE BEHAVIOUR (G)
+- The gate acted in 9/14 cells (13 rounds, 56 checks). It never fired in 5 cells that were still working at the
+  cap (satb, production-planning, fin-saccr, batched-eval-parity, shadow-relay).
+- The reviewer sub-turn ran in all 9: median 741 s of model time per review (170-961 s), 289 reviewer calls,
+  5,918 s in all. 5 reviews finished (15 findings, all outcome "passed"); 4 were still running when the cap hit
+  (wal-recovery-ordering, atrx-vep-crispr, ontology-kg-querying, html-js-filter).
+- In the 5 cells whose review finished, G's hidden-test fraction equals C's exactly (mvcc 1.0, session-window
+  0.571, cargo 0.704, roy 0.667, protein 0.5): the findings were acted on (steered calls) but moved no hidden test.
+- The gate is blind to the clock, as pre-registered: the first checklist fired with 73-96% of the STEP budget left, and
+  the review then consumed the remaining wall time.
+
+READING (descriptive, not pre-registered; for the next design)
+- Part of the negative primary is noise, not the gate: in the 4 target pairs where the gate never acted, G - C
+  is -0.121 on average (batched-eval-parity -0.40, fin-saccr -0.083), because the arms' request bodies are
+  identical until the first done (wire test). In the 8 pairs where it acted, -0.092 (atrx -0.25 and html-js -0.50,
+  both capped while the reviewer ran; wal +0.01; five pairs 0.0). n = 1 per pair; self-flip noise is large.
+- So the screen shows no benefit and a clear cost: the "review" reviewer, as shipped, is too slow on this model
+  (~12 min) to fit inside a 30-min cap, and the gate does not know the deadline. Candidates before any re-test:
+  a wall-clock floor (--deadline / completion_min_remaining by time), a time/step cap on the reviewer, or
+  "checklist" mode without the reviewer.
+- Shared host: H3 (3 containers), G1 (1), R4H (2 LoRA-training containers using ~12 cores) and others ran
+  concurrently; 1-min load at cell start median 7.1 (max 22.3), and up to 95 at cell end. C capped 4 of 12 targets
+  that B41 had answered with time left in P2G41, so this window was slow for both arms; the pairing holds it equal
+  across arms, but it inflates caps, which is where the gate's cost lands.
+
+Files: cells-h4lite.csv (per cell), runs/<cell>/cell.json (committed); raw Harbor trials (jobs/) and wire logs
+(runs/<cell>/wire/) stay on gx10 under this folder (115 MB, not committed, as for P2G41).
+
+================================================================================================================
+H4-lite summary (exploratory screen; pre-registered analysis, ../PRE-REGISTRATION.md)
+cells run: 28  (C 14, G 14)
+buckets: valid 28 + invalid 0 = 28
+build per cell (gnomon-release.txt): ['gnomon v0.4.2 ae17a1ae958d6ccf 4226bcaab04100a6']
+G cells with the gate line in policy.toml: 14/14; C cells with it: 0
+
+per task (C | G): frac, solved, capped, false-finish, exec_s, requests, $; G gate
+  mvcc-lsm-compaction (control) B41=1.0:  C 1.0 S  370.3s 22req $0.02371 | G 1.0 S  1473.7s 64req $0.096427  gate[record: rounds=1 checks=4 reviews=1 review_steps=48 findings=0 outcome=passed; checklist>accept; trail: reviewer calls 28 (936.7 s model), steered main calls 5]
+  shadow-relay (control) B41=1.0:  C 0.125 - CAP 1800.1s 47req $0.129127 | G 0.125 - CAP 1800.1s 36req $0.076018  gate[live-record: rounds=0 checks=0 reviews=0 review_steps=0 findings=0 outcome=not_reached; ; trail: reviewer calls 0 (0.0 s model), steered main calls 0]
+  wal-recovery-ordering B41=0.979:  C 0.9485 - FF 629.1s 53req $0.048537 | G 0.9588 - CAP 1800.1s 53req $0.129369  gate[live-record: rounds=1 checks=4 reviews=0 review_steps=0 findings=0 outcome=not_reached; checklist; trail: reviewer calls 26 (961.0 s model), steered main calls 6, CAPPED WHILE THE REVIEWER RAN]
+  satb-audio-transcription B41=0.925:  C 0.025 - CAP 1800.1s 33req $0.070343 | G 0.025 - CAP 1800.1s 59req $0.161839  gate[live-record: rounds=0 checks=0 reviews=0 review_steps=0 findings=0 outcome=not_reached; ; trail: reviewer calls 0 (0.0 s model), steered main calls 0]
+  production-planning B41=0.9:  C 0.05 - CAP 1800.1s 30req $0.093135 | G 0.05 - CAP 1800.1s 22req $0.106158  gate[live-record: rounds=0 checks=0 reviews=0 review_steps=0 findings=0 outcome=not_reached; ; trail: reviewer calls 0 (0.0 s model), steered main calls 0]
+  fin-saccr-rwa B41=0.833:  C 0.9167 - FF 1203.7s 35req $0.080659 | G 0.8333 - CAP 1800.1s 37req $0.101417  gate[live-record: rounds=0 checks=0 reviews=0 review_steps=0 findings=0 outcome=not_reached; ; trail: reviewer calls 0 (0.0 s model), steered main calls 0]
+  atrx-vep-crispr B41=0.75:  C 1.0 S  1396.1s 66req $0.11199 | G 0.75 - CAP 1800.1s 100req $0.171127  gate[live-record: rounds=1 checks=4 reviews=0 review_steps=0 findings=0 outcome=not_reached; checklist; trail: reviewer calls 29 (627.8 s model), steered main calls 5, CAPPED WHILE THE REVIEWER RAN]
+  session-window-debug B41=0.714:  C 0.5714 - FF 1440.1s 36req $0.075305 | G 0.5714 -  1636.6s 67req $0.117827  gate[record: rounds=2 checks=10 reviews=1 review_steps=53 findings=5 outcome=passed; checklist>review(5)>accept; trail: reviewer calls 30 (761.5 s model), steered main calls 11]
+  cargo-flight-dispatch B41=0.704:  C 0.7037 - FF 610.9s 23req $0.034505 | G 0.7037 - FF 1261.6s 81req $0.129106  gate[record: rounds=2 checks=17 reviews=1 review_steps=36 findings=2 outcome=passed; checklist>review(2)>accept; trail: reviewer calls 23 (469.9 s model), steered main calls 22]
+  ontology-kg-querying B41=0.692:  C 0.7692 -  1618.1s 83req $0.137677 | G 0.7692 - CAP 1800.0s 127req $0.28425  gate[live-record: rounds=1 checks=7 reviews=0 review_steps=0 findings=0 outcome=not_reached; checklist; trail: reviewer calls 51 (740.7 s model), steered main calls 10, CAPPED WHILE THE REVIEWER RAN]
+  roy-polymorph-cn B41=0.667:  C 0.6667 - FF 1253.6s 23req $0.050644 | G 0.6667 - FF 1203.7s 86req $0.166916  gate[record: rounds=2 checks=4 reviews=1 review_steps=109 findings=5 outcome=passed; checklist>review(5)>accept; trail: reviewer calls 63 (757.0 s model), steered main calls 6]
+  batched-eval-parity B41=0.6:  C 0.6 - CAP 1800.1s 41req $0.066734 | G 0.2 - CAP 1800.1s 27req $0.069944  gate[live-record: rounds=0 checks=0 reviews=0 review_steps=0 findings=0 outcome=not_reached; ; trail: reviewer calls 0 (0.0 s model), steered main calls 0]
+  html-js-filter B41=0.5:  C 0.5 - CAP 1800.1s 23req $0.058285 | G 0.0 - CAP 1800.1s 58req $0.123796  gate[live-record: rounds=1 checks=2 reviews=0 review_steps=0 findings=0 outcome=not_reached; checklist; trail: reviewer calls 12 (170.0 s model), steered main calls 3, CAPPED WHILE THE REVIEWER RAN]
+  protein-autointerp-disulfide B41=0.5:  C 0.5 - FF 853.7s 12req $0.082458 | G 0.5 - FF 1454.8s 42req $0.127599  gate[record: rounds=2 checks=4 reviews=1 review_steps=46 findings=3 outcome=passed; checklist>review(3)>accept; trail: reviewer calls 27 (493.5 s model), steered main calls 6]
+
+PRIMARY (targets): n=12 valid pairs; mean C frac 0.604, G 0.502; paired G-C -0.102 [95% task-bootstrap -0.210, -0.014]
+  solved C 1, G 0; discordant G-only 0, C-only 1; exact McNemar p = 1.000
+  capped C 4, G 8; false finish C 6, G 3
+  wall (agent_execution) median C 1418s, G 1800s; paired G-C mean +313s
+  requests C 458, G 759; prompt tokens C 32,058,108, G 56,148,294; wire $ C 0.9103, G 1.6893
+
+SENSITIVITY (all 14 incl. controls): n=14 valid pairs; mean C frac 0.598, G 0.511; paired G-C -0.087 [95% task-bootstrap -0.182, -0.011]
+  solved C 2, G 1; discordant G-only 0, C-only 1; exact McNemar p = 1.000
+  capped C 5, G 9; false finish C 6, G 3
+  wall (agent_execution) median C 1418s, G 1800s; paired G-C mean +347s
+  requests C 527, G 859; prompt tokens C 36,591,950, G 59,659,031; wire $ C 1.0631, G 1.8618
+
+controls (harm check):
+  mvcc-lsm-compaction: C frac 1.0 solved=True capped=False | G frac 1.0 solved=True capped=False  -> no harm
+  shadow-relay: C frac 0.125 solved=False capped=True | G frac 0.125 solved=False capped=True  -> no harm
+
+gate (G, valid cells): acted in 9/14; rounds 13, checks 56, reviews 5, review steps 292, findings 15; outcomes {'not_reached': 9, 'passed': 5}
+  (addendum 1, descriptive) reviewer model calls 289, reviewer model time 5918 s; G cells with a reviewer sub-turn 9; G cells capped while the reviewer ran 4; C cells capped 5
+negative control: C cells with any gate counters/records: 0
+spend (wire): C $1.0631, G $1.8618, total $2.9249
+host load (1-min) at cell start: median 7.1, max 22.3; running containers at start: median 8.0, max 12
+
+SCREEN DECISION (pre-registered): NO POSITIVE SIGNAL  (primary mean -0.102, control harm=False, capped targets C 4 / G 8)
