@@ -1,0 +1,47 @@
+2026-11-05T13:52:14Z CHAIN-G1G G1G chain start (pid 3016222); build master-ae17a1a (ae17a1ae, SHA256SUMS d6b6c5f4); arms G0 (off), G1 (checklist), G2 (review), steer_role user, nudge_after_idle 100000; the gx10 lane http://127.0.0.1:18080 (llama-server-qwen-q4.service, never touched), one cell at a time; new-triple deadline 2026-11-06T09:00:00Z
+2026-11-05T13:52:32Z CHAIN-G1G offline test test_run_g1g.py: 48 passed, 0 failed
+2026-11-05T13:52:32Z CHAIN-G1G offline test test_collect_g1g.py: 30 passed, 0 failed
+2026-11-05T13:53:07Z CHAIN-G1G offline test test_chain_g1g.sh: 39 passed, 0 failed
+2026-11-05T13:53:07Z CHAIN-G1G holding the gx10 gpu.lock (/home/eljaplacido/.opencode/central-brain/runtime/decisionbench/gpu.lock) for the rest of this chain
+2026-11-05T13:53:07Z CHAIN-G1G N1 chain's last line: 2026-11-05T09:40:23Z CHAIN-N1 DONE
+2026-11-05T13:53:07Z CHAIN-G1G lane: the lane is R1's/S1's/N1's lane: build b1281-571d0d54, model, alias, template (= R1H's), caps, 1 slot x 98304, speculative, server defaults, unit flags; slots busy now: []; unit: MainPID=2359135 ExecMainStartTimestamp=Wed 2026-11-04 11:13:40 EET ActiveState=active 
+2026-11-05T13:53:23Z CHAIN-G1G weights: model sha256 2bee952b218e4a481430c59d8d3bdc7bae20bed0eb501326340c5fca7ae95d42, draft blob 107b7a433cbbdb4656a52b7845b35f6eed94eb0efb0019c8af7faed16d2d52f7
+2026-11-05T13:53:23Z CHAIN-G1G build master-ae17a1a: SHA256SUMS d6b6c5f4a72b66202377f31bf2df9fd8e4002625b8c96cae8589154e316891c8 and 4 tarballs: pinned
+2026-11-05T13:53:23Z CHAIN-G1G delivery gate on the gx10 lane (exit 0; probe-g1g-gx10.txt): pass on shapes from 8078df03e2a28c41753825dcccab13e8a0ac03dd
+    == S1 template probe 2026-11-05T13:53:23Z (live http://127.0.0.1:18080/apply-template)
+    shapes: S0 = gnomon's mid-turn messages as role system; S1 = steerAsUser at 8078df03e2a28c41753825dcccab13e8a0ac03dd (make_probe_shapes.mts (gnomon's own steerAsUser)); marker MARKER-S1Q
+      A nudge after a tool result [S0]: marker absent; prompt 1553 chars, '<think>' x2; around marker: -
+      A nudge after a tool result [S1]: marker PRESENT; prompt 1813 chars, '<think>' x1; around marker: 'tool_response>\n3\n</tool_response><|im_end|>\n<|im_start|>user\n[gnomon] MARKER-S1Q You have run 8 tool calls without changing a file. If you have found '
+      -> A nudge after a tool result: as expected (gate; want S0 absent, S1 present): the negative control: a late system message is dropped (S0) and the same words as a [gnomon] user message are rendered (S1)
+      B nudge, then two more steps [S0]: marker absent; prompt 1775 chars, '<think>' x3; around marker: -
+      B nudge, then two more steps [S1]: marker PRESENT; prompt 2035 chars, '<think>' x2; around marker: 'tool_response>\n3\n</tool_response><|im_end|>\n<|im_start|>user\n[gnomon] MARKER-S1Q You have run 8 tool calls without changing a file. If you have found '
+      -> B nudge, then two more steps: as expected (gate; want S0 absent, S1 present): the steering stays in the history the model sees on later steps (S1) or never appears (S0)
+      C tool-less wrap-up [S0]: marker absent; prompt 439 chars, '<think>' x2; around marker: -
+      C tool-less wrap-up [S1]: marker PRESENT; prompt 551 chars, '<think>' x1; around marker: 'tool_response>\n3\n</tool_response><|im_end|>\n<|im_start|>user\n[gnomon] MARKER-S1Q No tools are attached to this final call, so answer now from what you'
+      -> C tool-less wrap-up: as expected (gate; want S0 absent, S1 present): the wrap-up call is sent with no tools; same rule
+      D folded summary at index 1 (positive control) [S0]: marker PRESENT; prompt 1472 chars, '<think>' x1; around marker: 'turns in this session, folded because they no longer fit the window:\n\nMARKER-S1Q the count was 3.<|im_end|>\n<|im_start|>user\nHow many files are in /ap'
+      D folded summary at index 1 (positive control) [S1]: marker PRESENT; prompt 1473 chars, '<think>' x1; around marker: 'turns in this session, folded because they no longer fit the window:\n\nMARKER-S1Q the count was 3.<|im_end|>\n<|im_start|>user\nHow many files are in /ap'
+      -> D folded summary at index 1 (positive control): as expected (gate; want S0 present, S1 present): the template renders a system message at index 1, so the probe can see a system message it keeps: A's absence is position, not detection
+      E context-drop notice after the instruction [S0]: marker absent; prompt 1553 chars, '<think>' x2; around marker: -
+      E context-drop notice after the instruction [S1]: marker PRESENT; prompt 1670 chars, '<think>' x2; around marker: 'many files are in /app? Write the number to /app/count.txt.\n\n[gnomon] MARKER-S1Q [gnomon context] 3 earlier step(s) in this turn were dropped to stay '
+      -> E context-drop notice after the instruction: as expected (informational; want S0 absent, S1 present): informational: S1 merges the notice into the instruction's user message
+      F verification failure after an answer [S0]: marker absent; prompt 1620 chars, '<think>' x3; around marker: -
+      F verification failure after an answer [S1]: marker PRESENT; prompt 1754 chars, '<think>' x1; around marker: '|>\n<|im_start|>assistant\nDone: 3.<|im_end|>\n<|im_start|>user\n[gnomon] MARKER-S1Q The declared verification for this repository failed after your chang'
+      -> F verification failure after an answer: as expected (informational; want S0 absent, S1 present): informational
+    PROBE_SHAPES_SHA=8078df03e2a28c41753825dcccab13e8a0ac03dd
+    STEER_TEMPLATE_GATE=pass
+2026-11-05T13:53:33Z G1GRUN G1G smoke: build master-ae17a1a (ae17a1ae958d6ccfd316c85ebde2f48ae066d6ac) model=qwen3.6-35b upstream=http://127.0.0.1:18080 arms G0 (off), G1 (checklist), G2 (review), steer_role user, nudge_after_idle 100000; 1 triples, 0 cells finished already; deadline -
+2026-11-05T13:53:33Z G1GRUN g1g ATTEMPT s: 1 triples, one cell at a time
+2026-11-05T13:53:33Z G1GRUN START g1g-g0-s-l-hello-world arm=G0 completion_gate=off k=s pos=0 order=1/3 load=17.7
+2026-11-05T13:54:10Z G1GRUN END   g1g-g0-s-l-hello-world (tb exit 0) 37 s local_chat=3 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-05T13:54:10Z G1GRUN START g1g-g1-s-l-hello-world arm=G1 completion_gate=checklist k=s pos=0 order=2/3 load=17.8
+2026-11-05T13:54:47Z G1GRUN END   g1g-g1-s-l-hello-world (tb exit 0) 37 s local_chat=5 cloud_sink_chat=0 note_req=2 other_note_req=2 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-05T13:54:47Z G1GRUN START g1g-g2-s-l-hello-world arm=G2 completion_gate=review k=s pos=0 order=3/3 load=10.8
+2026-11-05T13:55:33Z G1GRUN END   g1g-g2-s-l-hello-world (tb exit 0) 46 s local_chat=14 cloud_sink_chat=0 note_req=2 other_note_req=2 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-05T13:55:33Z G1GRUN G1G smoke finished: {'triples_started': 1, 'not_started': 0, 'cells_done': 3, 'cells_skipped': 0, 'aborted': 0}
+2026-11-05T13:55:33Z CHAIN-G1G smoke PASS on the gx10 lane (smoke-g1g.txt)
+    cell                       state      resolved local_chat note_req other_req late_req adapted mc  sink  gate
+    g1g-g0-s-l-hello-world     valid      True              3        0         0        0       0   3     0  null actions []; surface ('user', 1) (100000, 1) ('off', 1)
+    g1g-g1-s-l-hello-world     valid      True              5        2         2        0       0   5     0  {"v": 1, "mode": "checklist", "max_rounds": 3, "rounds": 1, "checks": 1, "reviews": 0, "review_steps": 0, "findings": 0, "outcome": "passed", "ms": 9} actions ['checklist', 'accept']; surface ('user', 1) (100000, 1) ('checklist', 1)
+    g1g-g2-s-l-hello-world     valid      True             14        2         2        0       0  14     0  {"v": 1, "mode": "review", "max_rounds": 3, "rounds": 1, "checks": 1, "reviews": 1, "review_steps": 8, "findings": 0, "outcome": "passed", "ms": 9237} actions ['checklist', 'accept']; surface ('user', 1) (100000, 1) ('review', 1)
+    smoke (gx10 lane): PASS
