@@ -82,7 +82,16 @@ afterEach(async () => {
     await new Promise<void>((r) => s.close(() => r()));
   }
   servers = [];
-  for (const r of roots.splice(0)) rmSync(r, { recursive: true, force: true });
+  for (const r of roots.splice(0)) {
+    // Windows keeps a directory busy while a killed process tree that had it
+    // as its cwd finishes exiting (the snapshot probe, cut at 2 s): retry, and
+    // leave a temp directory behind rather than fail a test over cleanup.
+    try {
+      rmSync(r, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    } catch (err) {
+      if (process.platform !== "win32") throw err;
+    }
+  }
 });
 
 type Kind = "openai" | "ollama";
@@ -513,12 +522,13 @@ describe("[context] env_snapshot", () => {
     expect(audit!.duration_ms).toBeLessThan(5000);
   });
 
-  it("names the package-index allowlist when one is declared", async () => {
+  // Linux only: elsewhere the probe is usually cut at 2 s (above), and the line
+  // itself is checked by envSnapshotNetworkLine's own test.
+  it.skipIf(process.platform !== "linux")("names the package-index allowlist when one is declared", async () => {
     // An answer and nothing else: no command here may reach a listed host.
     const r = await scripted("openai", { context: "env_snapshot = true\n", sandbox: `allow_package_index = ["pypi.org"]\n` }, [
       { answer: "done" },
     ]);
-    if (process.platform !== "linux" && r.rec.counters.bootstrap?.outcome === "failed") return; // see above
     expect(r.bodies[0]!.messages[0].content).toContain("package downloads (pip, uv or npm install or download, and curl or wget GET) from pypi.org are allowed");
   });
 
