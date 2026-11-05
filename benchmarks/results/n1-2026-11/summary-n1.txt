@@ -1,0 +1,59 @@
+
+== N1 arms (gnomon v0.4.1 c511b810, qwen3.6-35b on the gx10 lane, one cell at a time, L routing)
+group     arm  valid pass  rate   95% Wilson    $/solved  cloud-share tok|req  wall-med  capped  local tok/solved  local out/solved  other states
+n1-n0     L       63   37  0.587  [0.46, 0.70]    0.0000       0.00|0.00           132      10            1.86M              23k  {'apparatus': 1}
+n1-n1     L       62   35  0.565  [0.44, 0.68]    0.0000       0.00|0.00           124       7            1.58M              17k  {'apparatus': 2}
+
+PRIMARY (solved; exact two-sided McNemar on (task, attempt) pairs valid in both arms):
+  N1 vs N0: pairs=61  solved 35 vs 37  N1-only=3 N0-only=5  exact McNemar p=0.7266  paired difference -0.033 [-0.125, +0.061]
+  sequential plan: interim look stop-futility; final alpha 0.0405  ->  VERDICT: no difference shown (stopped at the interim for futility: conditional power under the trend < 0.10)
+  companion (anytime-valid, not the decision): e-process over 8 discordant pairs: final 0.53, max 2.56, crossed 20 at discordant pair None
+  discordant pairs:
+      k1 sparql-university              solved only by N0  (stop N1: answered, N0: answered; nudges N1: 1, first at step 29; calls N1/N0: 33/39; first arm N0)
+      k2 pypi-server                    solved only by N0  (stop N1: answered, N0: answered; nudges N1: 0, first at step None; calls N1/N0: 25/20; first arm N0)
+      k2 parallelize-graph              solved only by N0  (stop N1: stall, N0: answered; nudges N1: 2, first at step 12; calls N1/N0: 28/68; first arm N1)
+      k3 parallelize-graph              solved only by N0  (stop N1: stall, N0: answered; nudges N1: 2, first at step 12; calls N1/N0: 26/47; first arm N0)
+      k3 tune-mjcf                      solved only by N1  (stop N1: answered, N0: None; nudges N1: 2, first at step 17; calls N1/N0: 59/109; first arm N1)
+      k3 sparql-university              solved only by N1  (stop N1: answered, N0: answered; nudges N1: 1, first at step 17; calls N1/N0: 23/43; first arm N0)
+      k3 fix-code-vulnerability         solved only by N1  (stop N1: answered, N0: stall; nudges N1: 1, first at step 21; calls N1/N0: 28/11; first arm N0)
+      k4 fix-code-vulnerability         solved only by N0  (stop N1: stall, N0: answered; nudges N1: 0, first at step None; calls N1/N0: 10/23; first arm N1)
+  by stage (descriptive):
+  N1 vs N0 (stage 1): pairs=61  solved 35 vs 37  N1-only=3 N0-only=5  exact McNemar p=0.7266  paired difference -0.033 [-0.125, +0.061]
+  N1 vs N0 (stage 2): pairs=0  solved 0 vs 0  N1-only=0 N0-only=0  exact McNemar p=1.0000  paired difference +nan [+nan, +nan]
+
+SECONDARY (paired, descriptive; same pairs):
+  capped at 900 s: N1 6 vs N0 8 of 61 pairs; N1-only 3, N0-only 5, exact McNemar p=0.7266
+  model calls per cell (meter chat requests): 61 pairs; median N1 20 vs N0 22; paired median difference -3 (mean -5.0); N1 lower in 36, N0 lower in 22, sign test p=0.0869
+  tool calls per cell (turn record): 48 pairs; median N1 21 vs N0 21; paired median difference -4 (mean -7.5); N1 lower in 27, N0 lower in 21, sign test p=0.4709
+  agent wall time, s: 61 pairs; median N1 123 vs N0 129; paired median difference -1 (mean -67.6); N1 lower in 33, N0 lower in 28, sign test p=0.6089
+  local tokens per cell: 61 pairs; median N1 255228 vs N0 376154; paired median difference -39028 (mean -144275.3); N1 lower in 36, N0 lower in 25, sign test p=0.2000
+
+MECHANISM (relay-meter-s1 counters, summed over cells, and gnomon's turn records):
+
+  n1-n1 (N1, nudge_after_idle = 12, steer_role = user): 64 cells, 64 metered; nudged (meter note, counters.nudges or model_calls) in 32
+    requests with a [gnomon] note: 1240 of 2320 (4954 notes, 1,945,079 chars); new-steering requests 103
+    requests carrying each kind as a note: nudge 1197, converge 0, wrapup 14, verify 0, context 72, other 0; cells with a nudge note 32
+    requests with a system message after the first: 0; reasoning_content: 0; client aborts 4; meter errors 0; cloud sink requests 0
+    gnomon: turn records 55 (wire steer_role user on 55); counters.nudges summed 54; steer_role_adapted 0; model_calls in 55 cells, steered_calls {'nudge': 722, 'other': 13}, nudge-carrying calls via {'user': 722}
+    surface (steer_role, count) / (nudge_after_idle, count): {"(('user', 1), (12, 1))": 55, '(None, None)': 9}; upstreams {'http://127.0.0.1:18080': 64}; stall signals (log-only, turns firing) {'novelty_cusum': 2, 'no_progress': 2}
+
+  n1-n0 (N0, nudge_after_idle = 100000, steer_role = user): 64 cells, 64 metered; nudged (meter note, counters.nudges or model_calls) in 0
+    requests with a [gnomon] note: 126 of 2481 (126 notes, 259,107 chars); new-steering requests 15
+    requests carrying each kind as a note: nudge 0, converge 0, wrapup 8, verify 0, context 118, other 0; cells with a nudge note 0
+    requests with a system message after the first: 0; reasoning_content: 0; client aborts 8; meter errors 0; cloud sink requests 0
+    gnomon: turn records 51 (wire steer_role user on 51); counters.nudges summed 0; steer_role_adapted 0; model_calls in 51 cells, steered_calls {'other': 65}, nudge-carrying calls via {}
+    surface (steer_role, count) / (nudge_after_idle, count): {"(('user', 1), (100000, 1))": 51, '(None, None)': 13}; upstreams {'http://127.0.0.1:18080': 64}; stall signals (log-only, turns firing) {'novelty_cusum': 2, 'no_progress': 2}
+  informational: N1 cells whose turn record counts a nudge but whose wire shows no nudge note (a nudge pushed after the last request): 0 []
+  CHECK N1 nudge notes on the wire > 0: yes; N0 nudge notes on the wire = 0 (negative control): yes; N0 counters.nudges = 0 and model_calls nudge = 0: yes; late system messages = 0 in both (steer_role user): yes; N1 nudge calls via user only: yes; steer_role_adapted = 0 in both: yes; cloud sink requests = 0 in both: yes; surfaces as declared: yes; every cell on the gx10 lane: yes
+  convergence pushes (identical config in both arms; expected 0, implementor declares no converge_after): N1 0, N0 0 requests
+
+how cells ended (the last turn record's stop_reason; capped cells usually have none):
+  n1-n1  valid: {'answered': 41, 'no-turn-record': 9, 'stall': 12}
+         valid unsolved: {'answered': 10, 'stall': 12, 'no-turn-record': 5}
+  n1-n0  valid: {'answered': 43, 'stall': 7, 'no-turn-record': 13}
+         valid unsolved: {'answered': 10, 'stall': 7, 'no-turn-record': 9}
+
+exposure (descriptive; conditions on N1's own trajectory, so not causal): pairs whose N1 cell was nudged 29: solved N1 14 vs N0 14, N1-only 3, N0-only 3
+
+cell states: {'n1-n1': {'valid': 62, 'apparatus': 2}, 'n1-n0': {'valid': 63, 'apparatus': 1}}
+128 N1 cells
