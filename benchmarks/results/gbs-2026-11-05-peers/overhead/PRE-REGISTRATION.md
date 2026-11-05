@@ -87,3 +87,6 @@ Author-run.
 
 | time (UTC) | change | before/after reading outcomes | reason |
 |---|---|---|---|
+| 2026-11-05T14:04–14:12Z | The analysis scripts (`chaos/analyse.py`, `overhead/analyse.py`, `governance/analyze.py`, `audit/summarise.py`) and `common/make_results.py` were written after the pre-registration commit, while the first blocks ran. Progress lines of `chaos-opencode-1` and the endpoint lane check had been seen; no aggregate outcome had been read. Each implements the analysis this file states | before | they did not exist yet |
+| 2026-11-05T17:02Z | Raw outputs compressed (`*.jsonl.gz`, `work.tar.gz`) and checksummed (`raw/SHA256SUMS`); the analyses re-run on the compressed files with identical output | after | repository size |
+| 2026-11-05T17:08Z | Disclosure, no change: the 1-minute load had a median of 6.79 (max 12.32) against the 5.0 threshold; 566 of 640 trials are flagged and kept, as this file requires. The load included this run's own chaos and audit blocks, pinned to the other ten cores (`run.sh`), as well as the host's other benchmarks. No governance block overlapped (they started at 14:16:18Z, after this block ended at 14:15:26Z) | after | stated so that the wall figures are read with it |

@@ -88,3 +88,5 @@ Author-run: gnomon's authors wrote CHAOS.md, `gnomon chaos` (the endpoint) and t
 
 | time (UTC) | change | before/after reading outcomes | reason |
 |---|---|---|---|
+| 2026-11-05T14:04–14:12Z | The analysis scripts (`chaos/analyse.py`, `overhead/analyse.py`, `governance/analyze.py`, `audit/summarise.py`) and `common/make_results.py` were written after the pre-registration commit, while the first blocks ran. Progress lines of `chaos-opencode-1` and the endpoint lane check had been seen; no aggregate outcome had been read. Each implements the analysis this file states | before | they did not exist yet |
+| 2026-11-05T17:02Z | Raw outputs compressed (`*.jsonl.gz`, `work.tar.gz`) and checksummed (`raw/SHA256SUMS`); the analyses re-run on the compressed files with identical output | after | repository size |
