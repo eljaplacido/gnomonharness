@@ -1,0 +1,56 @@
+[?2004hroot@53ae75a061ca:/app# asciinema rec --stdin /logs/agent.cast
+[?2004l[0;32masciinema: recording asciicast to /logs/agent.cast[0m
+[0;32masciinema: press <ctrl-d> or type "exit" when you're done[0m
+[?2004hroot@53ae75a061ca:/app# clear
+[?2004l[H[J[3J[?2004hroot@53ae75a061ca:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+[?2004l[?2004hroot@53ae75a061ca:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+[?2004lARM_VERSION=c511b8105fb2187423d21becbe3b19f8af2b80e5
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793850502
+[?2004hroot@53ae75a061ca:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with pip.'; tmux wait -S done
+[?2004lR1_ARM=L R1_ENTRY=implementor R1_ROUTES=coordinator=local,implementor=local,verifier=local,plan=local,implement=local,critique=local,smol=local N1_STEER_ROLE=user N1_NUDGE_AFTER_IDLE=12
+  │ `ensurepip` said it was already satisfied but didn't actually restore the…
+[approval] bash: python3 -c "
+import zipfile, shutil, os
+wheel_path = '/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl'
+dest = '/usr/local/lib/python3.13/site-packages'
+with zipfile.ZipFile(wheel_path, 'r') as z:
+    for name in z.namelist():
+        if name.endswith('/'):
+            os.makedirs(os.path.join(dest, name), exist_ok=True)
+        else:
+            z.extract(name, dest)
+            print(f'Extracted: {name}')
+print('Done.')
+" 2>&1 — approved
+  ⚙ bash python3 -c " import zipfile, shutil, os wheel_path = '/usr/local/lib/p…
+    ✓ bash — exit 0
+  qwen3.6-35b — 16 tool call(s) so far
+  │ Now let me verify pip works:
+[approval] bash: pip3 --version 2>&1 — approved
+  ⚙ bash pip3 --version 2>&1
+    ✓ bash — exit 0
+  qwen3.6-35b — 17 tool call(s) so far
+[approval] bash: python3 -m pip --version 2>&1 — approved
+  ⚙ bash python3 -m pip --version 2>&1
+    ✓ bash — exit 0
+  qwen3.6-35b — 18 tool call(s) so far
+  │ Let me do a quick smoke test to confirm package installation works:
+[approval] bash: pip3 install --dry-run requests 2>&1 — approved
+  ⚙ bash pip3 install --dry-run requests 2>&1
+    ✓ bash — exit 0
+  qwen3.6-35b — 19 tool call(s) so far
+Pip is fully restored and working. Here's what happened and what I did:
+
+**Problem:** The `pip` package's source code (`pip/` directory and all its subpackages) had been removed from `/usr/local/lib/python3.13/site-packages/`, leaving only the metadata directory (`pip-24.3.1.dist-info`). This caused `pip3` and `python3 -m pip` to fail with `ModuleNotFoundError: No module named 'pip'`.
+
+**Fix:** Extracted the bundled pip wheel (`pip-24.3.1-py3-none-any.whl`) from Python's `ensurepip` module directly into site-packages. This restored the full pip package including all its vendored dependencies.
+
+**Verification:** `pip3 --version` and `python3 -m pip --version` both report `pip 24.3.1`, and a dry-run install of `requests` succeeds.
+
+[refusal] role=implementor model=qwen3.6-35b tools=19 surface=48cd0ade3676
+[?2004hroot@53ae75a061ca:/app# [?2004l
+exit
+[0;32masciinema: recording finished[0m
+[0;32masciinema: asciicast saved to /logs/agent.cast[0m
+[?2004hroot@53ae75a061ca:/app# 
