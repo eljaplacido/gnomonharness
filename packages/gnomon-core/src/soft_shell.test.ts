@@ -433,6 +433,10 @@ describe.skipIf(!posix)("bash under soft_timeout = handle", () => {
     const k = await job({ action: "kill", id: "j1" });
     expect(k.summary).toBe("job j1 — killed");
     expect(k.content).toMatch(/^Exit code: none \(killed by SIGKILL\)/);
+    // A SIGKILLed grandchild can sit as a zombie until init reaps it: dead, and
+    // still answering kill(pid, 0). Polled, and a zombie counts as dead.
+    const until = Date.now() + 5000;
+    while (alive(pid) && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
     expect(alive(pid)).toBe(false);
     expect(table.list()).toEqual([]);
     expect(records.at(-1)).toMatchObject({ event: "kill", id: "j1", reason: "model" });
@@ -498,9 +502,15 @@ function spawnable(cmd: string): boolean {
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
+  }
+  try {
+    // Linux: state Z is a zombie, already dead. Elsewhere, kill(0) is the answer.
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf-8");
+    return stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) !== "Z";
+  } catch {
+    return !existsSync("/proc/self/stat");
   }
 }
 
