@@ -26,6 +26,12 @@
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-11-06
+
+Two record fixes from the P2G41 acid test (#151) and two sets of opt-in features (#152, #154). Upgrading from 0.4.2: nothing to do. Every addition is off by default, and with none declared the request bodies a model receives are byte-identical to 0.4.2 (pinned by `completion_gate_loop.test.ts`, `sweep_knobs.test.ts` and `endpoint_error_record.test.ts`). The fixes change records only: a turn whose endpoint failed now reads `stop_reason: "endpoint_error"` instead of `answered`, and partial and killed records carry `volatile.model_calls`.
+
+Benchmark status of the completion gate, measured so far and not yet a recommendation. On the local gx10 lane, a first pass solved 6 of 15 with the gate off, 8 with `checklist` and 9 with `review`: in the right direction, not yet significant. On hosted tasks capped at 30 minutes it hurt (H4-lite): hidden-test fraction −0.10 [−0.21, −0.01], and runs hitting the cap went from 4 to 8, because the gate does not know how much wall-clock is left. Keep `completion_gate` off for hosted or time-capped runs until a run deadline can be passed from the command line (`--deadline`, #153).
+
 ### Added
 
 - **Six opt-in sweep knobs, one per long-task hypothesis** (docs/CONTRACTS.md
@@ -4018,7 +4024,10 @@ was written.
   `git tag`, not a documentation edit as well.
 -->
 
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.4.3...HEAD
+[0.4.3]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.3
+[0.4.2]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.2
+[0.4.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.1
 [0.4.0]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.0
 [0.3.3]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.3
 [0.3.2]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.3.2
