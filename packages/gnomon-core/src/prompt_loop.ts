@@ -188,7 +188,7 @@ import {
 import { resolveContextWindow, type ContextSource } from "./context_window.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
 import { applyCredentials } from "./credentials.js";
-import { clampToDefaults, type TrustOutcome } from "./trust.js";
+import { clampToDefaults, recordExecFloor, type TrustOutcome } from "./trust.js";
 import {
   resolveSessionStore,
   saveSession,
@@ -297,7 +297,7 @@ export interface PromptState {
   sandbox?: SandboxLevel;
   /**
    * The sandbox the session started under (sandbox_pin.ts): a later reload
-   * of the surface may tighten it, never loosen it. Set on the first turn.
+   * of the surface may tighten it, never loosen it. Set at the session's start.
    */
   sandboxPin?: SandboxPin;
   /**
@@ -4516,8 +4516,8 @@ export async function runAgenticTurn(
   // is gated by the same reading of the surface this loop makes.
   const gate: ApprovalGate = resolveApprovalGate(config);
   // The sandbox as the session started it, tightened by any reload since and
-  // never loosened (sandbox_pin.ts): policy.toml is inside the root a
-  // sandboxed bash can write.
+  // never loosened (sandbox_pin.ts): policy.toml and roles.toml are inside the
+  // root a contained bash can write.
   const pinned = applySandboxPin((state.sandboxPin ??= pinSandbox(config)), config, role);
   const sandbox: SandboxLevel = state.sandbox ?? pinned.level;
 
@@ -7551,6 +7551,9 @@ export async function runTask(
   const chainGate = resolveChainGate(config);
 
   const state: PromptState = { config, exchanges: [], currentRole: role };
+  // Where this task's bash runs, recorded for the next session (trust.ts
+  // exec floor): a role that ran contained here may not leave it unasked.
+  recordExecFloor(config);
   const ui: ResolvedUi = { ...resolveUi(config), spinner: false, color: false };
   // `let`, as are `shadow` and `trust` below: an MCP server whose tools
   // changed since they were pinned clamps the run after its servers connect
@@ -8175,6 +8178,14 @@ export const LIVE_SAFE_COMMANDS = new Set([
  * none, and exec = "os", which blocks egress in the kernel (and suppresses
  * this note when it is enforcing).
  */
+/** The operator's line for a reload whose looser sandbox was not applied (sandbox_pin.ts). */
+export function sandboxKeptNotice(kept: readonly string[]): string {
+  return (
+    `sandbox NOT loosened: the surface now asks for ${kept.join("; ")}. ` +
+    `This session keeps the sandbox it started with; restart gnomon to apply a looser one.`
+  );
+}
+
 export const NETWORK_OFF_NOTE =
   "  note: network = false refuses webfetch and curl/ssh in bash — a filter, not isolation (see exec)";
 
@@ -9966,13 +9977,7 @@ export async function runSessionTurn(
       if (heldLine) print(paint(ui, "yellow", `  ${heldLine}`));
       // A loosened sandbox is not applied (sandbox_pin.ts). Said, not hidden.
       const kept = state.sandboxPin ? describeLoosening(state.sandboxPin, reloaded) : [];
-      if (kept.length > 0) {
-        print(
-          paint(ui, "yellow",
-            `  sandbox NOT loosened: the surface now asks for ${kept.join("; ")}. ` +
-            `This session keeps the sandbox it started with; restart gnomon to apply a looser one.`)
-        );
-      }
+      if (kept.length > 0) print(paint(ui, "yellow", `  ${sandboxKeptNotice(kept)}`));
       const short = recomputeManifest(reloaded.gnomonDir).surface_hash.slice(0, 16);
       print(
         paint(ui, "green", `  ✓ surface reloaded — now ${short}… · this session runs under it from the next turn`)
@@ -10250,6 +10255,13 @@ export async function runPromptLoop(
     audit.write("trust", { ...clamp.outcome, root: resolve(config.gnomonDir, "..") });
     console.log(paint(uiOf(state), "yellow", `  ${clamp.notice}`));
   }
+  // Where the keys go, as this session starts (credential_pin.ts): a reload
+  // may not move an endpoint's url or api_key_env, or an MCP server.
+  state.credentialPin ??= pinCredentials(state.config);
+  // The sandbox this session is held to from here on (sandbox_pin.ts), and
+  // this machine's record of it for the next session (trust.ts exec floor).
+  state.sandboxPin ??= pinSandbox(state.config);
+  recordExecFloor(state.config);
 
   // Rotating and switching need the loop's id and its persist(), so they are
   // supplied here rather than reached for from a command.
@@ -11413,13 +11425,7 @@ export async function runPromptLoop(
           const heldLine = heldNotice(held);
           if (heldLine) console.log(paint(ui0, "yellow", `  ${heldLine}`));
           const kept = state.sandboxPin ? describeLoosening(state.sandboxPin, fresh) : [];
-          if (kept.length > 0) {
-            console.log(
-              paint(ui0, "yellow",
-                `  sandbox NOT loosened: the surface now asks for ${kept.join("; ")}. ` +
-                `This session keeps the sandbox it started with; restart gnomon to apply a looser one.`)
-            );
-          }
+          if (kept.length > 0) console.log(paint(ui0, "yellow", `  ${sandboxKeptNotice(kept)}`));
           console.log(
             `\n  ${paint(ui0, "green", "✓")} ${paint(ui0, "bold", pickedRole)} → ` +
               `${modelTag} @${pickedEndpoint}`

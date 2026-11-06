@@ -200,6 +200,161 @@ fn build_sources(dir: &Path) -> Vec<Source> {
     sources
 }
 
+/// `-c` overrides on every git this binary runs: the subset of
+/// packages/gnomon-core/src/git_safe.ts GIT_HARDENING a rev-parse and a status
+/// can reach.
+const GIT_HARDENING: &[&str] = &[
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "core.pager=cat",
+    "-c",
+    "diff.external=",
+    "-c",
+    "gc.auto=0",
+    "-c",
+    "maintenance.auto=false",
+    "-c",
+    "submodule.recurse=false",
+    "-c",
+    "diff.ignoreSubmodules=all",
+    "-c",
+    "status.submoduleSummary=false",
+    "-c",
+    "core.askPass=",
+    "-c",
+    "credential.helper=",
+    "-c",
+    "protocol.ext.allow=never",
+    "-c",
+    "core.sshCommand=",
+    "-c",
+    "core.gitProxy=",
+    "-c",
+    "core.alternateRefsCommand=",
+];
+
+/// Variables that would steer git somewhere else or name a program for it.
+const GIT_ENV_DROP: &[&str] = &[
+    "GIT_EXTERNAL_DIFF",
+    "GIT_DIFF_OPTS",
+    "GIT_ASKPASS",
+    "SSH_ASKPASS",
+    "GIT_SSH",
+    "GIT_SSH_COMMAND",
+    "GIT_PROXY_COMMAND",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_EDITOR",
+    "GIT_SEQUENCE_EDITOR",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_CONFIG",
+];
+
+fn hardened_git_command(dir: &Path) -> std::process::Command {
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(dir)
+        .args(GIT_HARDENING)
+        .env("GIT_TERMINAL_PROMPT", "0");
+    for k in GIT_ENV_DROP {
+        cmd.env_remove(k);
+    }
+    for (k, _) in std::env::vars_os() {
+        if let Some(k) = k.to_str() {
+            if k.starts_with("GIT_CONFIG_KEY_") || k.starts_with("GIT_CONFIG_VALUE_") {
+                cmd.env_remove(k);
+            }
+        }
+    }
+    if !cfg!(windows) {
+        cmd.env("GIT_CONFIG_NOSYSTEM", "1");
+    }
+    cmd
+}
+
+/// Every filter, diff and merge driver the configuration in `dir` names, to
+/// blank through GIT_CONFIG_COUNT (a driver's name is the repository's choice,
+/// so no one `-c` key switches them all off). `git config --list` runs nothing.
+fn driver_keys(dir: &Path) -> Vec<String> {
+    let out = match hardened_git_command(dir)
+        .args(["config", "-z", "--list"])
+        .output()
+    {
+        Ok(o) if o.status.success() => o,
+        _ => return Vec::new(),
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut keys: Vec<String> = Vec::new();
+    let mut add = |k: String| {
+        if !keys.contains(&k) {
+            keys.push(k);
+        }
+    };
+    for entry in text.split('\0') {
+        let key = entry.split('\n').next().unwrap_or("");
+        let lower = key.to_ascii_lowercase();
+        let name_of = |prefix: &str, suffixes: &[&str]| -> Option<String> {
+            if !lower.starts_with(prefix) {
+                return None;
+            }
+            suffixes
+                .iter()
+                .find(|s| lower.ends_with(*s) && key.len() > prefix.len() + s.len())
+                .map(|s| key[prefix.len()..key.len() - s.len()].to_string())
+        };
+        if let Some(n) = name_of("filter.", &[".clean", ".smudge", ".process", ".required"]) {
+            add(format!("filter.{n}.clean"));
+            add(format!("filter.{n}.smudge"));
+            add(format!("filter.{n}.process"));
+        } else if let Some(n) = name_of("diff.", &[".textconv", ".command"]) {
+            add(format!("diff.{n}.textconv"));
+            add(format!("diff.{n}.command"));
+        } else if let Some(n) = name_of("merge.", &[".driver"]) {
+            add(format!("merge.{n}.driver"));
+        }
+    }
+    keys
+}
+
+/// git in `dir` with gnomon's hardening: no fsmonitor, hooks, pager, external
+/// diff, system config, or any filter/diff/merge driver the repository names.
+/// `.gnomon/` sits inside a project root that a sandboxed bash (exec =
+/// "docker") may write, `.git/config` included, and this runs on the host:
+/// `gnomon session` and `gnomon surface manifest` call it (third review,
+/// finding 7).
+fn safe_git(dir: &Path, args: &[&str]) -> Option<String> {
+    let mut cmd = hardened_git_command(dir);
+    let keys = driver_keys(dir);
+    let mut n = 0usize;
+    for k in &keys {
+        cmd.env(format!("GIT_CONFIG_KEY_{n}"), k)
+            .env(format!("GIT_CONFIG_VALUE_{n}"), "");
+        n += 1;
+    }
+    for k in keys.iter().filter(|k| k.ends_with(".clean")) {
+        let req = format!("{}.required", &k[..k.len() - ".clean".len()]);
+        cmd.env(format!("GIT_CONFIG_KEY_{n}"), req)
+            .env(format!("GIT_CONFIG_VALUE_{n}"), "false");
+        n += 1;
+    }
+    cmd.env("GIT_CONFIG_COUNT", n.to_string());
+    let mut argv: Vec<&str> = args.to_vec();
+    if argv.first() == Some(&"status") {
+        argv.insert(1, "--ignore-submodules=all");
+    }
+    let out = cmd.args(&argv).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
 /// The revision this manifest was produced at. See cmd_manifest for why.
 fn resolve_revision(dir: &Path) -> String {
     if let Ok(stamped) = std::env::var("GNOMON_BUILD") {
@@ -208,17 +363,12 @@ fn resolve_revision(dir: &Path) -> String {
             return stamped;
         }
     }
-    let git = |args: &[&str]| -> Option<String> {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(dir)
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        Some(String::from_utf8_lossy(&out.stdout).trim().to_string())
-    };
+    git_revision(dir)
+}
+
+/// The short HEAD of the repository holding `dir`, `-dirty` when its tree is.
+fn git_revision(dir: &Path) -> String {
+    let git = |args: &[&str]| -> Option<String> { safe_git(dir, args) };
     match git(&["rev-parse", "--short", "HEAD"]) {
         Some(sha) if !sha.is_empty() => {
             let dirty = git(&["status", "--porcelain"])
@@ -528,6 +678,69 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    /// Third review, finding 7: `gnomon session` and `gnomon surface manifest`
+    /// run this on the host, in the project's .gnomon/, and the repository's
+    /// config is writable from a docker-mode container.
+    #[cfg(unix)]
+    #[test]
+    fn resolve_revision_runs_nothing_the_repository_names() {
+        use std::io::Write;
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        let out = tmp.path().join("out");
+        fs::create_dir_all(&repo).unwrap();
+        fs::create_dir_all(&out).unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        fs::create_dir_all(repo.join(".gnomon")).unwrap();
+        fs::write(repo.join("a.txt"), "one\n").unwrap();
+        fs::write(repo.join(".gnomon/config.toml"), "").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "init"]);
+        let fsm = out.join("fsmonitor-ran");
+        let flt = out.join("filter-ran");
+        let mut cfg = fs::OpenOptions::new()
+            .append(true)
+            .open(repo.join(".git/config"))
+            .unwrap();
+        write!(
+            cfg,
+            "[core]\n\tfsmonitor = \"touch '{}'; false\"\n[filter \"evil\"]\n\tclean = \"touch '{}'; cat\"\n",
+            fsm.display(),
+            flt.display()
+        )
+        .unwrap();
+        drop(cfg);
+        fs::write(repo.join(".gitattributes"), "*.txt filter=evil\n").unwrap();
+        fs::write(repo.join("a.txt"), "two\n").unwrap();
+        let rev = git_revision(&repo.join(".gnomon"));
+        assert!(rev.ends_with("-dirty"), "a changed tree reads dirty: {rev}");
+        assert!(!fsm.exists(), "core.fsmonitor ran from resolve_revision");
+        assert!(!flt.exists(), "a filter driver ran from resolve_revision");
+        // CONTROL: plain git in the same repository runs both.
+        std::process::Command::new("git")
+            .arg("status")
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(
+            fsm.exists() && flt.exists(),
+            "control: the planted config is not live"
+        );
+    }
+
 
     fn setup_test_dir() -> TempDir {
         let tmp = TempDir::new().unwrap();

@@ -24,7 +24,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
-import { loadConfig, recomputeManifest } from "./config.js";
+import { loadConfig, recomputeManifest, resolveExec } from "./config.js";
 import { bashPolicy } from "./tools.js";
 import {
   SCAFFOLD_ROLES,
@@ -40,6 +40,7 @@ import {
   trustPath,
   TRUST_DECISIONS,
   TRUST_BY,
+  recordExecFloor,
 } from "./trust.js";
 import { runTask } from "./prompt_loop.js";
 
@@ -455,4 +456,73 @@ describe("end to end: a clamped task cannot use the grant", () => {
     expect(existsSync(join(root, "pwned"))).toBe(true);
     expect(record.trust).toMatchObject({ decision: "trusted", by: "flag:--trust" });
   }, 20000);
+});
+
+// Third review, finding 1: exec = "docker" is stricter than the scaffold, so a
+// surface declaring it grants nothing and is never asked about. A contained
+// command rewrote it to "off" (the root is bind-mounted), and the NEXT session
+// was a default surface again: bash on the host, nobody asked.
+describe("the exec floor: a role that ran contained here does not leave it unasked", () => {
+  const dockerPolicy = `[approval]\ngate = "on_write"\n\n[sandbox]\nlevel = "confined"\nnetwork = false\nexec = "docker"\nimage = "img:1"\n`;
+  const offPolicy = dockerPolicy.replace('exec = "docker"', 'exec = "off"');
+
+  it("exec = docker -> off between sessions is a grant: asked, clamped back headless, accepted by y", async () => {
+    const path = storeIn();
+    const root = project({ policy: dockerPolicy });
+    // The first session runs contained; nothing to ask.
+    expect(evaluateTrust(loadConfig(root), { path }).status).toBe("default");
+    recordExecFloor(loadConfig(root), path);
+    // A contained command rewrites the policy.
+    writeFileSync(join(root, ".gnomon", "policy.toml"), offPolicy);
+    const ev = evaluateTrust(loadConfig(root), { path });
+    expect(ev.status, "a downgrade from a contained exec was a default surface").toBe("untrusted");
+    expect(ev.uncovered.map((g) => g.key)).toContain("exec:implement:off");
+    // Nobody to ask: clamped, and bash goes back in the container it ran in.
+    const headless = settleTrustHeadless(loadConfig(root), { path, warn: () => {} });
+    expect(headless.outcome?.decision).toBe("clamped");
+    for (const r of ["implement", "verifier", "plan"]) {
+      expect(resolveExec(headless.config, r), r).toMatchObject({ mode: "docker", image: "img:1" });
+    }
+    // A person says yes: the floor follows, and the next session is not asked.
+    const asked = await settleTrust(loadConfig(root), { path, interactive: true, ask: async () => "y", print: () => {} });
+    expect(asked.outcome?.decision).toBe("granted");
+    expect(resolveExec(asked.config, "implement").mode).toBe("off");
+    expect(evaluateTrust(loadConfig(root), { path }).status).toBe("default");
+  });
+
+  it("a role's own exec = off under a contained default is a grant too; --trust accepts it", () => {
+    const path = storeIn();
+    const root = project({ policy: dockerPolicy });
+    recordExecFloor(loadConfig(root), path);
+    writeFileSync(
+      join(root, ".gnomon", "roles.toml"),
+      scaffoldRoles().replace(/(\[roles\.verifier\]\n)/, `$1exec = "off"\n`)
+    );
+    const ev = evaluateTrust(loadConfig(root), { path });
+    expect(ev.uncovered.map((g) => g.key)).toEqual(["exec:verifier:off"]);
+    expect(evaluateTrust(loadConfig(root), { path, flag: true }).status).toBe("trusted");
+  });
+
+  it("a trusted surface's other grants do not cover a downgrade", () => {
+    const path = storeIn();
+    const root = project({ policy: dockerPolicy.replace("network = false", "network = true") });
+    grantTrust(loadConfig(root), "human", path);
+    recordExecFloor(loadConfig(root), path);
+    expect(evaluateTrust(loadConfig(root), { path }).status).toBe("trusted");
+    writeFileSync(join(root, ".gnomon", "policy.toml"), offPolicy.replace("network = false", "network = true"));
+    const ev = evaluateTrust(loadConfig(root), { path });
+    expect(ev.status).toBe("untrusted");
+    expect(ev.uncovered.every((g) => g.key.startsWith("exec:"))).toBe(true);
+  });
+
+  it("nothing contained, nothing recorded; tightening raises the floor", () => {
+    const path = storeIn();
+    const root = project();
+    recordExecFloor(loadConfig(root), path);
+    expect(loadTrust(path).exec ?? []).toEqual([]);
+    writeFileSync(join(root, ".gnomon", "policy.toml"), dockerPolicy);
+    expect(evaluateTrust(loadConfig(root), { path }).status).toBe("default");
+    recordExecFloor(loadConfig(root), path);
+    expect(loadTrust(path).exec?.length).toBe(1);
+  });
 });

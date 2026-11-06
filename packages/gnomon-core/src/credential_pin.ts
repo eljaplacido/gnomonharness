@@ -13,8 +13,9 @@
  *     which reads the RELOADED config, stopped dropping the real key.
  *
  * (PR #156 second review, finding B.) So, as sandbox_pin.ts does for the
- * sandbox: the endpoints' `url` and `api_key_env`, every role fallback's, and
- * the MCP servers' definitions are pinned at session start. A reload that
+ * sandbox: the endpoints' `url` and `api_key_env`, every role fallback's
+ * (with the endpoint it names), and the MCP servers' definitions are pinned
+ * at session start. A reload that
  * changes one keeps the pinned value; a reload that ADDS an endpoint does not
  * get it (a new name could also shadow a built-in one). Each is reported --
  * "NOT applied, restart gnomon" -- and never applied in silence. A restart
@@ -32,9 +33,16 @@ interface PinnedEndpoint {
   api_key_env: unknown;
 }
 
+/**
+ * A fallback's url, key AND endpoint: the url it sends to is `url`, else the
+ * named endpoint's (config.ts routeRole), so a key pinned alone could be
+ * re-paired with any endpoint a reload names -- the built-in local one at
+ * 127.0.0.1 included (third review, finding 8).
+ */
 interface PinnedFallback {
   url: unknown;
   api_key_env: unknown;
+  endpoint: unknown;
 }
 
 export interface CredentialPin {
@@ -101,8 +109,8 @@ export function pinCredentials(config: GnomonConfig): CredentialPin {
   }
   const fallbacks = new Map<string, PinnedFallback | null>();
   for (const [role, def] of Object.entries(config.roles ?? {})) {
-    const fb = (def as { fallback?: { url?: unknown; api_key_env?: unknown } } | undefined)?.fallback;
-    fallbacks.set(role, fb ? { url: fb.url, api_key_env: fb.api_key_env } : null);
+    const fb = (def as { fallback?: { url?: unknown; api_key_env?: unknown; endpoint?: unknown } } | undefined)?.fallback;
+    fallbacks.set(role, fb ? { url: fb.url, api_key_env: fb.api_key_env, endpoint: fb.endpoint } : null);
   }
   const mcpServers = config.tools?.mcp_servers;
   return {
@@ -159,11 +167,11 @@ export function holdCredentials(pin: CredentialPin, fresh: GnomonConfig): { conf
   }
 
   for (const [role, def] of Object.entries(config.roles ?? {})) {
-    const d = def as { fallback?: { url?: unknown; api_key_env?: unknown } } | undefined;
+    const d = def as { fallback?: { url?: unknown; api_key_env?: unknown; endpoint?: unknown } } | undefined;
     const fb = d?.fallback;
     const was = pin.fallbacks.get(role) ?? null;
     if (!fb) continue;
-    for (const field of ["url", "api_key_env"] as const) {
+    for (const field of ["url", "api_key_env", "endpoint"] as const) {
       const pinned = was ? was[field] : undefined;
       if (!same(fb[field], pinned)) {
         held.push(`roles.${role}.fallback.${field} = ${JSON.stringify(fb[field])} (pinned: ${JSON.stringify(pinned)})`);

@@ -65,7 +65,7 @@ import { AuditTrail, resolveAudit } from "./audit.js";
 import { connectMcp } from "./mcp.js";
 import { AFTER_REFUSAL_REASON } from "./after_refusal.js";
 import { settleMcpTools } from "./tools_hash.js";
-import { clampToDefaults } from "./trust.js";
+import { clampToDefaults, recordExecFloor } from "./trust.js";
 import { harnessBuild } from "./build.js";
 import { ShadowRecorder } from "./shadow.js";
 import { Progress, splitThinking } from "./render.js";
@@ -640,6 +640,8 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
       // so the per-tool transcript lines (/cot) would only duplicate them.
       ui: { ...resolveUi(config), color: false, spinner: false, cot: "off" },
     };
+    // The exec floor for the next session (trust.ts), as the terminal records it.
+    recordExecFloor(config);
     const surfaceHash = (() => {
       try {
         return recomputeManifest(config.gnomonDir).surface_hash;

@@ -1667,6 +1667,14 @@ statement becomes a line of `receipts.jsonl` (`digest`, `backend`,
   `refs/heads/gnomon-anchors`, and a ref elsewhere is reported as a problem.
   Verification fetches the ref, reads every commit, and remembers the tip, so
   a history rewritten since the last read is a finding.
+  Commits are built in a local bare repository under gnomon's data directory
+  (`<data dir>/anchors/<scope>/git`), outside the project root a sandboxed
+  bash may write; one left at `anchors/git` by an earlier version is not
+  read. gnomon refuses that repository when its config holds a key `git init
+  --bare` does not write, when it holds `commondir`, `config.worktree` or
+  object alternates, or a symlink. A `remote` that names a remote of this
+  repository is resolved once, when the session starts, and the detached
+  delivery pushes to that target, not to whatever `.git/config` says by then.
 - **rfc3161:** a TimeStampReq for the digest (nonce, `certReq`). The token
   is checked at delivery and again, offline, at verification against
   `tsa_cert`: the imprint, the signed attributes, and the signature under a

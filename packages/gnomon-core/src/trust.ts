@@ -51,6 +51,8 @@ import {
   isLocalEndpoint,
   resolveShadow,
   resolveBootstrap,
+  resolveExec,
+  listRoles,
 } from "./config.js";
 import { bashPolicy } from "./tools.js";
 import { gnomonDataDir, restrictToOwner } from "./credentials.js";
@@ -473,8 +475,11 @@ export function surfaceGrants(config: GnomonConfig): Grant[] {
  * this only ever tightens. Pure -- the input is not touched, and nothing is
  * written to disk, so the surface hash does not move.
  */
-export function clampToDefaults(config: GnomonConfig): GnomonConfig {
+export function clampToDefaults(config: GnomonConfig, floor?: ExecFloor): GnomonConfig {
   const c = structuredClone(config) as GnomonConfig;
+  // A role that ran contained here and now asks to run on the host is put
+  // back where it ran (execDowngrades): the exec floor is this machine's.
+  if (floor) restoreExecFloor(c, floor);
   const policy = (c.policy ??= {}) as Record<string, any>;
   const defaults = ((c.config ??= {}).defaults ??= {}) as Record<string, any>;
 
@@ -579,9 +584,31 @@ export interface ToolPin {
   at: string;
 }
 
+/**
+ * Where each role's bash last ran in one project on this machine: the
+ * resolved `[sandbox] exec` (and image) per role, `*` for what a role with no
+ * `exec` of its own gets. Recorded when a session starts (recordExecFloor).
+ *
+ * WHY. exec = "docker" is not a grant -- it is stricter than the scaffold --
+ * so a surface that declares it is a "default" surface nobody is asked about.
+ * Then a contained command writes `exec = "off"` into policy.toml (the root is
+ * bind-mounted), and the next session was a default surface again: on the
+ * host, unasked (third review, finding 1). The repository cannot be the
+ * witness of its own containment, so this machine is: a role that ran
+ * contained here and now resolves to "off" is a GRANT (execDowngrades), asked
+ * about like any other, and clamped back to its floor when nobody is there.
+ */
+export interface ExecFloor {
+  root: string;
+  roles: Record<string, { mode: string; image: string }>;
+  at: string;
+}
+
 export interface TrustStore {
   v: 1;
   entries: TrustEntry[];
+  /** Exec floors, per project. Absent in a store that never recorded one. */
+  exec?: ExecFloor[];
   /**
    * MCP tool pins. Absent in a store that never pinned one, so a store this
    * feature has not touched is written back as it was read.
@@ -609,7 +636,11 @@ export function loadTrust(path = trustPath()): TrustStore {
           (p) => p && typeof p.root === "string" && typeof p.server === "string" && typeof p.tools_hash === "string"
         )
       : undefined;
-    return tools ? { v: 1, entries, tools } : { v: 1, entries };
+    const rawExec = (parsed as { exec?: unknown }).exec;
+    const exec = Array.isArray(rawExec)
+      ? (rawExec as ExecFloor[]).filter((f) => f && typeof f.root === "string" && f.roles && typeof f.roles === "object")
+      : undefined;
+    return { v: 1, entries, ...(tools ? { tools } : {}), ...(exec ? { exec } : {}) };
   } catch {
     // A corrupt store trusts nothing. Failing closed costs a prompt; failing
     // open would hand an unread surface its powers.
@@ -656,7 +687,80 @@ export function grantTrust(config: GnomonConfig, by: string, path = trustPath())
   );
   store.entries.push(entry);
   saveTrust(store, path);
+  // Accepting the surface accepts where its bash runs: a role it moves out of
+  // a container is no longer asked about.
+  recordExecFloor(config, path);
   return entry;
+}
+
+const contained = (mode: string) => mode !== "off";
+
+/** Each role's resolved exec under `config`, and `*` for a role with none of its own. */
+function execMap(config: GnomonConfig): Record<string, { mode: string; image: string }> {
+  const pick = (e: { mode: string; image: string }) => ({ mode: e.mode, image: e.image });
+  const out: Record<string, { mode: string; image: string }> = { "*": pick(resolveExec(config)) };
+  for (const r of listRoles(config)) out[r] = pick(resolveExec(config, r));
+  return out;
+}
+
+/** This project's exec floor on this machine, if a session ever ran a role contained here. */
+export function execFloorOf(config: GnomonConfig, path = trustPath()): ExecFloor | undefined {
+  const root = projectRootOf(config);
+  return loadTrust(path).exec?.find((f) => f.root === root);
+}
+
+/**
+ * Record where `config` runs each role's bash, as this project's floor: call
+ * when a session starts, with the configuration it runs (settled through
+ * trust, so a downgrade nobody accepted was already put back). Writes only
+ * when it changed, and drops the entry when nothing runs contained any more.
+ */
+export function recordExecFloor(config: GnomonConfig, path = trustPath()): void {
+  try {
+    const root = projectRootOf(config);
+    const roles = execMap(config);
+    const any = Object.values(roles).some((e) => contained(e.mode));
+    const store = loadTrust(path);
+    const floors = store.exec ?? [];
+    const had = floors.find((f) => f.root === root);
+    if (!any && !had) return;
+    if (had && JSON.stringify(had.roles) === JSON.stringify(roles)) return;
+    const rest = floors.filter((f) => f.root !== root);
+    store.exec = any ? [...rest, { root, roles, at: new Date().toISOString() }] : rest;
+    saveTrust(store, path);
+  } catch {
+    // A store that cannot be written records nothing; the in-session pin
+    // (sandbox_pin.ts) still holds this session.
+  }
+}
+
+/** The roles `config` moves out of the container they ran in here: each a grant. */
+export function execDowngrades(config: GnomonConfig, floor: ExecFloor | undefined): Grant[] {
+  if (!floor) return [];
+  const out: Grant[] = [];
+  for (const role of listRoles(config)) {
+    const was = floor.roles[role] ?? floor.roles["*"];
+    if (!was || !contained(was.mode)) continue;
+    if (resolveExec(config, role).mode !== "off") continue;
+    out.push({
+      key: `exec:${role}:off`,
+      subject: `role ${role}`,
+      grants: `runs bash on this machine (exec = "off"); it ran in ${was.mode} here`,
+      default: `exec = "${was.mode}", as this project last ran`,
+    });
+  }
+  return out;
+}
+
+/** Put every role `execDowngrades` names back in the container it ran in. */
+function restoreExecFloor(c: GnomonConfig, floor: ExecFloor): void {
+  for (const g of execDowngrades(c, floor)) {
+    const role = g.key.slice("exec:".length, -":off".length);
+    const was = floor.roles[role] ?? floor.roles["*"]!;
+    const def = (c.roles[role] ??= {} as RoleDef) as RoleDef & { exec?: string; image?: string };
+    def.exec = was.mode;
+    def.image = was.image;
+  }
 }
 
 /** Forget every trust recorded for this project. Returns how many entries went. */
@@ -804,6 +908,8 @@ export interface TrustEvaluation {
   uncovered: Grant[];
   /** GNOMON_TRUST was set and names a different surface. */
   envMismatch?: string;
+  /** Present when a role leaves the container it ran in here: what a clamp puts back. */
+  execFloor?: ExecFloor;
 }
 
 export interface TrustOptions {
@@ -821,10 +927,16 @@ function envNames(env: string, hash: string): boolean {
 }
 
 export function evaluateTrust(config: GnomonConfig, opts: TrustOptions = {}): TrustEvaluation {
-  const grants = surfaceGrants(config);
+  const store = loadTrust(opts.path);
   const root = projectRootOf(config);
+  const floor = store.exec?.find((f) => f.root === root);
+  // A role leaving the container it ran in here is a grant like any other,
+  // and one no trusted surface covers: it is relative to this machine's
+  // floor, not to the scaffold.
+  const downgrades = execDowngrades(config, floor);
+  const grants = [...surfaceGrants(config), ...downgrades];
   const surface_hash = surfaceHashOfConfig(config);
-  const base = { root, surface_hash, grants };
+  const base = { root, surface_hash, grants, ...(downgrades.length > 0 ? { execFloor: floor } : {}) };
   if (grants.length === 0) return { ...base, status: "default", uncovered: [] };
   if (opts.flag) return { ...base, status: "trusted", via: "flag:--trust", uncovered: [] };
 
@@ -834,23 +946,26 @@ export function evaluateTrust(config: GnomonConfig, opts: TrustOptions = {}): Tr
   }
   const envMismatch = env ? env : undefined;
 
-  const mine = loadTrust(opts.path).entries.filter((e) => e.root === root);
-  if (mine.some((e) => e.surface_hash === surface_hash)) {
-    return { ...base, status: "trusted", via: "store", uncovered: [] };
+  const mine = store.entries.filter((e) => e.root === root);
+  if (downgrades.length === 0) {
+    if (mine.some((e) => e.surface_hash === surface_hash)) {
+      return { ...base, status: "trusted", via: "store", uncovered: [] };
+    }
+    // No looser than ONE surface already trusted here. Not the union: trusting
+    // network on one day and approval = never on another is not trusting both
+    // at once.
+    const keys = grants.map((g) => g.key);
+    if (mine.some((e) => keys.every((k) => e.grants.includes(k)))) {
+      return { ...base, status: "trusted", via: "store:covered", uncovered: [] };
+    }
   }
-  // No looser than ONE surface already trusted here. Not the union: trusting
-  // network on one day and approval = never on another is not trusting both
-  // at once.
   const keys = grants.map((g) => g.key);
-  if (mine.some((e) => keys.every((k) => e.grants.includes(k)))) {
-    return { ...base, status: "trusted", via: "store:covered", uncovered: [] };
-  }
   const best = mine.reduce<TrustEntry | undefined>((acc, e) => {
     const n = keys.filter((k) => e.grants.includes(k)).length;
     const m = acc ? keys.filter((k) => acc.grants.includes(k)).length : -1;
     return n > m ? e : acc;
   }, undefined);
-  const uncovered = grants.filter((g) => !best?.grants.includes(g.key));
+  const uncovered = grants.filter((g) => !best?.grants.includes(g.key) || downgrades.includes(g));
   return { ...base, status: "untrusted", uncovered, ...(envMismatch ? { envMismatch } : {}) };
 }
 
@@ -955,7 +1070,7 @@ export function settleTrustHeadless(
   }
   (opts.warn ?? ((l: string) => process.stderr.write(`${l}\n`)))(clampNotice(evaluation));
   return {
-    config: clampToDefaults(config),
+    config: clampToDefaults(config, evaluation.execFloor),
     evaluation,
     outcome: outcomeOf(evaluation, "clamped", "default:no-operator"),
   };
@@ -996,7 +1111,7 @@ export async function settleTrust(config: GnomonConfig, opts: SettleOptions): Pr
     if (a === "" || a === "n" || a === "no") {
       print("  Running with the defaults this time. `gnomon trust grant` trusts it later.");
       return {
-        config: clampToDefaults(config),
+        config: clampToDefaults(config, evaluation.execFloor),
         evaluation,
         outcome: outcomeOf(evaluation, "clamped", "human:declined"),
       };
@@ -1007,7 +1122,7 @@ export async function settleTrust(config: GnomonConfig, opts: SettleOptions): Pr
   // Five unreadable answers is nobody answering: the safe side, said out loud.
   print("  No answer; running with the defaults.");
   return {
-    config: clampToDefaults(config),
+    config: clampToDefaults(config, evaluation.execFloor),
     evaluation,
     outcome: outcomeOf(evaluation, "clamped", "default:no-operator"),
   };
