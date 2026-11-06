@@ -14,7 +14,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { safeGit, markGitContained } from "./git_safe.js";
+import { safeGit } from "./git_safe.js";
 import { recordDegradation, type DegradationSink } from "./degradation.js";
 import {
   readFileSync,
@@ -1705,9 +1705,6 @@ export function sandboxCommand(
 ): string {
   const ex = ctx.exec;
   if (!ex || ex.mode === "off") return command;
-  // The container can write the repository's .git/config and .gitattributes:
-  // gnomon's own git lists and blanks their drivers from now on (git_safe.ts).
-  markGitContained();
   // Single-quoted for `sh -c`, so only the quote character needs escaping --
   // and it was escaped WRONG. The POSIX idiom is `'\''`: close the quote,
   // emit a backslash-escaped quote, reopen. That is four characters. Written as

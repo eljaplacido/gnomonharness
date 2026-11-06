@@ -26,9 +26,10 @@
  *      driver's name is the repository's choice. So the configuration is
  *      listed first (`git config --list` reads; it runs nothing) and every
  *      driver it names is blanked through GIT_CONFIG_COUNT, which takes any
- *      key a `-c k=v` could not spell (a name containing `=`). Done whenever a
- *      contained command may have run in this process, and always for the
- *      one-shot CLI commands, which cannot know.
+ *      key a `-c k=v` could not spell (a name containing `=`). Done for every
+ *      call but a `rev-parse` on a hot path, and cached per config state: a
+ *      command contained in an EARLIER session may have planted a driver
+ *      this process never saw being written.
  *   3. Under exec = "os", git itself runs inside the sandbox: `gnomon-exec
  *      sandbox --network off`, writable only in an empty directory of its
  *      own. Whatever the repository still makes git run -- a driver defined
@@ -43,7 +44,7 @@
  */
 import { spawnSync, type SpawnSyncReturns, type StdioOptions } from "node:child_process";
 import { isAbsolute, resolve, dirname, join } from "node:path";
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 
 /** `-c` overrides every gnomon-run git gets. */
@@ -61,6 +62,16 @@ export const GIT_HARDENING: readonly string[] = [
   "-c", "credential.helper=",
   "-c", "protocol.ext.allow=never",
   "-c", "log.showSignature=false",
+  // Programs a repository's config could name for subcommands gnomon does
+  // not run today; blanked anyway, so a later call site cannot reach one.
+  "-c", "core.sshCommand=",
+  "-c", "core.gitProxy=",
+  "-c", "commit.gpgSign=false",
+  "-c", "tag.gpgSign=false",
+  "-c", "gpg.program=",
+  "-c", "core.editor=:",
+  "-c", "sequence.editor=:",
+  "-c", "core.alternateRefsCommand=",
 ];
 
 /** Environment for a gnomon-run git: no system config, no prompt, no pager. */
@@ -69,6 +80,17 @@ export function gitHardenedEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Pr
   for (const k of [
     "GIT_EXTERNAL_DIFF", "GIT_DIFF_OPTS", "GIT_ASKPASS", "SSH_ASKPASS", "GIT_SSH", "GIT_SSH_COMMAND",
     "GIT_PROXY_COMMAND", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR",
+    // Redirections of PART of a repository -- its index, its common dir (and
+    // with it the config), its object store -- arrive in the environment of a
+    // git hook gnomon was started from. Bookkeeping measures the repository
+    // the walk from cwd finds, whole. GIT_DIR and GIT_WORK_TREE stay: they
+    // name a whole repository, the stamp honours them deliberately
+    // (tools.ts gitRootOf), and only gnomon's own parent can set them -- a
+    // contained command cannot. GIT_CONFIG_GLOBAL stays for the same reason:
+    // it is the operator's own global config, and it is in the listing's
+    // cache key.
+    "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG_SYSTEM", "GIT_CONFIG",
   ]) {
     delete env[k];
   }
@@ -141,10 +163,20 @@ function gitDirOf(cwd: string, args: readonly string[]): string {
  * (includes too) and runs nothing.
  */
 /**
- * What the driver listing depends on: the repository's config files and the
- * global ones, by size and mtime. Null (do not cache) when the repository's
- * `.git` is not a plain directory (a linked worktree, a submodule), where
- * the config lives somewhere this walk does not follow.
+ * What the driver listing depends on: every file git reads the repository's
+ * configuration from, and the global ones, by stat. Null (do not cache) when
+ * the layout is one this walk does not follow.
+ *
+ * The repository's config is `<common dir>/config`, and the common dir is
+ * not always `.git`: a `commondir` file inside the git dir moves it (that is
+ * how a linked worktree shares its main repository's config), and a `.git`
+ * FILE (`gitdir: <path>`) moves the git dir itself. Both are inside the
+ * project root, so a contained command can write them -- the first signature
+ * here read only `.git/config`, and a `commondir` written after a listing was
+ * cached pointed git at a config defining a filter while the cache still
+ * answered "no drivers" (third review, finding 2). So the pointers are
+ * followed, and each pointer file is itself part of the signature: changing
+ * where git looks changes the key.
  */
 function configSignature(dir: string, env: NodeJS.ProcessEnv): string | null {
   // ctime too: size, mtime and inode can all be kept by an in-place
@@ -158,7 +190,17 @@ function configSignature(dir: string, env: NodeJS.ProcessEnv): string | null {
       return "-";
     }
   };
+  const readPointer = (p: string): string | null => {
+    try {
+      return readFileSync(p, "utf8");
+    } catch {
+      return null;
+    }
+  };
+  // GIT_DIR / GIT_WORK_TREE name a repository the walk from `dir` does not find.
+  if (env.GIT_DIR !== undefined || env.GIT_WORK_TREE !== undefined) return null;
   let d = resolve(dir);
+  let gitDir: string;
   for (;;) {
     let g;
     try {
@@ -167,19 +209,40 @@ function configSignature(dir: string, env: NodeJS.ProcessEnv): string | null {
       g = null;
     }
     if (g) {
-      if (!g.isDirectory()) return null;
+      if (g.isDirectory()) {
+        gitDir = join(d, ".git");
+      } else if (g.isFile()) {
+        const m = /^gitdir:\s*(.+?)\s*$/m.exec(readPointer(join(d, ".git")) ?? "");
+        if (!m) return null;
+        gitDir = resolve(d, m[1]!);
+      } else {
+        return null;
+      }
       break;
     }
     const up = dirname(d);
     if (up === d) return null;
     d = up;
   }
+  let common = gitDir;
+  const cd = readPointer(join(gitDir, "commondir"));
+  if (cd !== null) {
+    const target = cd.trim();
+    if (!target) return null;
+    common = resolve(gitDir, target);
+  }
   const home = env.HOME || homedir();
   const xdg = env.XDG_CONFIG_HOME || join(home, ".config");
   return [
     d,
-    st(join(d, ".git", "config")),
-    st(join(d, ".git", "config.worktree")),
+    st(join(d, ".git")),
+    gitDir,
+    st(join(gitDir, "commondir")),
+    common,
+    st(join(common, "config")),
+    st(join(gitDir, "config")),
+    st(join(gitDir, "config.worktree")),
+    st(join(common, "config.worktree")),
     st(join(home, ".gitconfig")),
     st(join(xdg, "git", "config")),
     env.GIT_CONFIG_GLOBAL ?? "",
@@ -192,7 +255,7 @@ function configSignature(dir: string, env: NodeJS.ProcessEnv): string | null {
  * file that changes -- size, mtime, ctime or inode -- lists again. A listing
  * that names any `include.*` or `includeIf.*` key is NEVER cached: the files
  * it pulls in (which may not exist yet, or apply only on some branch) are
- * not in the signature. Nor is a repository whose `.git` is not a directory.
+ * not in the signature. Nor is a layout configSignature does not follow.
  */
 const driverCache = new Map<string, string[]>();
 
@@ -272,31 +335,42 @@ function driverEnv(keys: readonly string[], env: NodeJS.ProcessEnv): NodeJS.Proc
 }
 
 /**
+ * Subcommands that read no worktree file and no blob content, so no filter,
+ * textconv or diff driver can fire: a `hot` call of one of these skips the
+ * listing (build.ts's rev-parse calls, on the first record's path).
+ */
+const DRIVERLESS = new Set(["rev-parse"]);
+
+/** The subcommand of `args`, after any leading options. */
+function subcommandOf(args: readonly string[]): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === "-C" || a === "-c" || a === "--git-dir" || a === "--work-tree") {
+      i++;
+      continue;
+    }
+    if (!a.startsWith("-")) return a;
+  }
+  return undefined;
+}
+
+/**
  * How git is run inside the OS sandbox, once exec = "os" has run a command in
  * this process (tools.ts registers it from osSandboxPlan). Null: on the host.
  */
 export type GitSandbox = (argv: string[], env: NodeJS.ProcessEnv) => { file: string; args: string[]; env: NodeJS.ProcessEnv };
 
 let sandbox: GitSandbox | null = null;
-/** A contained command (docker or os) may have written the repository's config. */
-let contained = false;
 
 /** Run every later gnomon git inside the OS sandbox. Only ever tightens. */
 export function setGitSandbox(wrap: GitSandbox): void {
   sandbox = wrap;
-  contained = true;
-}
-
-/** A contained command may have run: list and blank drivers from now on. */
-export function markGitContained(): void {
-  contained = true;
 }
 
 /** Tests only. */
 export function _resetGitSafety(): void {
   driverCache.clear();
   sandbox = null;
-  contained = false;
 }
 
 export function gitSandboxed(): boolean {
@@ -311,8 +385,15 @@ export interface SafeGitOptions {
   stdio?: StdioOptions;
   env?: NodeJS.ProcessEnv;
   /**
-   * The hot path (per turn, per bash call): list drivers only once a
-   * contained command may have written them. Default false: always list.
+   * A call on a hot path (per turn, per bash call). It skips the driver
+   * listing only for a subcommand that cannot run a driver (DRIVERLESS);
+   * everything else lists, and the listing is cached per config state, so
+   * the cost on a hot path is one `git config --list` per change.
+   *
+   * It used to skip the listing for every hot call until a contained command
+   * had run IN THIS PROCESS -- and a filter a container planted in the last
+   * session then ran on the host from this session's first tree measurement,
+   * before any contained command had (third review, finding 3).
    */
   hot?: boolean;
 }
@@ -320,7 +401,8 @@ export interface SafeGitOptions {
 function plan(args: readonly string[], opts: SafeGitOptions): { file: string; args: string[]; env: NodeJS.ProcessEnv } {
   let env = gitHardenedEnv(opts.env ?? process.env);
   const argv = hardenGitArgs(args);
-  if (sandbox === null && (contained || !opts.hot)) {
+  const sub = subcommandOf(args);
+  if (!(opts.hot && sub !== undefined && DRIVERLESS.has(sub))) {
     env = neutralizeDriversEnv(gitDirOf(opts.cwd, args), env);
   }
   return sandbox !== null ? sandbox(["git", ...argv], env) : { file: "git", args: argv, env };
