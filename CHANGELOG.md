@@ -107,8 +107,18 @@
   EPERM, so the supervisor refused every connect, loopback included, while the
   probe reported `network_supported: true`. It now reports false with the
   reason, and `bash` refuses under `network = false` there.
+
 ### Security
 
+- **`exec = "os"` gets the same read-only paths as `docker`** (below).
+  `.gnomon/`, `.gnomon-audit/`, `.gnomon-sessions/` and git's control files
+  are passed to `gnomon-exec sandbox --readonly`, which macOS's kernel
+  enforces. Linux's Landlock cannot take a subtree back out of the root's
+  write grant, so there gnomon snapshots `.gnomon/` and git's control files
+  before each command and puts back (and reports) what the command changed;
+  the probe reports `readonly_enforced: false`. The rest of this section
+  applies to `exec = "os"` too: root_fs.ts writes, the fail-closed trust
+  store and floor file, nested `.gnomon/` floors.
 - **`exec = "docker"` now contains a hostile model against gnomon's own
   host-side actions.** In v0.4.3 and earlier it did not: the container could
   write files in the mounted project that gnomon, running on the host, then

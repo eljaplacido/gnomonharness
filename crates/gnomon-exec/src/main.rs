@@ -542,7 +542,7 @@ fn print_usage() {
     println!("  gnomon-exec validate   --session <file> [--fixture <golden.json>]");
     println!("  gnomon-exec hash       --session <file>");
     println!("  gnomon-exec sandbox    --root <dir> [--write <dir>]... [--network on|off|none]");
-    println!("                         [--reads all|scoped] [--read <path>]... -- <program> [args...]");
+    println!("                         [--reads all|scoped] [--read <path>]... [--readonly <path>]... -- <program> [args...]");
     println!("  gnomon-exec sandbox-probe");
     println!("  gnomon-exec sandbox-clean <dir> [--dev N --ino N]   (empty a per-call temp dir; follows no link)");
     println!("  gnomon-exec sandbox-kill --supervisor <pid>:<start>... -- <pid> [signal]");
@@ -558,6 +558,7 @@ fn sandbox_cmd(args: &[String]) -> ! {
     let mut network = false;
     let mut loopback = true;
     let mut report_fd: Option<i32> = None;
+    let mut readonly = Vec::new();
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
@@ -575,6 +576,10 @@ fn sandbox_cmd(args: &[String]) -> ! {
             }
             "--read" => {
                 readable.push(value(i).into());
+                i += 2;
+            }
+            "--readonly" => {
+                readonly.push(value(i).into());
                 i += 2;
             }
             "--reads" => {
@@ -616,7 +621,7 @@ fn sandbox_cmd(args: &[String]) -> ! {
     if reads == sandbox::Reads::All && !readable.is_empty() {
         sandbox::refuse("--read is meaningful only with --reads scoped (under --reads all every path is readable)");
     }
-    let policy = sandbox::Policy { root, writable, readable, reads, network, loopback, report_fd };
+    let policy = sandbox::Policy { root, writable, readable, reads, network, loopback, report_fd, readonly };
     sandbox::run(&policy, &args[i..])
 }
 

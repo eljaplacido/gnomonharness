@@ -34,6 +34,7 @@ import { loadConfig, routeRole } from "./config.js";
 import { runPromptLoop, COMMANDS } from "./prompt_loop.js";
 import { verifyTrail } from "./audit.js";
 import { stubDeclaredKeys } from "./test_support.js";
+import { _setProtectedGuard } from "./tools.js";
 
 // The real surface, copied per test. loadConfig is fine on the repo itself, but
 // the loop saves a session
@@ -701,10 +702,20 @@ describe("a sandboxed command cannot loosen its own sandbox through the surface"
           ? `kernel cannot sandbox: ${probe.probe.reason}`
           : "";
   let restoreKeys: () => void;
+  // What holds when a write to the surface or .git/config gets past the
+  // put-back of protected paths (a background process writing after the
+  // check, fifth review): the guard is off here so the write lands, and the
+  // layers below it are what is tested. tools.ts's guard has its own test
+  // in os_sandbox.test.ts. (Where the kernel refuses the write -- macOS --
+  // these skip already: no network sandbox there.)
   beforeAll(() => {
     restoreKeys = stubDeclaredKeys(loadConfig(resolve(process.cwd(), "..", "..")));
+    _setProtectedGuard(false);
   });
-  afterAll(() => restoreKeys());
+  afterAll(() => {
+    restoreKeys();
+    _setProtectedGuard(true);
+  });
 
   it.skipIf(!!why)(`exec = "off" written by bash is not applied; the next command is still confined${why ? ` [SKIPPED: ${why}]` : ""}`, async () => {
     const root = makeProject();
@@ -772,10 +783,20 @@ describe("a sandboxed command cannot act through gnomon's own git or key routing
           ? `kernel cannot sandbox: ${probe.probe.reason}`
           : "";
   let restoreKeys: () => void;
+  // What holds when a write to the surface or .git/config gets past the
+  // put-back of protected paths (a background process writing after the
+  // check, fifth review): the guard is off here so the write lands, and the
+  // layers below it are what is tested. tools.ts's guard has its own test
+  // in os_sandbox.test.ts. (Where the kernel refuses the write -- macOS --
+  // these skip already: no network sandbox there.)
   beforeAll(() => {
     restoreKeys = stubDeclaredKeys(loadConfig(resolve(process.cwd(), "..", "..")));
+    _setProtectedGuard(false);
   });
-  afterAll(() => restoreKeys());
+  afterAll(() => {
+    restoreKeys();
+    _setProtectedGuard(true);
+  });
 
   /** The repository's surface under exec = "os", no [verify], nobody to ask. */
   const osProject = (): string => {

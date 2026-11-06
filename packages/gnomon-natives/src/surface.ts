@@ -570,6 +570,8 @@ export interface SandboxProbe {
   not_enforced: string[];
   /** Can `sandbox --reads scoped` run here? Absent from a gnomon-exec that predates it. */
   reads_scoped_supported?: boolean;
+  /** `--readonly` is enforced by the kernel (macOS); absent: the binary predates it. */
+  readonly_enforced?: boolean;
   /** Under `--reads scoped`: the system and toolchain paths readable on this machine. */
   scoped_reads?: string[];
   /** Under `--reads scoped`: the credential locations no grant may cover. */

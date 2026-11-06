@@ -364,6 +364,31 @@ describe("bash under exec = \"os\" — the kernel, not the rules, holds the line
     expect(existsSync(join(tmpdir(), tmp!))).toBe(false);
   });
 
+  // Fifth review, A, for exec = "os": the surface and git's control files are
+  // read-only to the command -- by the kernel on macOS (gnomon-exec
+  // --readonly), and on Linux, where Landlock cannot take a subtree back out
+  // of the root's grant, put back after the command and reported.
+  it.skipIf(!!skipWhy || !has("git"))(label("a command cannot keep a change to .gnomon/ or .git/config; its own work stays", skipWhy), async () => {
+    mkdirSync(join(root, ".gnomon"));
+    writeFileSync(join(root, ".gnomon", "policy.toml"), 'exec = "os"\n');
+    execFileSync("git", ["init", "-q", root]);
+    const config = readFileSync(join(root, ".git", "config"), "utf8");
+    const out = await bash(
+      // Spelled so the text rules (surface, git_hooks) do not see it: they
+      // are an intent filter, and this is what gets past one.
+      `s=$(printf .gno; printf mon); g=$(printf .g; printf it); printf 'exec = "off"\\n' > $s/policy.toml; touch $s/extra.toml; ` +
+        `printf '[core]\\n\\tfsmonitor = touch /tmp/gnomon-r5-fsmonitor\\n' >> $g/config; echo hook > $g/hooks/pre-commit; echo work > work.txt`,
+      ctx()
+    );
+    expect(existsSync(join(root, "work.txt")), out.content).toBe(true);
+    expect(readFileSync(join(root, "work.txt"), "utf8")).toBe("work\n");
+    expect(readFileSync(join(root, ".gnomon", "policy.toml"), "utf8")).toBe('exec = "os"\n');
+    expect(existsSync(join(root, ".gnomon", "extra.toml"))).toBe(false);
+    expect(readFileSync(join(root, ".git", "config"), "utf8")).toBe(config);
+    expect(existsSync(join(root, ".git", "hooks", "pre-commit"))).toBe(false);
+    if (process.platform === "linux") expect(out.content).toMatch(/\[gnomon\] This command changed files/);
+  });
+
   describe("network = false", () => {
     let server: Server;
     let port: number;

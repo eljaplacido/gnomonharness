@@ -1693,6 +1693,17 @@ of HOME credentials that the other two let through
   `/dev/null` and the other device files programs expect to write. Create,
   modify, truncate, delete, rename and link elsewhere all fail with
   `Permission denied`, `rm -rf` and `shutil.rmtree` included.
+- **Not gnomon's own state or git's control files, even inside the root**:
+  `.gnomon/`, `.gnomon-audit/`, `.gnomon-sessions/`, `.git/config`,
+  `.git/hooks/`, `.git/info/`, `.git/commondir`. On macOS the kernel refuses
+  the write (`gnomon-exec --readonly`). On Linux it cannot: Landlock is an
+  allow-list, and the write grant on the root covers everything beneath it, so
+  gnomon snapshots `.gnomon/` and git's control files before each command,
+  puts back anything the command changed, and says so in the tool result. A
+  process the command leaves running in the background can still change them
+  after that check; the exec floor, the session pin and gnomon's sandboxed git
+  are what hold then. The model cannot change `.gnomon/*.toml` from bash under
+  `exec = "os"`; configuration is the operator's.
 - **No egress unless `[sandbox] network = true`** (or `/network on` for the
   session; as with `docker`, an undeclared `network` counts as off). Only
   loopback is reachable — a local server is not egress, so

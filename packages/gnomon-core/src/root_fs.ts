@@ -33,7 +33,11 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readdirSync,
+  readFileSync,
   readlinkSync,
+  rmSync,
+  chmodSync,
   realpathSync,
   renameSync,
   unlinkSync,
@@ -337,4 +341,120 @@ export function containedReadonlyPaths(root: string): string[] {
     want(join(git, "info"), "dir", true);
   }
   return out;
+}
+
+/**
+ * What a guarded command found and put back (exec = "os" on Linux, where the
+ * kernel cannot make a subtree of the root read-only: Landlock is an
+ * allow-list, and a write grant on the root covers everything beneath it).
+ */
+export interface ProtectedSnapshot {
+  root: string;
+  entries: Map<string, { kind: "file" | "dir"; mode: number; data: Buffer | null }>;
+}
+
+/** Files above this are recorded by kind only; a change to one is reported, not restored. */
+const SNAPSHOT_FILE_CAP = 4 * 1024 * 1024;
+
+function walkProtected(root: string, onEntry: (abs: string, st: Stats) => void): void {
+  // The surface and git's control files: the ones a command can use to
+  // loosen the next one. Not the record dirs, which gnomon writes between
+  // commands itself (root_fs.ts writes and the record guard cover them).
+  // Found from what is there now, never refusing: a symlink in place of one
+  // is exactly what this has to see and remove.
+  const base = resolve(root);
+  const git = join(base, ".git");
+  const g = lstatOrNull(git);
+  const tops = [join(base, ".gnomon")];
+  if (g?.isDirectory()) tops.push(join(git, "config"), join(git, "commondir"), join(git, "hooks"), join(git, "info"));
+  else if (g) tops.push(git);
+  const walk = (abs: string) => {
+    const st = lstatOrNull(abs);
+    if (!st) return;
+    onEntry(abs, st);
+    if (st.isDirectory()) {
+      let names: string[] = [];
+      try {
+        names = readdirSync(abs);
+      } catch {
+        names = [];
+      }
+      for (const n of names.sort()) walk(join(abs, n));
+    }
+  };
+  for (const t of tops) walk(t);
+}
+
+/** Record the surface and git's control files under `root`, contents included. */
+export function snapshotProtected(root: string): ProtectedSnapshot {
+  const entries: ProtectedSnapshot["entries"] = new Map();
+  walkProtected(root, (abs, st) => {
+    if (st.isDirectory()) entries.set(abs, { kind: "dir", mode: st.mode & 0o7777, data: null });
+    else if (st.isFile()) {
+      let data: Buffer | null = null;
+      if (st.size <= SNAPSHOT_FILE_CAP) {
+        try {
+          data = readFileSync(abs);
+        } catch {
+          data = null;
+        }
+      }
+      entries.set(abs, { kind: "file", mode: st.mode & 0o7777, data });
+    }
+  });
+  return { root, entries };
+}
+
+/**
+ * Put back what changed since `snap` was taken: remove what appeared (links
+ * included), recreate what went, rewrite what changed. Returns the paths it
+ * touched, relative to the root, and what it could not restore.
+ */
+export function restoreProtected(snap: ProtectedSnapshot): { restored: string[]; unrestorable: string[] } {
+  const restored: string[] = [];
+  const unrestorable: string[] = [];
+  const rel = (p: string) => relative(resolve(snap.root), p) || ".";
+  const now = new Map<string, Stats>();
+  walkProtected(snap.root, (abs, st) => now.set(abs, st));
+  // Appeared, or changed kind: removed, deepest first.
+  for (const abs of [...now.keys()].sort((a, b) => b.length - a.length)) {
+    const st = now.get(abs)!;
+    const was = snap.entries.get(abs);
+    const sameKind = was && ((was.kind === "dir" && st.isDirectory() && !st.isSymbolicLink()) || (was.kind === "file" && st.isFile()));
+    if (sameKind) continue;
+    try {
+      rmSync(abs, { recursive: true, force: true });
+      restored.push(rel(abs));
+    } catch {
+      unrestorable.push(rel(abs));
+    }
+  }
+  // Recreated or rewritten, shallowest first.
+  for (const [abs, was] of [...snap.entries].sort((a, b) => a[0].length - b[0].length)) {
+    const st = lstatOrNull(abs);
+    try {
+      if (was.kind === "dir") {
+        if (!st) {
+          ensureDirIn(snap.root, abs, was.mode);
+          if (!restored.includes(rel(abs))) restored.push(rel(abs));
+        }
+        continue;
+      }
+      if (was.data === null) {
+        if (!st) unrestorable.push(rel(abs));
+        continue;
+      }
+      const same = st && st.isFile() && st.size === was.data.length && readFileSync(abs).equals(was.data);
+      if (!same) {
+        writeFileIn(snap.root, abs, was.data, was.mode);
+        if (!restored.includes(rel(abs))) restored.push(rel(abs));
+      } else if (st && (st.mode & 0o7777) !== was.mode) {
+        chmodSync(abs, was.mode);
+        if (!restored.includes(rel(abs))) restored.push(rel(abs));
+      }
+    } catch {
+      unrestorable.push(rel(abs));
+    }
+  }
+  return { restored, unrestorable };
 }

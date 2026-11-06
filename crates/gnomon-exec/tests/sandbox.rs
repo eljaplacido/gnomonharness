@@ -278,6 +278,37 @@ fn a_malformed_invocation_is_refused_never_run() {
     }
 }
 
+/// Fifth review: gnomon's state under the root is read-only to the command
+/// where the kernel can say so (macOS); Linux's Landlock cannot take a
+/// subtree back out of a granted root, and the probe says so rather than
+/// pretend.
+#[test]
+fn readonly_paths_under_the_root_are_refused_where_the_kernel_can() {
+    require_sandbox!(true);
+    let s = scene();
+    let surface = s.root.join(".gnomon");
+    std::fs::create_dir(&surface).unwrap();
+    std::fs::write(surface.join("policy.toml"), "exec = \"os\"\n").unwrap();
+    let out = Command::new(bin())
+        .args(["sandbox", "--root"])
+        .arg(&s.root)
+        .arg("--write")
+        .arg(&s.tmp)
+        .arg("--readonly")
+        .arg(&surface)
+        .args(["--network", "on", "--", "/bin/sh", "-c"])
+        .arg(format!("echo off > {}/policy.toml; echo ok > {}/work.txt", sh_quote(&surface), sh_quote(&s.root)))
+        .current_dir(&s.root)
+        .output()
+        .expect("spawn gnomon-exec sandbox");
+    assert_eq!(std::fs::read_to_string(s.root.join("work.txt")).unwrap(), "ok\n", "{out:?}");
+    let enforced = probe()["readonly_enforced"].as_bool().unwrap();
+    assert_eq!(enforced, cfg!(target_os = "macos"));
+    if enforced {
+        assert_eq!(std::fs::read_to_string(surface.join("policy.toml")).unwrap(), "exec = \"os\"\n", "{out:?}");
+    }
+}
+
 #[test]
 fn the_probe_reports_what_this_kernel_enforces() {
     let p = probe();

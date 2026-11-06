@@ -78,6 +78,13 @@ pub struct Policy {
     /// `--report-fd N`: write the supervisor's pid to this descriptor, once,
     /// and close it in every process the command can reach (sandbox-kill).
     pub report_fd: Option<i32>,
+    /// `--readonly PATH`: paths under a writable directory the command must
+    /// not write -- gnomon's own state and git's control files (fifth review).
+    /// Enforced by the kernel on macOS (an SBPL deny after the allow).
+    /// Landlock is an allow-list and cannot take a subtree back out of a
+    /// granted root, so on Linux the caller guards these itself and the probe
+    /// says `readonly_enforced: false`.
+    pub readonly: Vec<PathBuf>,
 }
 
 /// System directories a scoped command may read, when they exist: where
@@ -340,6 +347,9 @@ pub struct Probe {
     pub scoped_protected: Vec<String>,
     /// The limits of `--reads scoped` in particular.
     pub scoped_not_enforced: Vec<&'static str>,
+    /// Does the kernel enforce `--readonly` here? macOS yes; Linux (Landlock)
+    /// no -- see `Policy::readonly`.
+    pub readonly_enforced: bool,
 }
 
 /// The limits of this sandbox, said once, here, and printed by `probe`.
@@ -417,6 +427,11 @@ impl Policy {
             network: self.network,
             loopback: self.loopback,
             report_fd: self.report_fd,
+            readonly: self
+                .readonly
+                .iter()
+                .map(|r| canonical_path(r, "--readonly"))
+                .collect::<Result<_, _>>()?,
         })
     }
 
@@ -875,6 +890,7 @@ fn scoped_description() -> (Vec<String>, Vec<String>) {
         network: true,
         loopback: true,
         report_fd: None,
+        readonly: vec![],
     };
     let reads = read_grants(&probe_policy)
         .map(|g| g.into_iter().map(|(p, _)| p.display().to_string()).collect())
@@ -917,6 +933,7 @@ mod unsupported {
             degraded: vec![],
             not_enforced: NOT_ENFORCED.to_vec(),
             reads_scoped_supported: false,
+            readonly_enforced: cfg!(target_os = "macos"),
             scoped_reads: vec![],
             scoped_protected: vec![],
             scoped_not_enforced: SCOPED_NOT_ENFORCED.to_vec(),
@@ -965,6 +982,7 @@ mod macos {
             ],
             not_enforced: NOT_ENFORCED.to_vec(),
             reads_scoped_supported: false,
+            readonly_enforced: cfg!(target_os = "macos"),
             scoped_reads: vec![],
             scoped_protected: vec![],
             scoped_not_enforced: SCOPED_NOT_ENFORCED.to_vec(),
@@ -990,6 +1008,15 @@ mod macos {
             p.push_str(&format!("  (literal \"{dev}\")\n"));
         }
         p.push_str("  (regex #\"^/dev/fd/[0-9]+$\")\n  (regex #\"^/dev/ttys[0-9]+$\"))\n");
+        // Taken back out of the grant above: a later matching rule wins.
+        if !policy.readonly.is_empty() {
+            p.push_str("(deny file-write*\n");
+            for r in &policy.readonly {
+                let kind = if r.is_dir() { "subpath" } else { "literal" };
+                p.push_str(&format!("  ({kind} {})\n", lit(r)));
+            }
+            p.push_str(")\n");
+        }
         if !policy.network {
             // Bazel's darwin sandbox, verbatim (--sandbox_block_network).
             // A fifth line, `(allow network-bind (local ip "*:*"))`, was
@@ -1523,6 +1550,7 @@ pub mod linux {
             degraded,
             not_enforced: NOT_ENFORCED.to_vec(),
             reads_scoped_supported: ok,
+            readonly_enforced: cfg!(target_os = "macos"),
             scoped_reads,
             scoped_protected,
             scoped_not_enforced: SCOPED_NOT_ENFORCED.to_vec(),

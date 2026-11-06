@@ -76,7 +76,7 @@ import {
   type RepoCodeRun,
   type WriteTarget,
 } from "./shell.js";
-import { containedReadonlyPaths, ensureDirIn, RootWriteError, writeFileIn } from "./root_fs.js";
+import { containedReadonlyPaths, ensureDirIn, restoreProtected, RootWriteError, snapshotProtected, writeFileIn } from "./root_fs.js";
 
 // ---------------------------------------------------------------------------
 // Outcome codes
@@ -2274,6 +2274,19 @@ export function osSandboxPlan(
   // the session's read scope, which it reads the root and extra_roots under
   // rather than writes (third review, finding 9).
   registerGitSandbox(sb.bin, reads === "scoped" ? [ctx.root, ...extra, ...readGrants] : null, ctx.config);
+  // gnomon's own state and git's control files, read-only to the command
+  // (fifth review, A): enforced by the kernel where gnomon-exec says it can
+  // (macOS), and on Linux -- where Landlock cannot take a subtree back out of
+  // the root's grant -- by the snapshot bashTool takes before the command and
+  // puts back after it (root_fs.ts restoreProtected). A gnomon-exec that
+  // predates --readonly is not handed it: it would refuse every command.
+  let readonly: string[];
+  try {
+    readonly = sb.probe.readonly_enforced === undefined ? [] : containedReadonlyPaths(ctx.root);
+  } catch (e) {
+    if (!(e instanceof RootWriteError)) throw e;
+    return refuse(`${e.message}.`, "gnomon state under the root is a symlink");
+  }
   return {
     file: sb.bin,
     args: [
@@ -2283,6 +2296,7 @@ export function osSandboxPlan(
       ...extra.flatMap((r) => ["--write", r]),
       "--network", network ? "on" : "off",
       ...readArgs,
+      ...readonly.flatMap((r) => ["--readonly", r]),
       // fd 3: gnomon-exec writes the supervisor's pid there (sandbox-kill).
       "--report-fd", "3",
       "--",
@@ -2296,6 +2310,16 @@ export function osSandboxPlan(
     tmpId,
     network,
   };
+}
+
+/**
+ * Tests only: switch off the put-back of protected paths under exec = "os",
+ * to test what holds when a write gets past it (a process the command left
+ * running in the background changes the surface after the check).
+ */
+let protectedGuardOn = true;
+export function _setProtectedGuard(on: boolean): void {
+  protectedGuardOn = on;
 }
 
 let gitSandboxRoot: string | null = null;
@@ -3470,6 +3494,8 @@ async function bashTool(
   const osPlan = ctx.exec?.mode === "os" ? osSandboxPlan(command, ctx, shellBin, await loadOsSandboxProbe()) : undefined;
   if (osPlan && "refusal" in osPlan) return osPlan.refusal;
   let supervisor: number | null = null;
+  // exec = "os": what the command may not change, as it was before it ran.
+  const guarded = osPlan && protectedGuardOn ? snapshotProtected(ctx.root) : null;
 
   // From here until docker run has returned -- or the container is confirmed
   // removed -- gnomon runs no git on the host (git_safe liveContainer).
@@ -3714,9 +3740,25 @@ async function bashTool(
   // backgrounded loses it too -- such a job should keep its files under the
   // repository, which is where the background recipe already logs. Removed
   // by cleanOsSandboxTmp, never by an unsandboxed recursive rm: see there.
-  return running.finally(() => {
-    cleanOsSandboxTmp(osPlan.file, osPlan.tmp, osPlan.tmpId);
-  });
+  return running
+    .then((outcome) => {
+      if (!guarded) return outcome;
+      // Put back the surface and git's control files if the command changed
+      // them, and say so: the next gnomon read of either must not be the
+      // command's choice (fifth review, A, for exec = "os").
+      const { restored, unrestorable } = restoreProtected(guarded);
+      if (restored.length === 0 && unrestorable.length === 0) return outcome;
+      const note =
+        `\n\n[gnomon] This command changed files that are read-only to commands under exec = "os" ` +
+        `(gnomon's surface and git's control files). ` +
+        (restored.length > 0 ? `Put back: ${restored.slice(0, 8).join(", ")}${restored.length > 8 ? ` (+${restored.length - 8} more)` : ""}. ` : "") +
+        (unrestorable.length > 0 ? `Could NOT put back: ${unrestorable.slice(0, 8).join(", ")}. Tell the operator. ` : "") +
+        `Configuration under .gnomon/ is the operator's to change, not a command's.`;
+      return { ...outcome, content: `${outcome.content}${note}`, summary: `${outcome.summary} · protected files restored` };
+    })
+    .finally(() => {
+      cleanOsSandboxTmp(osPlan.file, osPlan.tmp, osPlan.tmpId);
+    });
 }
 
 /**
