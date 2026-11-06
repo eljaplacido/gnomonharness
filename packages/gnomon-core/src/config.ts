@@ -21,6 +21,7 @@ import { loadSkills } from "./skills.js";
 import { harnessBuild } from "./build.js";
 import { AUTO_WINDOW, rememberedWindow, type ContextSource } from "./context_window.js";
 import { COMPLETION_GATE_MODES, auditCompletionGate } from "./completion_gate.js";
+import { auditSoftShell } from "./soft_shell.js";
 import {
   ENV_SNAPSHOT_ID,
   ENV_SNAPSHOT_LIMITS,
@@ -627,6 +628,13 @@ export interface ToolDef {
    * edit as it was. sweep_knobs.ts, docs/CONTRACTS.md §32.
    */
   variant?: string;
+  /**
+   * On the `bash` declaration only: `"handle"` keeps a command that outlives
+   * `timeout_seconds` running as a job and offers the `job` tool beside bash;
+   * `"kill"` (or absent) kills it, as before. soft_shell.ts,
+   * docs/CONTRACTS.md §34.
+   */
+  soft_timeout?: string;
 }
 
 /** System prompt template */
@@ -3105,6 +3113,7 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
 problems.push(...auditCompletionGate(config));
 // The sweep knobs (sweep_knobs.ts): each opt-in, none fatal.
 problems.push(...auditSweepKnobs(config, (ep) => endpointKind(ep)));
+problems.push(...auditSoftShell(config));
 
 // [shadow] is log-only, so nothing in it is fatal: a shadow that cannot run
 // changes nothing about the run. What it can do is look like it is recording

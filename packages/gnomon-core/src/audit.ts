@@ -260,6 +260,11 @@ export type AuditKind =
   // judged: the round, hand_back or accept, the open items and the budget
   // left. Its own kind for the reason completion_gate has one.
   | "todo_gate"
+  // A bash command under soft_timeout = "handle" (soft_shell.ts) that ran
+  // past the timeout and was handed back as a job: when it yielded, what was
+  // sent to it, how it exited, or why it was killed. Its own kind because a
+  // job outlives the tool_call that started it.
+  | "job"
   // One per model request a turn made, when [audit] is on: what it carried
   // (gnomon's estimate, replayed reasoning, steering and its role, the trim
   // before it) and what came back (provider tokens, reasoning, code, clock).

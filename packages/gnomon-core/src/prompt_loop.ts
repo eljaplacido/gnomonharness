@@ -103,6 +103,8 @@ import {
 } from "./tools.js";
 import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
 import { StallSignals, type StallSignalCounters } from "./stall_signals.js";
+import { JobTable } from "./tools.js";
+import { JOB_TOOL, resolveSoftTimeout } from "./soft_shell.js";
 import {
   resolveCompletionGate,
   nextGateStep,
@@ -4506,7 +4508,32 @@ export function shadowTurnInfo(
   return { sessionId, label, role, model: route.target.model, endpointUrl: route.target.url, t0 };
 }
 
+/**
+ * Run one agentic turn. Under bash `soft_timeout = "handle"` (soft_shell.ts)
+ * every job the turn left running is killed here, whichever way it ended --
+ * an answer, a stall, a refusal, an Esc, a throw -- before the caller goes on
+ * to anything else. The ordinary endings stop them earlier, before the turn's
+ * own measurement of the tree (agenticTurn).
+ */
 export async function runAgenticTurn(
+  state: PromptState,
+  role: string,
+  route: ReturnType<typeof routeRole>,
+  messages: ChatMessage[],
+  deps: TurnDeps,
+  depth: number = 0,
+  parentLedger?: CallLedger,
+  sub?: { readOnly?: boolean }
+): Promise<TurnResult> {
+  const held: { jobs?: JobTable } = {};
+  try {
+    return await agenticTurn(state, role, route, messages, deps, depth, parentLedger, sub, held);
+  } finally {
+    await held.jobs?.closeAll("turn_end");
+  }
+}
+
+async function agenticTurn(
   state: PromptState,
   /** The role THIS turn runs as — a `/plan …` prefix differs from the
    *  session role, and it selects both the tool list and max_steps. */
@@ -4523,7 +4550,9 @@ export async function runAgenticTurn(
    * cannot change the worktree (completion_gate.ts reviewerToolNames), and
    * the declared [verify] check is not run for it.
    */
-  sub?: { readOnly?: boolean }
+  sub?: { readOnly?: boolean },
+  /** Where this turn's job table is left for runAgenticTurn to close. */
+  held: { jobs?: JobTable } = {}
 ): Promise<TurnResult> {
   const config = state.config;
   // `gnomon task --deadline`'s stopping clock, when the caller set one. A
@@ -4637,6 +4666,22 @@ export async function runAgenticTurn(
     toolSet.schemas = toolSet.schemas.filter((t) => keep.has(t.function.name));
   }
   const offered = new Set(toolSet.schemas.map((t) => t.function.name));
+  // bash soft_timeout = "handle" (soft_shell.ts, CONTRACTS.md §34): a
+  // command past the timeout becomes a job of this turn's, when `job` is
+  // offered to wait on it (the completion reviewer is offered none). Absent,
+  // nothing below reads it.
+  const jobs =
+    resolveSoftTimeout(config) === "handle" && offered.has(JOB_TOOL)
+      ? (held.jobs = new JobTable({
+          signal: deps.signal,
+          record: (r) =>
+            deps.audit?.write("job", {
+              ...r,
+              role,
+              ...(r.command !== undefined ? { command: deps.audit.action(r.command) } : {}),
+            }),
+        }))
+      : undefined;
   // The definitions this turn offers, hashed for the turn record's `wire`
   // (tools_hash.ts). Read, never changed: what goes out is toolSet.schemas.
   const offeredHash = toolsHash(toolSet.schemas);
@@ -4717,6 +4762,7 @@ export async function runAgenticTurn(
     // undeclared surface builds the context it always did.
     ...(packageIndex.length > 0 ? { packageIndex } : {}),
     ...(editVariant === "compat" ? { editVariant } : {}),
+    ...(jobs ? { jobs } : {}),
     // Turn-scoped: a command that blocked once will block again, and the loop
     // owns the lifetime of that fact.
     timedOutCommands: new Set<string>(),
@@ -6473,6 +6519,9 @@ export async function runAgenticTurn(
       // Nothing may be still held back when the turn ends: a folded chunk
       // printed after the answer would describe work the reader has already
       // been given conclusions about.
+      // Jobs still running are stopped first (soft_shell.ts): the measurement
+      // is of what the turn did, and a job must not keep writing past it.
+      await jobs?.closeAll("turn_end");
       flushFold();
       counters.tree_delta = measureTreeDelta(workRootOf(state.config), treeBaseline);
       stampCitations(counters, result.content, workRootOf(state.config));
@@ -6646,6 +6695,7 @@ export async function runAgenticTurn(
       // Nothing may be still held back when the turn ends: a folded chunk
       // printed after the answer would describe work the reader has already
       // been given conclusions about.
+      await jobs?.closeAll("turn_end");
       flushFold();
       counters.tree_delta = measureTreeDelta(workRootOf(state.config), treeBaseline);
       stampCitations(counters, content, workRootOf(state.config));
@@ -6865,7 +6915,12 @@ export async function runAgenticTurn(
       steps++;
       stepsThisLeg++;
       callsSinceWrite++;
-      recentCalls.push(callSignature(call));
+      // A `job wait` is time passing on a job that is still working, not the
+      // model repeating itself: it never counts toward stall_repeats or the
+      // alternation window (soft_shell.ts). Each wait is its own signature.
+      recentCalls.push(
+        call.name === JOB_TOOL && call.args.action === "wait" ? `${callSignature(call)}#${steps}` : callSignature(call)
+      );
       // Keep enough history for the WIDER of the two stall tests. This was
       // stall_repeats * 2 = 6, so an 8-call alternation window could never be
       // filled and the check it guards never fired once. Still computed from the

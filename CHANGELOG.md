@@ -26,6 +26,23 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Soft-timeout shell (opt-in): a long command is handed back as a job, not
+  killed.** tools.toml `[[tools]] name = "bash"`, `soft_timeout = "handle"`.
+  A model's bash command still running at `timeout_seconds` keeps running as
+  job `j1`, `j2`, …; the result carries the output so far, and a `job` tool
+  is offered beside bash to `wait` (up to 300 s per call, returning new output
+  and the exit code), `send` stdin text or `ctrl-c` / `ctrl-d`, and `kill`. At
+  most 3 jobs run at once, and every job is killed when its turn ends (or on
+  Esc and `--deadline`) through the same kill as a timed-out command, the
+  docker container included, which stays registered with git_safe (no host
+  git) until it is removed. `send` text goes through bash's intent filters and
+  approval. Results under `handle` carry Codex's `Exit code` / `Wall time` /
+  `Total output lines` header; audit kind `job` records yield, send, exit and
+  kill. An unknown value is a fatal surface finding. Absent or `"kill"`, every
+  request body is master's. CONTRACTS.md §34, `conformance/soft_shell.json`.
+
 ### Security
 
 - **`exec = "docker"` now contains a hostile model against gnomon's own
