@@ -58,6 +58,8 @@ import {
   collectAnchors,
   verifyAgainstAnchors,
   setAnchorScheduler,
+  pinnedAnchorTarget,
+  usePinnedAnchorTarget,
   redactRemote,
   CHECKPOINT_DIR,
   type ResolvedAnchor,
@@ -1263,7 +1265,15 @@ function detachedAnchorFlush(s: ResolvedAnchor, trustFlag = false): void {
   try {
     // `--trust` carries over when this run was trusted by the flag, which the
     // child cannot see; GNOMON_TRUST and the trust store it reads itself.
-    const args = [launcher, "audit", "anchor", "--background", "--dir", s.root, ...(trustFlag ? ["--trust"] : [])];
+    // The remote as this session resolved it at its start (anchor.ts
+    // pinAnchorTarget): the workspace's .git/config may have been rewritten
+    // since, from inside a sandbox, and the child would read it afresh.
+    const target = pinnedAnchorTarget(s);
+    const args = [
+      launcher, "audit", "anchor", "--background", "--dir", s.root,
+      ...(trustFlag ? ["--trust"] : []),
+      ...(target ? ["--remote-target", target] : []),
+    ];
     const child = spawn(process.execPath, args, {
       cwd: s.root,
       detached: true,
@@ -1410,6 +1420,8 @@ async function cmdAudit(args: CliArgs): Promise<void> {
       if (!background) for (const p of anchor.problems) console.error(p);
       process.exit(1);
     }
+    const handed = args.flags["remote-target"];
+    if (background && handed && handed !== "true") usePinnedAnchorTarget(anchor, handed);
     const r = await flushAnchors(anchor);
     if (background) return;
     for (const p of anchor.problems) console.error(p);

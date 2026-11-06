@@ -88,6 +88,8 @@ import type { GnomonConfig } from "./config.js";
 import { recordDegradation, type DegradationSink } from "./degradation.js";
 import { parseTimeStampResponse, timeStampRequest, verifyTimeStampToken } from "./rfc3161.js";
 import { posixShell, NO_POSIX_SHELL } from "./tools.js";
+import { gnomonDataDir } from "./credentials.js";
+import { safeGit } from "./git_safe.js";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -286,7 +288,7 @@ export function resolveAnchor(config: GnomonConfig, auditDir: string): ResolvedA
   }
 
   const declaredDir = str(a.dir);
-  return {
+  const resolved: ResolvedAnchor = {
     enabled: backend !== null,
     declared,
     backend,
@@ -302,6 +304,11 @@ export function resolveAnchor(config: GnomonConfig, auditDir: string): ResolvedA
     timeout_sec,
     problems,
   };
+  // A remote named through the workspace's repository is read once, now --
+  // the first resolve in a process is the session's start -- and that is
+  // where the session's anchors go (pinAnchorTarget).
+  if (resolved.enabled) pinAnchorTarget(resolved);
+  return resolved;
 }
 
 // ---------------------------------------------------------------------------
@@ -533,20 +540,67 @@ function gitEnv(now: Date): NodeJS.ProcessEnv {
   };
 }
 
+/**
+ * Where the local anchor repository lives: gnomon's data directory, per
+ * checkout (the anchor scope), OUTSIDE the project root.
+ *
+ * It used to be `<audit dir>/anchors/git`, inside the root a sandboxed bash
+ * may write, and the host-side git that pushes from it at session end reads
+ * its config, its hooks, its `commondir` and its object alternates (third
+ * review, finding 4). It holds nothing that is not on the remote -- a scratch
+ * copy to build the next commit on -- so it moves rather than migrates: a copy
+ * still under the audit dir is never read again (the next delivery fetches
+ * the remote's history into the new one), and is left for its owner to
+ * delete. The queue, the receipts and the state stay in the audit dir.
+ */
+export function localAnchorRepo(s: ResolvedAnchor): string {
+  return join(gnomonDataDir(), "anchors", s.scope || scopeOf(s.root), "git");
+}
+
+/** The repository the anchor git used to keep inside the project root. Read by nothing. */
+export function legacyAnchorRepo(s: ResolvedAnchor): string {
+  return join(s.dir, "git");
+}
+
+/**
+ * `-c` overrides on every anchor git. Command-line config outranks the
+ * repository's own for single-valued keys. core.gitProxy is first-match-wins,
+ * which a `-c` cannot override, and `url.<x>.insteadOf` is longest-match --
+ * so the repository's own config is held to what `git init --bare` writes
+ * (assertAnchorRepoConfig) rather than out-voted.
+ *
+ * NOT blanked: credential.helper, core.askPass, and the system config. Those
+ * come from the user's global and system files, which no sandboxed command
+ * can write (the repository's own config may hold no such key), and an https
+ * remote needs them to push: Apple's git keeps osxkeychain in the system
+ * file, `gh auth setup-git` writes a global helper.
+ */
+const ANCHOR_GIT_HARDENING = [
+  "-c", "core.hooksPath=/dev/null",
+  "-c", "core.fsmonitor=false",
+  "-c", "protocol.ext.allow=never",
+  "-c", "core.sshCommand=",
+  "-c", "core.gitProxy=",
+  "-c", "core.alternateRefsCommand=",
+  "-c", "gc.auto=0",
+  "-c", "maintenance.auto=false",
+];
+
 async function git(repo: string, args: string[], s: ResolvedAnchor, now: Date, input?: string): Promise<Ran> {
-  // The local anchor repository lives under the audit dir, inside the project
-  // root -- which a sandboxed bash may write. Its config must still be the one
-  // `git init --bare` wrote, or a command could have planted a program for
-  // this host-side git to run at session end (PR #156 second review, A).
+  // The repository's config must still be the one `git init --bare` wrote,
+  // and nothing in it may redirect git elsewhere, or a program planted there
+  // runs from this host-side git at session end (PR #156 second review, A;
+  // third review, finding 4).
   assertAnchorRepoConfig(repo);
   return runProcess(
     "git",
     // No hooks: a pre-push hook from a global core.hooksPath would run, and
-    // could wait on a terminal nobody is at -- and a hooks dir inside the
-    // repository (as `no-hooks` was) is one a sandboxed command can fill:
-    // `update-ref` runs reference-transaction. No `ext::` transport: a remote
-    // must not be a way to run a command. No fsmonitor.
-    ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never", "--git-dir", repo, ...args],
+    // could wait on a terminal nobody is at. No `ext::` transport: a remote
+    // must not be a way to run a command. No fsmonitor, no ssh command, proxy or
+    // alternate-refs command from any config file -- the user's own
+    // GIT_SSH_COMMAND (gitEnv) still reaches ssh, since the environment
+    // outranks core.sshCommand.
+    [...ANCHOR_GIT_HARDENING, "--git-dir", repo, ...args],
     { input, env: gitEnv(now), timeoutSec: s.timeout_sec }
   );
 }
@@ -564,8 +618,33 @@ const ANCHOR_REPO_KEYS = new Set([
   "extensions.refstorage",
 ]);
 
-/** Throws when the anchor repository's config holds a key `git init --bare` does not write. */
+/**
+ * Files that point git at another repository's config, objects or worktree
+ * config. `git init --bare` writes none of them.
+ */
+const ANCHOR_REDIRECTS = ["commondir", "config.worktree", "gitdir", join("objects", "info", "alternates"), join("objects", "info", "http-alternates")];
+
+/**
+ * Throws when the anchor repository is not as `git init --bare` (and gnomon's
+ * own fetches and commits) left it: a key init does not write, a file that
+ * redirects git elsewhere, or a symlink anywhere in it.
+ */
 export function assertAnchorRepoConfig(repo: string): void {
+  for (const f of ANCHOR_REDIRECTS) {
+    let there = false;
+    try {
+      lstatSync(join(repo, f));
+      there = true;
+    } catch {
+      /* absent: as init left it */
+    }
+    if (there) {
+      throw new Error(
+        `the local anchor repository holds ${f}, which points git at another repository: ${repo}. ` +
+          `Nothing is anchored until it is removed; delete ${repo} to have gnomon recreate it.`
+      );
+    }
+  }
   const path = join(repo, "config");
   if (!existsSync(path)) return;
   if (!lstatSync(path).isFile()) throw new Error(`the local anchor repository's config is not a plain file (${path}); refusing to run git there`);
@@ -577,7 +656,7 @@ export function assertAnchorRepoConfig(repo: string): void {
     if (!line || line.startsWith("#") || line.startsWith(";")) continue;
     const sec = /^\[\s*([^\]\s"]+)(?:\s+"[^"]*")?\s*\]/.exec(line);
     if (sec) {
-      // A subsection ([remote "x"], [include], [includeIf ...]) is never written by init.
+      // A subsection ([remote "x"], [url "x"], [include], [includeIf ...]) is never written by init.
       section = /"/.test(line) ? `${sec[1]!.toLowerCase()}.<sub>` : sec[1]!.toLowerCase();
       const rest = line.slice(sec[0].length).trim();
       if (!rest || rest.startsWith("#") || rest.startsWith(";")) continue;
@@ -595,6 +674,36 @@ export function assertAnchorRepoConfig(repo: string): void {
   }
 }
 
+/** Throws when anything in the anchor repository is a symlink: git would follow it out. Once per delivery. */
+export function assertAnchorRepoTree(repo: string): void {
+  const walk = (dir: string): void => {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const n of names) {
+      const p = join(dir, n);
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) {
+        throw new Error(
+          `the local anchor repository holds a symlink (${p}), which git would follow out of it. ` +
+            `Nothing is anchored until it is removed; delete ${repo} to have gnomon recreate it.`
+        );
+      }
+      if (st.isDirectory()) walk(p);
+    }
+  };
+  try {
+    if (lstatSync(repo).isSymbolicLink()) throw new Error(`the local anchor repository is a symlink: ${repo}`);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw e;
+  }
+  walk(repo);
+}
+
 /** A remote URL or path with any credentials stripped, for receipts and messages. */
 export function redactRemote(remote: string): string {
   return remote.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^@/]*@/i, "$1");
@@ -605,18 +714,78 @@ export function redactRemote(remote: string): string {
  * own repository, read from it; a relative path is relative to the root;
  * anything else (a URL, `host:path`, an absolute path) is used as it is.
  */
-async function remoteTarget(s: ResolvedAnchor, now: Date): Promise<string> {
+/**
+ * A bare-name remote resolved through the workspace's own repository, pinned
+ * per process by (root, name). The workspace's .git/config is inside the root
+ * a sandboxed bash may write -- `remote.<name>.url` and `url.<x>.insteadOf`
+ * included -- so what the name meant when this process first asked (the
+ * session's start: audit settings are resolved before the first turn) is
+ * what it pushes to at the end. The detached delivery is handed the pinned
+ * target (`--remote-target`) rather than reading the name again (third
+ * review, finding 5).
+ */
+const pinnedTargets = new Map<string, string>();
+
+const targetKey = (root: string, remote: string) => `${resolve(root)}\0${remote}`;
+
+function namesWorkspaceRemote(s: Pick<ResolvedAnchor, "root" | "remote">): boolean {
+  const r = s.remote;
+  return r !== null && /^[A-Za-z0-9._-]+$/.test(r) && !existsSync(join(s.root, r));
+}
+
+function resolveWorkspaceRemote(root: string, name: string, timeoutSec: number): string | null {
+  // git_safe: hardened, every driver blanked, no system config.
+  const got = safeGit(["-C", root, "remote", "get-url", name], { cwd: root, timeout: timeoutSec * 1000 });
+  if (got.status !== 0 || typeof got.stdout !== "string") return null;
+  const url = got.stdout.trim();
+  return url && !url.startsWith("-") ? url : null;
+}
+
+/** Resolve and pin `s`'s remote now, when it names a remote of the workspace. The session's start calls it. */
+export function pinAnchorTarget(s: ResolvedAnchor): string | null {
+  if (s.backend !== "git" || !s.remote || !namesWorkspaceRemote(s)) return null;
+  const key = targetKey(s.root, s.remote);
+  const had = pinnedTargets.get(key);
+  if (had !== undefined) return had;
+  const url = resolveWorkspaceRemote(s.root, s.remote, s.timeout_sec);
+  if (url !== null) pinnedTargets.set(key, url);
+  return url;
+}
+
+/** What the parent pinned, handed to a detached delivery. */
+export function usePinnedAnchorTarget(s: ResolvedAnchor, target: string): void {
+  if (s.remote && !target.startsWith("-")) pinnedTargets.set(targetKey(s.root, s.remote), target);
+}
+
+/** The target pinned for `s` in this process, if any. */
+export function pinnedAnchorTarget(s: ResolvedAnchor): string | undefined {
+  return s.remote ? pinnedTargets.get(targetKey(s.root, s.remote)) : undefined;
+}
+
+/** Tests only. */
+export function _resetAnchorTargets(): void {
+  pinnedTargets.clear();
+}
+
+/**
+ * What `remote` names. A bare word is the name of a remote of the workspace's
+ * own repository, read from it once per process (pinAnchorTarget); a relative
+ * path is relative to the root; anything else (a URL, `host:path`, an absolute
+ * path) is used as it is.
+ */
+async function remoteTarget(s: ResolvedAnchor, _now: Date): Promise<string> {
   const r = s.remote!;
-  if (/^[A-Za-z0-9._-]+$/.test(r) && !existsSync(join(s.root, r))) {
-    const got = await runProcess("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", s.root, "remote", "get-url", r], { env: gitEnv(now), timeoutSec: s.timeout_sec });
-    if (got.code !== 0) throw new Error(`"${r}" is not a remote of the repository at ${s.root}`);
-    return got.out.trim();
+  if (namesWorkspaceRemote(s)) {
+    const got = pinAnchorTarget(s);
+    if (got === null) throw new Error(`"${r}" is not a remote of the repository at ${s.root}`);
+    return got;
   }
   if (isAbsolute(r) || /^[a-z][a-z0-9+.-]*:\/\//i.test(r) || /^[^/\\]+:/.test(r)) return r;
   return join(s.root, r);
 }
 
 async function ensureRepo(repo: string, s: ResolvedAnchor, now: Date): Promise<void> {
+  assertAnchorRepoTree(repo);
   if (existsSync(join(repo, "HEAD"))) return;
   mkdirSync(repo, { recursive: true });
   const r = await runProcess("git", ["init", "--bare", "-q", repo], { env: gitEnv(now), timeoutSec: s.timeout_sec });
@@ -649,7 +818,7 @@ export interface AnchorDeps {
 type Delivered = Map<string, Record<string, unknown>>;
 
 async function deliverGit(s: ResolvedAnchor, entries: QueueEntry[], now: Date): Promise<Delivered> {
-  const repo = join(s.dir, "git");
+  const repo = localAnchorRepo(s);
   await ensureRepo(repo, s, now);
   const target = await remoteTarget(s, now);
   // One line per statement, canonical, so anyone holding the remote can
@@ -1058,7 +1227,7 @@ function readReceipts(s: ResolvedAnchor): Array<Record<string, unknown>> {
 
 async function collectGit(s: ResolvedAnchor, offline: boolean, now: Date): Promise<AnchorLog> {
   const log: AnchorLog = { backend: "git", source: "remote", anchors: [], problems: [], findings: [] };
-  const repo = join(s.dir, "git");
+  const repo = localAnchorRepo(s);
   const verifyRef = "refs/gnomon/verify";
   let ref = verifyRef;
   try {
@@ -1107,7 +1276,13 @@ async function collectGit(s: ResolvedAnchor, offline: boolean, now: Date): Promi
 
   const list = await git(repo, ["log", "--reverse", "--format=%H %cI", ref], s, now);
   if (list.code !== 0) {
-    if (log.source === "local-copy") log.problems.push("there is no local copy of the anchors");
+    if (log.source === "local-copy") {
+      log.problems.push(
+        existsSync(join(legacyAnchorRepo(s), "HEAD"))
+          ? `there is no local copy of the anchors outside the project root yet; the old copy at ${legacyAnchorRepo(s)} sits where a sandboxed command could have rewritten it, so it is not read`
+          : "there is no local copy of the anchors"
+      );
+    }
     return log;
   }
   const commits = list.out.split("\n").filter(Boolean).map((l) => {
