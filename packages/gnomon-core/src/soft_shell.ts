@@ -80,14 +80,33 @@ export function resolveSoftTimeout(config: GnomonConfig): SoftTimeoutMode {
   return decl?.soft_timeout === "handle" ? "handle" : "kill";
 }
 
+/**
+ * bash's parameters under `handle`: `command`, plus `interactive`. Kill mode
+ * offers master's `{command}`, the same object.
+ */
+export const HANDLE_BASH_PARAMETERS: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    command: { type: "string", description: "Shell command to run" },
+    interactive: {
+      type: "boolean",
+      description:
+        "Keep stdin open so job send can answer the command's prompts (a REPL, an installer asking y/n). " +
+        "Default false: stdin is closed and a command that reads it gets end of input at once.",
+    },
+  },
+  required: ["command"],
+};
+
 /** The `job` tool's description: the only place the model is told how jobs work. */
 export const JOB_DESCRIPTION =
   "Manage a bash command that is still running. A bash command that runs past the tool timeout is " +
   "not killed: it keeps running as a job, and the bash result names its id (j1, j2, ...). " +
   `"wait": block up to \`seconds\` (at most ${JOB_LIMITS.wait_max_seconds}, default ${JOB_LIMITS.wait_default_seconds}) ` +
   "until it finishes; returns the output it printed since you last looked, and its exit code once it has finished. " +
-  `"send": write \`input\` to its stdin (end a line with \\n), or send \`key\` "ctrl-c" (interrupt) or "ctrl-d" ` +
-  `(end of input), then return what it printed within \`seconds\` (default ${JOB_LIMITS.send_default_seconds}). ` +
+  `"send": write \`input\` to the stdin of a job started with bash \`interactive: true\` (end a line with \\n), ` +
+  `or send \`key\` "ctrl-c" (interrupt, any job) or "ctrl-d" (end of input), then return what it printed within ` +
+  `\`seconds\` (default ${JOB_LIMITS.send_default_seconds}). ` +
   `"kill": stop it. At most ${JOB_LIMITS.max_jobs} jobs run at once, and every job still running when your turn ends is killed.`;
 
 /** The `job` tool's parameters. */
@@ -142,12 +161,14 @@ export function frameHeader(f: {
 }
 
 /** What a running job's result tells the model it can do next. */
-export function runningHint(id: string): string {
+export function runningHint(id: string, interactive = false): string {
   return (
     `\n\nThe command is still running as job ${id}. Its output so far is above. Next: ` +
     `job {"action":"wait","id":"${id}","seconds":${JOB_LIMITS.wait_default_seconds}} for more output and its exit code ` +
     `(up to ${JOB_LIMITS.wait_max_seconds} s per call), ` +
-    `job {"action":"send","id":"${id}","input":"...\\n"} to answer a prompt, ` +
+    (interactive
+      ? `job {"action":"send","id":"${id}","input":"...\\n"} to answer a prompt, `
+      : `job {"action":"send","id":"${id}","key":"ctrl-c"} to interrupt it (its stdin is closed; a command that needs input is run with "interactive": true), `) +
     `or job {"action":"kill","id":"${id}"}. Other tools can be used meanwhile; it is killed when your turn ends.`
   );
 }

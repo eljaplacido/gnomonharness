@@ -2709,9 +2709,14 @@ result is framed and no `job` record is written.
   offered it. It moves `wire.tools_hash` (§26).
 - A model's bash command still running at the yield is **not killed**. The
   result (code `0`, no `shell_exit`) carries the output so far and the job id
-  (`j1`, `j2`, … per turn), and says how to wait, send and kill. Stdin is a
-  live pipe (under `exec = "docker"` the container runs with `-i`), so a
-  command that reads stdin waits for input instead of getting end of file.
+  (`j1`, `j2`, … per turn), and says how to wait, send and kill.
+- bash takes one more parameter, `interactive` (boolean, default false).
+  Without it stdin is closed exactly as in kill mode, so a command that reads
+  stdin (`npm init`, an `apt` prompt, `python` reading `sys.stdin`) gets end
+  of input at once instead of blocking until the yield. With `interactive:
+  true` stdin is a live pipe for `job send` (under `exec = "docker"` the
+  container runs with `-i`, and only then). Kill mode's bash schema is
+  master's `{command}`, the same object.
 - Only the model's own calls become jobs: the declared `[verify]` check, the
   bootstrap and the must-fail-first re-run do not offer `job` and are killed at
   the timeout exactly as before.
@@ -2721,7 +2726,12 @@ result is framed and no `job` record is written.
   `Total output lines` (both streams, the whole run). A command that finished
   inside the limit keeps kill mode's body below the header.
 - At most `max_jobs` (3) run at once; a fourth command is refused before it is
-  stamped or run (code 11), naming the running jobs.
+  stamped or run, naming the running jobs.
+- The model's own usage mistakes -- the fourth command, an unknown job id or
+  action, a `send` with nothing to send or to a closed stdin, an unknown key
+  -- are code `1` (`result`, the negative answer a missing path gets), never
+  `11`: they say nothing about the apparatus, and a turn that makes one and
+  then answers ends `answered` with code `0`.
 
 **The `job` tool.** Parameters `action` (required), `id` (required),
 `seconds`, `input`, `key`.
@@ -2729,7 +2739,7 @@ result is framed and no `job` record is written.
 | action | does |
 |---|---|
 | `wait` | block up to `seconds` (default `wait_default_seconds` 30, at most `wait_max_seconds` 300, never past the deadline's margin) until the job ends; returns the output since the last look, and once ended its exit code (`shell_exit`), the worktree and surface stamps against the command's start, and the job is forgotten |
-| `send` | write `input` verbatim to stdin, or `key`: `ctrl-c` (SIGINT to the process group; under docker `docker kill --signal INT`; refused on Windows) or `ctrl-d` (close stdin); then wait `seconds` (default `send_default_seconds` 2) and report |
+| `send` | write `input` verbatim to stdin (a job started with `interactive: true`; otherwise refused, named), or `key`: `ctrl-c` (SIGINT to the process group; under docker `docker kill --signal INT`; refused on Windows) or `ctrl-d` (close stdin); then wait `seconds` (default `send_default_seconds` 2) and report |
 | `kill` | kill it as a timed-out command is killed, and report |
 
 `send` is a command by another door, so it is held to what a bash command is
@@ -2750,7 +2760,9 @@ and waited for. A job's container is registered with git_safe from start to
 confirmed removal, so while a job may still be writing, gnomon runs no git on
 the host (the PR #158 rule); host-side measurements taken meanwhile report
 unknown. Jobs never outlive the turn, so nothing crosses into the next
-turn or session.
+turn or session. When `exec = "os"` (#156) lands, a job's kill must also call
+its `killSupervisedTree` (marked TODO at `JobTable.stop`, the one job kill
+site).
 
 **Audit kind `job`**, one record per event: `event` (`yield`, `send`, `exit`,
 `kill`), `id`, `role`, `wall_ms`, `lines`; on `yield` the `command` (redacted

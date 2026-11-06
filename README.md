@@ -92,8 +92,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2720 TypeScript tests (2198 core, 497 cli, 18
-> natives, 7 tui) and 63 Rust tests — **2783 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2724 TypeScript tests (2202 core, 497 cli, 18
+> natives, 7 tui) and 63 Rust tests — **2787 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1192,7 +1192,8 @@ default until an A/B on gnomon's own lanes says otherwise
 of killing it** (opt-in; the default `"kill"` is unchanged). Past
 `timeout_seconds` the command becomes a job (`j1`, …) and the model gets its
 output so far plus a `job` tool to `wait` on it (≤300 s per call), `send` it
-stdin or `ctrl-c` / `ctrl-d`, or `kill` it — the shape of Codex's
+`ctrl-c` / `ctrl-d` (or stdin text, when bash was called with
+`interactive: true`; otherwise stdin is closed as in kill mode), or `kill` it — the shape of Codex's
 `exec_command`/`write_stdin` and opencode's background shell. At most three
 run at once; all are killed when the turn ends, by the same kill a timeout
 uses (under `exec = "docker"`, the container is removed and host git stays

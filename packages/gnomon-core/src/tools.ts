@@ -70,6 +70,7 @@ import {
 } from "./shell.js";
 import { containedMountPoints, containedReadonlyPaths, ensureDirIn, readRegular, RootWriteError, writeFileIn, writeRegular } from "./root_fs.js";
 import {
+  HANDLE_BASH_PARAMETERS,
   JOB_DESCRIPTION,
   JOB_LIMITS,
   JOB_ACTIONS,
@@ -368,10 +369,17 @@ export function readParameters(window?: number): Record<string, unknown> {
  * default variant is IMPLEMENTED.edit itself, the same object, so a surface
  * that declares none offers the same bytes as before.
  */
-function parametersFor(name: string, readWindow?: number, editVariant?: EditVariant): Record<string, unknown> | undefined {
+function parametersFor(
+  name: string,
+  readWindow?: number,
+  editVariant?: EditVariant,
+  /** bash soft_timeout = "handle": bash takes `interactive`, and `job` exists. */
+  softShell?: boolean
+): Record<string, unknown> | undefined {
   // `job` is never declared: buildToolSet offers it beside bash under
   // soft_timeout = "handle" (soft_shell.ts). Known here for the schema repair.
   if (name === JOB_TOOL) return JOB_PARAMETERS;
+  if (name === "bash" && softShell) return HANDLE_BASH_PARAMETERS;
   if (!Object.prototype.hasOwnProperty.call(IMPLEMENTED, name)) return undefined;
   if (name === "edit" && editVariant === "compat") return COMPAT_EDIT_PARAMETERS;
   return name === "read" ? readParameters(readWindow) : IMPLEMENTED[name];
@@ -437,7 +445,7 @@ export function buildToolSet(
       disabled.push(tool.name);
       continue;
     }
-    const parameters = parametersFor(tool.name, readWindow, editVariant);
+    const parameters = parametersFor(tool.name, readWindow, editVariant, handle);
     if (!parameters) {
       unimplemented.push(tool.name);
       continue;
@@ -2841,13 +2849,20 @@ async function bashTool(
   const pre = bashPrecheck(args, ctx);
   if (pre) return outcomeOf(pre);
   const command = args.command as string;
+  // soft_timeout = "handle" only: stdin stays a live pipe for `job send`.
+  // Otherwise -- and always in kill mode -- it is closed, and a command that
+  // reads it gets end of input at once rather than waiting for the yield.
+  const interactive = ctx.jobs !== undefined && args.interactive === true;
 
   // soft_timeout = "handle": at most JOB_LIMITS.max_jobs commands run at once.
   // Refused before anything is stamped or spawned, and named.
   if (ctx.jobs && ctx.jobs.running().length >= JOB_LIMITS.max_jobs) {
     const ids = ctx.jobs.running().map((j) => j.id);
+    // A result, not a failure: the model's own usage, which says nothing
+    // about the apparatus (code 11 is apparatus_failure) and is not a policy
+    // refusal either. The turn carries on and is judged on its answer.
     return {
-      code: TOOL_FAILED,
+      code: TOOL_OK_EMPTY,
       content:
         `Refused: ${ids.length} jobs are already running (${ids.join(", ")}), the most one turn may have. ` +
         `Nothing ran. Wait for one with job {"action":"wait","id":"${ids[0]}"}, or stop one with ` +
@@ -2954,7 +2969,7 @@ async function bashTool(
   const sandboxName = `gnomon-${process.pid}-${startedAt.toString(36)}`;
   let spawned: string;
   try {
-    spawned = sandboxCommand(command, ctx, sandboxName, ctx.jobs ? { interactive: true } : {});
+    spawned = sandboxCommand(command, ctx, sandboxName, interactive ? { interactive: true } : {});
   } catch (e) {
     if (!(e instanceof RootWriteError)) throw e;
     return {
@@ -2993,6 +3008,7 @@ async function bashTool(
       surfaceBefore,
       worktreeBefore,
       shellCwd,
+      interactive,
     });
   }
 
@@ -3274,6 +3290,8 @@ interface JobStart {
   surfaceBefore: string | null;
   worktreeBefore: string | null;
   shellCwd?: string;
+  /** bash `interactive: true`: stdin a live pipe for `job send`; else closed, as in kill mode. */
+  interactive: boolean;
 }
 
 /** One running (or finished, not yet reported) command. */
@@ -3293,7 +3311,7 @@ class Job {
   signal: NodeJS.Signals | null = null;
   endedAt = 0;
   spawnError?: string;
-  stdinOpen = true;
+  stdinOpen: boolean;
   killedBy?: JobKillReason;
   readonly exited: Promise<void>;
   private listeners = new Set<() => void>();
@@ -3303,6 +3321,7 @@ class Job {
     readonly proc: ChildProcess,
     private readonly onFinish: (job: Job) => void
   ) {
+    this.stdinOpen = start.interactive;
     this.exited = new Promise<void>((ok) => {
       if (proc.exitCode !== null || proc.signalCode !== null) ok();
       else proc.once("exit", () => ok());
@@ -3463,8 +3482,9 @@ export class JobTable {
     const proc = spawn(s.shellBin, ["-c", s.spawned], {
       cwd: ctx.root,
       env: agentEnv(ctx.agentSession),
-      // stdin a pipe, unlike kill mode's closed one: `job send` writes to it.
-      stdio: ["pipe", "pipe", "pipe"],
+      // stdin closed, as in kill mode, unless the call asked for
+      // `interactive: true`: then a pipe `job send` writes to.
+      stdio: [s.interactive ? "pipe" : "ignore", "pipe", "pipe"],
       detached: process.platform !== "win32",
     });
     const job = new Job(s, proc, (j) => this.finished(j));
@@ -3526,7 +3546,7 @@ export class JobTable {
           : `It ran past the ${s.limitMs}ms tool timeout and was NOT killed. Output so far:\n`) +
         droppedNote(dropped) +
         clampEnds(capped.text, capped.ctx, `bash-job`) +
-        runningHint(job.id) +
+        runningHint(job.id, job.start.interactive) +
         (drift ? `\n\n${drift.notice}` : ""),
       summary: `bash — running as job ${job.id} after ${Math.round(wallMs / 1000)}s${drift ? " · surface changed" : ""}`,
       surface_drift: drift ?? undefined,
@@ -3549,6 +3569,10 @@ export class JobTable {
     let gone = true;
     const wasRunning = !job.done;
     if (wasRunning) {
+      // TODO(#156, exec = "os"): when the kernel sandbox lands, a job started
+      // under it has a supervisor, and this must call killSupervisedTree on
+      // it (first, as bashTool's timeout path does there), or a setsid'd
+      // descendant outlives the turn. This is the one job kill site.
       const killed = killTree(job.proc, job.start.sandboxName);
       await settleKill(killed, job.exited);
       if (job.start.sandboxName) gone = await removeContainer(job.start.sandboxName);
@@ -3622,7 +3646,7 @@ function jobReport(job: Job, table: JobTable, ctx: ToolContext, lead = ""): Tool
         `Output since you last looked:\n` +
         droppedNote(dropped) +
         body +
-        runningHint(job.id),
+        runningHint(job.id, job.start.interactive),
       summary: `job ${job.id} — still running (${Math.round(job.wallMs() / 1000)}s)`,
     };
   }
@@ -3705,7 +3729,7 @@ async function jobTool(args: Record<string, unknown>, ctx: ToolContext): Promise
   const action = args.action;
   if (typeof action !== "string" || !(JOB_ACTIONS as readonly string[]).includes(action)) {
     return {
-      code: TOOL_FAILED,
+      code: TOOL_OK_EMPTY,
       content: `job needs an \`action\`: one of ${JOB_ACTIONS.join(", ")}. Got ${JSON.stringify(action)}. Nothing was done.`,
       summary: "job — no action",
     };
@@ -3715,7 +3739,7 @@ async function jobTool(args: Record<string, unknown>, ctx: ToolContext): Promise
   if (!job) {
     const known = table.list();
     return {
-      code: TOOL_FAILED,
+      code: TOOL_OK_EMPTY,
       content:
         `No job ${JSON.stringify(id)} in this turn. ` +
         (known.length > 0
@@ -3759,10 +3783,10 @@ async function jobTool(args: Record<string, unknown>, ctx: ToolContext): Promise
     const key = args.key;
     const input = args.input;
     if (key !== undefined && !(JOB_KEYS as readonly unknown[]).includes(key)) {
-      return { code: TOOL_FAILED, content: `job send's \`key\` is one of ${JOB_KEYS.join(", ")}; got ${JSON.stringify(key)}. Nothing was sent.`, summary: "job — unknown key" };
+      return { code: TOOL_OK_EMPTY, content: `job send's \`key\` is one of ${JOB_KEYS.join(", ")}; got ${JSON.stringify(key)}. Nothing was sent.`, summary: "job — unknown key" };
     }
     if (key === undefined && (typeof input !== "string" || input === "")) {
-      return { code: TOOL_FAILED, content: "job send needs `input` (text for the job's stdin) or `key` (ctrl-c or ctrl-d). Nothing was sent.", summary: "job — nothing to send" };
+      return { code: TOOL_OK_EMPTY, content: "job send needs `input` (text for the job's stdin) or `key` (ctrl-c or ctrl-d). Nothing was sent.", summary: "job — nothing to send" };
     }
     if (typeof input === "string" && input !== "") {
       // The same intent filters as a command: bash_deny, bash_allow, the
@@ -3774,8 +3798,17 @@ async function jobTool(args: Record<string, unknown>, ctx: ToolContext): Promise
         const o = outcomeOf(pre);
         return { ...o, content: `Not sent to ${job.id}: ${o.content}`, summary: `job ${job.id} — send refused` };
       }
+      if (!job.start.interactive) {
+        return {
+          code: TOOL_OK_EMPTY,
+          content:
+            `Not sent: ${job.id} was not started with \`interactive: true\`, so its stdin is closed (it read end of input). ` +
+            `It is still running; wait for it or kill it, and run a command that needs input with bash {"command": ..., "interactive": true}.`,
+          summary: `job ${job.id} — not interactive`,
+        };
+      }
       if (!job.stdinOpen || !job.proc.stdin || job.proc.stdin.destroyed) {
-        return { code: TOOL_FAILED, content: `Not sent: ${job.id}'s stdin is closed (ctrl-d was sent, or it closed it). It is still running; wait or kill it.`, summary: `job ${job.id} — stdin closed` };
+        return { code: TOOL_OK_EMPTY, content: `Not sent: ${job.id}'s stdin is closed (ctrl-d was sent, or it closed it). It is still running; wait or kill it.`, summary: `job ${job.id} — stdin closed` };
       }
       job.proc.stdin.write(input);
     }
@@ -3784,7 +3817,7 @@ async function jobTool(args: Record<string, unknown>, ctx: ToolContext): Promise
       job.stdinOpen = false;
     } else if (key === "ctrl-c") {
       const why = await interruptJob(job);
-      if (why) return { code: TOOL_FAILED, content: `Not sent: ${why}`, summary: `job ${job.id} — ctrl-c unsupported` };
+      if (why) return { code: TOOL_OK_EMPTY, content: `Not sent: ${why}`, summary: `job ${job.id} — ctrl-c unsupported` };
     }
     table.record({
       event: "send",
@@ -6257,8 +6290,8 @@ function typeText(spec: unknown): string {
  * `path (string, required), old_text (string, required), …` -- or null for a
  * name with no schema in this build.
  */
-export function toolParamsText(name: string, readWindow?: number, editVariant?: EditVariant): string | null {
-  const params = parametersFor(name, readWindow, editVariant);
+export function toolParamsText(name: string, readWindow?: number, editVariant?: EditVariant, softShell?: boolean): string | null {
+  const params = parametersFor(name, readWindow, editVariant, softShell);
   const props = (params?.properties ?? undefined) as Record<string, unknown> | undefined;
   if (!props) return null;
   const req = new Set(Array.isArray(params!.required) ? (params!.required as string[]) : []);
@@ -6294,9 +6327,10 @@ export function argProblems(
   name: string,
   args: Record<string, unknown>,
   readWindow?: number,
-  editVariant?: EditVariant
+  editVariant?: EditVariant,
+  softShell?: boolean
 ): ArgProblems | null {
-  const params = parametersFor(name, readWindow, editVariant);
+  const params = parametersFor(name, readWindow, editVariant, softShell);
   const props = (params?.properties ?? undefined) as Record<string, Record<string, unknown>> | undefined;
   if (!props) return null;
   const required = Array.isArray(params!.required) ? (params!.required as string[]) : [];
@@ -6331,9 +6365,10 @@ export function schemaRepairText(
   name: string,
   args: Record<string, unknown>,
   readWindow?: number,
-  editVariant?: EditVariant
+  editVariant?: EditVariant,
+  softShell?: boolean
 ): string {
-  const p = argProblems(name, args, readWindow, editVariant);
+  const p = argProblems(name, args, readWindow, editVariant, softShell);
   if (!p || (p.missing.length === 0 && p.wrongType.length === 0)) return "";
   const parts: string[] = [];
   if (p.missing.length > 0) parts.push(`missing ${ticked(p.missing)}`);
@@ -6345,7 +6380,7 @@ export function schemaRepairText(
   }
   return (
     `\n\nYour ${name} call does not match its parameters: ${parts.join("; ")}. ` +
-    `${name} takes one JSON object: ${toolParamsText(name, readWindow, editVariant)}.`
+    `${name} takes one JSON object: ${toolParamsText(name, readWindow, editVariant, softShell)}.`
   );
 }
 
@@ -6359,10 +6394,11 @@ function withSchemaRepair(
   args: Record<string, unknown>,
   outcome: ToolOutcome,
   readWindow?: number,
-  editVariant?: EditVariant
+  editVariant?: EditVariant,
+  softShell?: boolean
 ): ToolOutcome {
   if (outcome.code === TOOL_OK || outcome.code === TOOL_OK_EMPTY) return outcome;
-  const text = schemaRepairText(name, args, readWindow, editVariant);
+  const text = schemaRepairText(name, args, readWindow, editVariant, softShell);
   return text ? { ...outcome, content: outcome.content + text } : outcome;
 }
 
@@ -6510,7 +6546,7 @@ export async function executeTool(
     const error = String(malformed.error ?? "not a JSON object");
     // "Whose keys are this tool's parameters" told the model there was a list
     // without giving it. Named here, so the corrected call can use them.
-    const params = toolParamsText(name, ctx.maxLines?.read, ctx.editVariant);
+    const params = toolParamsText(name, ctx.maxLines?.read, ctx.editVariant, ctx.jobs !== undefined && offered.has(JOB_TOOL));
     return {
       code: TOOL_DENIED,
       content:
@@ -6545,7 +6581,7 @@ export async function executeTool(
   // Error path only: a call that failed with arguments the schema does not
   // accept is told which parameters the tool takes. Anything else is returned
   // untouched.
-  return withSchemaRepair(name, args, outcome, ctx.maxLines?.read, ctx.editVariant);
+  return withSchemaRepair(name, args, outcome, ctx.maxLines?.read, ctx.editVariant, ctx.jobs !== undefined && offered.has(JOB_TOOL));
 }
 
 async function dispatch(

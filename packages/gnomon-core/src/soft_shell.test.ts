@@ -25,9 +25,10 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { platformBlock, runTask } from "./prompt_loop.js";
 import { auditSurface, loadConfig } from "./config.js";
-import { buildToolSet, executeTool, JobTable, TOOL_DENIED, TOOL_FAILED, TOOL_OK, type JobRecord, type ToolContext } from "./tools.js";
+import { buildToolSet, executeTool, JobTable, TOOL_DENIED, TOOL_FAILED, TOOL_OK, TOOL_OK_EMPTY, type JobRecord, type ToolContext } from "./tools.js";
 import { liveContainer } from "./git_safe.js";
 import {
+  HANDLE_BASH_PARAMETERS,
   JOB_ACTIONS,
   JOB_EVENTS,
   JOB_KEYS,
@@ -56,6 +57,7 @@ describe("conformance/soft_shell.json", () => {
     expect([...JOB_ACTIONS]).toEqual(FIXTURE.actions);
     expect([...JOB_KEYS]).toEqual(FIXTURE.keys);
     expect(Object.keys((JOB_PARAMETERS as { properties: object }).properties)).toEqual(FIXTURE.parameters);
+    expect(Object.keys((HANDLE_BASH_PARAMETERS as { properties: object }).properties)).toEqual(FIXTURE.bash_parameters);
     expect({ ...JOB_LIMITS }).toEqual(FIXTURE.limits);
     expect([...JOB_EVENTS]).toEqual(FIXTURE.audit.events);
     expect([...JOB_KILL_REASONS]).toEqual(FIXTURE.audit.kill_reasons);
@@ -71,7 +73,7 @@ describe("conformance/soft_shell.json", () => {
     const next = contracts.indexOf("\n## ", at + 5);
     const s33 = contracts.slice(at, next === -1 ? undefined : next);
     const words = [
-      "soft_timeout", "timeout_seconds", JOB_TOOL, ...SOFT_TIMEOUT_MODES, ...JOB_ACTIONS, ...JOB_KEYS,
+      "soft_timeout", "timeout_seconds", "interactive", JOB_TOOL, ...SOFT_TIMEOUT_MODES, ...JOB_ACTIONS, ...JOB_KEYS,
       ...FIXTURE.parameters, ...Object.keys(FIXTURE.limits), ...FIXTURE.framing, ...JOB_EVENTS, ...JOB_KILL_REASONS,
       ...FIXTURE.audit.fields, "conformance/soft_shell.json", "ae17a1ae",
     ];
@@ -319,6 +321,8 @@ describe.skipIf(!posix)("bash under soft_timeout = handle", () => {
     ...over,
   });
   const bash = (command: string, c = ctx()) => executeTool("bash", { command }, c, offered);
+  /** A command whose stdin `job send` may write to. */
+  const ibash = (command: string, c = ctx()) => executeTool("bash", { command, interactive: true }, c, offered);
   const job = (args: Record<string, unknown>, c = ctx()) => executeTool("job", args, c, offered);
 
   beforeEach(() => {
@@ -359,7 +363,8 @@ describe.skipIf(!posix)("bash under soft_timeout = handle", () => {
     expect(w.summary).toBe("job j1 — exit 4");
     // Reported once, then forgotten.
     const again = await job({ action: "wait", id: "j1" });
-    expect(again.code).toBe(TOOL_FAILED);
+    // The model's mistake, not the apparatus's: a result, as a missing path is.
+    expect(again.code).toBe(TOOL_OK_EMPTY);
     expect(again.content).toContain('No job "j1"');
     expect(records.map((x) => x.event)).toEqual(["yield", "exit"]);
     expect(records[1]).toMatchObject({ id: "j1", exit: 4, lines: 2 });
@@ -375,7 +380,7 @@ describe.skipIf(!posix)("bash under soft_timeout = handle", () => {
   });
 
   it("send writes to stdin: a line to `read`, then ctrl-d to `cat`", async () => {
-    await bash("read x; echo got:$x; cat; echo eof");
+    await ibash("read x; echo got:$x; cat; echo eof");
     const s = await job({ action: "send", id: "j1", input: "hello\n", seconds: 1 });
     expect(s.content).toContain("got:hello");
     expect(s.content).toMatch(/^Job: j1/);
@@ -388,12 +393,38 @@ describe.skipIf(!posix)("bash under soft_timeout = handle", () => {
 
   it("send drives an interactive interpreter", async () => {
     if (spawnable("python3")) {
-      await bash("python3 -i -q -u");
+      await ibash("python3 -i -q -u");
       const s = await job({ action: "send", id: "j1", input: "print(6*7)\n", seconds: 2 });
       expect(s.content).toContain("42");
       const d = await job({ action: "send", id: "j1", key: "ctrl-d", seconds: 5 });
       expect(d.shell_exit).toBe(0);
     }
+  });
+
+  it("without interactive, stdin is closed as in kill mode: a command reading it returns at once", async () => {
+    const t0 = Date.now();
+    const r = await bash("cat; read x; echo rc=$?; python3 -c 'import sys; print(len(sys.stdin.read()))' 2>/dev/null || true");
+    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(r.shell_exit).toBe(0);
+    expect(r.content).toMatch(/^Exit code: 0\n/);
+    expect(r.content).toContain("rc=1");
+    expect(table.list()).toEqual([]);
+  });
+
+  it("send to a job started without interactive is refused, named, and the job keeps running", async () => {
+    await bash("sleep 30");
+    const r = await job({ action: "send", id: "j1", input: "y\n" });
+    expect(r.code).toBe(TOOL_OK_EMPTY);
+    expect(r.content).toContain("was not started with `interactive: true`");
+    expect(table.running().map((j) => j.id)).toEqual(["j1"]);
+    // ctrl-c needs no stdin.
+    const c = await job({ action: "send", id: "j1", key: "ctrl-c", seconds: 5 });
+    expect(c.summary).toMatch(/killed by SIGINT|exit 130/);
+  });
+
+  it("the hint says how to interrupt a non-interactive job and how to answer an interactive one", async () => {
+    expect((await bash("sleep 30")).content).toContain('"key":"ctrl-c"');
+    expect((await ibash("sleep 30")).content).toContain('"input":"...\\n"');
   });
 
   it("ctrl-c interrupts the job", async () => {
@@ -404,7 +435,7 @@ describe.skipIf(!posix)("bash under soft_timeout = handle", () => {
   });
 
   it("send is held to the role's bash_deny and bash_allow, as a command is", async () => {
-    await bash("sh");
+    await ibash("sh");
     const c = ctx({ bashDeny: ["\\brm\\b"] });
     const r = await job({ action: "send", id: "j1", input: "rm -rf important\n" }, c);
     expect(r.code).toBe(TOOL_DENIED);
@@ -416,7 +447,7 @@ describe.skipIf(!posix)("bash under soft_timeout = handle", () => {
   });
 
   it("send asks as bash does under on_write; wait and kill do not", async () => {
-    await bash("sh");
+    await ibash("sh");
     const asked: string[] = [];
     const c = ctx({ gate: "on_write", approve: async (req) => (asked.push(req.summary), false) });
     expect((await job({ action: "send", id: "j1", input: "echo x\n" }, c)).code).toBe(TOOL_DENIED);
@@ -445,7 +476,7 @@ describe.skipIf(!posix)("bash under soft_timeout = handle", () => {
   it(`at most ${JOB_LIMITS.max_jobs} run at once; a fourth command is refused before it runs`, async () => {
     for (let i = 1; i <= JOB_LIMITS.max_jobs; i++) expect((await bash("sleep 30")).summary).toMatch(`job j${i}`);
     const r = await bash("touch fourth");
-    expect(r.code).toBe(TOOL_FAILED);
+    expect(r.code).toBe(TOOL_OK_EMPTY);
     expect(r.content).toContain("3 jobs are already running (j1, j2, j3)");
     expect(existsSync(join(root, "fourth"))).toBe(false);
     await job({ action: "kill", id: "j2" });
@@ -584,12 +615,12 @@ esac
   const containers = () => readdirSync(fake).filter((n) => n.startsWith("gnomon-") && !n.includes("."));
   const state = (n: string) => readFileSync(join(fake, n), "utf-8").trim();
 
-  it("runs with -i, stays registered while it runs (host git refused), and is removed by kill", async () => {
+  it("runs without -i unless interactive, stays registered while it runs (host git refused), and is removed by kill", async () => {
     const r = await executeTool("bash", { command: "echo in; sleep 30" }, ctx(), new Set(["bash", "job"]));
     expect(r.summary).toMatch(/running as job j1/);
     expect(r.content).toContain("stdout:\nin");
     const [name] = containers();
-    expect(readFileSync(join(fake, `${name}.args`), "utf-8").split("\n").slice(0, 3)).toEqual(["run", "--rm", "-i"]);
+    expect(readFileSync(join(fake, `${name}.args`), "utf-8").split("\n")).not.toContain("-i");
     expect(state(name!)).toBe("running");
     expect(liveContainer()).toBe(name);
 
@@ -602,7 +633,8 @@ esac
 
   it("stdin reaches the container, and the end of the turn removes what is left", async () => {
     const o = new Set(["bash", "job"]);
-    await executeTool("bash", { command: "read x; echo got:$x; sleep 30" }, ctx(), o);
+    await executeTool("bash", { command: "read x; echo got:$x; sleep 30", interactive: true }, ctx(), o);
+    expect(readFileSync(join(fake, `${containers()[0]}.args`), "utf-8").split("\n").slice(0, 3)).toEqual(["run", "--rm", "-i"]);
     const s = await executeTool("job", { action: "send", id: "j1", input: "hi\n", seconds: 1 }, ctx(), o);
     expect(s.content).toContain("got:hi");
     const [name] = containers();
@@ -627,6 +659,26 @@ esac
 // ---------------------------------------------------------------------------
 
 describe.skipIf(!posix)("on the wire and in the records", () => {
+  it("a model's job mistakes (an unknown id, a fourth job) end the turn normally, not as an apparatus failure", async () => {
+    const steps: Step[] = [
+      ["bash", { command: "sleep 30" }],
+      ["bash", { command: "sleep 31" }],
+      ["bash", { command: "sleep 32" }],
+      ["bash", { command: "sleep 33" }],
+      ["job", { action: "wait", id: "j9", seconds: 0 }],
+      ["job", { action: "send", id: "j1", input: "y\n" }],
+      { answer: "done" },
+    ];
+    const r = await scripted("openai", `timeout_seconds = 0.3\nsoft_timeout = "handle"\n`, steps);
+    expect(r.rec.stop_reason).toBe("answered");
+    expect(r.rec.code).toBe(0);
+    expect(r.rec.bucket).toBe("result");
+    const calls = r.audit.filter((a) => a.kind === "tool_call");
+    expect(calls.map((c) => c.bucket)).toEqual(["result", "result", "result", "result", "result", "result"]);
+    expect(calls[3]!.summary).toBe("bash — refused (3 jobs running)");
+    expect(r.audit.filter((a) => a.kind === "job" && a.event === "kill").map((a) => a.reason)).toEqual(["turn_end", "turn_end", "turn_end"]);
+  }, 60_000);
+
   it("offers job, frames results, records the job, and kills what is left at the end of the turn", async () => {
     const steps: Step[] = [
       ["bash", { command: "echo a; sleep 1.5; echo b" }],
@@ -643,6 +695,7 @@ describe.skipIf(!posix)("on the wire and in the records", () => {
     expect(r.rec.stop_reason).toBe("answered");
     const tools = r.bodies[0]!.tools.map((t: any) => t.function.name);
     expect(tools).toEqual(["bash", "edit", "job", "read", "todo"]);
+    expect(Object.keys(r.bodies[0]!.tools[0].function.parameters.properties)).toEqual(["command", "interactive"]);
     const toolMsgs = r.bodies.at(-1)!.messages.filter((m: any) => m.role === "tool").map((m: any) => m.content as string);
     expect(toolMsgs[0]).toMatch(/^Job: j1 \(still running, not killed\)/);
     expect(toolMsgs[5]).toMatch(/^Exit code: 0\n/);
