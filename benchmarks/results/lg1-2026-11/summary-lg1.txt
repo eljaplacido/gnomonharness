@@ -1,0 +1,32 @@
+== LG1: R3R's L arm (local only) on OLD v0.4.2 (2498d16d) and NEW PR #153 head (59f1e314), paired by (task, attempt), run together
+build  N valid pass  95% Wilson    capped(solved)  local tok mean|median   calls mean|med  agent-med  p90   other states
+OLD   32    32   18  [0.39, 0.72]       2(0)           705k|   306k     32.2| 22        98    693   {}
+NEW   32    32   18  [0.39, 0.72]       2(0)          1008k|   542k     37.9| 24       114    654   {}
+
+PRIMARY (pre-registered): solved on 32 pairs valid in both: OLD 18, NEW 18; OLD-only 2, NEW-only 2; exact McNemar p = 1.0000
+  paired difference NEW - OLD = +0.0 pts, Agresti-Min 95% CI [-12.9, +12.9] pts; margin -10 pts -> NOT SHOWN
+GUARD local tokens per cell, ratio NEW/OLD (sum over pairs) 1.431 [1.044, 2.150] (bootstrap 10000, seed 20261105); limit 1.20 -> BREACHED
+GUARD median agent wall per cell, ratio NEW/OLD 1.161 [0.962, 1.965] on 32 pairs; limit 1.20 -> NOT SHOWN
+  pair start skew (s): median 0.0, max 34649; pairs started > 60 s apart: 1 (a cell re-run alone after a yield)
+
+SECONDARY (pre-registered, descriptive):
+  capped on the pairs: OLD 2 vs NEW 2 (OLD-only 0, NEW-only 0); local calls ratio NEW/OLD 1.180 [0.942, 1.498]; local output tokens ratio 1.753 [0.934, 3.797]
+  OLD: reasoning returned by the lane: 0 responses, 0 chars; requests carrying replayed reasoning 0 in 0 cell(s) (0 chars; after a reasoned tool reply 0/0); requests carrying the idle nudge 547 in 15 cell(s); prompt tokens processed (uncached) 922382; client aborts 2, meter errors 0
+       how turns end {'answered': 19, 'none': 3, 'stall': 8, 'truncated': 2}
+  NEW: reasoning returned by the lane: 0 responses, 0 chars; requests carrying replayed reasoning 0 in 0 cell(s) (0 chars; after a reasoned tool reply 0/0); requests carrying the idle nudge 0 in 0 cell(s); prompt tokens processed (uncached) 1704198; client aborts 1, meter errors 5
+       how turns end {'answered': 21, 'none': 4, 'stall': 5, 'truncated': 2}
+
+MECHANISM CHECK (pre-registered expectation on this lane: OLD 0 and NEW 0 replayed requests, because the lane returns no reasoning field; OLD >= 0 and NEW 0 nudged requests):
+  replayed: OLD 0, NEW 0; reasoning responses OLD 0, NEW 0; nudged: OLD 547, NEW 0
+  -> the lane returned no reasoning field, so NEW's replay default could not fire: LG1 does not test replay on a reasoning-returning local lane
+
+checks:
+  CHECK buckets sum to n per build: ok
+  CHECK each valid cell's surface (where copied out) is its build's release default (nudge_after_idle OLD 12 / NEW 0, no replay_reasoning or steer_role): ok (7 capped cells carry no surface copy)
+  CHECK every cell ran its build's commit: ok (wrong_commit cells: 0)
+  CHECK $0 cloud: cloud (trap) chat requests over all LG1 cells: 0 (ok); no relay-go ran and the traps' upstream is closed, so $0.00 spent
+  CHECK every valid cell has a meter timeline: ok; timeline read errors: 0
+
+VERDICT (pre-registered rule): solved not shown, tokens guard breached, wall guard not shown on 32 pairs
+64 LG1 cells; summary in /home/eljaplacido/gnomon-wt/peers/benchmarks/results/lg1-2026-11/runs/lg1-summary.json
+VERDICT: regresses
