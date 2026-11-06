@@ -412,6 +412,7 @@ describe("published vocabulary", () => {
     );
     expect([...TRUST_DECISIONS]).toEqual(fixture.decisions);
     expect([...TRUST_BY]).toEqual(fixture.by);
+    expect(Object.keys(fixture.optional_keys).sort()).toEqual(["floor_held", "tools_changed"]);
   });
 });
 
@@ -526,6 +527,10 @@ describe("the exec floor: a role that ran contained here does not leave it unask
       expect(resolveExec(s.config, r), r).toMatchObject({ mode: "docker", image: "img:1" });
     }
     expect(warned.join(" ")).toMatch(/--trust does not cover/);
+    // The record says the run differs from the declared surface (audit 2026-11-06).
+    expect(s.outcome).toMatchObject({ decision: "trusted", by: "flag:--trust" });
+    expect(s.outcome?.floor_held).toEqual(expect.arrayContaining(["exec:implement:off"]));
+    expect([...(s.outcome?.floor_held ?? [])]).toEqual([...(s.outcome?.floor_held ?? [])].sort());
     // The session starts with what it settled, and with what the disk says: neither lowers the floor.
     recordExecFloor(s.config, path);
     recordExecFloor(loadConfig(root), path);
@@ -540,6 +545,8 @@ describe("the exec floor: a role that ran contained here does not leave it unask
     writeFileSync(join(root, ".gnomon", "policy.toml"), offPolicy);
     const s = settleTrustHeadless(loadConfig(root), { path, flag: true, execDowngrade: true, warn: () => {} });
     expect(resolveExec(s.config, "implement").mode).toBe("off");
+    // Nothing was held, so the record carries no floor_held.
+    expect(s.outcome?.floor_held).toBeUndefined();
     recordExecFloor(s.config, path);
     expect(evaluateTrust(loadConfig(root), { path }).status).toBe("untrusted");
     grantTrust(loadConfig(root), "human", path);

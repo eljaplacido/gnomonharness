@@ -259,6 +259,10 @@ describe("resolver and surface audit", () => {
     expect(p.problem).toContain("todo_gate does not run");
     expect(auditFinishGate(withTodo({ finish_gate: "v2", completion_gate: "review" }))).toHaveLength(2);
   });
+  it("finish_gate is a known [verify] key: declaring it raises no unknown-key warning", () => {
+    const problems = auditSurface({ ...cfg({ finish_gate: "v2" }), gnomonDir: "/nonexistent/.gnomon" } as any);
+    expect(problems.filter((p) => /finish_gate/.test(p.where + p.problem))).toEqual([]);
+  });
   it("a misspelt mode is reported by auditSurface", () => {
     const problems = auditSurface({ ...cfg({ finish_gate: "v3" }), gnomonDir: "/nonexistent/.gnomon" } as any);
     expect(problems.some((p) => /finish_gate/.test(p.where + p.problem))).toBe(true);

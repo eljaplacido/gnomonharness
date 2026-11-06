@@ -96,6 +96,33 @@ adoption blocker for teams — *"I cannot apply one policy across forty repos."*
 This strengthens Rule 1 rather than eroding it, because today the workaround is
 copy-paste, and copy-paste drifts.
 
+### Rule 1's carve-outs, listed (added 2026-11-06)
+
+Rule 1 says behaviour comes from the content-hashed `.gnomon/` and nothing
+machine-scoped (no `$XDG_*` config, no home-directory settings). The build has
+a few pieces of machine-local state that touch a run anyway. Each is listed
+here so the constitution names its own exceptions instead of leaving a reader
+to find them (audit 2026-11-06, action 13). None loosens anything; the test
+for keeping one is that it is **tightening-only or run/don't-run**, that it is
+**announced** when it acts, and that the **record says so**.
+
+| Carve-out | Where it lives | What it can change | Why it is kept | Visible in the record |
+|---|---|---|---|---|
+| Credentials (`gnomon key set`, env vars) | key store in the data dir; the environment | Nothing about behaviour: the surface names the endpoint and the variable | A key is access, not configuration (README "This is not a Rule 1 exception") | No (by design: secrets are never recorded) |
+| Workspace trust (`trust.json`) | `$XDG_DATA_HOME/gnomon/trust.json` (else `~/.local/share`, `%APPDATA%`) | Whether a surface's grants run as declared or clamped to the scaffold's defaults | Run/don't-run, keyed by root and surface hash: two machines that both trust a surface behave identically | Yes: `trust` audit record and task record (`decision`, `by`, `grants`) |
+| **Exec floors** (`exec-floors.json`, #158) | beside the trust store | **Where `bash` runs**: a surface that now says `exec = "off"` (or another image, or `network = true`) for a role that ran contained here is held in the container until `gnomon trust grant` or `--trust-exec-downgrade`; an unreadable trust or floor file runs every project contained | Tightening-only and fail-closed: the container must not be able to switch itself off by writing the surface it cannot otherwise escape ([THREAT-MODEL-EXEC.md](THREAT-MODEL-EXEC.md), row 9) | Yes: a clamp is `decision: "clamped"` with the `exec:<role>:…` grants; a trusted run held by the floor carries `floor_held` (since 2026-11-06; before that it was silent — the one gap the audit found) |
+| **Read-only workdir state** (TB7, #153) | `$XDG_STATE_HOME/gnomon/workdirs/<sha16(path)>/.gnomon` (else `~/.local/state/...`), `config.ts` `workdirStateDir` | Where the `.gnomon/` surface itself is read from, when the working directory is not writable and holds none | Still a hashed `.gnomon/` (the hash covers it like any other), only created when the directory is unwritable, and announced; without it a read-only `/app` could not run at all (P2G41) | Yes: the surface hash, and `workRoot` names the directory served |
+| Pinned MCP tool hashes | trust store | A changed server's tools clamp the run to the defaults | Tightening-only | Yes: `tools_changed` on the clamp |
+| `--profile`, `GNOMON_MODEL_URL` | command line, environment | Which role profile / model URL is used | Explicit per-run choices by the operator, not ambient machine config | Disclosed at startup |
+
+Records the build keeps in the data directory — prompt history, `gnomon
+guard`/`check` bases, rule caches, restore journals, anchor hand-offs (moved
+there by #158) — are records, not configuration, and change no behaviour.
+
+**Rule for new carve-outs.** Anything else machine-local that changes what a
+run does must meet the same three tests (tightening-only or run/don't-run;
+announced; recorded) and be added to this table in the same PR.
+
 ---
 
 ## 3. The two principles that do not follow — and cost the most

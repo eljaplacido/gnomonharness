@@ -679,8 +679,8 @@ const SIGNER_GUARANTEE =
   "only that the trail was not edited afterwards by someone without the key. The guarantee " +
   "against an agent with a shell comes ONLY from a signer that needs a person for each " +
   "signature -- confirming it at the end of the trial (ssh-agent with `ssh-add -c`, a FIDO or " +
-  "hardware key that needs a touch, a passphrase prompt) -- or from the kernel sandbox " +
-  "(exec os), which keeps the agent away from the key. require_trial is off by default.";
+  "hardware key that needs a touch, a passphrase prompt). A kernel sandbox (exec os), which " +
+  "would keep the agent away from the key, is proposed (#74/#156) but not yet merged. require_trial is off by default.";
 
 const SIGNER_HOWTO =
   "Declare a signer in .gnomon/config.toml, so trial trails are anchored outside the file:\n" +

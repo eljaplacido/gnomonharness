@@ -252,7 +252,8 @@ const PROFILE_HEADERS: Record<string, { description: string; header: string[] }>
     header: [
       "# frontier_plan — a cloud model plans, the local model builds.",
       "#",
-      "# Written by `gnomon setup`. The split gnomon measured in R1H (2026-11): the",
+      "# Written by `gnomon setup`. The split gnomon measured in R1H (2026-11; that lead",
+      "# did not reproduce in R3R/R4H, see docs/benchmarks/HYBRID.md): the",
       "# coordinator and plan roles on a cloud model; implementor, verifier, implement,",
       "# critique and smol stay on this machine, as roles.toml names them. A profile",
       "# is merged OVER the base roles, so roles not named here are roles.toml's.",

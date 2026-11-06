@@ -10,7 +10,8 @@ A white paper and a how-to, for two readers:
 
 [README.md](../README.md) is the reference; this guide is the path through it.
 Its commands were run against gnomon 0.3.1 (`master` at `bc8f27a`) and every
-TOML snippet was loaded by that build;
+TOML snippet was loaded by that build (install pins below name the current
+release, 0.4.5; sections added since say which version they describe);
 [Appendix A](#appendix-a-how-this-guide-was-verified) says how, and what was
 not exercised.
 
@@ -279,7 +280,7 @@ download is checked against the release's `SHA256SUMS`.
 
 | Variable | Effect |
 |---|---|
-| `GNOMON_VERSION=0.3.3` | Pin a release (`curl … \| GNOMON_VERSION=0.3.3 sh`) |
+| `GNOMON_VERSION=0.4.5` | Pin a release (`curl … \| GNOMON_VERSION=0.4.5 sh`) |
 | `GNOMON_NPM_PREFIX` | Where npm installs |
 | `GNOMON_NO_NATIVE=1` | Skip the native binaries |
 | `GITHUB_TOKEN` | Lift GitHub's anonymous API rate limit |
@@ -293,14 +294,14 @@ and `simulate` will not work unless you build from source; everything else does.
 The four packages are one program split up, so npm needs all four URLs:
 
 ```bash
-V=0.3.3
+V=0.4.5
 B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz \
          $B/gnomon-tui-$V.tgz  $B/gnomon-harness-$V.tgz
 ```
 
 ```powershell
-$V="0.3.3"
+$V="0.4.5"
 $B="https://github.com/eljaplacido/gnomonharness/releases/download/v$V"
 npm i -g "$B/gnomon-core-$V.tgz" "$B/gnomon-natives-$V.tgz" "$B/gnomon-tui-$V.tgz" "$B/gnomon-harness-$V.tgz"
 ```
@@ -327,7 +328,7 @@ global link, run `~/gnomon/gnomon <command>` from any project. Windows steps:
 ### 3.4 Verify the install
 
 ```bash
-gnomon --version        # gnomon/0.3.3+npm for a release install; +<commit> from a checkout
+gnomon --version        # gnomon/0.4.5+npm for a release install; +<commit> from a checkout
 gnomon enumerations     # prints the enumerations JSON: proves the native binaries are found
 ```
 
@@ -360,7 +361,9 @@ gnomon setup
    recommends a model from its dated catalog (`packages/gnomon-cli/catalog/models.toml`)
    with the reason. With 24 GB of GPU memory or 64 GB of unified memory that
    is `qwen3.6:35b`: gnomon measured it solving 24 of 32 tasks alone on an
-   RTX 5090 (R1H) and 18 of 32 on an NVIDIA GB10 (R1). Smaller machines get
+   RTX 5090 in R1H; later runs of the same lane solved 22 of 29 (R3R, v0.4.0)
+   and 18 of 32 (LG1), so read it as "about two thirds". On an NVIDIA GB10 it
+   solved 18 of 32 (R1). Smaller machines get
    `gpt-oss:20b`, `qwen3:14b`, `qwen3:8b` or `qwen3:4b`, each marked "not
    measured by gnomon". A model you already have is offered without a
    download. A download happens only on your yes, through Ollama, with its
@@ -371,8 +374,14 @@ gnomon setup
    `gnomon key set` stores it, never in `.gnomon/`. Checking it with one token
    is a separate yes. With a cloud model, setup suggests **hybrid**: the cloud
    plans (`coordinator`, `plan`), this machine builds (everything else). On an
-   RTX 5090 that solved 87% vs 84% cloud-only at 26% lower cost per solved
-   task. A slow or small local model also leads to hybrid, a very slow one to
+   RTX 5090 that split has **no measured advantage** over cloud-only: an early
+   lead (R1H) did not reproduce on v0.4.0 (R3R: 19/31 vs 24/31 cloud-only) and
+   R4H found no build effect (20 vs 19). On an NVIDIA GB10 it solved 22/32 vs
+   16/31 local-only (M2, McNemar p = 0.07). See
+   [HYBRID.md](benchmarks/HYBRID.md) and the
+   [R3R](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/r3r-2026-11/summary-r3r.txt),
+   [R4H](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/r4h-2026-11/summary-r4h.txt) and
+   [M2](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/m2-2026-11/summary-m2.txt) summaries. A slow or small local model also leads to hybrid, a very slow one to
    cloud first; those speed thresholds are provisional and say so.
 3. **Accept the diff, then `gnomon launch`.** The change to `.gnomon/` is shown
    as a diff and written only on your yes. The surface hash moves, so a
@@ -1211,10 +1220,16 @@ repo_code = true      # ask before npm test, make, pip install -e . — whatever
 ```
 
 `exec` can be set per role, and is refused on native Windows. Nothing checks
-for a docker daemon before a turn. Docker raises the cost of an accident or an
-injected instruction; it is not a jail for hostile code
-([SANDBOX-DESIGN.md](SANDBOX-DESIGN.md)). The control that binds everyone is
-branch protection on the remote.
+for a docker daemon before a turn. Since 0.4.5 the container cannot edit
+`.gnomon/*.toml`, `.git/config` or git hooks (they are mounted read-only;
+configuration changes are yours to make), and a contained role refuses a
+project root that contains your home directory, gnomon's data directory or
+gnomon's own code (`GNOMON_ALLOW_SELF_IN_ROOT=1` for working on gnomon
+itself). What docker does and does not defend against, layer by layer, with
+its accepted limits and the recommended `git config --global
+safe.bareRepository explicit`, is [THREAT-MODEL-EXEC.md](THREAT-MODEL-EXEC.md);
+kernel and docker-runtime escapes are outside it. The control that binds
+everyone is branch protection on the remote.
 
 ### 7.7 Team use
 
@@ -1447,12 +1462,25 @@ and none when less than `completion_min_remaining` of the step budget (or of a
 run deadline, when one is given) is left. Each round is in
 `counters.completion_gate` and the `completion_gate` audit record
 ([CONTRACTS.md §30](CONTRACTS.md)). It costs steps and tokens on every turn
-that changes files, so turn it on where "almost right" is the failure you see.
+that changes files.
+
+**Measured so far, it has not helped.** On a hosted model (H4-lite,
+deepseek-v4.1-flash, 1,800 s cap) `"review"` *lowered* the hidden-test
+fraction by 0.10 (95% CI −0.21 to −0.01), doubled capped cells (4 → 8) and
+cost +86% wire spend: the reviewer took ~12 minutes and the gate does not see
+the clock
+([H4-lite summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h4lite-2026-11/summary-h4lite.txt)).
+On a local model (G1, qwen3.6-35b) neither `"checklist"` (18 vs 16 solved,
+p = 0.63) nor `"review"` (17 vs 16, p = 1.0) showed a difference, and
+`"review"` added a median +153 s of wall time per task
+([G1 summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/g1gate-2026-11/summary-g1g.txt)).
+Leave it off unless you are measuring it; if you try it, prefer `"checklist"`
+and a run deadline, so the gate is skipped near the end of the budget.
 
 ```toml
 # policy.toml: inside the existing [verify] block
 [verify]
-completion_gate = "review"        # "off" (default), "checklist", or "review"
+completion_gate = "checklist"     # "off" (default), "checklist", or "review" (see above)
 completion_rounds = 3             # hand-backs per turn, at most
 completion_min_remaining = 0.2    # skip with less than a fifth of the budget left
 completion_reviewer = "verifier"  # a read-only role (no write/edit; a bash_allow)

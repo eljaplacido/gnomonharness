@@ -372,10 +372,16 @@ describe("bash", () => {
     // A killed command cannot be cheaply narrowed and re-run, and the reason it
     // was still running is usually the last thing it printed — so the tail is
     // kept too, unlike the head-only clamp used on a command that completed.
+    //
+    // The output is one builtin printf (no loop, no `seq`), so it is all
+    // written before the timeout on any platform; the timeout is what ends
+    // the command. It was a 400-iteration loop under a 400 ms timeout, which a
+    // Windows runner sometimes had not finished when the kill came, so TAIL
+    // was never printed (audit 2026-11-06). Slow platforms get a longer clock.
     const out = await executeTool(
       "bash",
-      { command: `printf 'HEAD'; for i in $(seq 1 400); do printf 'xxxxxxxxxx'; done; printf 'TAIL'; sleep 5` },
-      ctx({ timeoutMs: 400, maxOutputBytes: 200 }),
+      { command: `printf 'HEAD%04000dTAIL' 0; sleep 10` },
+      ctx({ timeoutMs: process.platform === "linux" ? 400 : 3000, maxOutputBytes: 200 }),
       offered
     );
     expect(out.code).toBe(TOOL_FAILED);

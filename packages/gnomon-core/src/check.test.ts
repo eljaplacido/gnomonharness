@@ -76,7 +76,8 @@ beforeEach(() => {
   sh(["config", "core.autocrlf", "false"]);
 });
 afterEach(() => {
-  rmSync(repo, { recursive: true, force: true });
+  // Windows: a git a timed-out test started can still hold the directory (EBUSY).
+  rmSync(repo, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 });
 
 const byId = (v: CheckVerdict, id: string) => v.checks.find((c) => c.id === id);

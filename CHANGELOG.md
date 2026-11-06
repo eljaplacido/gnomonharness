@@ -48,6 +48,36 @@
   (docs/CONTRACTS.md §33, `conformance/finish_gate.json`). Off by default:
   request bodies are byte-identical (`finish_gate_loop.test.ts`). Not yet
   benchmarked.
+- **Unknown keys in `[turn]`, `[verify]`, `[sandbox]`, `[resilience]` and
+  `[approval]` are warned about**, with a "did you mean" suggestion (a
+  misspelt `[turn] todo_gat` or `[verify] completion_gat` was silently
+  ignored). A warning, never a refusal: an unknown key changes nothing.
+- **The trust record says when the exec floor held a trusted run**:
+  `floor_held` lists the `exec:<role>:off` / `exec:<role>:image` grants that
+  `--trust`, `GNOMON_TRUST` or the store did not cover (CONTRACTS §8).
+
+### Changed (performance)
+
+- **Faster start.** `gnomon --version` 58 → 44 ms and a one-request `gnomon
+  task` 100 → 94 ms (NVIDIA GB10, paired, median of 30–40 rounds): `node:http`
+  is loaded only when the dashboard or `gnomon chaos` makes a server (on Node 22
+  importing it loads tls, http2, zlib and undici), the TUI's grapheme segmenter
+  is made on first use, and `tui`, `setup`, `doctor` and `check` load their
+  modules when run. `startup_budget.test.ts` pins what `--version` may load
+  (no network stack) instead of a wall time.
+
+### Docs
+
+- **Truth pass (audit 2026-11-06).** `exec = "os"` (the kernel sandbox, #74/#156)
+  is marked as proposed and not merged everywhere it read as shipped (README,
+  CONTRACTS §10/§11/§14/§16, the `skill accept` signer message): master accepts
+  only `exec = "off"` or `"docker"`. GUIDE no longer cites the RTX 5090 hybrid
+  lead (87% vs 84%) that R3R/R4H did not reproduce, and now cautions against the
+  completion gate with its measurements (H4-lite: −0.10 hidden-test fraction on
+  hosted, caps 4 → 8; G1: no difference locally). POSITIONING adds P2G41 (v0.4.1
+  defaults 0/28 vs opencode 6/29). Stale versions fixed (GUIDE 0.3.3, README
+  v0.5.0) and the "24 of 32" figure given with its later re-runs.
+
 ## [0.4.5] — 2026-11-06
 
 Security release for `exec = "docker"` (PR #158). Upgrade if you run a model

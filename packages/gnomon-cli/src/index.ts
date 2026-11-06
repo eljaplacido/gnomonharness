@@ -117,7 +117,6 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { runTui } from "gnomon-tui";
 import { initSurface } from "./init.js";
 import {
   looksLikeChatModel,
@@ -139,12 +138,14 @@ import {
 } from "./setup.js";
 import { pendingMigrations, applyMigrations, MIGRATIONS } from "./migrate.js";
 import { cmdUpdate, cmdUninstall, maybeNotifyUpdate } from "./update.js";
-import { cmdCheck } from "./check.js";
-import { probeMachine, formatProbe, probeAtInit, systemHost } from "./probe.js";
-import { loadCatalog, defaultCatalogPath, type Suggestion } from "./catalog.js";
-import { runSetup, HYBRID_CONTROLS, MODE_ALIASES, SETUP_EXIT, type HybridControl } from "./setup_wizard.js";
-import { systemSetupEffects } from "./setup_host.js";
-import { runDoctor, formatDoctor, DOCTOR_EXIT } from "./doctor.js";
+import { probeMachine, formatProbe, probeAtInit } from "./probe.js";
+import type { Suggestion } from "./catalog.js";
+import type { HybridControl } from "./setup_wizard.js";
+// Cold paths, loaded by the command that needs them: `gnomon-tui`, `check`,
+// `setup` (wizard, catalog, host effects) and `doctor`. A bundle or a
+// compiled dist/ imports every static import at startup, and none of these
+// is on the path of `--version`, `task` or `prompt` (audit 2026-11-06,
+// startup: the launcher bundle grew 67% and every command paid for it).
 import { selfLauncher } from "./self_launcher.js";
 
 // ---------------------------------------------------------------------------
@@ -477,6 +478,7 @@ async function cmdLoop(args: CliArgs): Promise<void> {
 }
 
 async function cmdTui(args: CliArgs): Promise<void> {
+  const { runTui } = await import("gnomon-tui");
   await runTui(args.dir);
 }
 
@@ -2204,6 +2206,8 @@ function commandError(args: CliArgs, schema: string, message: string, exit: numb
  * setup_wizard.ts; this reads the flags and supplies the real machine.
  */
 async function cmdSetup(args: CliArgs, opts: { fromLaunch?: boolean } = {}): Promise<number> {
+  const [{ runSetup, HYBRID_CONTROLS, MODE_ALIASES, SETUP_EXIT }, { loadCatalog, defaultCatalogPath }, { systemSetupEffects }, { systemHost }] =
+    await Promise.all([import("./setup_wizard.js"), import("./catalog.js"), import("./setup_host.js"), import("./probe.js")]);
   const f = args.flags;
   const schema = "gnomon.setup/1";
   const usage = (m: string) => commandError(args, schema, m, SETUP_EXIT.usage);
@@ -2273,6 +2277,11 @@ async function cmdSetup(args: CliArgs, opts: { fromLaunch?: boolean } = {}): Pro
  * from what setup recorded. Never writes; says what would fix each problem.
  */
 async function cmdDoctor(args: CliArgs): Promise<number> {
+  const [{ runDoctor, formatDoctor, DOCTOR_EXIT }, { loadCatalog, defaultCatalogPath }, { systemHost }] = await Promise.all([
+    import("./doctor.js"),
+    import("./catalog.js"),
+    import("./probe.js"),
+  ]);
   const schema = "gnomon.doctor/1";
   if (args.flags.catalog === "true") return commandError(args, schema, "--catalog needs a file.", DOCTOR_EXIT.couldNotRun);
   try {
@@ -2958,8 +2967,10 @@ async function main(): Promise<void> {
     case "trust":
       await cmdTrust(args);
       break;
-    case "check":
+    case "check": {
+      const { cmdCheck } = await import("./check.js");
       process.exit(await cmdCheck(args));
+    }
     case "chaos": {
       // Its own argv parser, like guard: subcommands and flags it alone reads.
       const { cmdChaos } = await import("./chaos.js");

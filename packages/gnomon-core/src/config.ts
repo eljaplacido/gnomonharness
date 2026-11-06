@@ -2574,6 +2574,72 @@ const BLOCK_OWNER: Record<string, BlockOwner> = {
   tools: { file: "tools.toml", read: true },
 };
 
+/**
+ * The keys each of these blocks is read for, by file. Checked by auditSurface
+ * so a misspelt key is named instead of silently ignored. A new key in one of
+ * these blocks must be added here, or the surface audit warns that it does
+ * nothing (config.test.ts pins the documented keys as known).
+ *
+ * Sources: resolveLoop, resolveDeadline and sweep_knobs (todo_gate) for
+ * [turn]; resolveResilience for [resilience]; resolveVerify and
+ * completion_gate.ts for [verify]; resolveExec, sandbox_pin, trust and
+ * sweep_knobs for [sandbox]; tools.ts, after_refusal.ts and the scaffold for
+ * [approval] (`modes`/`default` are typed on Policy and kept as known, as is
+ * [sandbox] `filesystem`).
+ */
+export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.toml", block: string, keys: readonly string[]]> = [
+  [
+    "config.toml",
+    "turn",
+    [
+      "max_consecutive_empty",
+      "max_consecutive_malformed",
+      "max_run_notes",
+      "read_only_converge_after",
+      "all_refused_notice",
+      "max_steps",
+      "legs",
+      "stall_repeats",
+      "nudge_after_idle",
+      "converge_refire",
+      "deadline_notes",
+      "deadline_margin_ms",
+      "todo_gate",
+    ],
+  ],
+  [
+    "config.toml",
+    "resilience",
+    [
+      "attempts",
+      "backoff_ms",
+      "request_timeout_ms",
+      "transport_grace_ms",
+      "task_transport_grace_ms",
+      "stream_idle_timeout_ms",
+      "stream_total_timeout_ms",
+    ],
+  ],
+  [
+    "policy.toml",
+    "verify",
+    [
+      "command",
+      "after",
+      "max_rounds",
+      "test_must_fail_first",
+      "test_paths",
+      "completion_gate",
+      "completion_rounds",
+      "completion_min_remaining",
+      "completion_reviewer",
+      "finish_gate",
+    ],
+  ],
+  ["policy.toml", "sandbox", ["level", "network", "exec", "image", "extra_roots", "allow_package_index", "filesystem"]],
+  ["policy.toml", "approval", ["gate", "repo_code", "after_refusal", "after_refusal_calls", "modes", "default"]],
+];
+
 const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "max_tokens", "model", "exec", "image", "profile", "reasoning_effort", "task_allow", "temperature", "tools", "top_p", "write_allow"]);
 
 /**
@@ -2914,6 +2980,30 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
           fatal: false,
         });
       }
+    }
+  }
+
+  // A misspelt key inside a known block is read by nothing (audit 2026-11-06:
+  // `[turn] todo_gat` and `[verify] completion_gat` were silently ignored).
+  // Warned, never fatal: an unknown key changes nothing, and refusing to start
+  // over one would be a claim larger than the evidence.
+  for (const [file, block, known] of BLOCK_KEYS) {
+    const parsed = (file === "config.toml" ? config.config : config.policy) as Record<string, unknown> | undefined;
+    const body = parsed?.[block];
+    if (!body || typeof body !== "object" || Array.isArray(body)) continue;
+    for (const key of Object.keys(body as Record<string, unknown>)) {
+      // A right key in the wrong block is reported above, with where it goes.
+      if (known.includes(key) || KEY_OWNER[key]) continue;
+      const near = known
+        .map((k) => [k, editDistance(key, k)] as const)
+        .filter(([, d]) => d <= Math.max(2, Math.floor(key.length / 4)))
+        .sort((a, b) => a[1] - b[1])[0]?.[0];
+      problems.push({
+        where: `.gnomon/${file} [${block}]`,
+        problem: `${key} is not a key [${block}] reads; it does nothing` + (near ? `. Did you mean "${near}"?` : "."),
+        fix: `[${block}] reads: ${known.join(", ")}.`,
+        fatal: false,
+      });
     }
   }
 
