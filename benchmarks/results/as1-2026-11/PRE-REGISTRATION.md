@@ -1,6 +1,6 @@
 # AS1: an adaptive multi-hypothesis sweep of gnomon fixes on P2G's long Terminal-Bench 4.0 tasks (pre-registered 2026-11-05)
 
-**Status: designed, built and committed 2026-11-05, before any AS1 cell. NOT launched.** The build pin and the knob
+**Status: designed 2026-11-05; pinned to v0.4.4 (branch C) by Amendment 1 (2026-11-06, end of file), before any AS1 cell.** The build pin and the knob
 key names are filled in after H3 decides the v0.4.3 defaults (§2, §11). Later changes go in timestamped amendments at
 the end of this file; the confirmatory stage gets its own pre-registration file, committed before its first cell (§6).
 
@@ -356,3 +356,108 @@ AS1_APPROVED=yes nohup python3 run_as1.py run --stage confirm --push > ../run-co
 - **A fixed one-arm-per-study series** (H-style): ~$60 per fix to confirm; AS1 spends that only on the winner.
 - **Window "auto"**: not testable behind the relay (§4.1).
 - **2^(4−1) half fraction**: see §5.2.
+
+## Amendment 1 — the v0.4.4 pin, control C, the GC×deadline arm, the lean budget (2026-11-06T14:40Z, before any AS1 cell)
+
+Written and committed before the first AS1 cell; no outcome of AS1 exists. Everything not named here stands as
+registered (§3 scoring and validity, §4.3 allocation rule and seed, §4.5 re-runs/peak windows, §5, §6, §9).
+
+**What changed since §2 was written.** H3 finished: `replay_reasoning` ADOPTED by its pre-registered rule (R1−R0
+hidden-test fraction +0.160 [+0.042, +0.293], capped 14 vs 19); the rest of the recipe (1M window + nudge off, R2−R1)
++0.017 [−0.095, +0.138], not shown. LG1: switching the idle nudge off regresses local tokens 1.43× [1.04, 2.15]
+(verdict "regresses"). The resulting build is **v0.4.4** (tag `v0.4.4` = master `6b7f821098df`): replay on by default
+for **hosted** endpoints only, the idle nudge **unchanged at 12** (#153's nudge-off trimmed), `--deadline`, and
+v0.4.3's sweep knobs (#154, CONTRACTS §32). Neither branch A (assumed the nudge off) nor branch B (the 1M recipe as the
+control) matches it, so a third branch is registered.
+
+### A1.1 Build pin
+- **v0.4.4**, commit `6b7f821098dfcbd104c869f3da885f0ef15e1261`, `gnomonBuild` `v0.4.4-6b7f821`, `gnomon --version`
+  = `gnomon/0.4.4+v0.4.4-6b7f821`; `SHA256SUMS` sha256 `eae55819fa21063eae584d9811db1dcf6b6d1ee34f9819987bc565adf67bec98`.
+- The GitHub release is built (15 assets) but still a **draft** (not public), so the §11 mirror mechanism is used:
+  `gh release download v0.4.4` of SHA256SUMS and the four npm tarballs into `apparatus/build/v0.4.4/` (gitignored),
+  each tarball checked against SHA256SUMS on the host (4/4 OK), served by `run_as1.py` on 172.17.0.1:4739
+  (`source = "mirror"`). The adapter's three-way pin (sums hash, each tarball, gnomonBuild + `--version`) runs in every
+  cell exactly as registered, so the source does not matter. Recorded per trial as registered.
+- `build.toml` knobs: `replay_default, deadline, completion_gate, reasoning_effort, sampling_passthrough,
+  env_snapshot, todo_gate, edit_variant, package_index_allowlist, steer_role` — **not** `nudge_default_off`.
+
+### A1.2 The control: branch C (`arms/CTL.C.toml`)
+- **v0.4.4's own release scaffold + P2G's attempt-1 `_PATCH` + one declared line, `[endpoints.bench]
+  replay_reasoning = true`.** Window 65,536 (scaffold), `nudge_after_idle = 12` (scaffold), no sweep knob.
+- **Why the declared line.** Every AS1 cell reaches Go through a log relay at `http://172.17.0.1:473x`, a private
+  172.16/12 address, which v0.4.4 (`isLocalLaneUrl`, CONTRACTS §31) classifies as a *local lane*: undeclared, replay
+  stays off in every cell and the control would be H3's R0, the arm replay beat — not what a user on Go gets from
+  v0.4.4. Declaring it reproduces the hosted default (the default turns on from the request after the first reasoned
+  tool reply; declared, from the first request, which has no earlier reasoning to carry either way; the only other
+  difference is the default's resend-once-on-a-400 fallback, which Go/DeepSeek never triggered in H3). The wire test
+  shows the second request carrying `reasoning_content` and `replay_reasoning_source = "declared"`.
+- **How it differs from branch A:** A assumed #153 also switched the idle nudge off; under C the nudge stays at 12 in
+  the control and in every arm. From B: no 1M window and no nudge-off in the control.
+- Expectations (fatal unless noted): record window = 65,536; surface `turn.nudge_after_idle` = 12; surface
+  `endpoints.bench.replay_reasoning` = true; `replayed_calls > 0` (warn).
+
+### A1.3 Arms under C (13; burn-in 26 waves as registered)
+
+| arm | status | key (confirmed against CONTRACTS §32 on master/v0.4.4) | change from the registered fragment |
+|---|---|---|---|
+| AA | runs | — | none |
+| W | **runs** | config `[endpoints.bench] max_context_tokens = 1000000` | branches += C (C's control keeps 65,536, so W is a real one-variable arm, as under A). H3's R2−R1 bundled W with nudge-off and was +0.017, so W alone is untested |
+| D | runs | `gnomon task --deadline 1740` | none |
+| GC | runs | policy `[verify] completion_gate = "checklist"` (§30) | none |
+| GR | runs | policy `[verify] completion_gate = "review"` | none |
+| **GCD** | **new, runs** | GC's edit + `--deadline 1740` | see A1.4 |
+| EL / EH / EM | runs | roles `[roles.implementor] reasoning_effort` = low / high / max | key as proposed; `ready` |
+| S | runs | roles `[roles.implementor] temperature = "provider"`, `top_p = "provider"` | proposed key `sampling` under the role does not exist (it is an endpoint key that would strip every role); replaced by the two role keys. The `temperature not_equals 0.3, all` check was dropped: on an absent field `_test` reads it as a failure (wire test, first run), so it refused exactly what the arm intends; kept: `temperature` and `top_p` absent on any request |
+| ENV | runs | config `[context] env_snapshot = true` | proposed table `[turn]` was wrong. **Adds `--trust`**: the snapshot is a workspace-trust grant and the wire test's first run showed gnomon clamping the untrusted surface (`trust.decision = "clamped"`, no `counters.bootstrap`) — the fatal expectation caught it. Expect `counters.bootstrap.id = "env_snapshot"` (fatal), `outcome = "ok"` (warn) |
+| TODO | runs | config `[turn] todo_gate = true` | proposed `policy [verify]` was wrong. Expect `counters.todo_gate.max_rounds = 1` |
+| PKG | runs | policy `[sandbox] allow_package_index = [pypi.org, files.pythonhosted.org, registry.npmjs.org]` | proposed key name `package_index_allow` was wrong. Expect `counters.package_index.hosts` present |
+| **EDIT** | **dropped** | tools.toml `[[tools]] name = "edit"`, `variant = "compat"` | the knob exists, but in an array-of-tables entry of tools.toml, which the line-level surface patch cannot target by construction; extending the patcher now would add untested apparatus. Listed as excluded in the round-0 ledger entry |
+| P0/PG/PK | not run | — | the optional planner stratum is not run under the lean budget |
+
+**No nudge arm.** The idle nudge stays at the release's 12 everywhere. N1 stopped for futility (the nudge does not help
+when it reaches the model), H3's nudge-off-plus-window bundle added +0.017, and LG1 showed nudge-off costs local
+tokens; at the lean budget (one adaptive round after burn-in) a 14th arm would cost every other arm power.
+
+### A1.4 GCD: completion gate (checklist) + `--deadline 1740`, added as an explicit design change
+- The user's main hypothesis for the full-solve gap to opencode. By contract the two interact: the gate's
+  `completion_min_remaining` is judged against the run deadline when one is set (CONTRACTS §30/§31), else the step
+  budget; a one-variable screen of GC and D cannot see that until stage I, and only if both are promoted alone.
+- **A two-variable arm, declared as one.** Scored and allocated as any arm (§4.3). It sits in the `completion_gate`
+  family, so it never meets GC or GR in stage I, and `subsumes = ["deadline"]` removes the deadline family from stage
+  I's factors when GCD is the chosen gate level (`run_as1.subsumed_out`), so no interaction cell repeats `--deadline`.
+  If GCD is promoted, the claim it supports is about the pair, not about either part.
+- Expectations: `counters.completion_gate.mode = "checklist"` and `volatile.deadline` present (both fatal); a deadline
+  self-stop is CAPPED (§3.2), so GCD cannot win the cap guard by renaming timeouts.
+- Arm count stays 13 (GCD in, EDIT out): burn-in 26 waves, ~$18.95 planned.
+
+### A1.5 Apparatus changes (all before data, all covered by the offline tests and the wire test)
+- `surface_patch.merge`: a later fragment's expectation on the same `(on, path)` replaces the control's (W declares
+  window = 1,000,000 while the control pins 65,536; the wire test's first run failed W on the control's check — this
+  conflict existed under branch A too).
+- `run_as1.py`: branch C accepted; fragments with `status = "excluded"` are excluded in planning as in running;
+  `subsumed_out` (A1.4); the launch check read the wire test's verdict with `endswith("wire test: PASS")`, which the
+  verdict line `wire test: PASS (gnomon …)` can never match — now the last line's prefix; **host guards**: no wave starts
+  with the 1-min load above 30 (`--max-load`; the gx10 hard-halted at ~95–100 on 2026-11-05) or with less than 50 GB
+  free on `/` (`--min-disk-gb`; H3 Addendum 2 lost a cell to a full disk); the commit trailer carries the session line.
+- `apparatus/chain_as1.sh`: runs screening then the interaction stage unattended and commits/pushes a CHAIN line;
+  confirmation still waits for the operator's `CONFIRMATORY-PRE-REGISTRATION.md` (§6).
+- Offline tests on the v0.4.4 scaffold (`fixtures/surface-v044`, identical in content to v0.4.2's but one comment):
+  **150 passed** (`OFFLINE-TESTS-amendment1.txt`; 114 before, + branch C/GCD/override tests and the node-vs-Python
+  parity for the new fragments).
+- **Wire test on the pinned build** (`wiretest-as1.txt`, its sha256 in `build.toml`): **PASS** for CTL.C and all 13
+  arms, every fatal mechanism expectation passing, plus the read-only-cwd fallback. Two first-run failures were fixed
+  as above (ENV clamped by trust; S's absent-field check; W's control window check) — each was the mechanism check
+  doing its job.
+
+### A1.6 Budget and stopping rules (lean, the user's choice: ~$75)
+- Caps from the wire: **screening $25, interaction $10, confirmation $40 (k = 2, 58 waves)**; planner not run.
+- A wave starts only if the stage's spend + $2 ≤ its cap (§8); outside Go's 2× windows (weekdays 01–04, 06–10 UTC);
+  with the three slot relays idle; ≥ 24 GB RAM available; load ≤ 30; ≥ 50 GB free disk.
+- Screening stops when no arm is active or the next wave would pass the cap; arm decisions as §4.3 (N_MIN 4, N_MAX 12,
+  harm/futility/promotion thresholds unchanged). At lean, burn-in (~$19) leaves about one adaptive round of 4 waves;
+  ALLOCATION-SIM's $25 row applies (+0.2 arm promoted ~0.41; global-null false promotion 0.36 per campaign).
+- Interaction: as §5 within $10 (k = 3's 14 waves at ~$11.6 may stop on the budget; then the fit uses the waves run).
+  Nothing goes to confirmation unless §5.3's rule chooses a combination.
+- Confirmation needs its own committed pre-registration (§6); at k = 2 the MDE80 vs the control is 0.122 and
+  P(non-inferiority to opencode shown | parity) ≈ 0.27 (`SIZING.txt`).
+- Dry run under this pin: `DRY-RUN-amendment1.txt` (screen ~31 waves, ~15.5 h; interaction ~7 h).

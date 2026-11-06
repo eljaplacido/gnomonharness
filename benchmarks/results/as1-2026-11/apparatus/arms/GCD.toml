@@ -1,0 +1,40 @@
+# Completion gate (checklist) WITH --deadline 1740: Amendment 1 (2026-11-06), added before any cell.
+# The user's main hypothesis for closing the full-solve gap to opencode: the gate hands back the first answer of a turn
+# that changed the worktree, and with a run deadline it reads the time left (CONTRACTS §30/§31: completion_min_remaining
+# is judged against TurnDeps.deadline when one is set, else the step budget), so the two interact by design, which a
+# one-variable screen of GC and D cannot show until stage I, and only if both are promoted on their own.
+# A two-variable arm, declared as such: it sits in the completion_gate family (so it never meets GC or GR in stage I),
+# and `subsumes = ["deadline"]` drops the deadline family from stage I's factors if GCD is the completion_gate level
+# chosen (run_as1.py), so no interaction cell repeats --deadline. It is scored as any arm; a deadline self-stop is CAPPED.
+[arm]
+id = "GCD"
+family = "completion_gate"
+level = "checklist+deadline1740"
+status = "ready"
+branches = ["A", "B", "C"]
+requires = ["completion_gate", "deadline"]
+subsumes = ["deadline"]
+title = "[verify] completion_gate = \"checklist\" + gnomon task --deadline 1740"
+hypothesis = "the gate stops wrong answers with time left (P2G41 cause 2) while the deadline keeps the extra verification inside the cap (cause 3)"
+evidence = "p2g41 REPORT root causes 2 and 3; harnesses.md #2 (B) and #9 (C); CONTRACTS §30-§31 (gate reads the deadline)"
+cost_factor = 1.15
+
+[run]
+task_args = ["--deadline", "1740"]
+
+[[edit]]
+file = "policy.toml"
+table = "verify"
+key = "completion_gate"
+value = "checklist"
+
+[[expect]]
+on = "record"
+path = "counters.completion_gate.mode"
+op = "equals"
+value = "checklist"
+
+[[expect]]
+on = "record"
+path = "volatile.deadline"
+op = "present"

@@ -1,25 +1,32 @@
-# Todo gate: an answer is not accepted while the turn's todo list has open items.
-# KNOB PENDING (feat/sweep-knobs, todo_gate): key and table are the proposal; confirm, then set status = "ready".
+# Todo gate: an answer is not accepted while the turn's todo list has open items (handed back once).
+# KNOB CONFIRMED (Amendment 1, 2026-11-06), CONTRACTS §32: config.toml [turn] todo_gate = true (the proposal's
+# policy.toml [verify] was wrong). counters.todo_gate is present only when declared.
 [arm]
 id = "TODO"
 family = "todo_gate"
 level = "on"
-status = "pending-knob"
-branches = ["A", "B"]
+status = "ready"
+branches = ["A", "B", "C"]
 requires = ["todo_gate"]
-title = "todo_gate = true"
+title = "[turn] todo_gate = true"
 hypothesis = "optional todos get dropped under pressure; enforcing them prevents premature completion"
 evidence = "harnesses.md #6 (grade C: ForgeCode 38 -> 66 on TB2, confounded; OPENDEV design rationale)"
 cost_factor = 1.05
 
 [[edit]]
-file = "policy.toml"
-table = "verify"
+file = "config.toml"
+table = "turn"
 key = "todo_gate"
 value = true
 
 [[expect]]
 on = "surface"
-path = "policy.toml:verify.todo_gate"
+path = "config.toml:turn.todo_gate"
 op = "equals"
 value = true
+
+[[expect]]
+on = "record"
+path = "counters.todo_gate.max_rounds"
+op = "equals"
+value = 1

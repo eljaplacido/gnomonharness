@@ -1,0 +1,54 @@
+# Control, branch C (Amendment 1, 2026-11-06): v0.4.4's own release scaffold + P2G's attempt-1 _PATCH, with ONE
+# declared line: [endpoints.bench] replay_reasoning = true.
+#
+# Why the one line: v0.4.4 turns replay on by default for an undeclared HOSTED endpoint only (CONTRACTS §31). Every
+# AS1 cell reaches Go through a log relay on the docker bridge (http://172.17.0.1:473x), a private 172.16/12 address,
+# which v0.4.4's isLocalLaneUrl classifies as a LOCAL lane: undeclared, replay would stay OFF in every cell, and the
+# control would be H3's R0 (the arm replay beat), not what a user on Go gets from v0.4.4. Declaring it reproduces the
+# hosted default: the default switches on from the request after the first tool reply with reasoning, the declared
+# value from the first request, which carries no earlier reasoning either way; the only other difference is the
+# default's resend-once-without-reasoning on a 400 naming reasoning_content, which Go/DeepSeek never returned in H3.
+# Everything else is the release: 65,536-token window, nudge_after_idle = 12 (v0.4.4 kept it), no sweep knob.
+# Differs from branch A (CTL.A) in that A assumed #153 also switched the idle nudge off; v0.4.4 did not.
+[arm]
+id = "CTL.C"
+family = "control"
+level = "v044-release+replay"
+status = "ready"
+branches = ["C"]
+requires = ["replay_default"]
+title = "Control C: v0.4.4 release scaffold + _PATCH, replay declared (= the hosted default behind a bridge relay)"
+hypothesis = "none: the current best default, run in every wave"
+evidence = "h3-2026-11 (ADOPT); lg1-2026-11 (nudge kept); CONTRACTS §31 (v0.4.4)"
+cost_factor = 1.0
+
+[[edit]]
+file = "config.toml"
+table = "endpoints.bench"
+key = "replay_reasoning"
+value = true
+
+[[expect]]   # the release window, not the 1M recipe window
+on = "record"
+path = "counters.model_calls.window"
+op = "equals"
+value = 65536
+
+[[expect]]   # v0.4.4 keeps the idle nudge at 12
+on = "surface"
+path = "config.toml:turn.nudge_after_idle"
+op = "equals"
+value = 12
+
+[[expect]]
+on = "surface"
+path = "config.toml:endpoints.bench.replay_reasoning"
+op = "equals"
+value = true
+
+[[expect]]   # replay is behavioural (the model must answer a tool call with reasoning): a warning only
+on = "record"
+path = "counters.model_calls.replayed_calls"
+op = "gt"
+value = 0
+severity = "warn"

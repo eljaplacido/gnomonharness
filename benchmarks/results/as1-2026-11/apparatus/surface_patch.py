@@ -154,6 +154,10 @@ def merge(frags: list[Fragment]) -> dict:
             if k in env and env[k] != v:
                 raise FragmentError(f"conflicting env {k} ({f.id})")
             env[k] = v
+        # Amendment 1: a later fragment's expectation on the same (on, path) replaces an earlier one, so an arm that
+        # changes what the control pins (W's window) is checked against its own value, not the control's.
+        mine = {(x["on"], x.get("path")) for x in f.expects}
+        expects = [x for x in expects if (x["on"], x.get("path")) not in mine]
         expects += [dict(x, arm=f.id) for x in f.expects]
     spec = {"fragments": [f.id for f in frags], "edits": list(edits.values()), "role": role or "implementor",
             "task_args": args, "env": env, "expects": expects}

@@ -1,13 +1,15 @@
 # Sampling = provider defaults: send no temperature and no top_p on the implementor's requests.
-# KNOB PENDING (feat/sweep-knobs, "sampling passthrough"): the key below is the proposal. If the PR instead makes an
-# absent key mean "provider default", replace this edit with two op = "delete" edits of temperature and top_p in
-# [roles.implementor]. Confirm, then set status = "ready".
+# KNOB CONFIRMED (Amendment 1, 2026-11-06), CONTRACTS §32: a role's `temperature = "provider"` / `top_p = "provider"`
+# leaves out that one field (the endpoint-wide `[endpoints.<n>] sampling = "provider"` would also strip every other
+# role's sampling; the pre-registered arm is the implementor's only, so the role-level form is used). The proposal
+# key (`[roles.implementor] sampling`) does not exist; replaced by the two role keys. Profiles that declare the same
+# key under [roles.implementor] get the same edit (surface_patch P1 rule).
 [arm]
 id = "S"
 family = "sampling"
 level = "provider-default"
-status = "pending-knob"
-branches = ["A", "B"]
+status = "ready"
+branches = ["A", "B", "C"]
 requires = ["sampling_passthrough"]
 title = "No temperature / top_p overrides (implementor)"
 hypothesis = "gnomon's 0.3 / 0.95 is the last untested request difference from opencode; DeepSeek benchmarks at 1.0 / 0.95"
@@ -17,18 +19,26 @@ cost_factor = 1.0
 [[edit]]
 file = "roles.toml"
 table = "roles.implementor"
-key = "sampling"
+key = "temperature"
 value = "provider"
 
-[[expect]]   # gnomon's implementor temperature never reaches the wire
-on = "wire"
-path = "temperature"
-op = "not_equals"
-value = 0.3
-quantifier = "all"
+[[edit]]
+file = "roles.toml"
+table = "roles.implementor"
+key = "top_p"
+value = "provider"
 
+# (Amendment 1: the pre-registered `temperature not_equals 0.3, all` check was dropped: on an absent field it reads
+# as a failure by surface_patch._test's rule, so it refused exactly the requests the arm intends. A delegated
+# sub-turn of another role still sends its own numbers, so "any" request without them is the check.)
 [[expect]]
 on = "wire"
 path = "temperature"
+op = "absent"
+quantifier = "any"
+
+[[expect]]
+on = "wire"
+path = "top_p"
 op = "absent"
 quantifier = "any"

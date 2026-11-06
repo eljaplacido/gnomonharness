@@ -14,7 +14,7 @@ import pytest
 import surface_patch as SP
 
 HERE = Path(__file__).resolve().parent
-FIX = HERE / "fixtures" / "surface-v042"
+FIX = HERE / "fixtures" / "surface-v044"  # Amendment 1: the pinned build's scaffold (v042 kept for reference)
 FRAGS = SP.load_all()
 P2G_PATCH = "/* P2G _PATCH stand-in for script rendering */"
 
@@ -40,16 +40,16 @@ def combos():
             continue
         for b in f.branches:
             out.append((f"CTL.{b}", f.id))
-    out += [(c, None) for c in ("CTL.A", "CTL.B")]
+    out += [(c, None) for c in ("CTL.A", "CTL.B", "CTL.C")]
     return out
 
 
 def test_fragments_load_unique_and_valid():
-    assert {"CTL.A", "CTL.B", "AA", "W", "D", "GC", "GR", "EL", "EH", "EM", "S", "ENV", "TODO", "EDIT", "PKG",
-            "P0", "PG", "PK"} <= set(FRAGS)
+    assert {"CTL.A", "CTL.B", "CTL.C", "AA", "W", "D", "GC", "GR", "GCD", "EL", "EH", "EM", "S", "ENV", "TODO",
+            "EDIT", "PKG", "P0", "PG", "PK"} <= set(FRAGS)
     for f in FRAGS.values():
         assert f.status in SP.STATUSES and f.family and f.branches
-    assert FRAGS["W"].branches == ["A"]          # absorbed by branch B's control
+    assert FRAGS["W"].branches == ["A", "C"]     # absorbed by branch B's control
     assert FRAGS["AA"].edits == [] and FRAGS["AA"].family == "null"
     assert {f.family for f in FRAGS.values() if f.id in ("EL", "EH", "EM")} == {"reasoning_effort"}
 
@@ -293,6 +293,37 @@ def test_dry_plans_both_branches(R, capsys):
     import run_as1
     text = run_as1.dry(argparse.Namespace(branch=None, start="2026-11-07T00:00Z", budget=None))
     assert "=== branch A: control CTL.A" in text and "=== branch B: control CTL.B" in text and text.endswith("DRY OK")
+    assert "=== branch C: control CTL.C" in text
     lean = run_as1.dry(argparse.Namespace(branch="A", start=None, budget="lean"))
     assert "confirmatory k = 2" in lean
     run_as1.use_budget("recommended")
+
+
+def test_amendment1_branch_c_and_gcd():
+    """Amendment 1: branch C runs every ready arm except the excluded EDIT; GCD = GC's edit + D's deadline, and
+    subsumes the deadline family in stage I."""
+    import run_as1
+    knobs = ["replay_default", "deadline", "completion_gate", "reasoning_effort", "sampling_passthrough",
+             "env_snapshot", "todo_gate", "edit_variant", "package_index_allowlist", "steer_role"]
+    ctl, arms, excluded = run_as1.eligible("C", knobs)
+    assert ctl.id == "CTL.C"
+    assert sorted(arms) == ["AA", "D", "EH", "EL", "EM", "ENV", "GC", "GCD", "GR", "PKG", "S", "TODO", "W"]
+    assert "EDIT" in excluded
+    with pytest.raises(SystemExit):
+        run_as1.eligible("A", knobs)  # CTL.A needs nudge_default_off, which v0.4.4 does not ship
+    sp = SP.merge([ctl, FRAGS["GCD"], FRAGS["D"]])
+    assert sp["task_args"] == ["--deadline", "1740"]
+    assert SP.merge([ctl, FRAGS["GCD"]])["edits"] == SP.merge([ctl, FRAGS["GC"]])["edits"]
+    cands = [{"family": "completion_gate", "arm": "GCD", "why": "promoted"},
+             {"family": "deadline", "arm": "D", "why": "promoted"}, {"family": "window", "arm": "W", "why": "near-promoted"}]
+    assert [c["arm"] for c in run_as1.subsumed_out(cands, FRAGS)] == ["GCD", "W"]
+    cands[0]["arm"] = "GC"
+    assert [c["arm"] for c in run_as1.subsumed_out(cands, FRAGS)] == ["GC", "D", "W"]
+
+
+def test_arm_expectation_overrides_control_on_same_path():
+    sp = SP.merge([FRAGS["CTL.C"], FRAGS["W"]])
+    win = [x for x in sp["expects"] if x["path"] == "counters.model_calls.window"]
+    assert len(win) == 1 and win[0]["value"] == 1000000 and win[0]["arm"] == "W"
+    assert any(x["path"] == "config.toml:turn.nudge_after_idle" and x["arm"] == "CTL.C" for x in sp["expects"])
+    assert SP.merge([FRAGS["CTL.C"], FRAGS["ENV"]])["task_args"] == ["--trust"]

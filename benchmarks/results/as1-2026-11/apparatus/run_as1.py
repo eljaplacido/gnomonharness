@@ -1,6 +1,6 @@
 """AS1 runner: the adaptive multi-hypothesis sweep on P2G's long Terminal-Bench 4.0 tasks. See ../PRE-REGISTRATION.md.
 
-    python3 run_as1.py dry [--branch A|B] [--start ISO] [--write]   the plan, budget and calendar; spends nothing
+    python3 run_as1.py dry [--branch A|B|C] [--start ISO] [--write]   the plan, budget and calendar; spends nothing
     python3 run_as1.py check                                        launch gates (build pin, arms, wire test, relays)
     python3 run_as1.py run --stage screen|interact|confirm|planner  needs AS1_APPROVED=yes (planner: AS1_PLANNER_APPROVED)
                        [--after-pid N] [--min-avail-gb 24] [--push]
@@ -26,6 +26,7 @@ import gzip
 import json
 import os
 import random
+import shutil
 import socket
 import subprocess
 import sys
@@ -48,7 +49,8 @@ LEDGER, OUTCOMES = LEDGER_DIR / "LEDGER.jsonl", LEDGER_DIR / "outcomes.jsonl"
 STATUS = ROOT / "STATUS.txt"
 BUILD_TOML = HERE / "build.toml"
 COMMIT_LOCK = REPO / "benchmarks" / "results" / "m1-2026-11" / ".commit.lock"
-TRAILER = "\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
+TRAILER = ("\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\n"
+           "Claude-Session: https://claude.ai/code/session_01WtxrR5ELFRUqRYfmuxttRH")
 
 # P2G's apparatus constants, restated (P2G's run_p2g.py is imported only for a run, so dry/replay need no Harbor).
 MODEL = "deepseek-v4.1-flash"
@@ -128,7 +130,7 @@ def load_build(allow_pending: bool = False) -> dict:
         if b.get("status") != "ready":
             raise SystemExit(f"refusing: {BUILD_TOML.name} status is {b.get('status')!r} (fill in the pin, then 'ready')")
         bad = [k for k, v in b.items() if isinstance(v, str) and "{{" in v]
-        if bad or b.get("branch") not in ("A", "B"):
+        if bad or b.get("branch") not in ("A", "B", "C"):
             raise SystemExit(f"refusing: {BUILD_TOML.name} has placeholders: {bad or ['branch']}")
     return b
 
@@ -146,6 +148,8 @@ def eligible(branch: str, knobs: list[str] | None, stratum: str = "main") -> tup
             continue
         if branch not in f.branches:
             excluded[f.id] = f"not run under branch {branch} (absorbed by its control)"
+        elif f.status == "excluded":  # Amendment 1: excluded in its fragment (the reason is in its header)
+            excluded[f.id] = "status excluded (see its fragment)"
         elif f.status not in ("ready", "optional") and knobs is not None:
             excluded[f.id] = f"status {f.status}"
         elif knobs is not None and not set(f.requires) <= set(knobs):
@@ -155,6 +159,13 @@ def eligible(branch: str, knobs: list[str] | None, stratum: str = "main") -> tup
     if knobs is not None and not set(ctl.requires) <= set(knobs):
         raise SystemExit(f"refusing: control {ctl.id} needs knob(s) {sorted(set(ctl.requires) - set(knobs))}")
     return ctl, arms, excluded
+
+
+def subsumed_out(cands: list[dict], frags: dict) -> list[dict]:
+    """Amendment 1: a chosen factor whose fragment declares `[arm] subsumes = [families]` (GCD carries --deadline)
+    removes the factors of those families, so no interaction cell repeats a change it already contains."""
+    gone = {f for c in cands for f in ((frags[c["arm"]].raw.get("arm") or {}).get("subsumes") or [])}
+    return [c for c in cands if c["family"] not in gone]
 
 
 def spec_of(frags: list[SP.Fragment]) -> dict:
@@ -507,6 +518,15 @@ def wait_for_slot_window(args) -> None:
         if avail_gb() < args.min_avail_gb:
             time.sleep(60)
             continue
+        # Amendment 1: host guards (the gx10 hard-halted at load ~95-100 on 2026-11-05; a full disk lost an H3 cell)
+        if os.getloadavg()[0] > getattr(args, "max_load", 30.0):
+            say(f"host load {os.getloadavg()[0]:.1f} > {args.max_load}; waiting")
+            time.sleep(120)
+            continue
+        if shutil.disk_usage("/").free / 1e9 < getattr(args, "min_disk_gb", 50.0):
+            say(f"free disk {shutil.disk_usage('/').free / 1e9:.0f} GB < {args.min_disk_gb}; waiting")
+            time.sleep(300)
+            continue
         if not slots_idle():
             say("slot relays busy (another run?); waiting")
             time.sleep(60)
@@ -584,7 +604,7 @@ def stage_screen(args, build, P) -> None:
             commit(f"bench(as1): screening round {rnd} decided; round {rnd + 1} planned", as1_paths(), args.push)
         else:
             fam = {a: frags[a].family for a in arm_ids}
-            cands = A.factor_candidates(post, status, fam, PRM)
+            cands = subsumed_out(A.factor_candidates(post, status, fam, PRM), frags)
             factors = [c["arm"] for c in cands]
             plan = None
             if factors:
@@ -729,7 +749,7 @@ def dry(args) -> str:
     pr(f"budget profile: {args.budget or b.get('budget_profile')} -> caps " + ", ".join(f"{k} ${v['budget']:.0f}" for k, v in STAGES.items())
        + f"; confirmatory k = {CONFIRM_PASSES}")
     pr(f"build.toml: status={b['status']} branch={b['branch']} version={b['version']} knobs={b['knobs']}")
-    for branch in (args.branch,) if args.branch else ("A", "B"):
+    for branch in (args.branch,) if args.branch else ("A", "B", "C"):
         ctl, frags, excluded = eligible(branch, None)
         ready = {a: f for a, f in frags.items() if f.status == "ready"}
         pending = {a: f.status for a, f in frags.items() if f.status != "ready"}
@@ -788,7 +808,9 @@ def check(args) -> int:
           f"excluded {excluded}")
     wt = ROOT / "wiretest-as1.txt"
     import hashlib
-    ok = wt.exists() and wt.read_text().rstrip().endswith("wire test: PASS") and \
+    # Amendment 1: the verdict line is "wire test: PASS (gnomon ..., branch ..., arms [...])", so the check reads the
+    # last line's prefix (the pre-registered endswith() could never match it)
+    ok = wt.exists() and wt.read_text().rstrip().splitlines()[-1].startswith("wire test: PASS (") and \
         hashlib.sha256(wt.read_bytes()).hexdigest() == b.get("wiretest")
     print(f"wire test: {'PASS, hash pinned in build.toml' if ok else 'MISSING / FAIL / hash not in build.toml'}")
     for slot in (0, 1, 2):
@@ -846,7 +868,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("mode", choices=["dry", "check", "run", "replay", "report"])
     ap.add_argument("--stage", choices=list(STAGES))
-    ap.add_argument("--branch", choices=["A", "B"])
+    ap.add_argument("--branch", choices=["A", "B", "C"])
     ap.add_argument("--start", help="dry: calendar start, ISO 8601 UTC")
     ap.add_argument("--write", action="store_true", help="dry: also write ../DRY-RUN.txt")
     ap.add_argument("--budget", choices=list(BUDGETS), help="dry: plan under this budget profile")
@@ -854,6 +876,8 @@ def main() -> int:
     ap.add_argument("--min-avail-gb", type=float, default=24.0)
     ap.add_argument("--allow-peak", action="store_true")
     ap.add_argument("--push", action="store_true")
+    ap.add_argument("--max-load", type=float, default=30.0, help="no wave starts above this 1-min load (Amendment 1)")
+    ap.add_argument("--min-disk-gb", type=float, default=50.0, help="no wave starts below this free space on / (Amendment 1)")
     args = ap.parse_args()
     if args.mode == "dry":
         text = dry(args)
