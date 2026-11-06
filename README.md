@@ -87,8 +87,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2584 TypeScript tests (2066 core, 493 cli, 18
-> natives, 7 tui) and 105 Rust tests — **2689 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2601 TypeScript tests (2083 core, 493 cli, 18
+> natives, 7 tui) and 113 Rust tests — **2714 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1705,15 +1705,31 @@ of HOME credentials that the other two let through
   (`DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`, `TMUX`, `XDG_RUNTIME_DIR`,
   `DISPLAY`, …) are removed from `bash`'s environment, and so are the
   credentials gnomon supplied itself (its credential store, every
-  `api_key_env` the surface declares).
+  `api_key_env` any surface read this session declared) and variables whose
+  names look like secrets (`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*PASSWORD*`, …).
+  The socket is opened once, with no symlink on its path, and connected
+  through that descriptor, so a directory swapped mid-check reaches nothing.
+- **gnomon's own git runs nothing the repository names.** The per-turn
+  bookkeeping git (and `gnomon check`, `guard`, the anchor) runs with
+  `core.fsmonitor`, hooks, filter and diff drivers switched off, and under
+  `exec = "os"` inside the sandbox itself: `.git/config` is in the root, which
+  `bash` may write.
+- **Key routing is fixed for the session.** A reload that changes an
+  endpoint's `url` or `api_key_env`, a fallback's, or an MCP server is not
+  applied (`key routing NOT applied … restart gnomon`): a command could
+  otherwise point the key at a listener of its own.
 - **The sandbox a session starts with is a floor.** `.gnomon/policy.toml` is
   inside the root, so a command could write `exec = "off"` there. A later
   reload of the surface may tighten `exec`, `reads`, `read_roots`, `network`,
   `extra_roots` and `level`, never loosen them: the session says so and keeps
   the old value until you restart gnomon.
 - **The temp dir is removed safely.** After each call `$TMPDIR` is emptied by
-  `gnomon-exec sandbox-clean`, which follows no symlink and runs confined to
-  that directory; a job the command left running cannot redirect the cleanup.
+  `gnomon-exec sandbox-clean`, which follows no symlink, checks it is the
+  directory gnomon made (device and inode), and runs confined to that
+  directory; a job the command left running cannot redirect the cleanup. An
+  `extra_roots` entry that contains the temp directory is refused.
+- **Fails closed.** The command dies with its supervisor, and a timeout or a
+  cancel kills everything the call started, `setsid`'d jobs included.
 - **The sandbox binary is pinned.** `gnomon-exec` is resolved once per
   session, never from beneath the root, `extra_roots` or the temp dir (a
   command could overwrite it there), and is refused if it changes.
