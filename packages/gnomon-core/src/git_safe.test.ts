@@ -13,7 +13,7 @@
  * marker -- so the planted config is live and the test could have failed.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync, existsSync, appendFileSync, utimesSync, readFileSync, statSync, cpSync, realpathSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, existsSync, appendFileSync, utimesSync, readFileSync, statSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -24,6 +24,13 @@ const onWindows = process.platform === "win32";
 
 let repo: string;
 let outside: string;
+
+/**
+ * `cp -R`, not fs.cpSync: on macOS runners cpSync of a fresh .git/objects
+ * intermittently failed with ENOENT on the destination (CI, 2026-11-06),
+ * unrelated to what these tests check.
+ */
+const copyTree = (from: string, to: string) => execFileSync("cp", ["-R", from, to], { stdio: "ignore" });
 
 const git = (...args: string[]) =>
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: repo, stdio: "ignore" });
@@ -159,7 +166,7 @@ describe.skipIf(onWindows)("finding A — gnomon's own git runs nothing the repo
     // .git/config never changes: git reads <commondir>/config instead.
     expect(safeGit(["diff", "--numstat"], { cwd: repo }).status).toBe(0);
     const common = join(outside, "common");
-    cpSync(join(repo, ".git"), common, { recursive: true });
+    copyTree(join(repo, ".git"), common);
     const marker = join(outside, "commondir-ran");
     appendFileSync(join(common, "config"), `[filter "cd"]\n\tclean = "touch '${marker}'; cat"\n`);
     writeFileSync(join(repo, ".git", "commondir"), `${common}\n`);
@@ -237,7 +244,7 @@ describe.skipIf(onWindows)("fourth review — the repository git uses is pinned,
    * the cached listing -- of .git/config -- blanked nothing there.
    */
   function rootAsGitDir(marker: string): void {
-    for (const p of ["objects", "refs", "index"]) cpSync(join(repo, ".git", p), join(repo, p), { recursive: true });
+    for (const p of ["objects", "refs", "index"]) copyTree(join(repo, ".git", p), join(repo, p));
     writeFileSync(join(repo, "HEAD"), readFileSync(join(repo, ".git", "HEAD"), "utf8"));
     writeFileSync(
       join(repo, "config"),
@@ -281,9 +288,9 @@ describe.skipIf(onWindows)("fourth review — the repository git uses is pinned,
   it("finding 2: a .git replaced after the pin is a refusal, not a new repository", () => {
     expect(pinRepository(repo)).not.toBeNull();
     const marker = join(outside, "swapped-ran");
-    cpSync(join(repo, ".git"), join(outside, "moved.git"), { recursive: true });
+    copyTree(join(repo, ".git"), join(outside, "moved.git"));
     rmSync(join(repo, ".git"), { recursive: true, force: true });
-    cpSync(join(outside, "moved.git"), join(repo, ".git"), { recursive: true });
+    copyTree(join(outside, "moved.git"), join(repo, ".git"));
     appendFileSync(join(repo, ".git", "config"), `[core]\n\tfsmonitor = "touch '${marker}'; false"\n`);
     const r = safeGit(["status", "--porcelain=v2"], { cwd: repo });
     expect(r.status).not.toBe(0);
