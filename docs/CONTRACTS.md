@@ -2932,3 +2932,122 @@ record.
 code's lists and limits to it, this section to its keys, values and fields,
 the byte-identity above, and the tool against real processes, a stub docker
 and a scripted model.
+
+## 35. Deliverable-first notes and the first-token watchdog — `[turn] deliverable_first`, `[resilience] first_token_timeout_ms`, audit kinds `deliverable_first` and `first_token_stall`, `v: 1`
+
+**Why.** The 2026-11-06 timeout anatomy of the 80 capped cells in P2G41, H3
+and AS1 (research notes, reverse-engineering 06) found that 84% of the 1800 s
+went to model time, that 54 of the 80 had never written the deliverable the
+task names when the cap hit, and that `--deadline` made every AS1 cell answer:
+its half-time note works as an answer-now rule. It also found provider
+first-token stalls behind 4 of H3 R1's 14 caps: one request waited out the
+300 s request timeout, and its retry got its first token at 537 s. Both keys
+reuse what exists: the deadline's time notes (§31) and the retry budget
+(`[resilience] attempts`, `request_timeout_ms`), with no mechanism of their own.
+
+| key | values | absent |
+|---|---|---|
+| config.toml `[turn] deliverable_first` | `true`, `false` | `false`: the time notes are §31's |
+| config.toml `[resilience] first_token_timeout_ms` | milliseconds, `0` = off | `0`: the first byte waits `request_timeout_ms`, as before |
+
+**Validation.** `deliverable_first` that is not a boolean (`"yes"`, `1`) is a
+fatal surface finding. A negative or non-numeric `first_token_timeout_ms` reads
+as `0`, as every other `[resilience]` number does. Both are in `BLOCK_KEYS`, so
+a misspelling of either is the unknown-key warning.
+
+**What must not change.** With both absent, with `deliverable_first = false`,
+with `deliverable_first = true` and no `--deadline`, and with it under a far
+`--deadline`, a scripted `gnomon task` turn sends request bodies byte-identical
+to master's at `ae17a1ae` on an OpenAI-shaped and an Ollama endpoint (the
+hashes §32 pinned, held again in `deliverable_first.test.ts`). The same with
+`first_token_timeout_ms` declared: it arms a clock, it writes no byte.
+
+**`deliverable_first = true`, under `--deadline` only.**
+
+- At the session's start the task text is read for the output paths it names
+  (`extractDeliverables`): an absolute path, or a quoted (backtick or double
+  quote) filename with a lower-case extension, within a short window after an
+  instruction verb in its base form: `write`, `save`, `create`, `produce`,
+  `output`, `emit`, `generate`, `build`, `implement`, `add`, `put`, `place`,
+  `store`, `export`. The verb does not count after a determiner ("the output
+  contract"), within three words of a negation ("do not write"), or after a
+  modal whose subject is not "you" ("it should … write", "accepted leads should
+  write"); third-person forms ("writes", "produces") are never verbs here, so
+  a file the program under repair writes is not a deliverable. The window ends
+  at a clause word (`that`, `which`, `using`, `according`, `from`, `with`, `so`,
+  `then`, …). A list after an instructing line ending in `:` contributes each
+  item's leading path. `named \`x.csv\`` beside a directory the same sentence
+  asks for is joined to it. Fenced code and HTML comments are not read;
+  directories are never named. Each path once, in order.
+- On the 29 P2G41 task instructions the extractor names 33 paths, all 33 of
+  the files labelled by hand as instructed deliverables (precision 1.0, recall
+  1.0). Left out on purpose: `/app/src` (a directory), and outputs the program
+  is said to write (`release-manifest.json`, `flight_plan.json`, `audit.log`,
+  the risk scorer's and the lead form's outputs, `loss_trace.pt`,
+  `unified.ttl`). The fixture lists them.
+- At each fraction in `DELIVERABLE_FIRST_AT` = `[0.4, 0.7]` of the budget, at
+  depth 0, the named paths are checked on the filesystem gnomon runs on
+  (relative ones against the working root). If any does not exist, the next
+  request's time note (§31's `Time check: about … remain …`) ends with
+  `These required outputs do not exist yet: <paths>. Write a first complete
+  version now, then improve it.` (at most 12 paths, then `(and N more)`). It
+  goes on the steering channel: a mid-turn system message, a user message
+  marked `[gnomon]` under `steer_role = "user"`. A deliverable fraction and a
+  `deadline_notes` fraction crossed together send one note. Nothing missing,
+  no note is added for that fraction, and `deadline_notes` fire as before.
+- `counters.deliverable_first_notes` counts the notes that named a path.
+- Audit kind `deliverable_first`, `event`:
+  - `named`, once, after `session_start`: `named` (the paths, possibly `[]`),
+    `at` (the fractions);
+  - `check`, at each fraction when something was named: `at`, `step`, `used`
+    (the budget fraction used), `named`, `missing`, `noted` (whether the note
+    named them).
+
+**`first_token_timeout_ms` > 0, streamed calls only.**
+
+- A fourth clock beside the request deadline and the stream's idle and total
+  clocks (`request_timeout_ms`, `stream_idle_timeout_ms`,
+  `stream_total_timeout_ms`), from the request's send to its first
+  token: the first chunk carrying content, reasoning (`reasoning_content` or
+  `reasoning`) or a tool call. Keep-alive comments and an empty role chunk
+  re-arm the idle clock but are not a token. The first token disarms it, so
+  a request that has produced output is never cut by it; headers that never
+  arrive are a stall too.
+- On expiry the request is aborted (the socket closes, so the provider stops),
+  and the call ends as code `11` with `timedOut: "first_token"` and `Model
+  unavailable at <url>: no first token within <s>s ([resilience]
+  first_token_timeout_ms), so the request was aborted.`
+- `callEndpointWithRetry` asks again under the existing `attempts` and retry
+  budget (`attempts` × `request_timeout_ms`), charging the whole wait, and,
+  unlike a first-byte timeout, does not double the request deadline: the stall
+  is the provider's, not the prompt's. Announced on stderr: `[retry] no first
+  token in <ms>ms (first_token_timeout_ms) — attempt n of N`. Every attempt
+  stalled ends the call as that timeout, and the turn's fallback, if declared,
+  is tried as for any timeout.
+- Unstreamed calls (and Ollama's `/api/chat`, never streamed) never read it.
+- `counters.first_token_stalls` counts the aborts; audit kind
+  `first_token_stall`, one per abort: `role`, `step`, `attempt`, `waited_ms`,
+  `recovered` (whether a later attempt answered). The turn record's `wire`
+  carries `first_token_timeout_ms` beside the stream timeouts when declared.
+- Set it well above the model's normal time to first token: a model that
+  hides its reasoning streams nothing until it has finished thinking.
+
+**A benchmark arm** declares, on top of its base surface:
+
+```toml
+[turn]
+deliverable_first = true
+
+[resilience]
+first_token_timeout_ms = 120000
+```
+
+and runs `gnomon task --deadline <cap less the copy-out time>`.
+
+**Fixture**: `conformance/deliverable_first.json`. `deliverable_first.test.ts`
+holds the code's constants to it, this section to its keys, events, fields
+and counters, the byte-identity above, the extractor on a sentence per rule and
+on the 29 P2G41 instructions (by hash, read from `GNOMON_P2G_DATASET` or the
+local dataset, skipped where absent: the instructions carry a benchmark canary
+and are not in this repository), the notes in a paced `--deadline` run, and the
+watchdog against fake streaming servers.
