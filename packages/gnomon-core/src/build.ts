@@ -34,7 +34,7 @@
  * per turn to learn something that cannot change mid-process would be a cost
  * for nothing.
  */
-import { execFileSync } from "node:child_process";
+import { safeGit } from "./git_safe.js";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readFileSync, existsSync } from "node:fs";
@@ -79,8 +79,13 @@ export function resolveHarnessBuild(here: string, env: NodeJS.ProcessEnv = proce
   if (installed(here)) return `gnomon/${version}+${stamp ?? "npm"}`;
 
   try {
-    const git = (args: string[]) =>
-      execFileSync("git", args, { cwd: here, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], env }).trim();
+    // git_safe: gnomon's own checkout may sit inside a root a sandboxed
+    // command can write (dogfooding), and its config must not run anything.
+    const git = (args: string[]) => {
+      const r = safeGit(args, { cwd: here, stdio: ["ignore", "pipe", "ignore"], env, timeout: 5000 });
+      if (r.status !== 0 || typeof r.stdout !== "string") throw new Error(`git ${args[0]} failed`);
+      return r.stdout.trim();
+    };
     // Only gnomon's own checkout may name the build. A copy of the sources inside
     // some other repository would otherwise be stamped with that repository's
     // commit -- the same wrong answer the installed case gave.

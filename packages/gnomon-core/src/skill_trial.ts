@@ -32,6 +32,7 @@ import { existsSync, readFileSync, readdirSync, mkdirSync, mkdtempSync, writeFil
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { safeGit } from "./git_safe.js";
 import { createHash, randomBytes } from "node:crypto";
 import {
   GnomonConfig,
@@ -309,7 +310,7 @@ function sh(command: string, cwd: string, timeoutMs: number): { code: number | n
 }
 
 function git(root: string, args: string[]): string {
-  const r = spawnSync("git", args, { cwd: root, encoding: "utf-8", windowsHide: true });
+  const r = safeGit(args, { cwd: root });
   if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${(r.stderr || r.stdout || "").trim()}`);
   return r.stdout.trim();
 }

@@ -14,6 +14,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { safeGit, setGitSandbox, gitSandboxed, markGitContained } from "./git_safe.js";
 import { recordDegradation, type DegradationSink } from "./degradation.js";
 import {
   readFileSync,
@@ -48,6 +49,7 @@ import {
   toolMaxLines,
 } from "./config.js";
 import { suppliedByStore } from "./credentials.js";
+import { noteKeyVars, sessionKeyVars } from "./credential_pin.js";
 import { proposeSkill, ProposalRefused, renderSkill, SkillProposal } from "./skills.js";
 import { compute, ComputeError } from "./compute.js";
 import type { McpRegistry, McpToolInfo } from "./mcp.js";
@@ -1717,6 +1719,9 @@ export function sandboxCommand(
   // "os" is not a rewrite of the command line: bashTool spawns gnomon-exec
   // directly with an argv (osSandboxPlan), so no second shell parses anything.
   if (!ex || ex.mode !== "docker") return command;
+  // The container can write the repository's .git/config and .gitattributes:
+  // gnomon's own git lists and blanks their drivers from now on (git_safe.ts).
+  markGitContained();
   // Single-quoted for `sh -c`, so only the quote character needs escaping --
   // and it was escaped WRONG. The POSIX idiom is `'\''`: close the quote,
   // emit a backslash-escaped quote, reopen. That is four characters. Written as
@@ -1831,11 +1836,22 @@ export const OS_SANDBOX_SCRUBBED_ENV: readonly string[] = [
 ];
 
 /**
+ * Names that hold a secret by any common convention: `*_API_KEY`, `*_TOKEN`,
+ * `*_SECRET`, `*PASSWORD*`, `AWS_SECRET_ACCESS_KEY`, `*_CREDENTIALS`, ... A
+ * name, not a value, is matched; a variable the convention misses is still
+ * dropped when any surface this process read named it.
+ */
+export const SECRET_NAME = /(^|_)(API_?KEY|TOKEN|SECRETS?|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|PRIVATE_KEY|ACCESS_KEY|SESSION_KEY|AUTH|AUTH_?TOKEN)(_|$)|^(PGPASSWORD|MYSQL_PWD)$/i;
+
+/**
  * bash's environment under exec = "os": gnomon's, minus the channels above
- * and minus the secrets gnomon itself put there -- what applyCredentials
- * loaded from the credential store, and every variable the surface names as
- * a credential holder (an endpoint's api_key_env, an MCP server's env). The
- * model's own API key is gnomon's to use, not the command's to read.
+ * and minus every secret it can name -- what applyCredentials loaded from the
+ * credential store; every variable ANY surface read in this process named as
+ * a credential holder (an endpoint's or fallback's api_key_env, an MCP
+ * server's env), not just the one in force now (credential_pin.ts: a command
+ * that rewrote api_key_env to point elsewhere no longer un-drops the real
+ * key); and every name SECRET_NAME matches. The model's own API key is
+ * gnomon's to use, not the command's to read.
  */
 export function osSandboxEnv(
   base: NodeJS.ProcessEnv,
@@ -1845,12 +1861,15 @@ export function osSandboxEnv(
   const env: NodeJS.ProcessEnv = { ...base };
   const drop = new Set<string>([...OS_SANDBOX_SCRUBBED_ENV, ...supplied]);
   if (config) {
+    noteKeyVars(config);
     try {
       for (const k of declaredKeyVars(config)) drop.add(k);
     } catch {
       // a config without endpoints declares none
     }
   }
+  for (const k of sessionKeyVars()) drop.add(k);
+  for (const k of Object.keys(env)) if (SECRET_NAME.test(k)) drop.add(k);
   for (const k of drop) delete env[k];
   return env;
 }
@@ -1973,6 +1992,10 @@ export function osSandboxPlan(
       "network sandbox unsupported here"
     );
   }
+  // From the first sandboxed command on, gnomon's own git runs sandboxed too
+  // (git_safe.ts): this command can write .git/config, and a host-side git
+  // would run whatever core.fsmonitor or a filter driver it names.
+  registerGitSandbox(sb.bin);
   const tmp = mkdtempSync(join(tmpdir(), "gnomon-sbx-"));
   // Only roots that exist: gnomon-exec refuses a --write it cannot resolve,
   // and a granted root that is not there grants nothing anyway.
@@ -2017,6 +2040,29 @@ export function osSandboxPlan(
     tmp,
     network,
   };
+}
+
+let gitSandboxRoot: string | null = null;
+
+/**
+ * Run every later gnomon git under `gnomon-exec sandbox --network off`,
+ * writable only in an empty directory of its own (git_safe.ts layer 3). The
+ * bookkeeping reads; a git that needed to write would fail, and its caller
+ * treats that as "git could not answer", never as a pass.
+ */
+function registerGitSandbox(bin: string): void {
+  if (gitSandboxed()) return;
+  try {
+    gitSandboxRoot ??= mkdtempSync(join(tmpdir(), "gnomon-gitsbx-"));
+  } catch {
+    return;
+  }
+  const root = gitSandboxRoot;
+  setGitSandbox((argv, env) => ({
+    file: bin,
+    args: ["sandbox", "--root", root, "--network", "off", "--", ...argv],
+    env: osSandboxEnv(env, undefined),
+  }));
 }
 
 function existsPath(p: string): boolean {
@@ -2804,11 +2850,11 @@ function cleanReaches(ctx: ToolContext, at: string, clean: GitClean): { kind: "r
     // a symlinked temp dir (/var vs /private/var on macOS) reads as outside the
     // repository, and that would refuse a clean that reaches nothing.
     const spec = relative(at, p.dir).split(sep).join("/") || ".";
-    const r = spawnSync("git", ["-C", at, "status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all", "--", spec], {
-      encoding: "utf-8",
+    const r = safeGit(["-C", at, "status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all", "--", spec], {
+      cwd: at,
       timeout: 5000,
-      windowsHide: true,
       maxBuffer: 16 * 1024 * 1024,
+      hot: true,
     });
     if (r.status !== 0 || typeof r.stdout !== "string") {
       // Not a repository: git clean fails too. Anything else: assume reached.
@@ -3621,13 +3667,12 @@ const GIT_STAMP_MAX_BUFFER = 32 * 1024 * 1024;
 
 /** stdout of one git call in `cwd`, or null if it did not start or did not exit 0. */
 function stampGit(cwd: string, args: string[]): string | null {
-  const r = spawnSync("git", args, {
+  const r = safeGit(args, {
     cwd,
-    encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: GIT_STAMP_TIMEOUT_MS,
     maxBuffer: GIT_STAMP_MAX_BUFFER,
-    windowsHide: true,
+    hot: true,
   });
   return r.error || r.status !== 0 ? null : r.stdout;
 }

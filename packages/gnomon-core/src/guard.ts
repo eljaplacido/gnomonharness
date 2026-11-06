@@ -34,7 +34,7 @@
  */
 
 import { resolvePackageIndex } from "./sweep_knobs.js";
-import { spawnSync } from "node:child_process";
+import { safeGitBuffer } from "./git_safe.js";
 import {
   closeSync,
   existsSync,
@@ -284,7 +284,7 @@ function locate(cwd: string): Located | null {
 }
 
 function git(cwd: string, args: string[], input?: string): Buffer {
-  const r = spawnSync("git", args, { cwd, input, maxBuffer: 64 * 1024 * 1024 });
+  const r = safeGitBuffer(args, { cwd, input, maxBuffer: 64 * 1024 * 1024 });
   if (r.error) throw new GuardCannotDecide(`git ${args[0]} could not start: ${r.error.message}`);
   if (r.status !== 0) {
     const err = r.stderr.toString("utf-8").trim().split("\n")[0] ?? "";
@@ -350,7 +350,7 @@ function rulesAt(where: Located, rev: string): Rules {
         .split("\n");
   } catch {
     // Say which half failed: no such revision, or no surface in it.
-    const commit = spawnSync("git", ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`], { cwd: where.toplevel });
+    const commit = safeGitBuffer(["rev-parse", "--verify", "--quiet", `${rev}^{commit}`], { cwd: where.toplevel });
     if (commit.status !== 0) throw new GuardCannotDecide(`the base revision "${rev}" does not exist in this repository`);
     throw new GuardCannotDecide(
       `the base revision ${commit.stdout.toString().trim().slice(0, 12)} has no ${where.surfaceRel}/ — ` +

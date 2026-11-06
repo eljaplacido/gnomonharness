@@ -28,6 +28,7 @@ import { PassThrough, Writable } from "node:stream";
 import { mkdtempSync, cpSync, rmSync, readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { osSandbox } from "gnomon-natives";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { loadConfig, routeRole } from "./config.js";
 import { runPromptLoop, COMMANDS } from "./prompt_loop.js";
@@ -752,6 +753,144 @@ describe("a sandboxed command cannot loosen its own sandbox through the surface"
     } finally {
       rmSync(root, { recursive: true, force: true });
       rmSync(outside, { recursive: true, force: true });
+    }
+  }, 60000);
+});
+
+// PR #156 second review, findings A and B, end to end through the real loop
+// under exec = "os". The command writes files inside the root -- which the
+// kernel allows -- that gnomon itself then acts on outside the sandbox: git's
+// config (A) and the surface's key routing (B).
+describe("a sandboxed command cannot act through gnomon's own git or key routing", () => {
+  const probe = osSandbox();
+  const why =
+    process.platform === "win32"
+      ? "no OS sandbox on Windows"
+      : "error" in probe
+        ? `gnomon-exec unavailable: ${probe.error.split("\n")[0]}`
+        : !probe.probe.supported || !probe.probe.network_supported
+          ? `kernel cannot sandbox: ${probe.probe.reason}`
+          : "";
+  let restoreKeys: () => void;
+  beforeAll(() => {
+    restoreKeys = stubDeclaredKeys(loadConfig(resolve(process.cwd(), "..", "..")));
+  });
+  afterAll(() => restoreKeys());
+
+  /** The repository's surface under exec = "os", no [verify], nobody to ask. */
+  const osProject = (): string => {
+    const root = makeProject();
+    const policyPath = join(root, ".gnomon", "policy.toml");
+    writeFileSync(
+      policyPath,
+      readFileSync(policyPath, "utf8")
+        .replace(/^\[verify\][\s\S]*?(?=^\[)/m, "")
+        .replace(/^level = "confined".*$/m, 'level = "confined"\nexec = "os"')
+        .replace(/^gate = "on_write".*$/m, 'gate = "never"')
+    );
+    return root;
+  };
+  const bashCall = (command: string) => ({
+    message: { content: "", tool_calls: [{ function: { name: "bash", arguments: { command } } }] },
+  });
+  /** A python one-liner as a bash command, quoted for sh. */
+  const py = (code: string) => `python3 -c '${code.replace(/'/g, `'\\''`)}'`;
+
+  it.skipIf(!!why)(`A: core.fsmonitor and a filter written by bash never run outside the sandbox${why ? ` [SKIPPED: ${why}]` : ""}`, async () => {
+    const root = osProject();
+    const outside = mkdtempSync(join(tmpdir(), "gnomon-gitesc-outside-"));
+    const g = (...a: string[]) => execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...a], { cwd: root, stdio: "ignore" });
+    g("init", "-q");
+    writeFileSync(join(root, "a.txt"), "one\n");
+    g("add", "a.txt");
+    g("commit", "-qm", "init");
+    const fsm = join(outside, "fsmonitor-ran");
+    const flt = join(outside, "filter-ran");
+    try {
+      let call = 0;
+      const seen = await drive(root, ["plant it", "/quit"], {
+        initialRole: "implement",
+        onExit: (_c, stop) => stop(),
+        budgetMs: 40000,
+        reply: () => {
+          call++;
+          if (call === 1) {
+            // The path assembled at run time: the text rule refusing a write
+            // into .git/config sees no such path in the command.
+            return bashCall(py(
+              `c = ".g" + "it/con" + "fig"; ` +
+              `open(c, "a").write("[core]\\n\\tfsmonitor = \\"touch ${fsm}; false\\"\\n[filter \\"x\\"]\\n\\tclean = \\"touch ${flt}; cat\\"\\n"); ` +
+              `open(".gitattr" + "ibutes", "w").write("*.txt filter=x\\n"); ` +
+              `open("a.txt", "w").write("two\\n")`
+            ));
+          }
+          return { message: { content: "done" } };
+        },
+      });
+      // The command did write the config -- the root is writable...
+      expect(readFileSync(join(root, ".git", "config"), "utf8"), seen.seen.slice(-2000)).toContain("fsmonitor");
+      // ...and gnomon's bookkeeping git (the stamp after the call, the [tree]
+      // measurement at the end of the turn) ran neither program outside it.
+      expect(existsSync(fsm), "core.fsmonitor ran outside the sandbox").toBe(false);
+      expect(existsSync(flt), "the clean filter ran outside the sandbox").toBe(false);
+      // CONTROL: the planted config is live for a git that is not gnomon's.
+      execFileSync("git", ["status"], { cwd: root, stdio: "ignore" });
+      expect(existsSync(fsm), "control: plain git did not run the fsmonitor").toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  }, 60000);
+
+  it.skipIf(!!why)(`B: a rewritten endpoint url / api_key_env is held, and the real key stays out of bash${why ? ` [SKIPPED: ${why}]` : ""}`, async () => {
+    const root = osProject();
+    const cfgPath = join(root, ".gnomon", "config.toml");
+    // The role's endpoint carries a key, held in a variable whose NAME no
+    // secret pattern catches: only the session's own declaration drops it.
+    writeFileSync(
+      cfgPath,
+      readFileSync(cfgPath, "utf8").replace(
+        /^\[endpoints\.local\]\nurl = "([^"]+)"\n/m,
+        '[endpoints.local]\nurl = "$1"\napi_key_env = "GNOMON_PINTEST_REALVAR"\n'
+      )
+    );
+    expect(readFileSync(cfgPath, "utf8")).toContain('api_key_env = "GNOMON_PINTEST_REALVAR"');
+    const before = process.env.GNOMON_PINTEST_REALVAR;
+    process.env.GNOMON_PINTEST_REALVAR = "dummy-real-key-not-a-secret";
+    try {
+      let call = 0;
+      const seen = await drive(root, ["reroute it", "now dump the env", "/quit"], {
+        initialRole: "implement",
+        onExit: (_c, stop) => stop(),
+        budgetMs: 40000,
+        reply: () => {
+          call++;
+          if (call === 1) {
+            return bashCall(py(
+              `p = ".gno" + "mon/config.toml"; s = open(p).read(); ` +
+              `s = s.replace("api_key_env = \\"GNOMON_PINTEST_REALVAR\\"", "api_key_env = \\"GNOMON_PINTEST_DECOY\\""); ` +
+              `s = s.replace("http://127.0.0.1:11434/api/chat", "http://127.0.0.1:9/steal"); open(p, "w").write(s)`
+            ));
+          }
+          if (call === 3) return bashCall("env > envdump.txt");
+          return { message: { content: "done" } };
+        },
+      });
+      // The surface did move...
+      expect(readFileSync(cfgPath, "utf8")).toContain("127.0.0.1:9/steal");
+      // ...the loop said it would not apply the key routing...
+      expect(seen.seen, seen.seen.slice(-3000)).toContain("key routing NOT applied");
+      // ...every model request still went where the session started...
+      expect(seen.calls.length).toBeGreaterThanOrEqual(3);
+      for (const c of seen.calls) expect(c.url).not.toContain("/steal");
+      // ...and the real key was not in the next command's environment.
+      const dump = readFileSync(join(root, "envdump.txt"), "utf8");
+      expect(dump).toContain("PATH=");
+      expect(dump).not.toContain("dummy-real-key-not-a-secret");
+    } finally {
+      if (before === undefined) delete process.env.GNOMON_PINTEST_REALVAR;
+      else process.env.GNOMON_PINTEST_REALVAR = before;
+      rmSync(root, { recursive: true, force: true });
     }
   }, 60000);
 });
