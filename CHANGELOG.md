@@ -84,6 +84,46 @@
     the home directory, gnomon's data dir, or gnomon's own code
     (`GNOMON_ALLOW_SELF_IN_ROOT=1` for working on gnomon itself); MCP servers
     start outside the project while a role is contained.
+  - (seventh review) `gnomon check --base <rev>` takes only the policy under
+    judgement from the revision (roles, write_allow, bash_allow/deny,
+    `[verify]`). Everything that acts on the host -- `[audit]` (dir, redact,
+    attest sign/verify/public_key, anchor), where `[verify]` runs, its
+    network, `extra_roots`, the tool timeout -- comes from the live surface
+    (read-only to a container) and the exec floor. A base's
+    `[audit.attest] sign` ran on the host; a base's absolute `[audit] dir`
+    was written; a role named only in the base fell to `*` = off and ran
+    `[verify]` on the host (the floor is now read as its strictest entry); a
+    base's `network = true` reached `[verify]`. `gnomon guard` takes its
+    `[audit]` from the live surface too. The exec floor now records
+    `network`; a loosening needs `gnomon trust grant`.
+  - (seventh review) a committed surface is copied out of git entry by entry,
+    each checked (a plain blob, no `..`/`.`/`.git` component, inside the
+    copy) and written without following anything: a model-built tree with
+    `..` entries made `gnomon check` (and the dashboard's check) and `gnomon
+    guard` overwrite files outside the copy, such as `~/.bashrc`.
+  - (seventh review) each linked worktree's admin dir (`.git/worktrees/<wt>/`)
+    and each submodule's git dir (`.git/modules/**`: config, hooks, info,
+    commondir, config.worktree, recursively) is read-only to a container,
+    with the directories that hold them (and a submodule's `.git` file and the
+    directories down to it) mounted on themselves so they cannot be renamed
+    away. `git commit`, `git checkout` and `git worktree add` inside the
+    container still work.
+  - (seventh review) the turn's tree count reads untracked files only as
+    regular files in the root, at most 16 MiB (a symlink to `/dev/zero` hung
+    it; one to a host file put its line count in the record); a key or
+    shadow excerpts sent to a LAN, `.local` or tailnet host without a grant
+    is now a grant (only loopback counts as local for that); the write
+    precheck lists an archive's members only for a regular file in the root
+    of at most 256 MiB, with the archiver killed at its deadline.
+  - Known limit (seventh review, L1): a container can still corrupt
+    `.git/HEAD` and plant a bare repository in the root, so the user's own
+    git, run there, discovers the planted repository and its config. Mounting
+    `HEAD` read-only breaks `git checkout`/`git switch` in the container
+    (measured), so it is not done. Set `git config --global
+    safe.bareRepository explicit` on any machine that runs contained
+    sessions. The same holds for any `.git` directory the model creates in a
+    subdirectory: do not run git in a directory the model made without
+    looking.
 v0.4.4 candidate: long hosted-model tasks, from the P2G41 root causes
 (2026-11-05). **One default changes: reasoning replay is on for a hosted
 endpoint that returns reasoning**, adopted by H3's pre-registered decision

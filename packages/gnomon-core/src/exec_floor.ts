@@ -28,6 +28,13 @@ import { gnomonDataDir, restrictToOwner } from "./credentials.js";
 export interface ExecFloor {
   root: string;
   roles: Record<string, { mode: string; image: string }>;
+  /**
+   * `[sandbox] network` when a session here last started contained (seventh
+   * review, B4). false is a floor: `gnomon check` will not run [verify] with
+   * the network on until `gnomon trust grant` records otherwise. Absent in
+   * floors written before it was recorded.
+   */
+  network?: boolean;
   at: string;
   /** When a session here last started with a role contained. */
   last?: string;
@@ -61,6 +68,7 @@ function isFloor(f: unknown): f is ExecFloor {
   if (!f || typeof f !== "object") return false;
   const x = f as ExecFloor;
   if (typeof x.root !== "string" || !x.roles || typeof x.roles !== "object") return false;
+  if (x.network !== undefined && typeof x.network !== "boolean") return false;
   return Object.values(x.roles).every((e) => e && typeof e.mode === "string" && typeof e.image === "string");
 }
 
@@ -145,7 +153,10 @@ export function governingFloor(floors: readonly ExecFloor[], root: string): { fl
   }
   if (!best) return undefined;
   const strict = strictestOf(best)!;
-  return { floor: { root, roles: { "*": { ...strict } }, at: best.at }, exact: false };
+  return {
+    floor: { root, roles: { "*": { ...strict } }, ...(best.network !== undefined ? { network: best.network } : {}), at: best.at },
+    exact: false,
+  };
 }
 
 /**

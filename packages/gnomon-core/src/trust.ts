@@ -50,7 +50,7 @@ import {
   declaredTools,
   isToolEnabled,
   recomputeManifest,
-  isLocalEndpoint,
+  isLoopbackEndpoint,
   resolveShadow,
   resolveBootstrap,
   resolveExec,
@@ -314,9 +314,13 @@ function hostOf(url: string): string {
   }
 }
 
-/** Whether sending a key to this URL is something the scaffold could have set up. */
+/**
+ * Whether sending a key to this URL is something the scaffold could have set
+ * up. Only loopback is "local" here (seventh review, L3): a LAN, `.local` or
+ * tailnet host is someone else's machine as far as a key is concerned.
+ */
 function keyHostIsDefault(url: string): boolean {
-  if (isLocalEndpoint(url)) return true;
+  if (isLoopbackEndpoint(url)) return true;
   return KEY_HOSTS.includes(hostOf(url));
 }
 
@@ -436,7 +440,7 @@ export function surfaceGrants(config: GnomonConfig): Grant[] {
   }
 
   const shadow = resolveShadow(config);
-  if (shadow.enabled && !isLocalEndpoint(shadow.url)) {
+  if (shadow.enabled && !isLoopbackEndpoint(shadow.url)) {
     add({ key: `shadow:${hostOf(shadow.url)}`, subject: "shadow", grants: `sends session excerpts to ${hostOf(shadow.url)}`, default: "off" });
   }
 
@@ -528,7 +532,7 @@ export function clampToDefaults(config: GnomonConfig, floor?: ExecFloor): Gnomon
     if (str(ep.api_key_env) && str(ep.url) && !keyHostIsDefault(str(ep.url))) delete ep.api_key_env;
   }
   const shadow = resolveShadow(c);
-  if (shadow.enabled && !isLocalEndpoint(shadow.url)) {
+  if (shadow.enabled && !isLoopbackEndpoint(shadow.url)) {
     (c.config.shadow as Record<string, unknown>).enabled = false;
   }
 
@@ -741,7 +745,10 @@ function floorState(path = trustPath()): FloorState {
  *     since: contained, per its own declaration where that is contained and
  *     in docker otherwise -- never off.
  */
-export function governingExecFloor(config: GnomonConfig, path = trustPath()): { floor?: ExecFloor; lost?: string } {
+export function governingExecFloor(
+  config: GnomonConfig,
+  path = trustPath()
+): { floor?: ExecFloor; lost?: string; inherited?: boolean } {
   const root = projectRootOf(config);
   const st = floorState(path);
   const g = governingFloor(st.floors, root);
@@ -749,9 +756,12 @@ export function governingExecFloor(config: GnomonConfig, path = trustPath()): { 
     const contain = (e: { mode: string; image: string }) => (contained(e.mode) ? { mode: e.mode, image: e.image } : { mode: "docker", image: e.image });
     const roles: Record<string, { mode: string; image: string }> = { "*": contain(resolveExec(config)) };
     for (const r of listRoles(config)) roles[r] = contain(resolveExec(config, r));
-    return { floor: { root, roles, at: st.lost }, lost: st.lost };
+    return { floor: { root, roles, network: false, at: st.lost }, lost: st.lost, ...(g ? { inherited: true } : {}) };
   }
-  return g ? { floor: g.floor } : {};
+  // `inherited`: this root has no floor of its own and one above it governs
+  // -- a surface that appeared below a floored root, which a container may
+  // have written (seventh review: its host-side settings are not taken).
+  return g ? { floor: g.floor, ...(g.exact ? {} : { inherited: true }) } : {};
 }
 
 /** The warning a session start prints while the floors are lost for this project. */
@@ -864,6 +874,10 @@ export function recordExecFloor(config: GnomonConfig, path = trustPath(), opts: 
       }
     }
     const any = Object.values(roles).some((e) => contained(e.mode));
+    // The network, ratcheted like the roles: off once a contained session
+    // ran with it off stays off until a grant (seventh review, B4).
+    const declaredNet = (config.policy?.sandbox as { network?: unknown } | undefined)?.network === true;
+    const network = had && !opts.lower && had.network === false ? false : declaredNet;
     const exact = floors.find((f) => f.root === root);
     // After a loss a grant is recorded even when nothing runs contained: the
     // entry is what says this project was decided, by a person.
@@ -873,16 +887,19 @@ export function recordExecFloor(config: GnomonConfig, path = trustPath(), opts: 
     // `last`: when a session here last started contained (sixth review: `gnomon
     // check` warns about a base ref that moved after it). `at` stays the
     // time the roles were last recorded.
-    if (exact && JSON.stringify(exact.roles) === JSON.stringify(roles)) {
+    const same = (f: ExecFloor) => JSON.stringify(f.roles) === JSON.stringify(roles) && f.network === network;
+    if (exact && same(exact)) {
       if (opts.lower || !any) return;
       roles = exact.roles;
     }
     const rest = floors.filter((f) => f.root !== root);
-    const at = exact && JSON.stringify(exact.roles) === JSON.stringify(roles) ? exact.at : nowIso;
+    const at = exact && same(exact) ? exact.at : nowIso;
     writeFloors(
       {
         v: 1,
-        floors: keep ? [...rest, { root, roles, at, ...(any && !opts.lower ? { last: nowIso } : exact?.last ? { last: exact.last } : {}) }] : rest,
+        floors: keep
+          ? [...rest, { root, roles, network, at, ...(any && !opts.lower ? { last: nowIso } : exact?.last ? { last: exact.last } : {}) }]
+          : rest,
         ...(st.lost ? { lost: st.lost } : {}),
       },
       floorsPathFor(path)

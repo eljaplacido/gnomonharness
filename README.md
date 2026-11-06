@@ -92,8 +92,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2670 TypeScript tests (2148 core, 497 cli, 18
-> natives, 7 tui) and 63 Rust tests — **2733 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2683 TypeScript tests (2161 core, 497 cli, 18
+> natives, 7 tui) and 63 Rust tests — **2746 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1735,11 +1735,21 @@ container cannot create one pointing your git at a config it wrote. With
 that, the git you run yourself in the project root — a shell prompt, an IDE
 polling `git status` — reads only config, hooks and redirects the container
 could not write (unless your `.git/config` itself `[include]`s a file
-elsewhere in the project). It is **not** protected from: a nested repository or a
-submodule (a `.git` file or directory in a subdirectory, including
-`.git/modules/`), which the container can create and which your git enters
-when you `cd` into it or when `git status` recurses into a submodule — treat
-any repository below the root that you did not create as hostile; and a
+elsewhere in the project). The same holds for your linked worktrees (each
+`.git/worktrees/<name>/` is read-only, so the container cannot redirect a
+worktree you keep outside the project) and for the submodules that exist
+when a command starts (each `.git/modules/**` git dir has its config, hooks,
+info, commondir and config.worktree read-only, recursively, and the
+submodule's `.git` file too; the directories holding them are mounted on
+themselves so they cannot be renamed away). It is **not** protected from: a
+nested repository the container creates (a `.git` directory in a
+subdirectory, or a submodule added during the session), which your git
+enters when you `cd` into it or when `git status` recurses into it — treat
+any repository below the root that you did not create as hostile; a
+corrupted `.git/HEAD` beside a bare repository planted in the root, which
+your git, run in the root, would then discover instead (mounting `HEAD`
+read-only breaks `git checkout` in the container, so it is not done — set
+`git config --global safe.bareRepository explicit`); and a
 `.gitattributes` filter or diff driver, which names a program only through
 config the container cannot write but is itself repository content.
 
@@ -1754,10 +1764,16 @@ accepts that risk. Host reads and writes of files the model names (`read`,
 `write`, `edit`, `grep`, the must-fail-first re-run) take only regular files
 whose real path is in the root — never a FIFO, a device or a symlink out —
 and write by replacing the file, never through a symlink or a hard link.
-`gnomon check` holds `[verify]` to this machine's exec floor for the
-project (a base ref moved to a commit whose policy says `exec = "off"` does
-not move it onto the host), prints the commit the rules came from, and
-warns when that ref moved after a contained session started.
+`gnomon check` takes only the rules under judgement from `--base` (roles,
+write_allow, bash_allow/deny, `[verify]`); `[audit]`, where `[verify]` runs,
+its network and `extra_roots` come from the surface in your working tree and
+this machine's exec floor for the project, read as its strictest entry (a
+base ref moved to a commit whose policy says `exec = "off"`, `network =
+true`, or names a role of its own does not move `[verify]` onto the host or
+the network, and a base's `[audit.attest] sign` is never run). It copies the
+base's `.gnomon/` out of git entry by entry, refusing a tree with `..` or
+`.git` in a name. It prints the commit the rules came from, and warns when
+that ref moved after a contained session started.
 
 **Code the host still runs from the project.** MCP servers start in an
 empty directory outside the project while any role runs contained (so `npx`
