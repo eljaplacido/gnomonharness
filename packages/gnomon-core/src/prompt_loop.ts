@@ -3368,6 +3368,8 @@ export interface TurnDeps {
    * `deadline.stopAt`, at depth 0. Absent, the notes are the notes they were.
    */
   deliverables?: { paths: string[]; root: string };
+  /** RunTaskOptions.clock: what the deadline notes read the time from. `Date.now` when absent. */
+  clock?: () => number;
   /**
    * Where each tool call's start and wall time go (TB4), in the order they
    * ran, sub-turns included (`depth`). Told, never asked: nothing reads it
@@ -5792,7 +5794,7 @@ async function agenticTurn(
     // so a turn that wrote its outputs early sees only the time notes.
     if (depth === 0 && stopClock) {
       const d = stopClock;
-      const now = Date.now();
+      const now = (deps.clock ?? Date.now)();
       const used = (now - d.started_at) / Math.max(1, d.total_ms);
       let crossed = false;
       while (deadlineNoteNext < d.notes.length && used >= d.notes[deadlineNoteNext]!) {
@@ -8100,6 +8102,14 @@ export interface RunTaskOptions {
    * no clock, as before.
    */
   deadline?: { at: number; source: "flag" | "env" };
+  /**
+   * The clock `--deadline` reads its budget and its notes from: epoch
+   * milliseconds, `Date.now` when absent. For tests, so the 40%/70% and
+   * `deadline_notes` thresholds follow the script rather than the runner's
+   * speed. The stop timer still runs on real time, `stopAt` less this clock's
+   * reading at the start.
+   */
+  clock?: () => number;
 }
 
 /** See RunTaskOptions.interrupt. */
@@ -8322,7 +8332,8 @@ export async function runTask(
   // of its time. The timer aborts the turn's signal with DEADLINE_ABORT; the
   // turn reads that as its `deadline` ending. unref'd: it must never be what
   // keeps a finished run's process alive.
-  const deadlineStart = Date.now();
+  const clock = options.clock ?? Date.now;
+  const deadlineStart = clock();
   // Each tool call's start and wall time, for `volatile.tool_calls` (TB4).
   const toolTimes: ToolTiming[] = [];
   let turnDeadline: Required<TurnDeadline> | undefined;
@@ -8342,7 +8353,7 @@ export async function runTask(
     };
     const ctl = new AbortController();
     deadlineSignal = ctl.signal;
-    deadlineTimer = setTimeout(() => ctl.abort(DEADLINE_ABORT), Math.max(0, turnDeadline.stopAt - Date.now()));
+    deadlineTimer = setTimeout(() => ctl.abort(DEADLINE_ABORT), Math.max(0, turnDeadline.stopAt - clock()));
     deadlineTimer.unref?.();
   }
 
@@ -8381,7 +8392,12 @@ export async function runTask(
     audit.write("deliverable_first", { event: "named", named: deliverables.paths, at: [...DELIVERABLE_FIRST_AT] });
   }
   const deadlineDeps = turnDeadline
-    ? { deadline: turnDeadline, signal: deadlineSignal, ...(deliverables ? { deliverables } : {}) }
+    ? {
+        deadline: turnDeadline,
+        signal: deadlineSignal,
+        ...(deliverables ? { deliverables } : {}),
+        ...(options.clock ? { clock: options.clock } : {}),
+      }
     : {};
 
   // The record as the run goes, beside the trail (live_record.ts): opened

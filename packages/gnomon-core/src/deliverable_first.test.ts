@@ -479,10 +479,23 @@ const texts = (raw: string): string[] =>
 const MISSING = /These required outputs do not exist yet: ([^\n]*?)\. Write a first complete version now, then improve it\./;
 
 /**
+ * A deadline clock driven by the script, not the runner: each request the
+ * server has received moves it on by STEP of the BUDGET, so the turn reads
+ * `used = requests × 5%` before each call, on any machine at any load. The
+ * real stop timer is a BUDGET away and never fires in these runs.
+ */
+const BUDGET = 100_000;
+const STEP = 5_000;
+function scriptClock(raws: string[]) {
+  const base = Date.now();
+  return { at: base + BUDGET, clock: () => base + raws.length * STEP };
+}
+
+/**
  * The model reads files until a request carries the first deliverable note,
  * then writes result.txt, then reads again until a request carries a second
- * note, then answers. The replies are paced, not timed: the test waits on
- * what the requests carry, never on the clock.
+ * note, then answers. The deadline clock moves with the requests, so the note
+ * at 40% is on request 9 (8 × 5% used before it) and the one at 70% on 15.
  */
 async function deliverableRun(turn: string, endpoint = "") {
   let phase = 0;
@@ -494,18 +507,21 @@ async function deliverableRun(turn: string, endpoint = "") {
     }
     if (notes === 1 && phase === 0) {
       phase = 1;
-      return { ...toolCall(n, "write", { path: "result.txt", content: "first version\n" }), delayMs: 40 };
+      return toolCall(n, "write", { path: "result.txt", content: "first version\n" });
     }
-    return { ...toolCall(n, "read", { path: `f${(n % 6) + 1}.txt` }), delayMs: 40 };
+    if (n > 30) return answer("gave up");
+    return toolCall(n, "read", { path: `f${(n % 6) + 1}.txt` });
   });
   const root = deadlineSurface(url, turn, endpoint);
+  const { at, clock } = scriptClock(raws);
   const log = join(root, "logs", "run.log");
   const task = `Summarise the files. Write the summary to \`result.txt\` and the log to \`${log}\`.`;
   const rec = await runTask(loadConfig(root), task, {
     role: "smol",
     yes: true,
     stderr: { write() {} },
-    deadline: { at: Date.now() + 4000, source: "flag" },
+    deadline: { at, source: "flag" },
+    clock,
   });
   return { rec, raws, root, log, audit: trail(root) };
 }
@@ -517,6 +533,12 @@ describe("--deadline with deliverable_first = true", () => {
     // The notes, as they went out: system messages on the steering channel.
     const notes = [...new Set(r.raws.flatMap(texts).filter((t) => MISSING.test(t)))];
     expect(notes).toHaveLength(2);
+    // Where each note first went out: 1-based request numbers, by the script clock.
+    const firstWith = (note: string) => r.raws.findIndex((raw) => texts(raw).includes(note)) + 1;
+    expect(firstWith(notes[0]!)).toBe(9);
+    expect(firstWith(notes[1]!)).toBe(15);
+    // The request carrying the second note is answered: the run ends there.
+    expect(r.raws).toHaveLength(15);
     expect(notes[0]).toMatch(/^system:Time check: about .* remain before it is stopped\./);
     expect(notes[0]!.match(MISSING)![1]).toBe(`result.txt, ${r.log}`);
     expect(notes[1]!.match(MISSING)![1]).toBe(r.log);
@@ -545,16 +567,19 @@ describe("--deadline with deliverable_first = true", () => {
   }, 20_000);
 
   it("off under the same deadline: the notes are the plain time notes, nothing named, no record", async () => {
-    // Reads until the deadline, then stops; never told what is missing.
-    const { url, raws } = await serveJson((n) => ({ ...toolCall(n, "read", { path: `f${(n % 6) + 1}.txt` }), delayMs: 40 }));
-    const root = deadlineSurface(url, "deadline_notes = [0.4]\ndeadline_margin_ms = 200");
+    // Reads past 70% of the script clock, then answers; never told what is missing.
+    const { url, raws } = await serveJson((n) => (n > 16 ? answer("done") : toolCall(n, "read", { path: `f${(n % 6) + 1}.txt` })));
+    const root = deadlineSurface(url, "deadline_notes = [0.4]\ndeadline_margin_ms = 200\nnudge_after_idle = 0");
+    const { at, clock } = scriptClock(raws);
     const rec = await runTask(loadConfig(root), "Write the summary to `result.txt`.", {
       role: "smol",
       yes: true,
       stderr: { write() {} },
-      deadline: { at: Date.now() + 1500, source: "flag" },
+      deadline: { at, source: "flag" },
+      clock,
     });
-    expect(rec.stop_reason).toBe("deadline");
+    expect(rec.stop_reason).toBe("answered");
+    expect(rec.counters.deadline_notes).toBe(1);
     expect(raws.join("")).toContain("Time check");
     expect(raws.join("")).not.toContain("do not exist yet");
     expect(rec.counters).not.toHaveProperty("deliverable_first_notes");
@@ -618,7 +643,7 @@ describe("[resilience] first_token_timeout_ms", () => {
       whole(res, "hello");
     });
     const t0 = Date.now();
-    const r = await callEndpointWithRetry(target(url, { firstTokenMs: 300 }), hi, [], 5000, { attempts: 3, backoff_ms: 1 }, undefined, undefined);
+    const r = await callEndpointWithRetry(target(url, { firstTokenMs: 300 }), hi, [], 20_000, { attempts: 3, backoff_ms: 1 }, undefined, undefined);
     expect(r.code).toBe(0);
     expect(r.content).toBe("hello");
     expect(seen.bodies).toHaveLength(2);
@@ -627,8 +652,8 @@ describe("[resilience] first_token_timeout_ms", () => {
     expect(r.firstTokenStalls).toHaveLength(1);
     expect(r.firstTokenStalls![0]!.attempt).toBe(1);
     expect(r.firstTokenStalls![0]!.waited_ms).toBeGreaterThanOrEqual(250);
-    // Not waited out to the 5 s request timeout.
-    expect(Date.now() - t0).toBeLessThan(3000);
+    // Not waited out to the 20 s request timeout.
+    expect(Date.now() - t0).toBeLessThan(15_000);
   });
 
   it("a reply that has produced a token is never cut by it, however long it pauses after", async () => {

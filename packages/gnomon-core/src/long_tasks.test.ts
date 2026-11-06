@@ -338,14 +338,19 @@ describe("--deadline: the run stops itself with a final record (TB1)", () => {
     // The refusal floor, as a step_wall: 4, or a worse code a tool left.
     expect(rec.bucket).toBe("refusal");
     expect(taskExitCode(rec)).toBe(2);
-    // The budget runs from the session's start, a few ms after `started`;
-    // the margin is capped at a tenth of it (400 declared).
+    // The budget runs from the session's start, after `started` by however
+    // long the runner took to get there; the margin is capped at a tenth of it
+    // (400 declared).
     const budget = rec.stop_detail!.budget_ms!;
-    expect(budget).toBeGreaterThan(2400);
+    expect(budget).toBeGreaterThan(1500);
     expect(budget).toBeLessThanOrEqual(2500);
     expect(rec.stop_detail!.margin_ms).toBe(Math.floor(budget / 10));
-    // Before the deadline, and not waiting out the 30 s sleep.
-    expect(took).toBeLessThan(2500);
+    // Stopped by the deadline, not by waiting out the 30 s sleep. Structural,
+    // not a wall-time race: the stop's latency on a loaded runner is not the
+    // property (CI measured 2525 ms against a 2500 ms bound). A timer never
+    // fires early, so the lower bound holds on any machine; the upper one only
+    // has to tell "stopped" from "waited 30 s".
+    expect(took).toBeLessThan(15_000);
     expect(took).toBeGreaterThanOrEqual(2000);
     expect(rec.output).toMatch(/Stopped at the deadline/);
     expect(rec.volatile.deadline).toMatchObject({ budget_ms: budget, source: "flag" });
@@ -388,7 +393,8 @@ describe("--deadline: the run stops itself with a final record (TB1)", () => {
     const root = surface(url, { turn: "deadline_margin_ms = 100" });
     const started = Date.now();
     const rec = await runTask(loadConfig(root), "work", { role: "smol", deadline: { at: started + 1000, source: "env" } });
-    expect(Date.now() - started).toBeLessThan(2500);
+    // Not the 10 s reply waited out; how soon after the stop is the runner's.
+    expect(Date.now() - started).toBeLessThan(8000);
     expect(rec.stop_reason).toBe("deadline");
     expect(rec.volatile.deadline?.source).toBe("env");
     expect(verifyTrail(trail(root).files[0]!).sealed).toBe(true);
