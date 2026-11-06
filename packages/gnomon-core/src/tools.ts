@@ -1688,24 +1688,13 @@ export const NO_POSIX_SHELL =
  * out -- on Windows, when taskkill has exited, since taskkill /T /F is what
  * ends the tree; elsewhere at once, because the group SIGKILL is synchronous.
  */
-function killTree(
-  proc: { pid?: number; kill: (sig: NodeJS.Signals) => boolean },
-  containerName?: string
-): Promise<void> {
+function killTree(proc: { pid?: number; kill: (sig: NodeJS.Signals) => boolean }): Promise<void> {
   // A container is not in the process group. Killing `docker run` returns the
   // shell to us and leaves the container running, so a timed-out command would
   // keep working -- writing into the repository -- after the turn had given up
-  // on it. The caller removes it, and waits for that (removeContainer).
-  if (containerName) {
-    try {
-      spawn("docker", ["rm", "-f", containerName], {
-        stdio: "ignore",
-        detached: true,
-      }).unref();
-    } catch {
-      // docker gone, or never started one
-    }
-  }
+  // on it. Every caller starts removeContainer BEFORE this and awaits it: the
+  // one removal, owned and confirmed. (This used to fire its own detached
+  // `docker rm -f` as well, which outlived the tool call -- see removeContainer.)
   if (typeof proc.pid === "number" && process.platform === "win32") {
     // No process groups to signal. /T walks the tree, /F is SIGKILL's analogue.
     try {
@@ -1756,6 +1745,32 @@ const CONTAINER_REMOVE_MS = 20_000;
  * runs on this machine until docker says it is.
  */
 async function removeContainer(name: string): Promise<boolean> {
+  // Claimed synchronously, before the first await, so the `docker run` exit
+  // that the kill provokes (containerAfterExit) leaves the removal to us.
+  removing.add(name);
+  try {
+    return await confirmRemoved(name);
+  } finally {
+    removing.delete(name);
+  }
+}
+
+/**
+ * Containers whose removal a kill site is awaiting (removeContainer).
+ *
+ * WHY (#164 flake, 2026-11-06). A job kill under exec = "docker" used to run
+ * three `docker rm -f`s: killTree's and containerAfterExit's, both detached
+ * and never awaited, beside removeContainer's. The tool returned on
+ * removeContainer's confirmation while the strays could still be running --
+ * processes outliving the call that started them, racing whatever came next
+ * (on CI, the stub docker's state file, read as '' mid-rewrite). Harmless to
+ * the git_safe rule with a real docker -- only `inspect` saying "no such
+ * container" unregisters, and nothing brings a removed container back -- but
+ * a removal now has exactly one owner, and it is awaited.
+ */
+const removing = new Set<string>();
+
+async function confirmRemoved(name: string): Promise<boolean> {
   const until = Date.now() + CONTAINER_REMOVE_MS;
   const run = (args: string[], ms: number) =>
     new Promise<{ code: number | null; err: string }>((done) => {
@@ -3043,8 +3058,9 @@ async function bashTool(
     const timer = setTimeout(async () => {
       if (settled) return;
       settled = true;
-      await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
-      const containerLeft = sandboxed && !(await removeContainer(sandboxName));
+      const removal = sandboxed ? removeContainer(sandboxName) : Promise.resolve(true);
+      await settleKill(killTree(proc), exited);
+      const containerLeft = !(await removal);
       // What the command printed before it was killed is evidence the harness
       // already holds: the failing test, the last line of a build, the prompt it
       // was blocked on. Discarding it left the model with nothing to act on but
@@ -3090,8 +3106,9 @@ async function bashTool(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
-      const containerLeft = sandboxed && !(await removeContainer(sandboxName));
+      const removal = sandboxed ? removeContainer(sandboxName) : Promise.resolve(true);
+      await settleKill(killTree(proc), exited);
+      const containerLeft = !(await removal);
       releasePipes(proc);
       const atDeadline = ctx.signal?.reason === DEADLINE_ABORT;
       done({
@@ -3174,7 +3191,9 @@ async function bashTool(
 function containerAfterExit(sandboxName: string, exit: number | null): void {
   if (exit !== null && exit !== 125) {
     containerGone(sandboxName);
-  } else {
+  } else if (!removing.has(sandboxName)) {
+    // Nobody is removing it: start that. When a kill site is (removeContainer),
+    // it is awaiting the removal and unregisters on confirmation.
     try {
       spawn("docker", ["rm", "-f", sandboxName], { stdio: "ignore", detached: true }).unref();
     } catch {
@@ -3573,9 +3592,9 @@ export class JobTable {
       // under it has a supervisor, and this must call killSupervisedTree on
       // it (first, as bashTool's timeout path does there), or a setsid'd
       // descendant outlives the turn. This is the one job kill site.
-      const killed = killTree(job.proc, job.start.sandboxName);
-      await settleKill(killed, job.exited);
-      if (job.start.sandboxName) gone = await removeContainer(job.start.sandboxName);
+      const removal = job.start.sandboxName ? removeContainer(job.start.sandboxName) : Promise.resolve(true);
+      await settleKill(killTree(job.proc), job.exited);
+      gone = await removal;
     }
     // The shell is dead; its close follows. Bounded, so a grandchild holding
     // the pipes cannot hold the turn.

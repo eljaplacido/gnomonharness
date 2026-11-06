@@ -81,6 +81,18 @@
   modules when run. `startup_budget.test.ts` pins what `--version` may load
   (no network stack) instead of a wall time.
 
+### Fixed
+
+- **Docker job kills leave no stray `docker rm`.** Killing a job or a timed-out
+  command under `exec = "docker"` ran three `docker rm -f`s: killTree's and the
+  `docker run` exit handler's, detached and never awaited, beside the awaited,
+  confirmed one. The strays could outlive the tool call (the soft-timeout
+  shell's docker test flaked on CI, 3 of the #164 runs). A removal now has one
+  owner, started before the kill and awaited; the git_safe rule (#158) was not
+  weakened by the strays, since only `docker inspect` reporting the container
+  gone unregisters it. The test now asserts that: one removal, confirmed by an
+  `inspect` after it, the container's process dead, before host git is allowed.
+
 ### Docs
 
 - **Truth pass (audit 2026-11-06).** `exec = "os"` (the kernel sandbox, #74/#156)
