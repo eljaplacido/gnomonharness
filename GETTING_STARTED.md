@@ -18,8 +18,12 @@ Once gnomon is installed ([section 2](#2-install)):
 2. **Connect a cloud model (optional).** OpenCode Go, OpenRouter, OpenCode Zen
    or any OpenAI-compatible URL; the key is read hidden and kept outside the
    repository. With one, setup suggests hybrid: the cloud plans, your machine
-   builds. On an RTX 5090 that solved 87% vs 84% cloud-only, at 26% lower
-   cost per solved task.
+   builds. On an NVIDIA GB10 that solved 22/32 against 16/31 local-only
+   (+17 points, McNemar p = 0.07). The earlier RTX 5090 result (87% vs 84%
+   cloud-only, at 26% lower cost per solved task) did not reproduce on v0.4.0
+   (hybrid 19/31 against cloud-only 24/31), and not because of the build
+   (R4H: 20 vs 19, p = 1.0); see
+   [docs/benchmarks/HYBRID.md](docs/benchmarks/HYBRID.md).
 3. **Accept the diff, then `gnomon launch`.** Setup writes `.gnomon/` only
    after you accept the diff it shows. `gnomon doctor` re-checks the machine
    any time and changes nothing.
@@ -74,7 +78,7 @@ no Rust, no sudo.
 What it does: checks for Node ≥ 20 (if it is missing or old it prints the exact
 command for your OS — NodeSource, Homebrew, nvm, winget — and stops; it never
 installs Node as root on its own), resolves the latest release
-(`GNOMON_VERSION=0.4.2` pins one), installs the npm package, and puts the native
+(`GNOMON_VERSION=0.4.3` pins one), installs the npm package, and puts the native
 binaries in `~/.local/share/gnomon/bin` (`%LOCALAPPDATA%\gnomon\bin` on Windows),
 where `surface`, `enumerations`, `session`, `apply` and `simulate` find them
 with no environment variable. Every download is checked against the release's
@@ -91,19 +95,19 @@ package fails in dpkg while the distro's `npm` and `libnode-dev` are installed.
 ### By hand — the same packages, no script
 
 ```bash
-V=0.4.2
+V=0.4.3
 B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz \
          $B/gnomon-tui-$V.tgz  $B/gnomon-harness-$V.tgz
 ```
 
 ```powershell
-$V="0.4.2"
+$V="0.4.3"
 $B="https://github.com/eljaplacido/gnomonharness/releases/download/v$V"
 npm i -g "$B/gnomon-core-$V.tgz" "$B/gnomon-natives-$V.tgz" "$B/gnomon-tui-$V.tgz" "$B/gnomon-harness-$V.tgz"
 ```
 
-Two blocks because they have to be: `V=0.4.2` is not an assignment in
+Two blocks because they have to be: `V=0.4.3` is not an assignment in
 PowerShell and `\` is not its line continuation. The four are one package split
 up — `gnomon-harness` is the CLI and the other three its libraries — so npm
 needs all four URLs; from the registry, one name is enough (below). This
