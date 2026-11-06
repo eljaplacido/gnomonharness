@@ -3635,7 +3635,8 @@ case "$1" in
     name=""; prev=""
     for a in "$@"; do [ "$prev" = "--name" ] && name="$a"; prev="$a"; done
     echo running > "$state/$name"
-    setsid sleep 30 >/dev/null 2>&1 < /dev/null &
+    # setsid where there is one (not macOS): the container outlives the killed client.
+    if command -v setsid >/dev/null 2>&1; then setsid sleep 30 >/dev/null 2>&1 < /dev/null & else sleep 30 >/dev/null 2>&1 < /dev/null & fi
     echo $! > "$state/$name.pid"
     wait ;;
   rm)
