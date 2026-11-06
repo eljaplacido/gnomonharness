@@ -18,8 +18,12 @@ Once gnomon is installed ([section 2](#2-install)):
 2. **Connect a cloud model (optional).** OpenCode Go, OpenRouter, OpenCode Zen
    or any OpenAI-compatible URL; the key is read hidden and kept outside the
    repository. With one, setup suggests hybrid: the cloud plans, your machine
-   builds. On an RTX 5090 that solved 87% vs 84% cloud-only, at 26% lower
-   cost per solved task.
+   builds. On an NVIDIA GB10 that solved 22/32 against 16/31 local-only
+   (+17 points, McNemar p = 0.07). The earlier RTX 5090 result (87% vs 84%
+   cloud-only, at 26% lower cost per solved task) did not reproduce on v0.4.0
+   (hybrid 19/31 against cloud-only 24/31), and not because of the build
+   (R4H: 20 vs 19, p = 1.0); see
+   [docs/benchmarks/HYBRID.md](docs/benchmarks/HYBRID.md).
 3. **Accept the diff, then `gnomon launch`.** Setup writes `.gnomon/` only
    after you accept the diff it shows. `gnomon doctor` re-checks the machine
    any time and changes nothing.

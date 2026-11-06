@@ -32,6 +32,8 @@ Two record fixes from the P2G41 acid test (#151) and two sets of opt-in features
 
 Benchmark status of the completion gate, measured so far and not yet a recommendation. On the local gx10 lane, a first pass solved 6 of 15 with the gate off, 8 with `checklist` and 9 with `review`: in the right direction, not yet significant. On hosted tasks capped at 30 minutes it hurt (H4-lite): hidden-test fraction −0.10 [−0.21, −0.01], and runs hitting the cap went from 4 to 8, because the gate does not know how much wall-clock is left. Keep `completion_gate` off for hosted or time-capped runs until a run deadline can be passed from the command line (`--deadline`, #153).
 
+The README and GETTING_STARTED no longer cite the RTX 5090 hybrid result (87% vs 84% cloud-only at 26% lower cost per solved task) as current: it did not reproduce on v0.4.0 (R3R: hybrid 19/31, cloud-only 24/31), and R4H found no build effect (20 vs 19, p = 1.0). They now lead with the GB10 result that stands: hybrid 22/32 against local-only 16/31 (p = 0.07). `gnomon setup`'s own hybrid explanation still quotes the R1H figures; that text is catalog data (`packages/gnomon-cli/catalog/models.toml`) and is not changed in this release.
+
 ### Added
 
 - **Six opt-in sweep knobs, one per long-task hypothesis** (docs/CONTRACTS.md

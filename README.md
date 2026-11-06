@@ -36,8 +36,13 @@ Update with `gnomon update`; `gnomon uninstall` prints how to remove it.
 2. **Connect a cloud model (optional).** Pick OpenCode Go, OpenRouter,
    OpenCode Zen or any OpenAI-compatible URL. The key is read hidden and kept
    outside the repository, as `gnomon key set` does. With one, setup suggests
-   hybrid, where the cloud plans and your machine builds. On an RTX 5090 that
-   solved 87% vs 84% cloud-only at 26% lower cost per solved task.
+   hybrid, where the cloud plans and your machine builds. On an NVIDIA GB10
+   that solved 22/32 against 16/31 local-only (+17 points, McNemar p = 0.07).
+   The earlier RTX 5090 result (87% vs 84% cloud-only, at 26% lower cost per
+   solved task) did not reproduce: on v0.4.0 the same lane gave hybrid 19/31
+   against cloud-only 24/31 (R3R), and the old and new builds run side by side
+   showed no build effect (20 vs 19, p = 1.0; R4H), so the cause is open. See
+   [docs/benchmarks/HYBRID.md](docs/benchmarks/HYBRID.md).
 3. **Accept the diff, then `gnomon launch`.** Setup shows its change to
    `.gnomon/` as a diff and writes it only on your yes. `gnomon doctor`
    re-checks the machine any time and never changes anything.
