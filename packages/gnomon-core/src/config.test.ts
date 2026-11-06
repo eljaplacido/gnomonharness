@@ -25,6 +25,7 @@ import {
   routeInput,
   resolveContext,
   auditSurface,
+  BLOCK_KEYS,
   recomputeManifest,
   PROBE_TIMEOUT_MS,
   kindFromUrl,
@@ -612,6 +613,68 @@ describe("auditSurface", () => {
       )
     );
     expect(problems).toEqual([]);
+  });
+
+  // Audit 2026-11-06: `[turn] todo_gat` and `[verify] completion_gat` were
+  // silently ignored; only blocks, roles, endpoints and a few sub-blocks were
+  // checked for unknown keys.
+  describe("unknown keys in [turn], [verify], [sandbox], [resilience], [approval]", () => {
+    const withBlocks = (config: unknown, policy: unknown) =>
+      ({ gnomonDir: "/nowhere", config, roles: {}, policy, profiles: {}, tools: {}, system: { content: "", version: "0.1" } }) as never;
+    const unknownKey = (ps: Array<{ problem: string }>) => ps.filter((p) => /is not a key \[/.test(p.problem));
+
+    it.each([
+      ["config", "turn", "todo_gat", "todo_gate"],
+      ["config", "turn", "nudge_after_idel", "nudge_after_idle"],
+      ["config", "resilience", "attemps", "attempts"],
+      ["policy", "verify", "completion_gat", "completion_gate"],
+      ["policy", "verify", "comand", "command"],
+      ["policy", "sandbox", "imgae", "image"],
+      ["policy", "approval", "repo_cod", "repo_code"],
+    ] as const)("%s.toml [%s] %s warns, not fails, and suggests %s", (file, block, key, near) => {
+      const body = { [block]: { [key]: 1 } };
+      const ps = unknownKey(auditSurface(withBlocks(file === "config" ? body : {}, file === "policy" ? body : {})));
+      expect(ps).toHaveLength(1);
+      expect(ps[0]!.fatal).toBe(false);
+      expect(ps[0]!.where).toBe(`.gnomon/${file}.toml [${block}]`);
+      expect(ps[0]!.problem).toContain(`Did you mean "${near}"?`);
+    });
+
+    it("an unknown key with nothing close says so without a guess", () => {
+      const ps = unknownKey(auditSurface(withBlocks({ turn: { zzzzzz: 1 } }, {})));
+      expect(ps).toHaveLength(1);
+      expect(ps[0]!.problem).not.toMatch(/Did you mean/);
+    });
+
+    it("every known key is quiet", () => {
+      const config: Record<string, Record<string, unknown>> = {};
+      const policy: Record<string, Record<string, unknown>> = {};
+      for (const [file, block, keys] of BLOCK_KEYS) {
+        const target = file === "config.toml" ? config : policy;
+        target[block] = Object.fromEntries(keys.map((k) => [k, 1]));
+      }
+      expect(unknownKey(auditSurface(withBlocks(config, policy)))).toEqual([]);
+    });
+
+    it("a right key in the wrong block is reported once, by the owner check", () => {
+      const ps = auditSurface(withBlocks({}, { verify: { todo_gate: true } }));
+      expect(unknownKey(ps)).toEqual([]);
+      expect(ps.some((p) => /read from \[turn\]/.test(p.problem))).toBe(true);
+    });
+
+    it("the keys the README documents for [turn] are all known", () => {
+      const readme = readFileSync(join(__dirname, "..", "..", "..", "README.md"), "utf-8");
+      const block = readme.split("```toml\n[turn]\n")[1]!.split("```")[0]!;
+      const documented = [...block.matchAll(/^([a-z_]+)\s*=/gm)].map((m) => m[1]!);
+      expect(documented.length).toBeGreaterThanOrEqual(12);
+      const known = BLOCK_KEYS.find(([, b]) => b === "turn")![2];
+      for (const k of documented) expect(known, k).toContain(k);
+    });
+
+    it("this repository's own surface has no unknown key", () => {
+      const repo = loadConfig(join(__dirname, "..", "..", ".."));
+      expect(unknownKey(auditSurface(repo))).toEqual([]);
+    });
   });
 
   it("refuses a plaintext key in the surface, and says it is also inert", () => {

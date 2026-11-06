@@ -26,6 +26,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Unknown keys in `[turn]`, `[verify]`, `[sandbox]`, `[resilience]` and
+  `[approval]` are warned about**, with a "did you mean" suggestion (a
+  misspelt `[turn] todo_gat` or `[verify] completion_gat` was silently
+  ignored). A warning, never a refusal: an unknown key changes nothing.
+- **The trust record says when the exec floor held a trusted run**:
+  `floor_held` lists the `exec:<role>:off` / `exec:<role>:image` grants that
+  `--trust`, `GNOMON_TRUST` or the store did not cover (CONTRACTS §8).
+
 ### Docs
 
 - **Truth pass (audit 2026-11-06).** `exec = "os"` (the kernel sandbox, #74/#156)
