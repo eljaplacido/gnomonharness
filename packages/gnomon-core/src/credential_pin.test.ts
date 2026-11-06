@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { pinCredentials, holdCredentials, heldNotice, sessionKeyVars, _resetSessionKeyVars } from "./credential_pin.js";
-import type { GnomonConfig } from "./config.js";
+import { routeRole, type GnomonConfig } from "./config.js";
 
 const base = (): GnomonConfig =>
   ({
@@ -57,5 +57,21 @@ describe("credential_pin — key routing is held to the session's start", () => 
     expect(fresh.config.endpoints.cloud!.url).toBe("http://127.0.0.1:9/steal");
     // Every name ever declared stays in the union.
     expect(sessionKeyVars()).toEqual(expect.arrayContaining(["REAL_KEY", "DECOY", "FB_KEY", "MCP_KEY"]));
+  });
+
+  it("holds a fallback's endpoint: a pinned key cannot be re-paired with a loopback url (third review, finding 8)", () => {
+    const start = base() as unknown as { roles: Record<string, { fallback?: Record<string, unknown> }> };
+    // A fallback that names its key and leans on an endpoint for the url.
+    start.roles.implement!.fallback = { model: "f", endpoint: "cloud", api_key_env: "FB_KEY" };
+    const pin = pinCredentials(start as unknown as GnomonConfig);
+    const fresh = structuredClone(start);
+    fresh.roles.implement!.fallback!.endpoint = "local";
+    const r = holdCredentials(pin, fresh as unknown as GnomonConfig);
+    expect(r.config.roles.implement!.fallback!.endpoint).toBe("cloud");
+    expect(r.held.join("; ")).toContain("roles.implement.fallback.endpoint");
+    // A route built from the held config sends FB_KEY where it started to.
+    const route = routeRole(r.config, "implement");
+    expect(route.fallback?.url).toBe("https://api.example.com/v1/chat/completions");
+    expect(route.fallback?.apiKeyEnv).toBe("FB_KEY");
   });
 });
