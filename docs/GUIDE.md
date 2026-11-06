@@ -684,13 +684,30 @@ opt in:
 token_estimate = "calibrated"   # default "chars4"; trims divide by the measured ratio
 ```
 
-**Reasoning replay.** `replay_reasoning = true` in an `[endpoints.<name>]`
-block sends each assistant message's reasoning back as `reasoning_content`.
-That covers earlier turns of the session as well as the current one.
-DeepSeek's API requires it in thinking mode with tools (a 400 otherwise), so
-`api.deepseek.com` gets it without the line; declare it for a relay or gateway
-in front of DeepSeek. Everywhere else it is off: strict OpenAI-compatible
-servers refuse unknown message fields.
+**Reasoning replay.** gnomon sends each assistant message's reasoning back as
+`reasoning_content`, earlier turns of the session as well as the current one,
+to a hosted OpenAI-shaped endpoint that reasons. Undeclared, it turns on the
+first time such an endpoint answers a tool call with reasoning content
+(`reasoning_content` or `reasoning`) and stays on for the session; an endpoint
+that never sends reasoning is sent none, so its requests are unchanged. Every
+2026 open-weights family asks for it (DeepSeek V4, GLM-5, Kimi K3, Qwen3.6+,
+MiniMax), and DeepSeek's API answers 400 without it, so `api.deepseek.com` has
+it from the first request. A server that refuses the field by name (a strict
+schema: `Extra inputs are not permitted`) is resent the call without it, once,
+said on stderr, and replay stays off for it for the session
+(`counters.replay_reasoning_refused`). `replay_reasoning = false` in an
+`[endpoints.<name>]` block turns it off; `true` turns it on from the first
+request. The turn record's `wire` says `replay_reasoning: true` with
+`replay_reasoning_source: "declared"` or `"default"`. Before v0.4.4 it was off
+unless declared. The default is H3's (2026-11-06, pre-registered, hosted
+DeepSeek V4.1 Flash under 30-minute caps): replay alone raised the hidden-test
+fraction by +0.160 [95% +0.042, +0.293] and cut capped runs from 19 to 14
+([summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+H3 measured hosted endpoints only, so **local lanes are untested and off unless
+declared**: an endpoint whose URL host is a loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local, CGNAT/Tailscale (100.64/10), `*.local` or `host.docker.internal` host, a single-label name, or Ollama's `/api/chat` gets no replay by default,
+even when it returns reasoning (llama.cpp with a thinking model, vLLM with a
+reasoning parser, Ollama's `/v1`). Declare `replay_reasoning = true` there to
+turn it on; a fallback is judged by its own URL.
 
 **Steering role.** gnomon steers a turn with messages of its own: the idle
 nudge, the convergence push, a failed verification, the tool-less wrap-up,
@@ -853,7 +870,7 @@ api_key_env = "OPENAI_API_KEY"   # the NAME of the variable, never the key
 |---|---|---|
 | `gnomon launch [--dir P]` | Creates `.gnomon/` if missing, offers model setup if nothing answers, opens the loop | Daily start. The one to remember. |
 | `gnomon prompt [ROLE] [--continue \| --resume ID] [--profile N] [--trust]` | The interactive loop (alias `run`). A surface looser than the defaults that this machine has not trusted is shown and asked about first. | Resume a session; start in a role |
-| `gnomon task "TEXT" [--role R] [--yes] [--json] [--profile N] [--trust]` | One task, no terminal. Gated calls are refused unless `--yes`. An untrusted loosening surface runs clamped to the defaults unless `--trust`. | Scripts, CI, cron |
+| `gnomon task "TEXT" [--role R] [--yes] [--json] [--profile N] [--trust] [--deadline S]` | One task, no terminal. Gated calls are refused unless `--yes`. An untrusted loosening surface runs clamped to the defaults unless `--trust`. `--deadline` (seconds or an ISO time) stops it cleanly before a time cap (§7.2). | Scripts, CI, cron, benchmarks |
 | `gnomon setup [--json] [--yes] [--pull TAG] [--speed-check] [--mode local\|hybrid\|cloud] [--cloud-endpoint URL --cloud-model NAME]` | Scans the machine, recommends a local model it can run, pulls only on a yes, speed-checks it, connects an optional cloud model, suggests a mode, and writes `.gnomon/` after you accept the diff ([4.0](#40-get-started-in-3-steps)) | First run; a new machine |
 | `gnomon doctor [--json]` | Read-only: the machine, whether every role's model answers, drift since setup, and what would fix each problem. Exit 0 clear, 1 attention, 10 could not run. | "Why does nothing answer?"; after moving machines |
 | `gnomon init [--from P] [--force] [--no-verify]` | Writes a surface. `--from` copies another project's `.gnomon/`. | New project; team template |
@@ -954,6 +971,32 @@ esac
   each one is announced.
 - Switch on the **bucket** (0, 2, 10); that part of the
   [exit contract](CONTRACTS.md) is stable.
+- **`--deadline <seconds|ISO time>`** (or `GNOMON_DEADLINE`) gives the run a
+  wall clock, opt-in. At `[turn] deadline_notes` (default 50% and 80% of the
+  budget) the next request carries one short note of the time left, as a
+  mid-turn system message. A `bash` command's timeout is clamped to the time
+  left. At the deadline less `[turn] deadline_margin_ms` (30 s, at most a
+  tenth of the budget) the turn stops itself: the call in flight is aborted,
+  the record is final with `stop_reason: "deadline"` and `stop_detail`
+  (`deadline`, `budget_ms`, `margin_ms`), the trail is sealed, and the exit is
+  2 (the refusal floor a `step_wall` lands on). A value that is not a deadline
+  exits 10. **For benchmark adapters:** pass the task's time cap less what
+  the adapter needs to copy results out, e.g. `--deadline 1740` under a
+  1800 s cap. Harbor never signals the process it runs, so a run capped from
+  outside leaves only a partial record (P2G41: 29 of 29 capped cells); one
+  that stops at its own deadline leaves the final record and a sealed trail.
+- An unattended `gnomon task` waits out a provider outage for `[resilience]
+  task_transport_grace_ms` (default 180 s; a session keeps
+  `transport_grace_ms`, 60 s). A declared `transport_grace_ms` with no task
+  value is honoured in a task too.
+- Each tool call's start and wall time are on the record
+  (`volatile.tool_calls`) and on its `tool_call` audit record (`started_at`,
+  `duration_ms`); a partial record names the call in flight
+  (`volatile.tool_in_flight`).
+- In a directory gnomon cannot write (a read-only mount), `gnomon init` keeps
+  the surface and gnomon's records in `$XDG_STATE_HOME/gnomon/workdirs/<key>`
+  (else `~/.local/state/...`), keyed by the directory's path; `gnomon task`
+  run there finds it, and the tools still work in the directory.
 - A run that SIGINT, SIGTERM or SIGHUP ends mid-turn (a CI timeout, a
   benchmark's time cap) still prints its record under `--json`, with
   `stop_reason: "killed"`, `stop_detail.signal` and `bucket:
@@ -1631,6 +1674,7 @@ The record fields and the outcome list are a contract: [CONTRACTS.md §19](CONTR
 | `unknown field "tool" — … Did you mean "tools"?` | A typo in a role block (fatal, on purpose) | Fix the key |
 | `[verify] is declared here but read from policy.toml` | `[verify]` in the wrong file | Move it to `policy.toml` |
 | `No .gnomon/ surface found in … or any parent directory` | Wrong directory, or no surface yet | `cd` to the project, `gnomon init`, or pass `--dir` |
+| `… is not writable (a read-only mount, or no write permission)` after "No .gnomon/ surface found" | The directory is read-only, so no `.gnomon/` can be made there | `gnomon init` in it: the surface and records go to `$XDG_STATE_HOME/gnomon/workdirs/<key>` and the tools still work in the directory |
 | `.gnomon/ already exists … Refusing to overwrite` | `init` on an existing surface | Keep it, or `gnomon init --force` |
 | `gnomon task` exits 2 and the trail says `by: "default:no-operator"` | A gated call with nobody to approve it | Intended. Add `--yes` deliberately, or lower `[approval] gate`. |
 | `[tools] MODEL cannot accept tools — retrying without them.` | The model or its template rejects a tools array (common with reasoning distills) | Use a tool-capable model for that role, or set `tools = []` for it |

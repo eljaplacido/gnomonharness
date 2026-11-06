@@ -71,6 +71,12 @@ import {
 // Outcome codes
 // ---------------------------------------------------------------------------
 
+/**
+ * The abort reason `gnomon task --deadline` stops a turn with. A turn, or a
+ * command, aborted with it ended at the deadline, not at an operator's Esc.
+ */
+export const DEADLINE_ABORT = "gnomon:deadline";
+
 export const TOOL_OK = 0;
 /** The tool ran and the answer was negative (missing path). Still a result. */
 export const TOOL_OK_EMPTY = 1;
@@ -1023,6 +1029,14 @@ export interface ToolContext {
   approve: Approver;
   /** bash timeout, ms */
   timeoutMs: number;
+  /**
+   * `gnomon task --deadline`: the epoch milliseconds a bash command must be
+   * finished by (the deadline less twice its margin: the turn stops at one
+   * margin, and the model gets the other to act on the output). A command's
+   * timeout is clamped to the time left before it. Absent without a deadline, which is
+   * the behaviour before it existed.
+   */
+  deadlineAt?: number;
   /** Cap on bytes returned to the model from read/bash */
   maxOutputBytes: number;
   /**
@@ -2713,6 +2727,12 @@ async function bashTool(
   }
 
   const startedAt = Date.now();
+  // The timeout, clamped to the time left before `--deadline` (less its
+  // margin). At least a second, so a command started at the wire still gets
+  // to report. Unclamped, and the same number as before, without a deadline.
+  const limitMs =
+    ctx.deadlineAt === undefined ? ctx.timeoutMs : Math.max(1000, Math.min(ctx.timeoutMs, ctx.deadlineAt - startedAt));
+  const clamped = limitMs < ctx.timeoutMs;
   // A stable, unique name so a cancelled or timed-out turn can remove the
   // container. Killing the process group stops `docker run`, not the container
   // it started -- the work would keep going with nobody watching it.
@@ -2780,21 +2800,25 @@ async function bashTool(
       const drift = surfaceDrift(ctx, surfaceBefore);
       const movedTree = worktreeMoved(ctx, worktreeBefore, shellCwd);
       // So the next identical call is refused for free rather than stalling.
-      ctx.timedOutCommands?.add(commandKey);
+      // Not when the deadline cut it short: the command may well fit the
+      // ordinary limit, and the refusal would quote a limit it never had.
+      if (!clamped) ctx.timedOutCommands?.add(commandKey);
       done({
         code: TOOL_FAILED,
         worktree_changed: movedTree,
         content:
-          `Command timed out after ${ctx.timeoutMs}ms and was killed. Output captured before the kill:\n` +
+          (clamped
+            ? `Command stopped after ${limitMs}ms, the time left before this task's deadline, and was killed. Output captured before the kill:\n`
+            : `Command timed out after ${ctx.timeoutMs}ms and was killed. Output captured before the kill:\n`) +
           clampEnds(cappedCapture.text, cappedCapture.ctx, `bash-timeout`) +
           `\n\nIt did not finish, so this output is partial. Re-running it unchanged will time out again: ` +
           `narrow it, or start it in the background and poll:\n      ${backgroundRecipe(command)}\n` +
           `    then read ${JOB_LOG_DIR}/job.log on a later step.` +
           (drift ? `\n\n${drift.notice}` : ""),
-        summary: `bash — timeout${drift ? " · surface changed" : ""}`,
+        summary: `bash — timeout${clamped ? " (deadline)" : ""}${drift ? " · surface changed" : ""}`,
         surface_drift: drift ?? undefined,
       });
-    }, ctx.timeoutMs);
+    }, limitMs);
 
     // The operator pressing Esc must reach the process, not merely be noticed
     // once it has finished.
@@ -2804,10 +2828,13 @@ async function bashTool(
       clearTimeout(timer);
       await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
       releasePipes(proc);
+      const atDeadline = ctx.signal?.reason === DEADLINE_ABORT;
       done({
         code: TOOL_FAILED,
         content:
-          `Cancelled by the operator after ${Date.now() - startedAt}ms. Output captured before the stop:\n` +
+          (atDeadline
+            ? `Stopped at this task's deadline after ${Date.now() - startedAt}ms. Output captured before the stop:\n`
+            : `Cancelled by the operator after ${Date.now() - startedAt}ms. Output captured before the stop:\n`) +
           clampEnds(
             [stdout ? `stdout:\n${stdout}` : "stdout: (empty)", stderr ? `stderr:\n${stderr}` : ""]
               .filter(Boolean)
@@ -2815,7 +2842,7 @@ async function bashTool(
             ctx,
             `bash-cancelled`
           ),
-        summary: `bash — cancelled`,
+        summary: atDeadline ? `bash — stopped at the deadline` : `bash — cancelled`,
       });
     };
     ctx.signal?.addEventListener("abort", onAbort, { once: true });

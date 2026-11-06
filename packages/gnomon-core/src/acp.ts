@@ -58,6 +58,7 @@ import {
   recomputeManifest,
   resolveUi,
   routeRole,
+  workRootOf,
   type GnomonConfig,
 } from "./config.js";
 import { applyCredentials } from "./credentials.js";
@@ -806,7 +807,7 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
             s.toolCallIds.set(call, toolCallId);
             s.currentToolCallId = toolCallId;
             const path = typeof call.args.path === "string" ? call.args.path : undefined;
-            const root = resolve(s.state.config.gnomonDir, "..");
+            const root = workRootOf(s.state.config);
             const asked = call.gated && (call.escalated === true || !(s.approveRestOfSession || s.approveRestOfTurn));
             update(s.id, {
               sessionUpdate: "tool_call",

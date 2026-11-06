@@ -72,6 +72,7 @@ every `TaskRecord`.
 | `tamper` | a tool call, or something between calls, changed gnomon's own records and gnomon did not make the change; the turn stops with a refusal (3) and a `record_tamper` record |
 | `in_progress` | the turn had not ended when the record was written: only on a partial record (`record_state: "partial"`), which is what a SIGKILL leaves (§28) |
 | `killed` | SIGINT, SIGTERM or SIGHUP ended the process mid-turn and the record was flushed first; `stop_detail.signal` names the signal, and the record is `apparatus_failure` (11) (§28) |
+| `deadline` | `gnomon task --deadline` (or `GNOMON_DEADLINE`) was given and the turn reached the deadline less its margin, so it stopped itself: the call in flight aborted, the record final, the trail sealed. On the `refusal` floor a `step_wall` lands on (exit 2), with `stop_detail.deadline`, `budget_ms` and `margin_ms` (§31) |
 
 `in_progress` and `killed` are written by the live record, never returned by
 a turn's own loop. They are here because a consumer reads them on the same
@@ -130,6 +131,9 @@ unresolved (§14), `gnomon doctor` `0`/`1`/`10` (§15), `gnomon setup`
 or `1`; `gnomon migrate --check` exits `1` when a migration is pending. The
 finer codes are reserved for callers that need them; a consumer should switch
 on the bucket, which is the part that is stable.
+
+A `gnomon task` that stops itself at `--deadline` exits `2`, the refusal
+floor, with `stop_reason: "deadline"` (§31).
 
 A `gnomon task` or an interactive session that SIGINT, SIGTERM or SIGHUP ends
 mid-run exits by none of these: it flushes a `killed` record and then dies of
@@ -2103,6 +2107,11 @@ loop such as a benchmark adapter's) never sees half a record. Not inside
 `input` and `output` follow `[audit] record`: under `metadata` they are left
 out of the file, as they are out of the trail. The `--json` record keeps them.
 
+A partial or killed record's `volatile` carries `tool_calls` (each finished
+tool call's `tool`, `started_at`, `duration_ms`) as the final record does, and,
+while a tool call runs, `tool_in_flight` (`tool`, `started_at`), so a run
+killed inside a long command says which and since when (TB4, §31).
+
 A partial or killed record's `volatile` carries `model_calls` (§29) as the
 final record does: what came back per model request so far, with its clock,
 provider tokens and reasoning tokens. Until 2026-11-05 it carried only the
@@ -2117,6 +2126,7 @@ The killed `turn` audit record carries it too, beside `tokens_in`.
 | `partial` | `in_progress` | Written when the turn starts and rewritten after each model reply and each tool call. A run killed with SIGKILL leaves this, with the steps up to the last one that finished. |
 | `final` | the turn's own | The turn ended. Rewritten no more; in a session the next turn starts a new partial record in the same file. |
 | `final` | `killed` | SIGINT, SIGTERM or SIGHUP arrived mid-turn. `stop_detail.signal` names it; `output` is a note, never the model's text. |
+| `final` | `deadline` | `gnomon task --deadline` stopped the turn itself (§31). Written as any final record is, with the turn's own code and bucket. |
 
 A partial or killed record carries `code: 11` (`timed_out`) and `bucket:
 "apparatus_failure"`: the turn did not end, it was ended, so it is neither a
@@ -2225,7 +2235,7 @@ One entry per request:
 | `i` | 1-based within the turn |
 | `est` | gnomon's estimate of the messages' text: the number its trims budget against |
 | `est_body` | the same estimate over the whole request body: tool schemas, tool calls, replayed reasoning and JSON included |
-| `replayed` | assistant messages whose reasoning went out as `reasoning_content` (only an OpenAI-shaped endpoint with `replay_reasoning` is sent any) |
+| `replayed` | assistant messages whose reasoning went out as `reasoning_content` (only an OpenAI-shaped endpoint with replay on is sent any: declared, DeepSeek's API, or by default once it answered a tool call with reasoning, §31) |
 | `steer` | gnomon's own system messages after the leading ones, present in the request, by kind: `nudge` (the idle nudge), `converge` (the convergence push), `other` (a trim's ledger, a failed check, the wrap-up, a context notice) |
 | `via` | `system`, or `user` under `steer_role = "user"`: the role they went out in. Present with `steer` |
 | `trim` | a trim since the request before: `why` (`leg`: the leg checkpoint; `overflow`: the provider refused the request as too long, code 13, and gnomon trimmed to 50% to send it again), `dropped` messages, the working context's estimate `before` and `after`, the `budget` it was trimmed to, and the `ratio` it was divided by under `calibrated` |
@@ -2427,14 +2437,101 @@ not shown the transcript, that rounds are bounded, that the gate is skipped
 when the step budget or the deadline is nearly spent, and that every record
 carries only the fixture's keys.
 
+## 31. Long tasks — `--deadline`, tool timing, reasoning replay by default, `v: 1`
+
+**Why.** P2G41 (2026-11-05, hosted DeepSeek V4.1 Flash under Harbor, 30-minute
+caps) ranked the causes of gnomon's long-task losses: no reasoning replay in
+the release defaults (19 caps on slow model steps), long commands blind to the
+deadline, capped runs leaving only a partial record (TB1, 29 of 29), no tool
+timing (TB4), a read-only `/app` failing as "No .gnomon/ surface found" (TB7),
+and a 60 s provider grace outlasted by 503s.
+
+**The default that changes (v0.4.4), and the one that does not.**
+
+| key | before | now | to restore |
+|---|---|---|---|
+| `[endpoints.<name>] replay_reasoning` | off unless declared (or `api.deepseek.com`) | undeclared on a **hosted** endpoint: on from the request after it first answers a tool call with reasoning content (`reasoning_content` or `reasoning`), for the session. Undeclared on a **local lane** (a loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local, CGNAT/Tailscale (100.64/10), `*.local` or `host.docker.internal` host, a single-label name, or Ollama's `/api/chat`; `isLocalLaneUrl`; a fallback by its own URL): off, as before | `replay_reasoning = false` |
+| `[turn] nudge_after_idle` | `12` | `12`, unchanged; a declared `0` is now off (it was floored to 1) | — |
+
+Replay is H3's verdict (pre-registered; hosted DeepSeek V4.1 Flash, 30-minute
+caps): replay alone against the 0.4.2 defaults raised the hidden-test fraction
+by +0.160 [95% bootstrap +0.042, +0.293] and cut capped runs from 19 to 14, so
+both arms of its decision rule were met. H3 measured hosted endpoints only,
+so local lanes are untested and off unless declared
+([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+The nudge stays because LG1 (pre-registered, local RTX lane) measured the
+build that switched it off against 0.4.2: 18 vs 18 solved at 1.43× the local
+tokens [1.04, 2.15], past its 1.20 guard, verdict "regresses"; the old build
+sent 547 nudged requests and the new 0, and replay never fired there because
+the lane returns no reasoning field
+([summary-lg1.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/lg1-2026-11/summary-lg1.txt)).
+H3's nudge-off recipe arm added +0.017 [−0.095, +0.138] on top of replay.
+
+An endpoint that never sends reasoning is never sent any, so its requests are
+the bytes they were. A 400 that names `reasoning_content` on a default replay
+is resent once without it, said on stderr, and replay stays off for that
+endpoint and model for the session (`counters.replay_reasoning_refused`). The
+turn record's `wire` carries, beside `replay_reasoning: true`,
+`replay_reasoning_source`:
+
+| value | when |
+|---|---|
+| `declared` | `replay_reasoning = true` |
+| `default` | gnomon turned it on: `api.deepseek.com`, or an undeclared hosted endpoint that answered a tool call with reasoning |
+
+**`gnomon task --deadline <seconds|ISO 8601 time with a zone>`**, else
+`GNOMON_DEADLINE`. Opt-in; absent, nothing below happens. A value that is not
+a deadline, or a time already past, exits `10`. The budget runs from the
+session's start.
+
+| what | how |
+|---|---|
+| notes | at each `[turn] deadline_notes` fraction of the budget (default `[0.5, 0.8]`; `[]` none), the next request carries one note of the time left, `Time check: about … remain …`, as a mid-turn system message; a user message marked `[gnomon]` under `steer_role = "user"`. Fractions passed together send one. `counters.deadline_notes` counts them |
+| bash | a command's timeout is clamped to end one margin before the stop (at least 1 s); it is then reported `bash — timeout (deadline)` and not refused as a repeat |
+| stop | at the deadline less `[turn] deadline_margin_ms` (default 30 000, capped at a tenth of the budget) the turn's signal aborts: the model call or command in flight is stopped, no wrap-up is asked, `stop_reason: "deadline"`, code on the refusal floor (exit `2`), `stop_detail` `{steps, deadline, budget_ms, margin_ms}`; then the `turn` audit record, `session_end` and the final `<session>.record.json`, as for any ending |
+| completion gate | `[verify] completion_gate` (§30) reads the same budget (`TurnDeps.deadline.total_ms`, `started_at`) for `completion_min_remaining` |
+| record | `session_start.deadline` `{at, budget_ms, margin_ms, notes, source}` in the trail; `volatile.deadline` `{at, budget_ms, margin_ms, source}` on the task record; `source` is `flag` or `env` |
+
+**Tool timing (TB4).** Each `tool_call` audit record carries `started_at`
+(ISO 8601) and `duration_ms`; the task record carries them, in order, as
+`volatile.tool_calls` (`tool`, `started_at`, `duration_ms`, and `depth: 1` for
+a delegated sub-turn's call); a partial record carries `volatile.tool_in_flight`
+(§28). A prefetched read-only call is timed from its prefetch.
+
+**`[resilience] task_transport_grace_ms`** (default `180000`): the transport
+grace of an unattended `gnomon task`. Declared, it wins; else a declared
+`transport_grace_ms` is honoured in a task too; else 180 s. A session keeps
+`transport_grace_ms` (60 s). A refused socket on this machine keeps its short
+grace unless one of the two is declared.
+
+**Read-only working directory (TB7).** `gnomon init` in a directory it cannot
+write keeps the surface and every record gnomon writes beside one in
+`$XDG_STATE_HOME/gnomon/workdirs/<first 16 hex of sha256(absolute path)>`
+(else `~/.local/state/...`), with a `WORKDIR` file naming the directory, and
+writes nothing in the directory. Loading from the directory (or `--dir` it)
+finds that surface; the directory stays the root the tools work in. "No
+.gnomon/ surface found" names the cause when the directory is not writable.
+
+**Truncation.** The re-ask after an output-limit truncation is once per
+streak: any reply the limit did not cut ends a streak, including one re-asked
+for being blank or markup. Two cuts in a row still end the turn (§1).
+
+**What must not change.** With `replay_reasoning = false` declared, every
+request body of a scripted turn is byte-identical to master's (0.4.2 + #151),
+with and without a far `--deadline`; an undeclared endpoint that sends no
+reasoning, or any local lane, gets master's bytes with nothing declared. The tool timing, the task
+grace and the read-only fallback change no request.
+
+**Fixture**: `conformance/long_tasks.json`; `packages/gnomon-core/src/long_tasks.test.ts`
+asserts the code's defaults equal it.
+
 ## 32. Sweep knobs — reasoning effort, sampling, environment snapshot, todo gate, edit variant, package index, `v: 1`
 
 Six opt-in surface settings, one per long-task hypothesis from P2G41's root
 causes and the long-task research notes (2026-11-05), so an adaptive
 benchmark sweep can test each as a change to the hashed surface rather than
 as a build. Each is declared in `.gnomon/` and moves the surface hash; each
-absent key is the build before it. (§31 is reserved for the long-task
-changes in PR #153.)
+absent key is the build before it.
 
 **What must not change.** With every key below absent, and again with every
 key declared at its default value (`reasoning_effort = "provider"` on the
