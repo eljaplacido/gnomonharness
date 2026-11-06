@@ -48,13 +48,14 @@ local_only_min_prefill_tps = 500  # and prompt processing at or above
 cloud_first_below_gen_tps = 10    # generation below: too slow for a task; cloud first
 
 [hybrid]
-# What setup cites when it suggests hybrid. R1H: 16 Terminal-Bench tasks,
-# 900 s cap, gnomon d59e6c19; local qwen3.6-35b, cloud DeepSeek V4.1 Flash
-# through OpenCode Go. Not significant on solve rate (McNemar p = 1.0 against
-# cloud-only); the cost difference is a point estimate.
-evidence = "On an RTX 5090, cloud plans + local builds solved 87% (26/30) vs 84% (27/32) cloud-only, at 26% lower cost per solved task ($0.034 vs $0.046)."
-evidence_unified = "On an NVIDIA GB10 (R1), the same split solved 66% (21/32) vs 72% (23/32) cloud-only, at 20% lower cost per solved task: no difference shown either way."
-run = "R1H and R1, 2026-11 (benchmarks/results/r1h-2026-11, r1-2026-11)"
+# What setup cites when it suggests hybrid; kept consistent with
+# docs/benchmarks/HYBRID.md. R1H's RTX 5090 lead (2026-11, gnomon d59e6c19)
+# did not reproduce: R3R re-ran its lane on v0.4.0 and the hybrid fell behind
+# cloud-only; R4H ran R1H's build and v0.4.1 side by side and found no build
+# effect (20 vs 19, McNemar p = 1.0). Cause open. The GB10 results stand.
+evidence = "On an RTX 5090, cloud plans + local builds showed no measured advantage over cloud-only: an earlier lead did not reproduce (R3R: 19/31 vs 24/31 cloud-only on v0.4.0; R4H: no build effect). See docs/benchmarks/HYBRID.md."
+evidence_unified = "On an NVIDIA GB10 the same split solved 22/32 vs 16/31 local-only (M2, McNemar p = 0.07), and 21/32 vs 23/32 cloud-only (R1): no difference from cloud-only shown."
+run = "R1H, R3R, R4H, R1 and M2, 2026-11 (benchmarks/results/*-2026-11 on branch bench/peers-2026-11)"
 
 # Models, best first. A machine is offered every entry it clears; the first
 # one that fits is the recommendation.
