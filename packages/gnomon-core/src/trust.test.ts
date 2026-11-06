@@ -596,6 +596,17 @@ describe("the exec floor under exec = \"os\"", () => {
     expect(resolveExec(headless.config, "implement")).toMatchObject({ mode: "os", reads: "scoped" });
   });
 
+  it("--trust keeps reads scoped, and neither it nor the disk lowers the floor (fourth review, finding 5)", () => {
+    const path = storeIn();
+    const root = project({ policy: osPolicy("scoped") });
+    recordExecFloor(loadConfig(root), path);
+    writeFileSync(join(root, ".gnomon", "policy.toml"), osPolicy("all"));
+    const s = settleTrustHeadless(loadConfig(root), { path, flag: true, warn: () => {} });
+    expect(resolveExec(s.config, "implement")).toMatchObject({ mode: "os", reads: "scoped" });
+    recordExecFloor(loadConfig(root), path);
+    expect(evaluateTrust(loadConfig(root), { path }).uncovered.map((g) => g.key)).toContain("exec:implement:reads-all");
+  });
+
   it("os -> off is a grant; an exec that refuses bash is not a downgrade", () => {
     const path = storeIn();
     const root = project({ policy: osPolicy("all") });
