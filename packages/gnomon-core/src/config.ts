@@ -4165,6 +4165,29 @@ export interface ResolvedExec {
  * start must refuse rather than silently run unsandboxed, so it is not offered
  * rather than offered-and-broken.
  */
+/**
+ * A container image reference: `[registry[:port]/]path[:tag][@algo:hex]`, the
+ * grammar of the distribution reference. Nothing else is accepted for
+ * `[sandbox] image` or a role's `image`.
+ *
+ * WHY (fifth review, finding 5). The image was interpolated unquoted into the
+ * host's `sh -c` line, and nothing checked it: `image = "x; touch ~/p"` ran
+ * the tail on the host, and `image = "--privileged"` was a docker flag. The
+ * surface is writable by whoever wrote it last, which under a container may
+ * have been the container.
+ */
+const IMAGE_DOMAIN = "(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)(?:\\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?))*(?::[0-9]+)?";
+const IMAGE_COMPONENT = "[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
+const IMAGE_REF = new RegExp(
+  `^(?:${IMAGE_DOMAIN}/)?${IMAGE_COMPONENT}(?:/${IMAGE_COMPONENT})*` +
+    "(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?" +
+    "(?:@[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9a-fA-F]{32,})?$"
+);
+
+export function isValidImageRef(image: unknown): image is string {
+  return typeof image === "string" && image.length > 0 && image.length <= 255 && !image.startsWith("-") && IMAGE_REF.test(image);
+}
+
 export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
   const sandbox = (config.policy?.sandbox ?? {}) as {
     exec?: unknown;

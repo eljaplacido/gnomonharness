@@ -56,6 +56,7 @@ import { spawnSync, type SpawnSyncReturns, type StdioOptions } from "node:child_
 import { isAbsolute, resolve, dirname, join, sep } from "node:path";
 import { readFileSync, statSync, lstatSync, realpathSync, type Stats } from "node:fs";
 import { homedir } from "node:os";
+import { containedRootOverlaps, within } from "./exec_floor.js";
 
 /** `-c` overrides every gnomon-run git gets. */
 export const GIT_HARDENING: readonly string[] = [
@@ -79,6 +80,9 @@ export const GIT_HARDENING: readonly string[] = [
   "-c", "commit.gpgSign=false",
   "-c", "tag.gpgSign=false",
   "-c", "gpg.program=",
+  "-c", "gpg.ssh.program=",
+  "-c", "gpg.x509.program=",
+  "-c", "gpg.openpgp.program=",
   "-c", "core.editor=:",
   "-c", "sequence.editor=:",
   "-c", "core.alternateRefsCommand=",
@@ -423,8 +427,50 @@ export function containerGone(name: string): void {
   live.delete(name);
 }
 
-/** A container that may still be running, after asking each whether it has gone. */
-export function liveContainer(): string | null {
+/**
+ * The label every sandbox container carries: the real path of the root it
+ * bind-mounts. Any gnomon process can then ask docker which containers can
+ * write where (fifth review, finding 3).
+ */
+export const CONTAINER_ROOT_LABEL = "gnomon.root";
+
+/** Tests: how docker is asked. Returns the labels' values, or an error. */
+type DockerAsk = () => { roots: string[] } | { error: string; absent?: boolean };
+let askDocker: DockerAsk = () => {
+  const r = spawnSync("docker", ["ps", "--filter", `label=${CONTAINER_ROOT_LABEL}`, "--format", `{{.Label "${CONTAINER_ROOT_LABEL}"}}`], {
+    encoding: "utf8",
+    timeout: 5000,
+    windowsHide: true,
+  });
+  if (r.error) {
+    const code = (r.error as NodeJS.ErrnoException).code;
+    return { error: r.error.message, absent: code === "ENOENT" };
+  }
+  if (r.status !== 0) return { error: String(r.stderr ?? "").trim().split("\n")[0] || `docker ps exit ${r.status}` };
+  return { roots: String(r.stdout ?? "").split("\n").map((l) => l.trim()).filter(Boolean) };
+};
+
+/** Tests only. */
+export function _setDockerAsk(ask: DockerAsk | null, floorsFile?: string): void {
+  askDocker = ask ?? askDocker;
+  floorsOverride = floorsFile;
+}
+let floorsOverride: string | undefined;
+
+/**
+ * A container that may still be running and can write where a host git under
+ * `paths` would read, or null.
+ *
+ * First this process's own (containerStarted). Then, when this machine's exec
+ * floors say a contained session ran somewhere `paths` overlap -- or the
+ * floors cannot be read -- docker itself, by label, so a container another
+ * gnomon process started counts too: the dashboard's status, `gnomon check`,
+ * `gnomon guard` and a second session each kept a registry of their own and
+ * ran git while the first session's container rewrote .git/config. When
+ * docker cannot be asked there and then, that is a refusal, not a "none".
+ * A machine without docker installed has no containers to ask about.
+ */
+export function liveContainer(paths: readonly string[] = []): string | null {
   for (const [name, gone] of [...live]) {
     let g = false;
     try {
@@ -434,6 +480,17 @@ export function liveContainer(): string | null {
     }
     if (g) live.delete(name);
     else return name;
+  }
+  if (paths.length === 0) return null;
+  const real = paths.map(realOr);
+  if (!containedRootOverlaps(real, floorsOverride)) return null;
+  const asked = askDocker();
+  if ("error" in asked) {
+    if (asked.absent) return null;
+    return `(docker could not be asked which containers are running: ${asked.error})`;
+  }
+  for (const root of asked.roots) {
+    if (real.some((p) => within(root, p) || within(p, root))) return `labelled ${CONTAINER_ROOT_LABEL}=${root}`;
   }
   return null;
 }
@@ -546,7 +603,15 @@ function listDriverKeys(dir: string, env: NodeJS.ProcessEnv, located: readonly s
       continue;
     }
     m = /^merge\.(.+)\.driver$/i.exec(key);
-    if (m) add(`merge.${m[1]}.driver`);
+    if (m) {
+      add(`merge.${m[1]}.driver`);
+      continue;
+    }
+    // Programs named per URL, per format or per remote: no `-c` can blank a
+    // name nobody knows in advance, so each one the configuration names is
+    // blanked by name (fifth review, defence in depth).
+    m = /^(credential\..+\.helper|gpg\..+\.program|remote\..+\.(?:uploadpack|receivepack|vcs|proxy))$/i.exec(key);
+    if (m) add(m[1]!);
   }
   return { keys, includes };
 }
@@ -649,8 +714,8 @@ interface Plan {
 }
 
 function plan(args: readonly string[], opts: SafeGitOptions): Plan | Refusal {
-  const running = liveContainer();
-  if (running !== null) return { refuse: `sandbox container ${running} may still be running, and it can write this repository` };
+  const own = liveContainer();
+  if (own !== null) return { refuse: `sandbox container ${own} may still be running, and it can write this repository` };
   let env = gitHardenedEnv(opts.env ?? process.env);
   const dir = gitDirOf(opts.cwd, args);
   const { located, namesRepo } = locatingOptions(args);
@@ -667,6 +732,9 @@ function plan(args: readonly string[], opts: SafeGitOptions): Plan | Refusal {
     env.GIT_COMMON_DIR = repo.commonDir;
     env.GIT_CEILING_DIRECTORIES = dirname(repo.workTree);
   }
+  // Another process's container, by label, wherever this git would read.
+  const running = liveContainer(repo ? [dir, repo.workTree, repo.gitDir, repo.commonDir] : [dir]);
+  if (running !== null) return { refuse: `sandbox container ${running} may still be running, and it can write this repository` };
   const argv = [...BARE_EXPLICIT, ...hardenGitArgs(args)];
   const sub = subcommandOf(args);
   if (!(opts.hot && sub !== undefined && DRIVERLESS.has(sub))) {

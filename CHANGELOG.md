@@ -26,6 +26,46 @@
 
 ## [Unreleased]
 
+### Security
+
+- **`exec = "docker"` now contains a hostile model against gnomon's own
+  host-side actions.** In v0.4.3 and earlier it did not: the container could
+  write files in the mounted project that gnomon, running on the host, then
+  followed, ran or trusted. Five review rounds found instances of that one
+  cause, including: a symlink at `.gnomon-sessions/history` that made the
+  prompt history overwrite the trust store and erase the exec floors, so the
+  next session ran `exec = "off"` on the host unasked; a symlink at
+  `.gnomon-audit/<session>.jsonl` that appended recorded command lines to
+  `~/.bashrc`; a container another gnomon process could not see while it ran
+  git; a `.gnomon/` made below a floored project with no floor of its own; and
+  an `image` value interpolated unquoted into the host's shell line. Fixed at
+  the cause:
+  - gnomon's state and git's control files are read-only inside the container
+    (`.gnomon/`, `.gnomon-audit/`, `.gnomon-sessions/`, `.git/config`,
+    `.git/hooks/`, `.git/info/`, `.git/commondir`). **Behaviour change:** the
+    model can no longer edit `.gnomon/*.toml` from bash under docker; the
+    surface is the operator's to change. `git add` and `git commit` still work.
+  - every host write into the project goes through one helper (`root_fs.ts`)
+    that opens with `O_NOFOLLOW`, refuses symlinked directories and hard-linked
+    files, writes whole files by rename and keeps the audit trail's descriptor
+    open. Prompt history, the `gnomon guard`/`gnomon check` session bases and
+    rule cache, and the `gnomon check` restore journal moved to gnomon's data
+    directory (out of the project and `.git/`); the journal restores only
+    paths inside the worktree.
+  - exec floors live in their own file (`exec-floors.json`); a trust store or
+    floor file that cannot be read is set aside and every project runs
+    contained until `gnomon trust grant`, with a warning. Floors kept in
+    `trust.json` by older versions are moved over on first read.
+  - containers carry a `gnomon.root` label; any gnomon process refuses host
+    git in a project a running container can write, and refuses when docker
+    cannot be asked for a project recorded as contained.
+  - a `.gnomon/` below a floored project is held to that project's floor.
+  - `image` must be an image reference; it is quoted, and any image change is
+    a grant whatever the recorded mode, mid-session and across sessions.
+  - per-URL and per-remote programs (`credential.<url>.helper`,
+    `gpg.<format>.program`, `remote.<name>.uploadpack`/`receivepack`/`vcs`/
+    `proxy`) are blanked for gnomon's own git.
+
 ## [0.4.3] — 2026-11-06
 
 Two record fixes from the P2G41 acid test (#151) and two sets of opt-in features (#152, #154). Upgrading from 0.4.2: nothing to do. Every addition is off by default, and with none declared the request bodies a model receives are byte-identical to 0.4.2 (pinned by `completion_gate_loop.test.ts`, `sweep_knobs.test.ts` and `endpoint_error_record.test.ts`). The fixes change records only: a turn whose endpoint failed now reads `stop_reason: "endpoint_error"` instead of `answered`, and partial and killed records carry `volatile.model_calls`.

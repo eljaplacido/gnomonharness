@@ -18,6 +18,7 @@
 
 export * from "./config.js";
 export * from "./git_safe.js";
+export * from "./root_fs.js";
 // The endpoint's context window, read from its listing for
 // `max_context_tokens = "auto"` (CONTRACTS.md §24).
 export * from "./context_window.js";

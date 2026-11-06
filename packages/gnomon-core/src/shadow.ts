@@ -48,6 +48,7 @@ import {
   type ResolvedShadow,
   type ShadowOrder,
 } from "./config.js";
+import { appendFileIn, ensureDirIn } from "./root_fs.js";
 
 // ---------------------------------------------------------------------------
 // The questions, verbatim from decisionbench. A new wording is a new id.
@@ -802,10 +803,10 @@ export class ShadowRecorder {
     if (this.writeFailed) return false;
     try {
       if (!this.dirReady) {
-        mkdirSync(resolve(this.file, ".."), { recursive: true });
+        ensureDirIn(resolve(this.file, "..", ".."), resolve(this.file, ".."));
         this.dirReady = true;
       }
-      appendFileSync(this.file, JSON.stringify(record) + "\n");
+      appendFileIn(resolve(this.file, "..", ".."), this.file, JSON.stringify(record) + "\n");
       return true;
     } catch (e) {
       this.writeFailed = true;

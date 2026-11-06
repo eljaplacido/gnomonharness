@@ -35,6 +35,9 @@
 
 import { resolvePackageIndex } from "./sweep_knobs.js";
 import { safeGitBuffer } from "./git_safe.js";
+import { checkSessionFile, createExclusiveIn, ensureDirIn, repoStateDir } from "./root_fs.js";
+/** For `gnomon guard install`, which writes hook files into the project. */
+export { writeFileIn } from "./root_fs.js";
 import {
   closeSync,
   existsSync,
@@ -300,8 +303,8 @@ function git(cwd: string, args: string[], input?: string): Buffer {
  * later commit to `.gnomon/` does not loosen the rules mid-session.
  */
 function sessionBase(where: Located, session: string): string | null {
-  const recorded = join(where.gitDir, "gnomon-check", "sessions", `${session}.json`);
-  for (const f of [recorded, join(where.gitDir, "gnomon-guard", "sessions", `${session}.json`)]) {
+  const recorded = checkSessionFile(where.gitDir, session);
+  for (const f of [recorded, join(repoStateDir(where.gitDir), "guard", "sessions", `${session}.json`)]) {
     try {
       const head = (JSON.parse(readFileSync(f, "utf-8")) as { head?: unknown }).head;
       if (typeof head === "string" && /^[0-9a-f]{40,64}$/.test(head)) return head;
@@ -313,7 +316,7 @@ function sessionBase(where: Located, session: string): string | null {
 }
 
 function recordSessionBase(where: Located, session: string, head: string): void {
-  const f = join(where.gitDir, "gnomon-guard", "sessions", `${session}.json`);
+  const f = join(repoStateDir(where.gitDir), "guard", "sessions", `${session}.json`);
   if (existsSync(f)) return;
   try {
     mkdirSync(dirname(f), { recursive: true });
@@ -359,7 +362,7 @@ function rulesAt(where: Located, rev: string): Rules {
   }
   const [base, tree] = out as [string, string];
   if (!resolved) rememberTree(where, base, tree);
-  const cacheRoot = join(where.gitDir, "gnomon-guard", "rules");
+  const cacheRoot = join(repoStateDir(where.gitDir), "guard", "rules");
   const dir = join(cacheRoot, tree);
   const metaFile = join(dir, "meta.json");
   if (!existsSync(metaFile)) materialise(where, tree, cacheRoot, dir);
@@ -381,7 +384,7 @@ function rulesAt(where: Located, rev: string): Rules {
 // `git rev-parse`, never to a guess.
 
 const treeMemo = (where: Located, commit: string) =>
-  join(where.gitDir, "gnomon-guard", "commits", `${commit}-${createHash("sha256").update(where.surfaceRel).digest("hex").slice(0, 12)}`);
+  join(repoStateDir(where.gitDir), "guard", "commits", `${commit}-${createHash("sha256").update(where.surfaceRel).digest("hex").slice(0, 12)}`);
 
 function rememberTree(where: Located, commit: string, tree: string): void {
   try {
@@ -655,9 +658,9 @@ function appendDecision(
   const settings = resolveAudit({ ...config, gnomonDir: join(where.project, ".gnomon") });
   if (!settings.enabled) return;
   const id = `guard-${session ?? new Date().toISOString().slice(0, 10)}`;
-  mkdirSync(settings.dir, { recursive: true });
+  ensureDirIn(where.project, settings.dir);
   const lock = join(settings.dir, `${id}.lock`);
-  if (!acquire(lock)) {
+  if (!acquire(where.project, lock)) {
     // Recording is part of the contract when audit is on; a decision that
     // could not be recorded is not silently returned as if it were.
     throw new GuardCannotDecide(`the audit trail ${id}.jsonl stayed locked; the decision was not recorded`);
@@ -695,6 +698,7 @@ function appendDecision(
       exit: guardExit(v.decision, v.error !== undefined),
     });
     trail.write("session_end", {});
+    trail.close();
     if (record && trail.path) v.audit = { trail: trail.path, seq: record.seq, hash: record.hash ?? null };
   } finally {
     try {
@@ -706,12 +710,12 @@ function appendDecision(
 }
 
 /** An exclusive lock file, waited on for up to 2s; one older than 10s is stale. */
-function acquire(lock: string): boolean {
+function acquire(root: string, lock: string): boolean {
   const until = Date.now() + 2000;
   const nap = new Int32Array(new SharedArrayBuffer(4));
   for (;;) {
     try {
-      closeSync(openSync(lock, "wx"));
+      createExclusiveIn(root, lock);
       return true;
     } catch {
       try {

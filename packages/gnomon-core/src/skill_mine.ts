@@ -30,6 +30,7 @@ import { join, relative, resolve, isAbsolute, sep } from "node:path";
 import { createHash } from "node:crypto";
 import { GnomonConfig } from "./config.js";
 import { resolveAudit, type AuditRecord } from "./audit.js";
+import { writeFileIn } from "./root_fs.js";
 
 /**
  * The signals `mine` reports, published (Rule 6).
@@ -342,10 +343,10 @@ export function writeCandidates(
 ): { dir: string; written: string[]; fresh: string[] } {
   const dir = join(resolve(config.gnomonDir, ".."), CANDIDATES_DIR);
   const known = new Set(loadCandidates(config).map((c) => c.id));
-  if (candidates.length > 0) mkdirSync(dir, { recursive: true });
+  const root = resolve(config.gnomonDir, "..");
   const written: string[] = [];
   for (const c of candidates) {
-    writeFileSync(join(dir, `${c.id}.json`), `${JSON.stringify(c, null, 2)}\n`, "utf-8");
+    writeFileIn(root, join(dir, `${c.id}.json`), `${JSON.stringify(c, null, 2)}\n`);
     written.push(c.id);
   }
   return { dir, written, fresh: written.filter((id) => !known.has(id)) };

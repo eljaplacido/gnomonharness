@@ -230,22 +230,14 @@ describe("session persistence through the interactive loop", () => {
   );
 
   it(
-    "persist = false writes no snapshot, though the session directory still appears",
+    "persist = false writes no snapshot",
     async () => {
-      // Two things at once, and the second is why this test is not just
-      // `expect(existsSync(dir)).toBe(false)`: command history is written to
-      // the SAME directory and is not gated by [session].persist, so the
-      // directory exists either way. Asserting on its absence would pass today
-      // for the wrong reason and fail the day history moved.
       const root = makeSurface({ session: "[session]\npersist = false\n" });
 
       await drive(root, ["do a thing", "/quit"]);
 
       expect(snapshots(root)).toEqual([]);
-      expect(
-        existsSync(join(root, ".gnomon-sessions", "history")),
-        "history is written regardless, so the directory is not the signal"
-      ).toBe(true);
+      // History is in gnomon's data dir now, not .gnomon-sessions/.
       expect(listSessions(storeOf(root))).toEqual([]);
     },
     20000

@@ -25,6 +25,7 @@ import {
   toCursor,
   type GuardHarness,
   type GuardVerdict,
+  writeFileIn,
 } from "gnomon-core/guard";
 
 export const GUARD_USAGE = `Usage: gnomon guard --tool <${GUARD_TOOLS.join("|")}> --input <json> [options]
@@ -266,7 +267,7 @@ export default {
 }
 
 /** Merge hook entries into a JSON settings file, skipping any whose command is already there. */
-function mergeHooks(file: string, fragment: { hooks: Record<string, unknown[]>; version?: number }): string[] {
+function mergeHooks(project: string, file: string, fragment: { hooks: Record<string, unknown[]>; version?: number }): string[] {
   const current = existsSync(file) ? (JSON.parse(readFileSync(file, "utf-8")) as Record<string, unknown>) : {};
   const hooks = (current.hooks && typeof current.hooks === "object" ? current.hooks : {}) as Record<string, unknown[]>;
   const added: string[] = [];
@@ -285,8 +286,8 @@ function mergeHooks(file: string, fragment: { hooks: Record<string, unknown[]>; 
     hooks[event] = list;
   }
   const next = { ...(fragment.version !== undefined ? { version: fragment.version } : {}), ...current, hooks };
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`);
+  // root_fs.ts: never through a symlink a contained command left in the project.
+  writeFileIn(project, file, `${JSON.stringify(next, null, 2)}\n`);
   return added;
 }
 
@@ -305,7 +306,7 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
       const fragment = claudeCodeHooks();
       if (write) {
         const file = join(project, ".claude", "settings.json");
-        const added = mergeHooks(file, fragment);
+        const added = mergeHooks(project, file, fragment);
         console.error(added.length ? `gnomon guard: added ${added.join(", ")} to ${file}` : `gnomon guard: ${file} already has these hooks`);
         return 0;
       }
@@ -335,8 +336,7 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
           console.error(`gnomon guard: ${file} exists and was not written by gnomon; --force replaces it`);
           return 10;
         }
-        mkdirSync(dirname(file), { recursive: true });
-        writeFileSync(file, opencodePlugin());
+        writeFileIn(project, file, opencodePlugin());
         console.error(`gnomon guard: wrote ${file}`);
         return 0;
       }
@@ -355,7 +355,7 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
       const fragment = cursorHooks();
       if (write) {
         const file = join(project, ".cursor", "hooks.json");
-        const added = mergeHooks(file, fragment);
+        const added = mergeHooks(project, file, fragment);
         console.error(added.length ? `gnomon guard: added ${added.join(", ")} to ${file}` : `gnomon guard: ${file} already has these hooks`);
         return 0;
       }

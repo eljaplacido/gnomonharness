@@ -91,6 +91,7 @@ import { parseTimeStampResponse, timeStampRequest, verifyTimeStampToken } from "
 import { posixShell, NO_POSIX_SHELL } from "./tools.js";
 import { gnomonDataDir } from "./credentials.js";
 import { safeGit } from "./git_safe.js";
+import { appendFileIn, createExclusiveIn, ensureDirIn, writeFileIn } from "./root_fs.js";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -383,13 +384,11 @@ export function enqueueAnchor(settings: ResolvedAnchor, trailPath: string, seali
   const statement = statementFor(settings, trailPath, sealing, records);
   const digest = statementDigest(statement);
   const dir = queueDir(settings);
-  mkdirSync(dir, { recursive: true });
   const entry: QueueEntry = { statement, digest, queued_at: new Date().toISOString() };
-  // Written beside, then renamed: a flusher reading the directory never sees
-  // half a file.
-  const tmp = join(dir, `.${digest}.${process.pid}.tmp`);
-  writeFileSync(tmp, `${JSON.stringify(entry)}\n`, "utf-8");
-  renameSync(tmp, join(dir, `${digest}.json`));
+  // Written beside, then renamed (root_fs.ts): a flusher reading the
+  // directory never sees half a file, and nothing a contained command put at
+  // the path is written through.
+  writeFileIn(settings.root, join(dir, `${digest}.json`), `${JSON.stringify(entry)}\n`);
   return digest;
 }
 
@@ -440,11 +439,8 @@ function readState(s: ResolvedAnchor): AnchorState {
 }
 
 function writeState(s: ResolvedAnchor, patch: AnchorState): void {
-  mkdirSync(s.dir, { recursive: true });
   const next = { ...readState(s), ...patch };
-  const tmp = `${stateFile(s)}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, "utf-8");
-  renameSync(tmp, stateFile(s));
+  writeFileIn(s.root, stateFile(s), `${JSON.stringify(next, null, 2)}\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -1092,12 +1088,7 @@ function takeLock(s: ResolvedAnchor): boolean {
   const staleAfterMs = Math.max(120, s.timeout_sec * 12) * 1000;
   for (let i = 0; i < 2; i++) {
     try {
-      const fd = openSync(file, "wx");
-      try {
-        writeFileSync(fd, `${JSON.stringify({ pid: process.pid, host: hostname(), at: new Date().toISOString() })}\n`, "utf-8");
-      } finally {
-        closeSync(fd);
-      }
+      createExclusiveIn(s.root, file, `${JSON.stringify({ pid: process.pid, host: hostname(), at: new Date().toISOString() })}\n`);
       return true;
     } catch {
       try {
@@ -1146,7 +1137,7 @@ function releaseLock(s: ResolvedAnchor): void {
 export async function flushAnchors(settings: ResolvedAnchor, deps: AnchorDeps = {}): Promise<FlushResult> {
   const backend = settings.backend;
   if (!settings.enabled || !backend) return { backend, delivered: 0, pending: pendingAnchors(settings).length };
-  mkdirSync(settings.dir, { recursive: true });
+  ensureDirIn(settings.root, settings.dir);
   if (!takeLock(settings)) return { backend, delivered: 0, pending: readQueue(settings).length, busy: true };
   const onExit = (): void => releaseLock(settings);
   process.once("exit", onExit);
@@ -1184,10 +1175,10 @@ async function flushRound(settings: ResolvedAnchor, backend: AnchorBackend, deps
     for (const q of queued) {
       const receipt = delivered.get(q.entry.digest);
       if (!receipt) continue;
-      appendFileSync(
+      appendFileIn(
+        settings.root,
         receiptsFile(settings),
-        `${JSON.stringify({ digest: q.entry.digest, backend, statement: q.entry.statement, queued_at: q.entry.queued_at, delivered_at: at, receipt })}\n`,
-        "utf-8"
+        `${JSON.stringify({ digest: q.entry.digest, backend, statement: q.entry.statement, queued_at: q.entry.queued_at, delivered_at: at, receipt })}\n`
       );
       try {
         unlinkSync(q.file);

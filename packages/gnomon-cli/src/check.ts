@@ -22,6 +22,7 @@ import {
   type ResolvedUi,
   type TranscriptFormat,
   safeGit,
+  checkSessionFile,
 } from "gnomon-core";
 
 export interface CheckCliArgs {
@@ -139,7 +140,9 @@ async function runHook(kind: string, args: CheckCliArgs, raw: string): Promise<n
   const id = safeId(input.session_id);
   const where = governed(cwd);
   if (!where || !id) return 0;
-  const stateFile = join(where.gitDir, "gnomon-check", "sessions", `${id}.json`);
+  // Under the data dir, not the git dir: a contained command can write .git/
+  // and would choose the base the rules are read from (fifth review).
+  const stateFile = checkSessionFile(where.gitDir, id);
 
   if (kind === "session-start") {
     // Resume, /clear and compaction fire SessionStart again for the same
@@ -243,7 +246,7 @@ function installHook(target: string, out: (s: string) => void): number {
       "Merge the above into the \"hooks\" of .claude/settings.json (this project) or",
       "~/.claude/settings.json (every project; ungoverned ones are skipped). Nothing was written.",
       "",
-      "  SessionStart  records HEAD (and a snapshot of a dirty tree) in .git/gnomon-check/",
+      "  SessionStart  records HEAD (and a snapshot of a dirty tree) in gnomon's data dir",
       "  Stop          runs `gnomon check` on everything since, with the session transcript",
       "                for check 5. A failure blocks the stop once and hands Claude the findings.",
       "",

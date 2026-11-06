@@ -15,7 +15,9 @@ import { pinSandbox, applySandboxPin, describeLoosening, type SandboxPin } from 
 import { checkCitations } from "./citations.js";
 import { mustFailFirst, readVerifyExit } from "./must_fail_first.js";
 import { resolve, dirname, join, basename, sep } from "node:path";
-import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, realpathSync, renameSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { gnomonDataDir } from "./credentials.js";
 import { fileURLToPath } from "node:url";
 import {
   GnomonConfig,
@@ -8081,9 +8083,11 @@ export function completePath(line: string, root: string): [string[], string] {
  *
  * readline was constructed with no `history` option and no file, so Node's
  * in-memory default gave up-arrow within one run and nothing across runs --
- * re-running yesterday's prompt meant retyping it. Stored beside
- * `.gnomon-sessions/`, not inside `.gnomon/`: it is per-machine state like a
- * session log, not configuration, so it must not touch the surface hash.
+ * re-running yesterday's prompt meant retyping it. Per-machine state, kept in
+ * gnomon's data dir and keyed by the project's real path -- not in the
+ * project. It used to be `.gnomon-sessions/history`, inside the root, where a
+ * contained command replaced it with a symlink to the trust store and the
+ * next prompt's rewrite corrupted it (fifth review, finding 1).
  *
  * Bounded, newest last on disk. Failures are silent by design -- a read-only
  * checkout should still get a prompt, just without history.
@@ -8091,7 +8095,14 @@ export function completePath(line: string, root: string): [string[], string] {
 export const HISTORY_LIMIT = 500;
 
 export function historyPath(config: GnomonConfig): string {
-  return join(resolve(config.gnomonDir, ".."), ".gnomon-sessions", "history");
+  const root = resolve(config.gnomonDir, "..");
+  let real = root;
+  try {
+    real = realpathSync(root);
+  } catch {
+    /* not there: its spelling */
+  }
+  return join(gnomonDataDir(), "history", createHash("sha256").update(real).digest("hex").slice(0, 16));
 }
 
 export function loadHistory(config: GnomonConfig): string[] {
@@ -8111,8 +8122,10 @@ export function appendHistory(config: GnomonConfig, line: string): void {
   try {
     const kept = [...loadHistory(config).filter((l) => l !== text), text].slice(-HISTORY_LIMIT);
     const p = historyPath(config);
-    mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, kept.join("\n") + "\n");
+    mkdirSync(dirname(p), { recursive: true, mode: 0o700 });
+    const tmp = `${p}.${process.pid}.tmp`;
+    writeFileSync(tmp, kept.join("\n") + "\n", { mode: 0o600 });
+    renameSync(tmp, p);
   } catch {
     /* history is a convenience; never let it break the prompt */
   }
