@@ -12,13 +12,34 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import { callEndpoint, runSessionTurn, runTask, wireOf } from "./prompt_loop.js";
-import { auditSurface, loadConfig, resolveReplayReasoning, resolveUi, routeRole } from "./config.js";
+import { adaptReplayReasoning, callEndpoint, runSessionTurn, runTask, wireOf } from "./prompt_loop.js";
+import { auditSurface, loadConfig, replayFieldsOf, resolveReplayReasoning, resolveUi, routeRole } from "./config.js";
 import { Progress } from "./render.js";
+
+/**
+ * A hosted-looking URL for a fake server on 127.0.0.1: the replay default
+ * applies only to hosted (non-local) endpoints (isLocalLaneUrl), so a test of
+ * the default needs a URL whose host is public. `fetch` is wrapped to send
+ * that host's requests to the local server; restored after each test.
+ */
+const realFetch = globalThis.fetch;
+function asHosted(localUrl: string): string {
+  const local = new URL(localUrl);
+  const origin = `https://hosted-${local.port}.example.com`;
+  const prev = globalThis.fetch;
+  globalThis.fetch = ((input: any, init?: any) => {
+    const u: string = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    return u.startsWith(origin) ? prev(local.origin + u.slice(origin.length), init) : prev(input, init);
+  }) as typeof fetch;
+  return origin + local.pathname + local.search;
+}
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
 
 let servers: Server[] = [];
 const roots: string[] = [];
@@ -134,11 +155,161 @@ describe("replaying reasoning_content", () => {
     expect(assistants(bodies[1]!)[0]!.reasoning_content).toBe("I should read x.txt first.");
   });
 
-  it("sends no reasoning_content to an endpoint that does not declare it", async () => {
+  it("sends no reasoning_content to an endpoint that declares replay_reasoning = false", async () => {
     const { url, bodies } = await serve(false);
-    await runTask(loadConfig(surface(url, "stream = false")), "read x.txt", { role: "smol", yes: true });
+    await runTask(loadConfig(surface(url, "stream = false\nreplay_reasoning = false")), "read x.txt", { role: "smol", yes: true });
     expect(bodies.length).toBe(2);
     expect(JSON.stringify(bodies)).not.toContain("reasoning_content");
+  });
+});
+
+describe("on by default when the endpoint reasons (v0.4.3)", () => {
+  /** A surface with the trail on, so the turn record's `wire` can be read. */
+  function audited(url: string, endpointExtra: string) {
+    const root = surface(url, endpointExtra);
+    writeFileSync(
+      join(root, ".gnomon", "config.toml"),
+      `[audit]\nenabled = true\n\n[endpoints.target]\nurl = "${url}"\nkind = "openai"\n${endpointExtra}\n`
+    );
+    return root;
+  }
+  const turnRecord = (root: string): Record<string, any> => {
+    const dir = join(root, ".gnomon-audit");
+    const lines = readdirSync(dir)
+      .filter((f) => f.endsWith(".jsonl"))
+      .flatMap((f) => readFileSync(join(dir, f), "utf-8").split("\n").filter(Boolean))
+      .map((l) => JSON.parse(l));
+    return lines.find((r) => r.kind === "turn");
+  };
+
+  it("an undeclared hosted endpoint that answers a tool call with reasoning gets it back, and the wire says default", async () => {
+    const { url, bodies } = await serve(false);
+    const root = audited(asHosted(url), "stream = false");
+    const rec = await runTask(loadConfig(root), "read x.txt", { role: "smol", yes: true });
+    expect(rec.output).toContain("done");
+    // The first request had nothing to replay; the second carries it.
+    expect(assistants(bodies[1]!)[0]!.reasoning_content).toBe("I should read x.txt first.");
+    const wire = turnRecord(root).wire;
+    expect(wire.replay_reasoning).toBe(true);
+    expect(wire.replay_reasoning_source).toBe("default");
+  });
+
+  it("the same for a streamed reply", async () => {
+    const { url, bodies } = await serve(true);
+    await runTask(loadConfig(surface(asHosted(url), "stream = true")), "read x.txt", { role: "smol", yes: true });
+    expect(assistants(bodies[1]!)[0]!.reasoning_content).toBe("I should read x.txt first.");
+  });
+
+  it("a local lane (llama.cpp-style, 127.0.0.1) that returns reasoning_content is not replayed by default; declared true, it is", async () => {
+    // H3 measured hosted endpoints only; on a local lane the default is off.
+    const off = await serve(false);
+    const root = audited(off.url, "stream = false");
+    const rec = await runTask(loadConfig(root), "read x.txt", { role: "smol", yes: true });
+    expect(rec.output).toContain("done");
+    expect(off.bodies).toHaveLength(2);
+    expect(JSON.stringify(off.bodies[1])).not.toContain("reasoning_content");
+    expect(turnRecord(root).wire.replay_reasoning).toBeUndefined();
+
+    const on = await serve(false);
+    const declared = audited(on.url, "stream = false\nreplay_reasoning = true");
+    await runTask(loadConfig(declared), "read x.txt", { role: "smol", yes: true });
+    expect(assistants(on.bodies[1]!)[0]!.reasoning_content).toBe("I should read x.txt first.");
+    expect(turnRecord(declared).wire).toMatchObject({ replay_reasoning: true, replay_reasoning_source: "declared" });
+  });
+
+  it("an endpoint that never sends reasoning is sent none: the same bytes as replay_reasoning = false", async () => {
+    // A server that answers a tool call with no reasoning, then "done".
+    const plain = async () => {
+      const raws: string[] = [];
+      const server = createServer((req, res) => {
+        let raw = "";
+        req.on("data", (c) => (raw += c));
+        req.on("end", () => {
+          raws.push(raw);
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(
+            JSON.stringify(
+              raws.length === 1
+                ? { choices: [{ message: { role: "assistant", content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "read", arguments: '{"path":"x.txt"}' } }] }, finish_reason: "tool_calls" }] }
+                : { choices: [{ message: { role: "assistant", content: "done" }, finish_reason: "stop" }] }
+            )
+          );
+        });
+      });
+      servers.push(server);
+      await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+      return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/chat/completions`, raws };
+    };
+    const a = await plain();
+    await runTask(loadConfig(surface(a.url, "stream = false")), "read x.txt", { role: "smol", yes: true });
+    const b = await plain();
+    await runTask(loadConfig(surface(b.url, "stream = false\nreplay_reasoning = false")), "read x.txt", { role: "smol", yes: true });
+    expect(a.raws.length).toBe(2);
+    expect(a.raws).toEqual(b.raws);
+  });
+
+  it("a declared value is reported as declared, DeepSeek's own API as default, and false stays off", () => {
+    const declared = routeRole(loadConfig(surface("http://127.0.0.1:1/v1/chat/completions", "replay_reasoning = true")), "smol").target;
+    expect(wireOf(declared)).toMatchObject({ replay_reasoning: true, replay_reasoning_source: "declared" });
+    expect(replayFieldsOf({ url: "https://api.deepseek.com/chat/completions" })).toEqual({
+      replayReasoning: true,
+      replayReasoningSource: "default",
+    });
+    expect(replayFieldsOf({ url: "https://x.example/v1/chat/completions", kind: "openai", replay_reasoning: false })).toEqual({ replayReasoning: false });
+    expect(replayFieldsOf({ url: "https://x.example/v1/chat/completions", kind: "openai" })).toEqual({
+      replayReasoning: false,
+      replayReasoningAuto: true,
+    });
+    // Ollama's /api/chat is never sent it, declared or not.
+    expect(replayFieldsOf({ url: "http://127.0.0.1:11434/api/chat" })).toEqual({ replayReasoning: false });
+    // Learned for the session: on, as a default; refused: off again.
+    const auto = routeRole(loadConfig(surface("https://hosted.example.com/v1/chat/completions", "")), "smol").target;
+    const state: any = { replayReasoningLearned: new Set([`${auto.url}|${auto.model}`]) };
+    expect(wireOf(adaptReplayReasoning(state, auto))).toMatchObject({ replay_reasoning: true, replay_reasoning_source: "default" });
+    state.replayReasoningRefused = new Set([`${auto.url}|${auto.model}`]);
+    expect(wireOf(adaptReplayReasoning(state, auto)).replay_reasoning).toBeUndefined();
+  });
+
+  it("a 400 naming reasoning_content is resent once without it, and replay stays off for the session", async () => {
+    const bodies: Record<string, any>[] = [];
+    const server = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c) => (raw += c));
+      req.on("end", () => {
+        const body = JSON.parse(raw || "{}");
+        bodies.push(body);
+        const carries = raw.includes("reasoning_content");
+        res.writeHead(carries ? 400 : 200, { "content-type": "application/json" });
+        if (carries) {
+          res.end(JSON.stringify({ error: { message: "Extra inputs are not permitted, field: 'messages[2].reasoning_content'" } }));
+          return;
+        }
+        const n = bodies.filter((b) => !JSON.stringify(b).includes("reasoning_content")).length;
+        res.end(
+          JSON.stringify(
+            n <= 2
+              ? { choices: [{ message: { role: "assistant", content: "", reasoning_content: `step ${n}`, tool_calls: [{ id: `c${n}`, type: "function", function: { name: "read", arguments: '{"path":"x.txt"}' } }] }, finish_reason: "tool_calls" }] }
+              : { choices: [{ message: { role: "assistant", content: "done" }, finish_reason: "stop" }] }
+          )
+        );
+      });
+    });
+    servers.push(server);
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    const url = asHosted(`http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/chat/completions`);
+    const errs: string[] = [];
+    const rec = await runTask(loadConfig(surface(url, "stream = false")), "read x.txt", {
+      role: "smol",
+      yes: true,
+      stderr: { write: (t: string) => errs.push(t) },
+    });
+    expect(rec.output).toContain("done");
+    // The refusal did not end the turn: it went on and answered.
+    expect(rec.stop_reason).toBe("answered");
+    // Exactly one refused request; every later one goes without.
+    expect(bodies.filter((b) => JSON.stringify(b).includes("reasoning_content"))).toHaveLength(1);
+    expect(rec.counters.replay_reasoning_refused).toBe(1);
+    expect(errs.join("")).toMatch(/refused the reasoning_content gnomon sends back by default/);
   });
 });
 
@@ -303,7 +474,7 @@ describe("re-review findings (2026-11-03): turns that end another way", () => {
 });
 
 describe("which endpoints replay it", () => {
-  it("off by default, on for DeepSeek's own API, and a declaration wins either way", () => {
+  it("off at the start by default (it turns on at run time), on for DeepSeek's own API, and a declaration wins either way", () => {
     expect(resolveReplayReasoning({ url: "https://openrouter.ai/api/v1/chat/completions" })).toBe(false);
     expect(resolveReplayReasoning({ url: "https://api.deepseek.com/chat/completions" })).toBe(true);
     expect(resolveReplayReasoning({ url: "https://api.deepseek.com/v1/chat/completions", replay_reasoning: false })).toBe(false);
@@ -316,6 +487,7 @@ describe("which endpoints replay it", () => {
     const t = routeRole(loadConfig(surface(url, "replay_reasoning = true")), "smol").target;
     expect(t.replayReasoning).toBe(true);
     expect(wireOf(t).replay_reasoning).toBe(true);
+    expect(wireOf(t).replay_reasoning_source).toBe("declared");
   });
 
   it("the surface audit accepts the key, and says when it can do nothing", () => {

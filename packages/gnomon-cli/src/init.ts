@@ -23,7 +23,7 @@ import {
 } from "node:fs";
 import { join, resolve, relative } from "node:path";
 import { detectModels, ModelChoice, FALLBACK_LARGE, FALLBACK_SMALL } from "./detect.js";
-import { detectVerifyCommand } from "gnomon-core";
+import { detectVerifyCommand, isWritableDir, workdirStateDir, WORKDIR_MARKER } from "gnomon-core";
 
 // ---------------------------------------------------------------------------
 // Templates
@@ -100,6 +100,11 @@ stream_total_timeout_ms = 1800000  # overall cap on one streamed reply; not retr
 # outright gets a few seconds -- nothing is running there, and a first session
 # should say so, not retry for a minute. Declare it to knock that long on both.
 # transport_grace_ms = 60000
+# An unattended \`gnomon task\` has nobody to retry it, so it waits out an
+# outage longer: task_transport_grace_ms, 180s when undeclared (a declared
+# transport_grace_ms with no task value is honoured in a task too). Declared,
+# it applies to a refused local socket as well.
+# task_transport_grace_ms = 180000
 
 [turn]
 # The numbers that decide when a turn stops, is nudged, or is pushed to
@@ -125,7 +130,7 @@ all_refused_notice = 3       # every call to one tool refused this many times ->
 max_steps = 12               # tool calls per leg when a role declares no max_steps of its own
 legs = 8                     # max_steps_total defaults to max_steps * legs (1 = stop at the first checkpoint)
 stall_repeats = 3            # identical calls in a row that count as going in circles
-nudge_after_idle = 12        # calls without changing a file before the model is nudged to decide
+nudge_after_idle = 12        # calls without changing a file before the model is nudged to decide (0 = never)
 converge_refire = 6          # calls between convergence re-pushes once converge_after is reached
 
 # Known limit, stated rather than implied: this block declares TEN of the
@@ -1137,6 +1142,12 @@ export interface InitResult {
   gitignore?: string[];
   /** Whether the scaffold switched the audit trail on */
   audit?: boolean;
+  /**
+   * Set when the directory could not be written (a read-only mount, no
+   * permission): the surface and gnomon's records are kept in this state
+   * directory instead (workdirStateDir), and the tools work in `root`.
+   */
+  readOnly?: { root: string; stateDir: string };
 }
 
 /** Directories gnomon creates next to .gnomon/ that must stay out of git. */
@@ -1231,7 +1242,11 @@ export function enableAuditBlock(config: string): string {
  */
 export async function initSurface(options: InitOptions = {}): Promise<InitResult> {
   const root = resolve(options.dir ?? process.cwd());
-  const gnomonDir = join(root, ".gnomon");
+  // A directory gnomon cannot write keeps its surface in the state directory,
+  // keyed by its path, and is still the root the tools work in (TB7).
+  const readOnly =
+    existsSync(root) && !isWritableDir(root) ? { root, stateDir: workdirStateDir(root) } : undefined;
+  const gnomonDir = join(readOnly ? readOnly.stateDir : root, ".gnomon");
 
   if (existsSync(gnomonDir) && !options.force) {
     throw new Error(
@@ -1303,6 +1318,11 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
   const written: string[] = [];
   const skipped: string[] = [];
 
+  if (readOnly) {
+    mkdirSync(readOnly.stateDir, { recursive: true });
+    writeFileSync(join(readOnly.stateDir, WORKDIR_MARKER), `${root}\n`, "utf-8");
+  }
+
   for (const t of templates) {
     const dest = join(gnomonDir, t.path);
     if (existsSync(dest) && !options.force) {
@@ -1323,10 +1343,11 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
   // hashed differently on the two machines -- the one property the hash
   // exists to guarantee. gnomon's own repository fixed this for itself with a
   // .gitattributes line; a scaffolded project never got one.
+  // Nothing of the project's own is written when it is read-only.
   const attrs = join(root, ".gitattributes");
   const attrsText = existsSync(attrs) ? readFileSync(attrs, "utf-8") : "";
   let gitattributes = false;
-  if (!/^\s*\.gnomon\/\S*\s+.*\beol=lf\b/m.test(attrsText)) {
+  if (!readOnly && !/^\s*\.gnomon\/\S*\s+.*\beol=lf\b/m.test(attrsText)) {
     writeFileSync(
       attrs,
       (attrsText && !attrsText.endsWith("\n") ? attrsText + "\n" : attrsText) +
@@ -1346,7 +1367,7 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
   const present = new Set(
     ignoreText.split(/\r?\n/).map((l) => l.trim().replace(/^\//, "").replace(/\/$/, ""))
   );
-  const gitignore = MACHINE_LOCAL_DIRS.filter((d) => !present.has(d));
+  const gitignore = readOnly ? [] : MACHINE_LOCAL_DIRS.filter((d) => !present.has(d));
   if (gitignore.length > 0) {
     writeFileSync(
       ignore,
@@ -1366,5 +1387,6 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
     models: options.from ? undefined : choice,
     verify: verifyCommand ?? undefined,
     audit: !options.from && !options.noVerify,
+    ...(readOnly ? { readOnly } : {}),
   };
 }

@@ -28,7 +28,12 @@
     "",
     "`endpoint_error` was added 2026-11-05 (P2G41 acid test): a turn that ended because its",
     "last model request failed -- code 12 after the transport grace, in three cells -- was",
-    "recorded as `answered`, one of them with no tool step at all."
+    "recorded as `answered`, one of them with no tool step at all.",
+    "",
+    "`deadline` was added 2026-11-05 (TB1, P2G41): `gnomon task --deadline` stops the",
+    "turn itself before an external time cap, with a final record and a sealed trail;",
+    "Harbor never signals the process it runs, so 29 of 29 capped cells left only a",
+    "partial record."
   ],
   "stop_reason": {
     "answered": "the model stopped calling tools of its own accord",
@@ -42,8 +47,9 @@
     "endpoint_error": "the turn's last model request failed and the turn ended on it: no key (10), no reply in time (11), the provider unreachable or erroring past the transport grace (12), or the context could not be fitted (13); the code says which, and the bucket is apparatus_failure",
     "tamper": "a tool call, or something between calls, changed gnomon's own records and gnomon did not make the change; the turn stops with a refusal (3) and a record_tamper record",
     "in_progress": "the turn had not ended when the record was written; only on a partial record (record_state: partial), which is what a SIGKILL leaves",
-    "killed": "SIGINT, SIGTERM or SIGHUP ended the process mid-turn and the record was flushed first; stop_detail.signal names the signal, and the record is apparatus_failure (11)"
+    "killed": "SIGINT, SIGTERM or SIGHUP ended the process mid-turn and the record was flushed first; stop_detail.signal names the signal, and the record is apparatus_failure (11)",
+    "deadline": "gnomon task --deadline (or GNOMON_DEADLINE) was given and the turn reached the deadline less its margin, so it stopped itself: the call in flight aborted, the record final, the trail sealed; on the refusal floor a step_wall lands on (exit 2), with stop_detail.deadline, budget_ms and margin_ms"
   },
-  "expected_count": 12,
+  "expected_count": 13,
   "not_a_bucket": "stop_reason is a separate axis from the outcome bucket. The bucket says WHAT happened; this says why the loop stopped. Nothing here maps to result/refusal/apparatus_failure, and a reader combining them is producing a composite verdict this project refuses to publish."
 }

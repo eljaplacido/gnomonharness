@@ -40,7 +40,7 @@
 import { writeFileSync, renameSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { beforeOwnWrite, noteOwnWrite } from "./record_guard.js";
-import type { TaskRecord, TurnCounters, TokenUsage, WireRecord } from "./prompt_loop.js";
+import type { TaskRecord, ToolTiming, TurnCounters, TokenUsage, WireRecord } from "./prompt_loop.js";
 import type { ModelCallsMeasured } from "./mediators.js";
 import type { TrustOutcome } from "./trust.js";
 import { RootWriteError, writeFileIn } from "./root_fs.js";
@@ -84,6 +84,10 @@ export interface TurnSoFar {
    * usage or reasoning: in P2G41 all 29 capped cells left only this record.
    */
   modelCalls?: ModelCallsMeasured;
+  /** Each finished tool call's start and wall time (TB4) */
+  toolTimes?: ToolTiming[];
+  /** The tool call running now, if one is: a kill inside it says which (TB4) */
+  toolInFlight?: { tool: string; started_at: string };
 }
 
 /**
@@ -278,6 +282,8 @@ export class LiveRecord implements TurnLive {
         ...(usage?.ms !== undefined ? { model_ms: usage.ms } : {}),
         ...(usage?.requests !== undefined ? { requests: usage.requests } : {}),
         ...(now?.modelCalls ? { model_calls: structuredClone(now.modelCalls) } : {}),
+        ...(now?.toolTimes && now.toolTimes.length > 0 ? { tool_calls: now.toolTimes.map((t) => ({ ...t })) } : {}),
+        ...(now?.toolInFlight ? { tool_in_flight: { ...now.toolInFlight } } : {}),
       },
       record_state: signal ? "final" : "partial",
       session: this.opts.session,

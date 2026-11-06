@@ -39,6 +39,7 @@ import {
   recordTrial,
   trialExit,
   runTask,
+  parseDeadline,
   unstartedTaskRecord,
   taskExitCode,
   type TaskRecord,
@@ -1654,8 +1655,22 @@ async function cmdTask(args: CliArgs): Promise<void> {
   // switching on the bucket read a task that never started as one that ran.
   // Neither started, so both are launch failures (10).
   if (!text) {
-    console.error('Usage: gnomon task "<what to do>" [--role <name>] [--yes] [--json]');
+    console.error('Usage: gnomon task "<what to do>" [--role <name>] [--yes] [--json] [--deadline <seconds|ISO time>]');
     process.exit(10);
+  }
+
+  // `--deadline`, else GNOMON_DEADLINE: seconds from now or an ISO 8601 time.
+  // A value that is not one is a launch failure (10), said, never ignored: a
+  // benchmark adapter that misspelt it would otherwise run with no clock.
+  const deadlineRaw = args.flags["deadline"] ?? process.env.GNOMON_DEADLINE;
+  let deadline: { at: number; source: "flag" | "env" } | undefined;
+  if (deadlineRaw !== undefined && deadlineRaw !== "") {
+    const parsed = parseDeadline(deadlineRaw);
+    if ("error" in parsed) {
+      console.error(`gnomon task: ${parsed.error}${args.flags["deadline"] === undefined ? " (from GNOMON_DEADLINE)" : ""}`);
+      process.exit(10);
+    }
+    deadline = { at: parsed.at, source: args.flags["deadline"] !== undefined ? "flag" : "env" };
   }
 
   // A task has nobody to ask. An untrusted surface that grants more than the
@@ -1693,6 +1708,7 @@ async function cmdTask(args: CliArgs): Promise<void> {
       verbose: !args.json,
       trust: settled.outcome,
       interrupt,
+      ...(deadline ? { deadline } : {}),
     });
   } catch (err) {
     // No .gnomon/ above the cwd, a --dir without one, a --role the surface
@@ -1976,6 +1992,14 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
 
   console.log(`Initialised ${result.gnomonDir}`);
   console.log(`  (in ${resolve(args.dir ?? process.cwd())})`);
+  if (result.readOnly) {
+    // The cause, named: the directory cannot be written (TB7).
+    console.log(
+      `  ${result.readOnly.root} is not writable (a read-only mount, or no write permission),\n` +
+        `  so the surface and gnomon's records are kept in ${result.readOnly.stateDir}.\n` +
+        `  gnomon finds them from ${result.readOnly.root}, and the tools work there.`
+    );
+  }
   for (const f of result.written) console.log(`  + .gnomon/${f}`);
   for (const f of result.skipped) console.log(`  · .gnomon/${f} (kept existing)`);
   if (result.gitattributes) console.log("  + .gitattributes: .gnomon/** text eol=lf (same surface hash on Windows)");
@@ -2646,8 +2670,13 @@ Commands:
     not, 10 no answer. Never accepts anything.
 
   task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--dir <path>]
+       [--deadline <seconds|ISO time>]
     Run one task without a terminal and print the result. --json emits a
     record whose only run-to-run differences are under "volatile".
+    --deadline (or GNOMON_DEADLINE) gives the run a wall clock: it is told
+    the time left, bash timeouts are clamped to it, and before it the turn
+    stops itself with stop_reason "deadline", its final record and a
+    sealed trail (exit 2).
     Gated tool calls are REFUSED unless --yes: a non-interactive run has
     nobody to ask. Exit code: 0 result, 2 refusal, 10 apparatus_failure.
     A surface granting more than the defaults that this machine has not
@@ -2773,6 +2802,8 @@ Getting started in a project:
 Environment:
   GNOMON_BIN_OVERRIDE     Path to gnomon binary (for testing)
   GNOMON_NO_UPDATE_CHECK  Set to 1 to never look for a newer release
+  GNOMON_DEADLINE         \`gnomon task --deadline\` when the flag is absent:
+                          seconds from now, or an ISO 8601 time with a zone.
   GNOMON_TRUST            A surface hash (or 12+ char prefix): run THAT surface
                           as declared even though it is untrusted. Any other
                           surface is still clamped. See \`gnomon trust\`.
