@@ -365,3 +365,24 @@ cd /home/eljaplacido/gnomon-wt/peers/benchmarks/results/g1gate-2026-11 && \
 - **Stop:** `kill -TERM <chain pid>`; the chain's trap stops its runner's process group and the cell in flight moves to
   `runs-aborted/<cell>-operator`. **Resume:** the same command; finished cells are skipped and the smoke is not repeated.
 - **Progress** is in `STATUS.txt` (`G1GRUN START/END` per cell, `CHAIN-G1G` per gate).
+
+## Amendment 1 — host crash, 2026-11-06 (written before resuming; no change to the analysis)
+
+- **What happened.** The gx10 halted abruptly at **2026-11-05T20:17Z** (no shutdown in the journal; 1-min load ~100 with
+  H3, G1, H4-lite and R4H containers) and came back at **2026-11-06T05:21Z**. The chain, runner and meters died with it;
+  `llama-server-qwen-q4.service` came back by itself under systemd (not touched by the operator).
+- **Finished before the crash:** attempt 1 complete (16 triples) and attempt 2 triple 1 (`prove-plus-comm`): 51 cells
+  with `cell.json`, kept as is.
+- **Interrupted:** `g1g-g0-k2-l-polyglot-c-py` (started 19:58:05Z, first cell of attempt 2's triple 2; no `END`). Moved by
+  the runner's own `run_g1g.py abort-inflight runs crash` to `runs-aborted/g1g-g0-k2-l-polyglot-c-py-crash/` (its
+  compose project and network removed by exact label; reason file inside). It is **re-run fresh**, never scored from the
+  aborted attempt; the triple then runs in its pre-registered arm order.
+- **Deadline.** The new-triple deadline 2026-11-06T09:00Z was set so the run would fit; the crash took ~9 h of it. It is
+  moved by the downtime, to **2026-11-06T18:00:00Z** (`G1G_DEADLINE`). Triples not started by then are still never
+  imputed. No other change.
+- **Resume.** The same chain (`g1g-chain.sh`): offline tests, gpu.lock, lane check against S1's references, weights,
+  ports, `dist/` pins, delivery gate; the smoke is not repeated; finished cells are skipped.
+- **Load note.** The last cells before the crash (attempt 1 `hf-lora-adapter` G1 and attempt 2 `prove-plus-comm`) started at
+  1-min load 41–100; they are valid under the pre-registered rule and kept (load is recorded per cell). On resume the
+  operator keeps the host under ~40 (G1 one cell at a time, H3 one wave of 3, LG1's pairs on the hub's GPU).
+- **Unchanged:** validity, endpoints, Holm family, decision rule.

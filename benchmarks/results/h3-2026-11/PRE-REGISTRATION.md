@@ -153,3 +153,24 @@ All three arms run per task at the same time, on P2G relay slots 0–2, with the
   with its interval.
 
 **Rows are never pooled.** P2G41's A41/B41 (v0.4.1) are time-separated from H3 and appear only as reference rows.
+
+## Addendum 1 — host crash, 2026-11-06 (written before resuming; no change to the analysis)
+
+- **What happened.** The gx10 halted abruptly at **2026-11-05T20:17Z** (the journal shows no shutdown; 1-min load had
+  been ~100 with H3, G1, H4-lite and R4H containers on the one docker host) and came back at **2026-11-06T05:21Z**.
+  The H3 runner, its log relays and the P2G slot relays died with it.
+- **Finished before the crash:** 20 waves (60 cells, every one with `cell.json`), wire spend $6.1407. They are kept as is.
+- **Interrupted:** wave 21, `bun-sourcemap-leak` — `h3-k1-R0-`, `h3-k1-R1-`, `h3-k1-R2-bun-sourcemap-leak` (started
+  20:12:37–20:13:17Z, no `END`, no `cell.json`). Their dirs moved to `runs-aborted/<cell>-crash/` (reason file inside),
+  their Harbor job dirs to `jobs-aborted/<cell>-crash/`, their three containers and compose networks removed by name.
+  Their wire spend before the crash was $0.0763 (not counted in the runner's budget, reported here). They are **re-run
+  fresh** as one wave, all three arms together as pre-registered; nothing from the aborted attempt is scored.
+- **Resume.** The same `run_h3.py run` (finished cells are skipped by `cell.json`), the same arms, adapters, slots, cap,
+  flags and task order. The P2G slot relays 0–2 (4710–4712, counters 4810–4812) are restarted with P2G's `relay-go.mjs`
+  unchanged; relay counters restart at zero, which the runner's per-cell counter deltas do not depend on.
+- **Build re-checked before resume:** the v0.4.2 release still serves `SHA256SUMS` hashing to `46ebca29…` and the four
+  gnomon tarballs match it; gnomon-core carries `gnomonBuild = v0.4.2-2498d16`.
+- **Load.** To avoid a repeat, H3 runs alongside G1's one-cell-at-a-time chain and LG1's pairs only, with `--min-avail-gb 24`
+  as before; the operator watches the 1-min load (target < ~40). Load is already recorded per cell.
+- **Unchanged:** validity rule, scoring, comparisons, decision rule, seed, budget ($20). The time gap (waves 1–20 on
+  11-05, waves 21–29 on 11-06, including Go's 06–10 UTC peak-price window) hits all three arms of a wave equally.

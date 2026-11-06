@@ -268,3 +268,20 @@ with it.
 `cd ~/gnomon-wt/peers/benchmarks/results/lg1-2026-11/apparatus && setsid nohup env LG1_DEADLINE=2026-11-05T21:30:00Z ./lg1-chain.sh >> ../chain-lg1.log 2>&1 < /dev/null &`
 
 It waits for R4H's lock, then for 2 idle samples, then runs.
+
+## Addendum 1 — gx10 crash, 2026-11-06 (written before resuming; no change to the analysis)
+
+- **What happened.** The gx10 (where LG1's chain, runner, meters, tunnel and task containers run) halted abruptly at
+  **2026-11-05T20:17Z** (no shutdown in the journal; load ~100) and came back at **2026-11-06T05:21Z**. The hub's
+  llama-server LG1 had started was gone when checked at 05:30Z (hub GPU 2809 MiB used, no llama-server.exe).
+- **Finished before the crash:** attempt 1 pairs 1–7 (14 cells) and `lg1-k1-new-mailman`: 15 cells with `cell.json`, kept.
+- **Interrupted:** `lg1-k1-old-mailman` (started 20:01:43Z, no `END`). Moved by the runner's own
+  `run_lg1.py abort-inflight runs crash` to `runs-aborted/lg1-k1-old-mailman-crash/` (compose project and network
+  removed by exact label; reason file inside). It is **re-run fresh, alone**, exactly as the pre-registered after-yield
+  rule handles a pair with one cell finished; the collector reports such pairs.
+- **Deadline.** The 2026-11-05T21:30Z new-cell deadline passed during the outage. The resumed chain uses
+  **`LG1_DEADLINE=2026-11-06T20:30:00Z`** (the coordinator's window: the hub is idle now). Pairs not started by then are
+  never imputed.
+- **Resume.** The same chain, with its idle-start and hubwatch yield unchanged (it yields if the GPU's owner starts
+  using it); the smoke is not repeated; finished cells are skipped.
+- **Unchanged:** validity, non-inferiority margins, comparisons, seed, verdict rule.
