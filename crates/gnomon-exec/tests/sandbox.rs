@@ -380,6 +380,37 @@ fn network_off_still_reaches_a_local_server() {
     }
 }
 
+/// `--network none`: what gnomon's own git runs under (third review,
+/// finding 9). Off, AND no loopback: a filter a command planted could
+/// otherwise hand what it read to a listener the command left running.
+#[test]
+fn network_none_refuses_loopback_that_off_allows() {
+    require_sandbox!(true);
+    require_tool!("python3");
+    let (port, _h) = local_server();
+    let s = scene();
+    let script = format!(
+        "python3 -c 'import urllib.request; print(urllib.request.urlopen(\"http://127.0.0.1:{port}/\", timeout=5).read().decode().strip())'"
+    );
+    let none = Command::new(bin())
+        .args(["sandbox", "--root"])
+        .arg(&s.root)
+        .args(["--network", "none", "--", "/bin/sh", "-c", &script])
+        .current_dir(&s.root)
+        .output()
+        .expect("spawn gnomon-exec sandbox");
+    assert!(!none.status.success(), "{none:?}");
+    assert!(!String::from_utf8_lossy(&none.stdout).contains("local"), "{none:?}");
+    assert!(
+        String::from_utf8_lossy(&none.stderr).contains(&format!("blocked connect to 127.0.0.1:{port}")),
+        "{none:?}"
+    );
+    // CONTROL: the same connect under --network off reaches the server.
+    let off = sandboxed(&s, false, &script);
+    assert!(off.status.success(), "{off:?}");
+    assert_eq!(String::from_utf8_lossy(&off.stdout).trim(), "local");
+}
+
 #[test]
 fn network_off_curl_external_fails_and_local_succeeds() {
     require_sandbox!(true);

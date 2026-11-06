@@ -14,7 +14,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { safeGit, setGitSandbox, gitSandboxed } from "./git_safe.js";
+import { safeGit, setGitSandbox } from "./git_safe.js";
 import { recordDegradation, type DegradationSink } from "./degradation.js";
 import {
   readFileSync,
@@ -2100,10 +2100,6 @@ export function osSandboxPlan(
       "network sandbox unsupported here"
     );
   }
-  // From the first sandboxed command on, gnomon's own git runs sandboxed too
-  // (git_safe.ts): this command can write .git/config, and a host-side git
-  // would run whatever core.fsmonitor or a filter driver it names.
-  registerGitSandbox(sb.bin);
   // The temp dir's parent must not be writable by the command: an extra root
   // (or the root) holding tmpdir() could swap the per-call dir for a symlink
   // before it is cleaned (second review, finding D). Refused, not trimmed.
@@ -2147,16 +2143,14 @@ export function osSandboxPlan(
   // read_roots go through as written (gnomon-exec refuses one that would
   // expose a credential store); the install's own directories are dropped
   // when they are the home directory or above it, rather than refused.
-  const readArgs =
-    reads === "scoped"
-      ? [
-          "--reads", "scoped",
-          ...[...new Set([...(ctx.exec?.readRoots ?? []).filter(existsPath), ...installRoots(sb.bin)])].flatMap((r) => [
-            "--read",
-            r,
-          ]),
-        ]
-      : [];
+  const readGrants = [...new Set([...(ctx.exec?.readRoots ?? []).filter(existsPath), ...installRoots(sb.bin)])];
+  const readArgs = reads === "scoped" ? ["--reads", "scoped", ...readGrants.flatMap((r) => ["--read", r])] : [];
+  // From the first sandboxed command on, gnomon's own git runs sandboxed too
+  // (git_safe.ts): this command can write .git/config, and a host-side git
+  // would run whatever core.fsmonitor or a filter driver it names -- under
+  // the session's read scope, which it reads the root and extra_roots under
+  // rather than writes (third review, finding 9).
+  registerGitSandbox(sb.bin, reads === "scoped" ? [ctx.root, ...extra, ...readGrants] : null, ctx.config);
   return {
     file: sb.bin,
     args: [
@@ -2182,26 +2176,43 @@ export function osSandboxPlan(
 }
 
 let gitSandboxRoot: string | null = null;
+/** The read scope gnomon's sandboxed git runs under: null (all) until a command ran scoped. Only tightens. */
+let gitSandboxReads: string[] | null = null;
 
 /**
- * Run every later gnomon git under `gnomon-exec sandbox --network off`,
+ * Run every later gnomon git under `gnomon-exec sandbox --network none`,
  * writable only in an empty directory of its own (git_safe.ts layer 3). The
  * bookkeeping reads; a git that needed to write would fail, and its caller
  * treats that as "git could not answer", never as a pass.
+ *
+ * It ran with reads unconfined and loopback open, whatever the session's
+ * `reads` said: a filter a command planted could read ~/.ssh and hand it to a
+ * listener the command left running on 127.0.0.1 (third review, finding 9).
+ * So it takes the session's scope -- once a command ran under reads =
+ * "scoped", git does too, granted the root, extra_roots and the same
+ * read_roots and install directories, never more -- and `--network none`
+ * refuses loopback as well. Its environment drops what bash's does.
  */
-function registerGitSandbox(bin: string): void {
-  if (gitSandboxed()) return;
+function registerGitSandbox(bin: string, scopedReads: string[] | null, config?: GnomonConfig): void {
   try {
     gitSandboxRoot ??= mkdtempSync(join(tmpdir(), "gnomon-gitsbx-"));
   } catch {
     return;
   }
+  if (scopedReads !== null) gitSandboxReads = scopedReads;
   const root = gitSandboxRoot;
+  const reads = gitSandboxReads;
+  const readArgs = reads === null ? [] : ["--reads", "scoped", ...reads.filter(existsPath).flatMap((r) => ["--read", r])];
   setGitSandbox((argv, env) => ({
     file: bin,
-    args: ["sandbox", "--root", root, "--network", "off", "--", ...argv],
-    env: osSandboxEnv(env, undefined),
+    args: ["sandbox", "--root", root, "--network", "none", ...readArgs, "--", ...argv],
+    env: osSandboxEnv(env, config),
   }));
+}
+
+/** Tests only. */
+export function _resetGitSandboxScope(): void {
+  gitSandboxReads = null;
 }
 
 function existsPath(p: string): boolean {

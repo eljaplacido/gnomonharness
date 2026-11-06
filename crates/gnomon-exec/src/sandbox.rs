@@ -70,6 +70,11 @@ pub struct Policy {
     pub reads: Reads,
     /// May the command reach hosts other than this one?
     pub network: bool,
+    /// Under `network` false: may it still connect to this host's loopback?
+    /// `--network off` yes (a dev server, a local registry); `--network none`
+    /// no -- gnomon's own git, which has no business reaching a listener a
+    /// command may have left running (third review, finding 9).
+    pub loopback: bool,
     /// `--report-fd N`: write the supervisor's pid to this descriptor, once,
     /// and close it in every process the command can reach (sandbox-kill).
     pub report_fd: Option<i32>,
@@ -410,6 +415,7 @@ impl Policy {
                 .collect::<Result<_, _>>()?,
             reads: self.reads,
             network: self.network,
+            loopback: self.loopback,
             report_fd: self.report_fd,
         })
     }
@@ -867,6 +873,7 @@ fn scoped_description() -> (Vec<String>, Vec<String>) {
         readable: vec![],
         reads: Reads::Scoped,
         network: true,
+        loopback: true,
         report_fd: None,
     };
     let reads = read_grants(&probe_policy)
@@ -1909,7 +1916,13 @@ pub mod linux {
         // one of these, so no later rename above them can redirect it.
         let allowed: Vec<PathBuf> = policy.writable_dirs().into_iter().map(Path::to_path_buf).collect();
         let dirfds = allowed.iter().map(|d| open_dir_path(d)).collect();
-        let ctx = Arc::new(Vetting { allowed, dirfds, slash: open_dir_path(Path::new("/")), network: policy.network });
+        let ctx = Arc::new(Vetting {
+            allowed,
+            dirfds,
+            slash: open_dir_path(Path::new("/")),
+            network: policy.network,
+            loopback: policy.loopback,
+        });
         serve(listener, child, pidfd, status_w, ctx)
     }
 
@@ -1924,6 +1937,8 @@ pub mod linux {
         pub slash: i32,
         /// `--network on`: any inet destination. Off: loopback only.
         pub network: bool,
+        /// Off with this false (`--network none`): not loopback either.
+        pub loopback: bool,
     }
 
     /// C: confine, filter, hand the listener to S, become the command.
@@ -2417,6 +2432,10 @@ pub mod linux {
                 None => return Err(libc::EINVAL),
                 Some(false) => {
                     notice(notices, format_args!("network = false: blocked connect to {} (only loopback is allowed)", describe(&addr)));
+                    return Err(libc::EACCES);
+                }
+                Some(true) if !ctx.loopback => {
+                    notice(notices, format_args!("network = none: blocked connect to {} (loopback too)", describe(&addr)));
                     return Err(libc::EACCES);
                 }
                 Some(true) => {}

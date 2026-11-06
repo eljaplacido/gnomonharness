@@ -334,9 +334,14 @@ kernel at all, but through gnomon acting on files the command may write.
   config, and every filter and diff driver the configuration names blanked
   (`GIT_CONFIG_COUNT`, which can spell any key). Under `exec = "os"`, from the
   first sandboxed call on, git itself runs inside `gnomon-exec sandbox
-  --network off`, writable only in an empty directory, so a driver defined
-  between the listing and the run executes where the command could have run it
-  anyway. A repository whose tracked content depends on a clean filter (LFS)
+  --network none` (off, and loopback refused too), writable only in an empty
+  directory and, once a command ran under `reads = "scoped"`, under the same
+  read scope (the root, `extra_roots`, `read_roots`, the install), so a driver
+  defined between the listing and the run executes with less than the command
+  had -- third review, finding 9: it used to run with reads unconfined and
+  loopback open, so such a driver could read `~/.ssh` and hand it to a
+  listener the command left running. Drivers are listed and blanked under
+  the sandbox too. A repository whose tracked content depends on a clean filter (LFS)
   can show more files as changed in `[tree]`: errs towards "changed", never
   towards running something.
 - **B — key routing through a reload.** A command rewrote

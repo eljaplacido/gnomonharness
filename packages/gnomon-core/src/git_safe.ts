@@ -31,11 +31,13 @@
  *      command contained in an EARLIER session may have planted a driver
  *      this process never saw being written.
  *   3. Under exec = "os", git itself runs inside the sandbox: `gnomon-exec
- *      sandbox --network off`, writable only in an empty directory of its
- *      own. Whatever the repository still makes git run -- a driver defined
+ *      sandbox --network none` (no loopback either), writable only in an
+ *      empty directory of its own, under the session's read scope once a
+ *      command ran with reads = "scoped" (tools.ts registerGitSandbox).
+ *      Whatever the repository still makes git run -- a driver defined
  *      between the listing and the run by a job an earlier call backgrounded,
- *      a key this list did not foresee -- runs where the command could have
- *      run it anyway.
+ *      a key this list did not foresee -- runs with no more than the command
+ *      had.
  *
  * The bookkeeping reads; none of it needs a hook, a filter or a writable
  * tree. A repository whose tracked content depends on a clean filter (LFS)
@@ -362,7 +364,7 @@ export type GitSandbox = (argv: string[], env: NodeJS.ProcessEnv) => { file: str
 
 let sandbox: GitSandbox | null = null;
 
-/** Run every later gnomon git inside the OS sandbox. Only ever tightens. */
+/** Run every later gnomon git inside the OS sandbox (re-registered as the session's scope tightens). */
 export function setGitSandbox(wrap: GitSandbox): void {
   sandbox = wrap;
 }
@@ -375,6 +377,11 @@ export function _resetGitSafety(): void {
 
 export function gitSandboxed(): boolean {
   return sandbox !== null;
+}
+
+/** Tests only: what a git run as `argv` would be spawned as, or null on the host. */
+export function _gitSandboxWrap(argv: string[], env: NodeJS.ProcessEnv = process.env): { file: string; args: string[]; env: NodeJS.ProcessEnv } | null {
+  return sandbox === null ? null : sandbox(argv, env);
 }
 
 export interface SafeGitOptions {

@@ -1717,8 +1717,9 @@ of HOME credentials that the other two let through
 - **gnomon's own git runs nothing the repository names.** The per-turn
   bookkeeping git (and `gnomon check`, `guard`, the anchor) runs with
   `core.fsmonitor`, hooks, filter and diff drivers switched off, and under
-  `exec = "os"` inside the sandbox itself: `.git/config` is in the root, which
-  `bash` may write.
+  `exec = "os"` inside the sandbox itself — `--network none` (loopback refused
+  too) and, under `reads = "scoped"`, the session's read scope: `.git/config`
+  is in the root, which `bash` may write.
 - **Key routing is fixed for the session.** A reload that changes an
   endpoint's `url` or `api_key_env`, a fallback's, or an MCP server is not
   applied (`key routing NOT applied … restart gnomon`): a command could

@@ -541,7 +541,7 @@ fn print_usage() {
     println!("  gnomon-exec step     --cmd <command> [--timeout-ms <ms>]");
     println!("  gnomon-exec validate   --session <file> [--fixture <golden.json>]");
     println!("  gnomon-exec hash       --session <file>");
-    println!("  gnomon-exec sandbox    --root <dir> [--write <dir>]... [--network on|off]");
+    println!("  gnomon-exec sandbox    --root <dir> [--write <dir>]... [--network on|off|none]");
     println!("                         [--reads all|scoped] [--read <path>]... -- <program> [args...]");
     println!("  gnomon-exec sandbox-probe");
     println!("  gnomon-exec sandbox-clean <dir> [--dev N --ino N]   (empty a per-call temp dir; follows no link)");
@@ -556,6 +556,7 @@ fn sandbox_cmd(args: &[String]) -> ! {
     let mut readable = Vec::new();
     let mut reads = sandbox::Reads::All;
     let mut network = false;
+    let mut loopback = true;
     let mut report_fd: Option<i32> = None;
     let mut i = 0;
     while i < args.len() {
@@ -594,10 +595,12 @@ fn sandbox_cmd(args: &[String]) -> ! {
                 i += 2;
             }
             "--network" => {
-                network = match value(i).as_str() {
-                    "on" => true,
-                    "off" => false,
-                    v => sandbox::refuse(&format!("--network must be on or off, not {v:?}")),
+                // `none`: off, and loopback refused too.
+                (network, loopback) = match value(i).as_str() {
+                    "on" => (true, true),
+                    "off" => (false, true),
+                    "none" => (false, false),
+                    v => sandbox::refuse(&format!("--network must be on, off or none, not {v:?}")),
                 };
                 i += 2;
             }
@@ -613,7 +616,7 @@ fn sandbox_cmd(args: &[String]) -> ! {
     if reads == sandbox::Reads::All && !readable.is_empty() {
         sandbox::refuse("--read is meaningful only with --reads scoped (under --reads all every path is readable)");
     }
-    let policy = sandbox::Policy { root, writable, readable, reads, network, report_fd };
+    let policy = sandbox::Policy { root, writable, readable, reads, network, loopback, report_fd };
     sandbox::run(&policy, &args[i..])
 }
 
