@@ -541,7 +541,9 @@ describe("the hook installation is protected surface (GBS-LAYER L-3)", () => {
       "mkdir -p ~/.claude && printf '{\"disableAllHooks\": true}' > ~/.claude/settings.json",
       "printf '{\"disableAllHooks\": true}' > $HOME/.claude/settings.json",
       "printf '{}' > ${HOME}/.claude/settings.local.json",
-      `printf '{"plugin": []}' > ${join(homedir(), ".config/opencode/opencode.json")}`,
+      // A native absolute path in shell text: a Windows path's backslashes are
+      // shell escapes there, so it is only a placeable path on POSIX.
+      ...(process.platform === "win32" ? [] : [`printf '{"plugin": []}' > ${join(homedir(), ".config/opencode/opencode.json")}`]),
       "rm -f ~/.config/opencode/plugins/gnomon-guard.js",
       "printf '{}' > ~/.cursor/hooks.json",
     ]) {
@@ -567,7 +569,13 @@ describe("the hook installation is protected surface (GBS-LAYER L-3)", () => {
     await guardToolCall({ cwd: repo, call: { tool: "bash", input: { command: "ls" } }, role: "implement", session: "s-st" });
     const state = repoStateDir(sh(["rev-parse", "--absolute-git-dir"]));
     expect(existsSync(join(state, "guard", "sessions", "s-st.json"))).toBe(true);
-    // (From its parent: \`rm -rf /…\` is the surface's own bash_deny.)
+    // (From its parent: \`rm -rf /…\` is the surface's own bash_deny.) A
+    // native path in shell text is placeable on POSIX only (see above); on
+    // Windows the write is still refused, by write_allow.
+    if (process.platform === "win32") {
+      expect((await bash(`rm -f ${join(state, "guard", "sessions", "s-st.json")}`)).decision).toBe("deny");
+      return;
+    }
     expect(await bash(`cd ${dirname(state)} && rm -rf ${state.split("/").pop()}`)).toMatchObject({ decision: "deny", rule: "host_hooks" });
     expect(await bash(`rm -f ${join(state, "guard", "sessions", "s-st.json")}`)).toMatchObject({ decision: "deny", rule: "host_hooks" });
   });
