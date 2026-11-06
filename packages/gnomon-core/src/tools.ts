@@ -1923,11 +1923,11 @@ export interface OsTmpId {
 const sessionSupervisors = new Map<number, string>();
 
 /** /proc/<pid>/stat: parent and start time, or null. Linux only. */
-function procStat(pid: number): { ppid: number; start: string } | null {
+function procStat(pid: number): { ppid: number; start: string; state: string } | null {
   try {
     const st = readFileSync(`/proc/${pid}/stat`, "utf8");
     const f = st.slice(st.lastIndexOf(")") + 2).split(" ");
-    return { ppid: Number(f[1]), start: f[19] ?? "" };
+    return { ppid: Number(f[1]), start: f[19] ?? "", state: f[0] ?? "" };
   } catch {
     return null;
   }
@@ -1959,33 +1959,73 @@ function registerSupervisor(reported: string): number | null {
 function killSupervisedTree(pid: number): void {
   const start = sessionSupervisors.get(pid);
   if (start === undefined || procStat(pid)?.start !== start) return;
-  const kids = new Map<number, number[]>();
-  try {
-    for (const e of readdirSync("/proc")) {
-      const p = Number(e);
-      if (!Number.isInteger(p)) continue;
-      const st = procStat(p);
-      if (!st) continue;
-      const l = kids.get(st.ppid) ?? [];
-      l.push(p);
-      kids.set(st.ppid, l);
-    }
-  } catch {
-    return;
-  }
-  const order: number[] = [];
-  const walk = (p: number) => {
-    order.push(p);
-    for (const c of kids.get(p) ?? []) walk(c);
-  };
-  walk(pid);
-  for (const p of order) {
+  // Every live descendant of the supervisor, by pid and start time (so a pid
+  // that exits and is reused mid-sweep is never signalled). Zombies are left
+  // out: they are dead, and their parent reaps them.
+  const descendants = (): Map<number, string> | null => {
+    const kids = new Map<number, Array<[number, string]>>();
     try {
-      process.kill(p, "SIGKILL");
+      for (const e of readdirSync("/proc")) {
+        const p = Number(e);
+        if (!Number.isInteger(p)) continue;
+        const st = procStat(p);
+        if (!st || st.state === "Z" || st.state === "X") continue;
+        const l = kids.get(st.ppid) ?? [];
+        l.push([p, st.start]);
+        kids.set(st.ppid, l);
+      }
+    } catch {
+      return null;
+    }
+    const out = new Map<number, string>();
+    const walk = (p: number) => {
+      for (const [c, cs] of kids.get(p) ?? []) {
+        if (out.has(c) || c === pid) continue;
+        out.set(c, cs);
+        walk(c);
+      }
+    };
+    walk(pid);
+    return out;
+  };
+  const signal = (p: number, st: string, sig: NodeJS.Signals) => {
+    if (procStat(p)?.start !== st) return;
+    try {
+      process.kill(p, sig);
     } catch {
       // gone already
     }
+  };
+  // One snapshot and the supervisor killed FIRST (as this did) let a job that
+  // forks in a loop escape: its children born after the snapshot outlived it,
+  // and with the supervisor -- the child subreaper they would reparent to --
+  // already dead they went to init, out of reach. With its listener fd closed,
+  // a survivor could even install its own seccomp listener and answer its own
+  // connects (third review, finding 10). So:
+  //   1. freeze: SIGSTOP every descendant, sweep after sweep, until a sweep
+  //      finds none it had not stopped. A stopped process forks nothing.
+  //   2. kill: SIGKILL every descendant, until the supervisor has none left.
+  //      It is alive throughout, so an orphan reparents to it, not to init.
+  //   3. the supervisor, last.
+  const stopped = new Set<number>();
+  for (let sweep = 0; sweep < 100; sweep++) {
+    const d = descendants();
+    if (d === null) break;
+    let fresh = 0;
+    for (const [p, st] of d) {
+      if (stopped.has(p)) continue;
+      stopped.add(p);
+      signal(p, st, "SIGSTOP");
+      fresh++;
+    }
+    if (fresh === 0) break;
   }
+  for (let sweep = 0; sweep < 100; sweep++) {
+    const d = descendants();
+    if (d === null || d.size === 0) break;
+    for (const [p, st] of d) signal(p, st, "SIGKILL");
+  }
+  signal(pid, start, "SIGKILL");
   sessionSupervisors.delete(pid);
 }
 

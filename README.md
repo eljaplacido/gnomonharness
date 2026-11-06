@@ -1790,7 +1790,11 @@ network lines let a connect to 192.0.2.1 through, so `bash` refuses under
   EARLIER `bash` call started. For that, run `sandbox-kill <pid> [signal]` as
   the whole bash command: gnomon signals the pid from outside the sandbox, and
   only if one of this session's sandboxed calls started it. Below ABI 6, and on
-  macOS, a command can signal any process your user owns.
+  macOS, a command can signal any process your user owns — its own supervisor
+  included: stopping it stalls every connect it vets, killing it ends the call.
+  On a timeout or a cancel gnomon freezes the call's whole subtree (`SIGSTOP`,
+  sweep after sweep, until nothing new appears), kills it, and kills the
+  supervisor last, so a job forking in a loop cannot outlive it.
 - **POSIX shared memory.** `/dev/shm` is not granted, so `shm_open` — and
   Python `multiprocessing` locks, queues and pools — fail. Use threads, or run
   that step with `exec = "off"`.

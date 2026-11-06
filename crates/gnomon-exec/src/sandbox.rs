@@ -349,7 +349,7 @@ pub const NOT_ENFORCED: &[&str] = &[
     "unix sockets, where the supervisor cannot run (see degraded) or on macOS: a daemon reachable over one (the docker socket, the systemd user bus via systemd-run, a running tmux) can act outside the sandbox. On Linux with the supervisor, connect() to a pathname socket outside the root and the writable directories, and to any abstract socket, is refused; a datagram sent with sendto/sendmsg to a socket path is not vetted",
     "loopback: a local service that itself reaches the network (a proxy, a DNS resolver -- systemd-resolved's socket and 127.0.0.53 included, so a DNS lookup can carry data out under network = false) is reachable",
     "inbound: a server the command binds on a non-loopback address accepts connections",
-    "signals: on Landlock ABI 6+ the command cannot signal a process outside its own call (so not a job an EARLIER bash call started: gnomon's `sandbox-kill <pid>` does that from outside); below ABI 6, and on macOS, it can signal any process your user owns",
+    "signals: on Landlock ABI 6+ the command cannot signal a process outside its own call (so not a job an EARLIER bash call started: gnomon's `sandbox-kill <pid>` does that from outside); below ABI 6, and on macOS, it can signal any process your user owns -- its own supervisor included: SIGSTOP stalls every connect the supervisor vets, SIGKILL ends the call (the command dies with it). gnomon's timeout and cancel freeze and kill the call's whole subtree, the supervisor last",
     "macOS: Seatbelt confines writes only; mach services, launchctl, osascript and other IPC run outside the sandbox and can act for the command",
     "POSIX shared memory (/dev/shm): not granted, so shm_open and Python multiprocessing locks fail",
     "metadata outside the root: chmod, chown, utime and extended attributes of files outside the root are not confined by Landlock",
@@ -1491,8 +1491,8 @@ pub mod linux {
         if let Ok(a) = abi {
             if a < 6 {
                 degraded.push(
-                    "signals are not scoped: the command can signal any process your user owns (needs Landlock ABI 6, \
-                     Linux 6.12)"
+                    "signals are not scoped: the command can signal any process your user owns, its own supervisor \
+                     included (needs Landlock ABI 6, Linux 6.12)"
                         .to_string(),
                 );
             }

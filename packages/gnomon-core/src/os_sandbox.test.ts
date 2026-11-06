@@ -887,6 +887,57 @@ describe("second review — signals: a later call stops an earlier call's job on
     }
   }, 30_000);
 
+  // Third review, finding 10: one /proc snapshot, the supervisor killed
+  // first. A job forking in a loop had children born after the snapshot, and
+  // with the supervisor (their subreaper) already dead they went to init and
+  // survived the timeout.
+  it.skipIf(!!why || !has("setsid"))(label("a timeout kills a job that keeps forking: nothing born during the kill survives it", why), async () => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-os-forker-"));
+    const ex = { mode: "os" as const, image: "unused", network: false };
+    const marker = `300.${process.pid}${Date.now() % 100000}`;
+    const survivors = (): number[] => {
+      const out: number[] = [];
+      for (const e of readdirSync("/proc")) {
+        if (!/^\d+$/.test(e)) continue;
+        try {
+          if (readFileSync(`/proc/${e}/cmdline`, "utf8").split("\0").includes(marker)) out.push(Number(e));
+        } catch {
+          // gone
+        }
+      }
+      return out;
+    };
+    // CONTROL: sampled while the call runs, so the job is known to have forked.
+    let most = 0;
+    const sampler = setInterval(() => (most = Math.max(most, survivors().length)), 100);
+    try {
+      const out = await executeTool(
+        "bash",
+        // Each iteration starts a long sleep in a session of its own (out of
+        // the process group gnomon also kills) and goes round again: forks
+        // keep coming while gnomon walks /proc.
+        { command: `( while :; do setsid sleep ${marker} </dev/null >/dev/null 2>&1 & sleep 0.002; done ) >/dev/null 2>&1 & sleep 20` },
+        bashCtx(root, ex, { timeoutMs: 1500 }),
+        new Set(["bash"])
+      );
+      clearInterval(sampler);
+      expect(out.content).toContain("timed out");
+      expect(most, "control: the job never forked, so this test proves nothing").toBeGreaterThan(10);
+      await new Promise((ok) => setTimeout(ok, 300));
+      expect(survivors().length, "processes the job forked outlived the call's timeout").toBe(0);
+    } finally {
+      clearInterval(sampler);
+      for (const p of survivors()) {
+        try {
+          process.kill(p, "SIGKILL");
+        } catch {
+          // gone
+        }
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it.skipIf(!!why || !has("setsid"))(label("a timeout kills the call's whole subtree, a setsid'd job included", why), async () => {
     const root = mkdtempSync(join(tmpdir(), "gnomon-os-timeout-"));
     const ex = { mode: "os" as const, image: "unused", network: false };
