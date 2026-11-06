@@ -62,11 +62,14 @@ describe("the shipped catalog", () => {
     expect(lines.join("\n")).not.toMatch(/qwen3\.6:35b[^\n]*not measured/);
   });
 
-  it("labels its speed thresholds provisional, and cites R1H for hybrid", () => {
+  it("labels its speed thresholds provisional, and cites hybrid as HYBRID.md does", () => {
     expect(catalog.speed.provisional).toBe(true);
-    expect(catalog.hybrid.evidence).toContain("87%");
-    expect(catalog.hybrid.evidence).toContain("84%");
-    expect(catalog.hybrid.evidence).toContain("26% lower cost per solved task");
+    // R1H's RTX 5090 lead (87% vs 84%, 26% cheaper) did not reproduce (R3R, R4H):
+    // the catalog must not quote it as current.
+    expect(catalog.hybrid.evidence).toContain("no measured advantage over cloud-only");
+    expect(catalog.hybrid.evidence).toContain("did not reproduce");
+    expect(catalog.hybrid.evidence).not.toMatch(/87%|84%|26% lower cost/);
+    expect(catalog.hybrid.evidenceUnified).toContain("22/32 vs 16/31 local-only");
     // The file says so in words, where a reviewer reads it.
     expect(readFileSync(defaultCatalogPath(), "utf-8")).toMatch(/PROVISIONAL/);
   });
@@ -245,7 +248,8 @@ describe("the mode it suggests", () => {
   it("a cloud model configured: hybrid, citing the measured result", async () => {
     const s = suggestMode({ local: await local(), memory: await mem(), speed: speed(375, 4000), hasCloud: true }, catalog);
     expect(s.mode).toBe("hybrid");
-    expect(s.why).toContain("87% (26/30) vs 84% (27/32) cloud-only, at 26% lower cost per solved task");
+    expect(s.why).toContain("showed no measured advantage over cloud-only");
+    expect(s.why).not.toContain("87%");
   });
   it("on unified memory, the GB10 result is cited beside it", async () => {
     const rec = await recFor(withUrls(MACHINES.gb10(), ollamaServing({ "qwen3.6:35b": 23.9e9 })));

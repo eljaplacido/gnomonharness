@@ -135,6 +135,26 @@ robustness. With `replay_reasoning = false` declared, request bodies are
 byte-identical to master; with nothing declared they are byte-identical on
 any local lane (reasoning field or not) and on a hosted endpoint that returns
 no reasoning field (`long_tasks.test.ts` pins all three).
+## [0.4.4] — 2026-11-06
+
+Long hosted-model tasks, from the P2G41 root causes (2026-11-05). **One default
+changes: reasoning replay is on for a hosted endpoint that returns reasoning**,
+adopted by H3's pre-registered decision rule: hidden-test fraction +0.160
+[95% bootstrap +0.042, +0.293], capped runs 19 → 14
+([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+H3 measured hosted endpoints only, so local lanes stay off unless they declare
+it. The idle nudge stays at 12, as in 0.4.3: LG1 measured switching it off on
+the local lane and it cost tokens. New and opt-in: `gnomon task --deadline`.
+Everything else is record-only or robustness. Upgrading from 0.4.3: nothing to
+do. With `replay_reasoning = false` declared, request bodies are
+byte-identical to 0.4.3; with nothing declared they are byte-identical on any
+local lane (reasoning field or not) and on a hosted endpoint that returns no
+reasoning field (`long_tasks.test.ts` pins all three).
+
+**Security note.** `exec = "docker"` in 0.4.4 and earlier does not contain a
+deliberately hostile model against gnomon's own host-side actions (its
+bookkeeping git, audit writes, `gnomon check`). Treat it as protection against
+mistakes, not against an adversarial model. A fix is in review (PR #158).
 
 ### Changed (default)
 
@@ -205,6 +225,13 @@ no reasoning field (`long_tasks.test.ts` pins all three).
   blank, cut re-asks the second cut instead of letting it stand as
   `truncated`. Two cuts in a row still end the turn (P2G41's two `truncated`
   cells were that case).
+- **`gnomon setup` no longer cites the RTX 5090 hybrid result as current.**
+  Its hybrid explanation (catalog data, `packages/gnomon-cli/catalog/models.toml`)
+  still quoted R1H's 87% vs 84% cloud-only at 26% lower cost per solved task,
+  which did not reproduce (R3R; R4H found no build effect, 20 vs 19). It now
+  says the RTX lane showed no measured advantage over cloud-only and, on
+  unified memory, cites the GB10 result that stands (M2: 22/32 vs 16/31
+  local-only, p = 0.07), as docs/benchmarks/HYBRID.md does.
 
 ## [0.4.3] — 2026-11-06
 
@@ -4206,7 +4233,8 @@ was written.
   `git tag`, not a documentation edit as well.
 -->
 
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.4
 [0.4.3]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.3
 [0.4.2]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.2
 [0.4.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.1
