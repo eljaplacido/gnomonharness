@@ -339,23 +339,137 @@ export function containedReadonlyPaths(root: string): string[] {
   if (g?.isSymbolicLink()) refuse(git, "a symlink");
   else if (g?.isFile()) out.push(git);
   else if (g?.isDirectory()) {
-    want(join(git, "config"), "file", false);
-    // Absent, each of these was the container's to create (sixth review):
-    // `.git/commondir` naming a directory with a config of its own, or
-    // `.git/config.worktree`, and the user's own git -- a shell prompt, an
-    // IDE polling `git status` -- read the planted config and ran its
-    // fsmonitor. So each is made, by gnomon as the user, with a content git
-    // reads as "nothing changes" (verified: `.` as commondir is the git dir
-    // itself; an empty config.worktree sets nothing, and is read only under
-    // extensions.worktreeConfig, which lives in the read-only config), and
-    // mounted read-only like the rest. An empty commondir is NOT that: git
-    // refuses the repository ("failed to read .git/commondir").
-    placeholder(join(git, "commondir"), ".\n");
-    want(join(git, "commondir"), "file", false);
-    placeholder(join(git, "config.worktree"), "");
-    want(join(git, "config.worktree"), "file", false);
-    want(join(git, "hooks"), "dir", true);
-    want(join(git, "info"), "dir", true);
+    for (const p of gitControlPaths(base, git)) {
+      if (p.placeholder !== undefined) placeholder(p.path, p.placeholder);
+      want(p.path, p.kind, p.kind === "dir" && p.create === true);
+    }
+  }
+  return out;
+}
+
+interface ControlPath {
+  path: string;
+  kind: "file" | "dir";
+  /** Created as this, by gnomon, when absent (a file), so the container cannot plant it. */
+  placeholder?: string;
+  /** A directory created when absent. */
+  create?: boolean;
+}
+
+/** At most this many git dirs (submodules, nested) are walked; more is refused, not half-protected. */
+const MAX_GIT_DIRS = 256;
+
+/**
+ * Git's control files under a git dir, read-only to a contained command:
+ * its config, hooks/ and info/, commondir and config.worktree (placeholders
+ * when absent -- sixth review), and, recursively (seventh review, B5):
+ *
+ *   - each linked worktree's admin dir, `worktrees/<wt>/`, whole. Its
+ *     `commondir` names the repository the user's linked worktree (outside
+ *     the root) uses: rewritten, it pointed the user's `git status` there at a
+ *     config with an fsmonitor of the container's. A container has no use
+ *     for another worktree's admin files; `git worktree add` inside it still
+ *     works (worktrees/ itself stays writable, and git never reuses a name).
+ *   - each submodule's git dir under `modules/` (names may nest: `libs/a`),
+ *     protected like the top level, and its own modules in turn. Its config
+ *     and hooks are what the user's `git status` at the top runs when it
+ *     looks into the submodule.
+ *
+ * Also each submodule's `.git` file in its working tree, when that is
+ * inside `root`: rewritten, it redirected the submodule to a git dir the
+ * container made.
+ */
+function gitControlPaths(root: string, gitDir: string, seen = { n: 0 }, opts: { lenient?: boolean } = {}): ControlPath[] {
+  if (++seen.n > MAX_GIT_DIRS) throw new RootWriteError(`${gitDir}: more than ${MAX_GIT_DIRS} nested git directories; not setting up a sandbox over them`);
+  const out: ControlPath[] = [
+    { path: join(gitDir, "config"), kind: "file" },
+    // An empty commondir is NOT "nothing": git refuses the repository
+    // ("failed to read .git/commondir"). `.` is the git dir itself.
+    { path: join(gitDir, "commondir"), kind: "file", placeholder: ".\n" },
+    { path: join(gitDir, "config.worktree"), kind: "file", placeholder: "" },
+    { path: join(gitDir, "hooks"), kind: "dir", create: true },
+    { path: join(gitDir, "info"), kind: "dir", create: true },
+  ];
+  for (const wt of childDirs(join(gitDir, "worktrees"), opts.lenient)) {
+    // Lenient (the exec = "os" snapshot on Linux, which puts back what it
+    // recorded): only a worktree's redirects. Its index and HEAD are the
+    // user's git's to change while a command runs, and putting them back
+    // would undo the user's work.
+    if (opts.lenient) {
+      for (const f of ["commondir", "config.worktree", "gitdir"]) out.push({ path: join(wt, f), kind: "file" });
+    } else out.push({ path: wt, kind: "dir" });
+  }
+  for (const sub of submoduleGitDirs(join(gitDir, "modules"), 0, opts.lenient)) {
+    out.push(...gitControlPaths(root, sub, seen, opts));
+    const file = submoduleGitFile(root, sub);
+    if (file) out.push({ path: file, kind: "file" });
+  }
+  return out;
+}
+
+/** The plain directories directly in `dir` (none when it is absent or not a plain directory). */
+function childDirs(dir: string, lenient = false): string[] {
+  const st = lstatOrNull(dir);
+  if (!st) return [];
+  if (st.isSymbolicLink() || !st.isDirectory()) {
+    if (lenient) return [];
+    throw new RootWriteError(`${dir} is not a plain directory; the sandbox will not run with it there`);
+  }
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  // Anything else there (a file, a symlink) is no worktree git made: nothing
+  // the user's git reads, so nothing to protect.
+  return names.map((n) => join(dir, n)).filter((p) => {
+    const c = lstatOrNull(p);
+    return c !== null && c.isDirectory() && !c.isSymbolicLink();
+  });
+}
+
+/** The git dirs under a `modules/` directory: a dir holding a HEAD file is one; any other is a name prefix. */
+function submoduleGitDirs(modules: string, depth = 0, lenient = false): string[] {
+  if (depth > 16) return [];
+  const out: string[] = [];
+  for (const d of childDirs(modules, lenient)) {
+    if (lstatOrNull(join(d, "HEAD"))?.isFile()) out.push(d);
+    else out.push(...submoduleGitDirs(d, depth + 1, lenient));
+  }
+  return out;
+}
+
+/** `<worktree>/.git` of the submodule whose git dir is `sub`, when its core.worktree is inside `root` and it is a file. */
+function submoduleGitFile(root: string, sub: string): string | null {
+  let text: string;
+  const cfg = join(sub, "config");
+  // Only a plain, small file is read: a container-made symlink to /dev/zero
+  // must not hang the host (it is refused as a mount by want() regardless).
+  const st = lstatOrNull(cfg);
+  if (!st || !st.isFile() || st.size > 1 << 20) return null;
+  try {
+    text = readFileSync(cfg, "utf-8");
+  } catch {
+    return null;
+  }
+  const m = /^\s*worktree\s*=\s*(.+?)\s*$/m.exec(text);
+  if (!m) return null;
+  const wt = resolve(sub, m[1]!.replace(/^"(.*)"$/, "$1"));
+  if (!within(resolve(root), wt) || wt === resolve(root)) return null;
+  const f = join(wt, ".git");
+  return lstatOrNull(f)?.isFile() ? f : null;
+}
+
+/** The directories between `root` (exclusive) and `path` (inclusive). */
+function chainBelow(root: string, path: string): string[] {
+  const rel = relative(root, path);
+  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return [];
+  const out: string[] = [];
+  let cur = root;
+  for (const part of rel.split(sep)) {
+    cur = join(cur, part);
+    out.push(cur);
   }
   return out;
 }
@@ -368,6 +482,8 @@ export function containedReadonlyPaths(root: string): string[] {
 export interface ProtectedSnapshot {
   root: string;
   entries: Map<string, { kind: "file" | "dir"; mode: number; data: Buffer | null }>;
+  /** Where the walk started, when the snapshot was taken (absent: found again at restore). */
+  tops?: string[];
   /**
    * `.git` itself, when it is a directory (sixth review, finding 3): Landlock
    * cannot stop it being renamed away (`mv .git .git-old && mkdir .git`), so
@@ -379,7 +495,8 @@ export interface ProtectedSnapshot {
 /** Files above this are recorded by kind only; a change to one is reported, not restored. */
 const SNAPSHOT_FILE_CAP = 4 * 1024 * 1024;
 
-function walkProtected(root: string, onEntry: (abs: string, st: Stats) => void): void {
+/** The paths walkProtected starts from under `root`, found from what is there now. */
+function protectedTops(root: string): string[] {
   // The surface and git's control files: the ones a command can use to
   // loosen the next one. Not the record dirs, which gnomon writes between
   // commands itself (root_fs.ts writes and the record guard cover them).
@@ -391,8 +508,27 @@ function walkProtected(root: string, onEntry: (abs: string, st: Stats) => void):
   // `.gnomon-loops/` too (sixth review, finding 7): loop state, which no
   // command run inside a session has gnomon write.
   const tops = [join(base, ".gnomon"), join(base, ".gnomon-loops")];
-  if (g?.isDirectory()) tops.push(join(git, "config"), join(git, "commondir"), join(git, "config.worktree"), join(git, "hooks"), join(git, "info"));
-  else if (g) tops.push(git);
+  if (g?.isDirectory()) {
+    // The same control files the docker mounts read-only (gitControlPaths),
+    // linked worktrees' redirects and submodules' git dirs included
+    // (seventh review, B5). Never refusing: past the cap, the top level.
+    let paths: string[];
+    try {
+      paths = gitControlPaths(base, git, { n: 0 }, { lenient: true }).map((p) => p.path);
+    } catch {
+      paths = [join(git, "config"), join(git, "commondir"), join(git, "config.worktree"), join(git, "hooks"), join(git, "info")];
+    }
+    tops.push(...paths);
+  } else if (g) tops.push(git);
+  return tops;
+}
+
+/**
+ * Walk the protected paths. `tops` as recorded when the snapshot was taken:
+ * a submodule or worktree the command itself made is its own (protected from
+ * the next command on), and is not removed as if it had been planted.
+ */
+function walkProtected(root: string, onEntry: (abs: string, st: Stats) => void, tops = protectedTops(root)): void {
   const walk = (abs: string) => {
     const st = lstatOrNull(abs);
     if (!st) return;
@@ -413,6 +549,7 @@ function walkProtected(root: string, onEntry: (abs: string, st: Stats) => void):
 /** Record the surface and git's control files under `root`, contents included. */
 export function snapshotProtected(root: string): ProtectedSnapshot {
   const entries: ProtectedSnapshot["entries"] = new Map();
+  const tops = protectedTops(root);
   walkProtected(root, (abs, st) => {
     if (st.isDirectory()) entries.set(abs, { kind: "dir", mode: st.mode & 0o7777, data: null });
     else if (st.isFile()) {
@@ -428,7 +565,7 @@ export function snapshotProtected(root: string): ProtectedSnapshot {
     }
   });
   const git = join(resolve(root), ".git");
-  return { root, entries, git: lstatOrNull(git)?.isDirectory() ? identityOf(git) : undefined };
+  return { root, entries, tops, git: lstatOrNull(git)?.isDirectory() ? identityOf(git) : undefined };
 }
 
 /**
@@ -449,7 +586,7 @@ export function restoreProtected(snap: ProtectedSnapshot): { restored: string[];
     }
   }
   const now = new Map<string, Stats>();
-  walkProtected(snap.root, (abs, st) => now.set(abs, st));
+  walkProtected(snap.root, (abs, st) => now.set(abs, st), snap.tops);
   // Appeared, or changed kind: removed, deepest first.
   for (const abs of [...now.keys()].sort((a, b) => b.length - a.length)) {
     const st = now.get(abs)!;
@@ -517,9 +654,28 @@ function placeholder(file: string, data: string): void {
  * mount point cannot be renamed or removed (EBUSY).
  */
 export function containedMountPoints(root: string): string[] {
-  const git = join(resolve(root), ".git");
+  const base = resolve(root);
+  const git = join(base, ".git");
   const st = lstatOrNull(git);
-  return st && st.isDirectory() && !st.isSymbolicLink() ? [git] : [];
+  if (!st || !st.isDirectory() || st.isSymbolicLink()) return [];
+  // Seventh review (B5): the same for every directory that holds a
+  // read-only mount git's control files moved into -- worktrees/, modules/
+  // and each submodule git dir on the way down, and the directories from
+  // the root to a submodule's working tree (whose `.git` file is read-only).
+  const out = new Set<string>([git]);
+  const walk = (gitDir: string) => {
+    const wts = join(gitDir, "worktrees");
+    if (childDirs(wts).length > 0) out.add(wts);
+    for (const sub of submoduleGitDirs(join(gitDir, "modules"))) {
+      for (const d of chainBelow(gitDir, sub)) out.add(d);
+      const file = submoduleGitFile(base, sub);
+      if (file) for (const d of chainBelow(base, dirname(file))) out.add(d);
+      walk(sub);
+    }
+  };
+  walk(git);
+  // Parents before children: docker mounts in the order given.
+  return [...out].sort((a, b) => a.split(sep).length - b.split(sep).length);
 }
 
 // ---------------------------------------------------------------------------
@@ -588,7 +744,7 @@ function fdPath(fd: number): string | null {
  * `roots` empty means unconfined (sandbox = "off"): only the kind is checked.
  * Hard links are allowed for reading (pnpm's node_modules is made of them).
  */
-export function readRegular(roots: string[], file: string): Buffer {
+export function readRegular(roots: string[], file: string, opts: { maxBytes?: number } = {}): Buffer {
   const st = statSync(file);
   if (!st.isFile()) throw new RootWriteError(`${file} is ${kindOf(st)}; gnomon reads only regular files`);
   const fd = openSync(file, constants.O_RDONLY | NONBLOCK);
@@ -598,6 +754,9 @@ export function readRegular(roots: string[], file: string): Buffer {
     if (roots.length > 0) {
       const real = fdPath(fd) ?? realOr(file);
       if (!rootOf(roots, real)) throw new RootWriteError(`${file} resolved outside the project root (${real}); not reading it`);
+    }
+    if (opts.maxBytes !== undefined && fst.size > opts.maxBytes) {
+      throw new RootWriteError(`${file} is ${fst.size} bytes, over the ${opts.maxBytes} gnomon reads here`);
     }
     return readFileSync(fd);
   } finally {

@@ -3060,7 +3060,7 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     if (t.how === "tar -x (archive)" || t.how === "unzip (archive)") {
       const into = targets.find((x) => x.how === t.how.replace("(archive)", "(into)") && x.cwd === t.cwd);
       const base = (into && resolveTarget(into.path, into.cwd)) ?? resolve(dirAbs(t.cwd ?? ""));
-      for (const m of archiveMembers(abs, t.how.startsWith("tar") ? "tar" : "unzip")) {
+      for (const m of archiveMembers(abs, t.how.startsWith("tar") ? "tar" : "unzip", fsRoots(ctx))) {
         judged.push({ path: m, abs: resolve(base, m), how: t.how.replace(" (archive)", ""), writeAllow: true, t });
       }
       continue;
@@ -3330,6 +3330,9 @@ function gitHooksRefusal(tool: string, path: string, how?: string): Precheck {
  * cannot be read; capped, since a patch is the agent's to make arbitrarily
  * large.
  */
+/** The largest archive the write precheck lists members of (seventh review, L4). */
+const ARCHIVE_LIST_MAX_BYTES = 256 * 1024 * 1024;
+
 function patchPaths(abs: string): string[] {
   let text: string;
   try {
@@ -3354,11 +3357,43 @@ function patchPaths(abs: string): string[] {
  * missing or the listing fails: unknown is reported as unknown, which is the
  * pattern precheck's limit -- the kernel sandbox is what contains it.
  */
-function archiveMembers(abs: string, kind: "tar" | "unzip"): string[] {
-  if (!existsSync(abs)) return [];
+function archiveMembers(abs: string, kind: "tar" | "unzip", roots: string[] = []): string[] {
+  // Seventh review (L4): the archive is the model's file, and the host runs
+  // the archiver on it. Only a regular file (never a FIFO the listing would
+  // block on, or a device), at most ARCHIVE_LIST_MAX_BYTES, whose real path
+  // is in the root; the archiver gets no stdin, is killed (SIGKILL, not a
+  // TERM it can ignore) at the deadline, and its output is capped.
+  let st: Stats;
+  try {
+    st = statSync(abs);
+  } catch {
+    return [];
+  }
+  if (!st.isFile() || st.size > ARCHIVE_LIST_MAX_BYTES) return [];
+  if (roots.length > 0) {
+    let real: string;
+    try {
+      real = realpathSync(abs);
+    } catch {
+      return [];
+    }
+    const inside = roots.some((r) => {
+      let rr: string;
+      try {
+        rr = realpathSync(r);
+      } catch {
+        rr = resolve(r);
+      }
+      const rel = relative(rr, real);
+      return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+    });
+    if (!inside) return [];
+  }
   const r = spawnSync(kind, kind === "tar" ? ["-tf", abs] : ["-Z1", abs], {
     encoding: "utf-8",
     timeout: 5000,
+    killSignal: "SIGKILL",
+    stdio: ["ignore", "pipe", "ignore"],
     windowsHide: true,
     maxBuffer: 8 * 1024 * 1024,
   });

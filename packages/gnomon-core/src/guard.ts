@@ -36,6 +36,8 @@
 import { resolvePackageIndex } from "./sweep_knobs.js";
 import { safeGitBuffer } from "./git_safe.js";
 import { checkSessionFile, createExclusiveIn, ensureDirIn, repoStateDir } from "./root_fs.js";
+import { hostSurface } from "./host_surface.js";
+import { parseSurfaceTree, readSurfaceBlobs, SurfaceTreeError, writeSurfaceTree, type SurfaceEntry } from "./surface_tree.js";
 /** For `gnomon guard install`, which writes hook files into the project. */
 export { writeFileIn } from "./root_fs.js";
 import {
@@ -438,31 +440,26 @@ function resolveFromCache(where: Located, rev: string): [string, string] | null 
 
 function materialise(where: Located, tree: string, cacheRoot: string, dir: string): void {
   // ls-tree for the paths and blob ids, one cat-file --batch for every blob:
-  // two spawns whatever the size of the surface.
-  const entries = git(where.toplevel, ["ls-tree", "-r", "-z", tree])
-    .toString("utf-8")
-    .split("\0")
-    .filter(Boolean)
-    .map((line) => {
-      const tab = line.indexOf("\t");
-      const [, type, sha] = line.slice(0, tab).split(" ");
-      return { type: type!, sha: sha!, path: line.slice(tab + 1) };
-    })
-    .filter((e) => e.type === "blob");
-  const batch = git(where.toplevel, ["cat-file", "--batch"], entries.map((e) => e.sha).join("\n") + "\n");
-  const tmp = `${dir}.tmp-${process.pid}-${Date.now()}`;
-  let at = 0;
-  for (const e of entries) {
-    const nl = batch.indexOf(0x0a, at);
-    const header = batch.subarray(at, nl).toString("utf-8").split(" ");
-    const size = Number(header[2]);
-    const body = batch.subarray(nl + 1, nl + 1 + size);
-    at = nl + 1 + size + 1; // the content, then a newline
-    const dest = join(tmp, ".gnomon", e.path);
-    mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(dest, body);
+  // two spawns whatever the size of the surface. Every entry is checked
+  // before anything is written (surface_tree.ts, seventh review): a tree the
+  // model built with a `..` entry wrote outside the cache.
+  let entries: SurfaceEntry[];
+  let bodies: Buffer[];
+  try {
+    entries = parseSurfaceTree(git(where.toplevel, ["ls-tree", "-r", "-z", tree]), "");
+    bodies = readSurfaceBlobs((args, input) => git(where.toplevel, args, input), entries);
+  } catch (err) {
+    if (err instanceof SurfaceTreeError) throw new GuardCannotDecide(err.message);
+    throw err;
   }
+  const tmp = `${dir}.tmp-${process.pid}-${Date.now()}`;
   mkdirSync(join(tmp, ".gnomon"), { recursive: true });
+  try {
+    writeSurfaceTree(join(tmp, ".gnomon"), entries, bodies);
+  } catch (err) {
+    rmSync(tmp, { recursive: true, force: true });
+    throw new GuardCannotDecide(err instanceof Error ? err.message : String(err));
+  }
   const surface_hash = recomputeManifest(join(tmp, ".gnomon")).surface_hash;
   writeFileSync(join(tmp, "meta.json"), JSON.stringify({ surface_hash, tree }));
   mkdirSync(cacheRoot, { recursive: true });
@@ -537,7 +534,7 @@ export async function guardToolCall(req: GuardRequest): Promise<GuardVerdict> {
     v.rule = policy.rule;
     v.reason = policy.reason;
     if (policy.pattern) v.pattern = policy.pattern;
-    appendDecision(v, rules.config, where, req, session);
+    appendDecision(v, where, req, session);
     return done();
   } catch (err) {
     v.decision = "ask";
@@ -650,12 +647,13 @@ export function guardTarget(call: GuardCall): string {
  */
 function appendDecision(
   v: GuardVerdict,
-  config: GnomonConfig,
   where: Located,
   req: GuardRequest,
   session: string | null
 ): void {
-  const settings = resolveAudit({ ...config, gnomonDir: join(where.project, ".gnomon") });
+  // The live surface's [audit], never the revision's (seventh review, B2):
+  // a committed `[audit.attest] sign` is a command the host runs.
+  const settings = resolveAudit(hostSurface(join(where.project, ".gnomon")).config);
   if (!settings.enabled) return;
   const id = `guard-${session ?? new Date().toISOString().slice(0, 10)}`;
   ensureDirIn(where.project, settings.dir);

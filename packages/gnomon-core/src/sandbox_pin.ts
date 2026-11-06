@@ -100,7 +100,7 @@ export function pinSandbox(config: GnomonConfig): SandboxPin {
   return pin;
 }
 
-function readsRank(r: string): number {
+export function readsRank(r: string): number {
   return r === "all" ? 0 : r === "scoped" ? 1 : 2; // an invalid value refuses: tightest
 }
 

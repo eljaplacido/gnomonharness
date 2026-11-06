@@ -14,6 +14,7 @@ import { checkCitations } from "./citations.js";
 import { mustFailFirst, readVerifyExit } from "./must_fail_first.js";
 import { resolve, dirname, join, basename, sep } from "node:path";
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, realpathSync, renameSync } from "node:fs";
+import { readRegular } from "./root_fs.js";
 import { createHash } from "node:crypto";
 import { gnomonDataDir } from "./credentials.js";
 import { fileURLToPath } from "node:url";
@@ -3787,7 +3788,7 @@ export function measureTreeDelta(
     ? fast.untracked
     : (run(["ls-files", "--others", "--exclude-standard"]) ?? "")
       .split("\n").map((l) => l.trim()).filter(Boolean);
-  for (const rel of untrackedRels) untracked.set(rel, countLines(join(root, rel)));
+  for (const rel of untrackedRels) untracked.set(rel, countLines(root, rel));
   const head = fast ? fast.head : (run(["rev-parse", "HEAD"]) ?? "").trim() || null;
   const a = parse(plain);
 
@@ -3964,9 +3965,17 @@ function worktreeTop(root: string): string | null {
 }
 
 /** Line count of a file, or null when it is binary or unreadable. */
-function countLines(path: string): number | null {
+/**
+ * Lines in an untracked file, or null (binary, unreadable, not a regular
+ * file in the root, or over 16 MiB). Seventh review (L2): the path is the
+ * model's to shape under exec = "docker", and a plain readFileSync followed
+ * a symlink -- to /dev/zero (the turn hung) or to a host file (its line
+ * count reached the record). readRegular reads only a regular file whose
+ * real path is in the root, opened non-blocking.
+ */
+function countLines(root: string, rel: string): number | null {
   try {
-    const buf = readFileSync(path);
+    const buf = readRegular([root], join(root, rel), { maxBytes: COUNT_LINES_MAX_BYTES });
     // Same heuristic git uses to call a file binary: a NUL in the first 8000 bytes.
     if (buf.subarray(0, 8000).includes(0)) return null;
     const text = buf.toString("utf-8");
@@ -3976,6 +3985,8 @@ function countLines(path: string): number | null {
     return null;
   }
 }
+
+const COUNT_LINES_MAX_BYTES = 16 * 1024 * 1024;
 
 export interface TurnCounters {
   /**

@@ -53,7 +53,10 @@ import {
   type ResolvedExec,
 } from "./config.js";
 import { floorLossNotice, governingExecFloor, uncontainableRootAt } from "./trust.js";
-import { tightenExec } from "./sandbox_pin.js";
+import { strictestOf } from "./exec_floor.js";
+import { emptySurface, hostSurface } from "./host_surface.js";
+import { readsRank } from "./sandbox_pin.js";
+import { parseSurfaceTree, readSurfaceBlobs, SurfaceTreeError, writeSurfaceTree, type SurfaceEntry } from "./surface_tree.js";
 import { AuditTrail, redact, resolveAudit, verifyTrail } from "./audit.js";
 import { harnessBuild } from "./build.js";
 import { mustFailFirst, readVerifyExit, isTestPath, type PreImage } from "./must_fail_first.js";
@@ -192,7 +195,10 @@ export interface CheckOptions {
 class CheckCannotRun extends Error {}
 
 function git(cwd: string, args: string[]): Buffer {
-  const r = safeGitBuffer(args, { cwd, maxBuffer: 256 * 1024 * 1024 });
+  return gitIn(cwd, args);
+}
+function gitIn(cwd: string, args: string[], input?: string): Buffer {
+  const r = safeGitBuffer(args, { cwd, input, maxBuffer: 256 * 1024 * 1024 });
   if (r.error) throw new CheckCannotRun(`git ${args[0]} could not start: ${r.error.message}`);
   if (r.status !== 0) {
     const err = r.stderr.toString("utf-8").trim().split("\n")[0] ?? "";
@@ -314,22 +320,31 @@ async function withJournal<T>(path: string, toplevel: string, files: string[], f
 // ---------------------------------------------------------------------------
 
 /**
- * Where [verify] runs for `gnomon check`: the base surface's declaration,
- * held to this machine's exec floor for the project (sixth review).
+ * Where [verify] runs for `gnomon check`, and with what network: never the
+ * base's word alone (sixth and seventh reviews).
  *
  * The rules are read from `--base`, and a ref is the model's to move: a
  * contained command can write `.git/refs` and point `main` at a commit whose
- * policy.toml says `exec = "off"` and whose [verify] command is its own. The
- * session loop never takes a surface's word for exec over the floor; check
- * did, so the verify command ran on the host. Now the floor governs here
- * too: a role that ran contained on this machine is contained here, whatever
- * the base says (and lost floors are contained, as everywhere). The resolved
- * sha is on the verdict and in the banner, and a base ref that moved after a
- * contained session began is warned about.
+ * policy.toml says `exec = "off"`, `network = true`, and whose [verify]
+ * command is its own. So the base may only TIGHTEN where it runs (a base
+ * that says docker is contained); the mode, image and network otherwise come
+ * from this machine's exec floor for the project and the live surface (the
+ * working tree's, read-only to a container):
+ *
+ *   - mode: contained when the floor, the live surface or the base says so.
+ *     The floor is read as its STRICTEST entry, whatever the role: a role
+ *     named only in the base has no entry of its own, and falling back to
+ *     `*` (= off) ran [verify] on the host (B3). Lost floors are contained.
+ *   - image: the floor's, else the live surface's -- never the base's.
+ *   - network: the live surface's, and off when the floor recorded it off
+ *     (a loosening is `gnomon trust grant`'s) or the base asks for it off.
+ *
+ * The resolved sha is on the verdict and in the banner, and a base ref that
+ * moved after a contained session began is warned about.
  */
 function checkExec(
   config: GnomonConfig,
-  liveConfig: GnomonConfig,
+  host: { config: GnomonConfig; loaded: boolean },
   role: string,
   given: string,
   rulesRev: string,
@@ -337,34 +352,67 @@ function checkExec(
   verdict: CheckVerdict
 ): ResolvedExec {
   const warnings = (verdict.warnings ??= []);
-  let exec = resolveExec(config, role);
-  const { floor, lost } = governingExecFloor(liveConfig);
+  const fromBase = resolveExec(config, role);
+  const live: ResolvedExec = host.loaded ? resolveExec(host.config, role) : { ...resolveExec(host.config), network: false };
+  const { floor, lost } = governingExecFloor(host.config);
   if (lost) warnings.push(floorLossNotice(lost));
-  let floored = floor ? (floor.roles[role] ?? floor.roles["*"]) : undefined;
-  // No floor yet: the surface in the working tree (read-only to a container)
-  // is the next best word on where this project's bash belongs.
-  if (!floored || floored.mode === "off") {
-    try {
-      const live = resolveExec(loadConfig(dirname(liveConfig.gnomonDir)), role);
-      if (live.mode !== "off") floored = { mode: live.mode, image: live.image };
-    } catch {
-      /* no loadable surface in the tree: the floor alone */
-    }
+  const strict = floor ? strictestOf(floor) : undefined;
+
+  // An exec that refuses bash -- recorded so in the floor, or declared so by
+  // the live surface or the base -- refuses here too: nothing is tighter.
+  const invalid = strict?.mode === "invalid" ? "(as recorded for this project)" : (live.invalid ?? fromBase.invalid);
+  if (invalid !== undefined) {
+    const exec: ResolvedExec = { ...live, mode: "off", network: false, invalid };
+    verdict.exec = { mode: exec.mode, image: exec.image, network: exec.network };
+    if (warnings.length === 0) delete verdict.warnings;
+    return exec;
   }
-  if (floored && floored.mode !== "off") {
-    const t = tightenExec({ ...exec, mode: floored.mode as ResolvedExec["mode"], image: floored.image }, exec);
-    if (t.loosened.length > 0) {
-      warnings.push(
-        `the rules at ${rulesRev.slice(0, 12)} would run [verify] with ${t.loosened.join(", ")}; ` +
-          `role ${role} ran contained on this machine, so the check runs as it did (${t.exec.mode}, ${t.exec.image})`
-      );
-    }
-    exec = t.exec;
+
+  let mode: ResolvedExec["mode"] = "off";
+  let image = live.image;
+  if (strict) {
+    mode = strict.mode as ResolvedExec["mode"];
+    image = strict.image;
+  } else if (live.mode !== "off") {
+    mode = live.mode;
+  } else if (fromBase.mode !== "off") {
+    mode = fromBase.mode;
+  }
+  let network = live.network && fromBase.network;
+  if (live.network && floor?.network === false) {
+    network = false;
+    warnings.push(
+      `the live surface asks for network = true, but a contained session here ran with it off; ` +
+        `[verify] runs without network until \`gnomon trust grant\` accepts it`
+    );
+  }
+  // What an "os" sandbox may read: the live surface's, never looser than the
+  // floor recorded (a base's `reads = "all"` or `read_roots = ["~"]` would
+  // hand [verify] the host's files).
+  let reads = live.reads;
+  if (strict?.mode === "os" && strict.reads !== undefined && readsRank(reads) < readsRank(strict.reads)) {
+    warnings.push(`the live surface asks for reads = ${JSON.stringify(reads)}; this project ran with ${JSON.stringify(strict.reads)}, so the check does`);
+    reads = strict.reads;
+  }
+  const exec: ResolvedExec = { mode, image, network, reads, readRoots: live.readRoots };
+
+  const said: string[] = [];
+  if (fromBase.mode !== exec.mode) said.push(`exec = "${fromBase.mode}"`);
+  else if (fromBase.mode !== "off" && fromBase.image !== exec.image) said.push(`image = "${fromBase.image}"`);
+  if (fromBase.network && !exec.network) said.push("network = true");
+  if (said.length > 0) {
+    warnings.push(
+      `the rules at ${rulesRev.slice(0, 12)} ask for ${said.join(", ")}; where [verify] runs is this machine's ` +
+        `and the live surface's to say, so the check runs ${exec.mode}${exec.mode === "off" ? "" : ` (${exec.image})`}` +
+        `${exec.network ? " with network" : ""}`
+    );
+  }
+  if (strict) {
     // A named ref (not a sha) that moved after the contained session began
     // may have been moved by it. The reflog is in .git and so the
     // container's too: this is a warning, the clamp above is the defence.
     if (floor && !/^[0-9a-f]{40}$/i.test(given)) {
-      const at = Date.parse(floor!.last ?? floor!.at);
+      const at = Date.parse(floor.last ?? floor.at);
       let moved = NaN;
       try {
         moved = Number(gitText(toplevel, ["log", "-g", "-n", "1", "--format=%ct", given])) * 1000;
@@ -373,14 +421,14 @@ function checkExec(
       }
       if (Number.isFinite(at) && Number.isFinite(moved) && moved > at) {
         warnings.push(
-          `--base ${given} moved (${new Date(moved).toISOString()}) after a contained session started here (${floor!.last ?? floor!.at}); ` +
+          `--base ${given} moved (${new Date(moved).toISOString()}) after a contained session started here (${floor.last ?? floor.at}); ` +
             `the rules were read from ${rulesRev} -- make sure that is the commit you meant`
         );
       }
     }
   }
   if (exec.mode !== "off") {
-    const why = uncontainableRootAt(dirname(liveConfig.gnomonDir));
+    const why = uncontainableRootAt(dirname(host.config.gnomonDir));
     if (why) throw new CheckCannotRun(why);
   }
   verdict.exec = { mode: exec.mode, image: exec.image, network: exec.network };
@@ -494,20 +542,27 @@ async function judge(
   verdict.rules_rev = rulesRev;
   const baseTree = mkdtempSync(join(tmpdir(), "gnomon-check-base-"));
   cleanups.push(() => rmSync(baseTree, { recursive: true, force: true }));
-  const surfaceFiles = git(toplevel, ["ls-tree", "-r", "-z", "--name-only", rulesRev, "--", surfaceRel])
-    .toString("utf-8")
-    .split("\0")
-    .filter(Boolean);
-  if (surfaceFiles.length === 0) {
+  // Every entry checked before anything is written, blobs read by id
+  // (surface_tree.ts, seventh review B1): a tree the model built with a `..`
+  // entry made the host overwrite ~/.bashrc.
+  let surfaceEntries: SurfaceEntry[];
+  try {
+    surfaceEntries = parseSurfaceTree(git(toplevel, ["ls-tree", "-r", "-z", rulesRev, "--", surfaceRel]), surfaceRel);
+  } catch (err) {
+    if (err instanceof SurfaceTreeError) throw new CheckCannotRun(`the base revision ${rulesRev.slice(0, 12)}: ${err.message}`);
+    throw err;
+  }
+  if (surfaceEntries.length === 0) {
     throw new CheckCannotRun(
       `the base revision ${rulesRev.slice(0, 12)} has no ${surfaceRel}/ — there are no rules to judge this change by. ` +
         `Commit the surface first: the rules a change is judged by must predate it.`
     );
   }
-  for (const f of surfaceFiles) {
-    const dest = join(baseTree, f);
-    mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(dest, git(toplevel, ["show", `${rulesRev}:${f}`]));
+  try {
+    writeSurfaceTree(baseTree, surfaceEntries, readSurfaceBlobs((args, input) => gitIn(toplevel, args, input), surfaceEntries));
+  } catch (err) {
+    if (err instanceof SurfaceTreeError) throw new CheckCannotRun(`the base revision ${rulesRev.slice(0, 12)}: ${err.message}`);
+    throw err;
   }
   let config: GnomonConfig;
   try {
@@ -516,10 +571,15 @@ async function judge(
     throw new CheckCannotRun(`the base surface does not load: ${err instanceof Error ? err.message : String(err)}`);
   }
   verdict.surface_hash = recomputeManifest(config.gnomonDir).surface_hash;
-  // The real surface location, for everything resolved relative to the project
-  // (the audit dir, an attest key): those must land in the repository, not in
-  // the temporary copy of the rules.
-  const liveConfig: GnomonConfig = { ...config, gnomonDir: join(toplevel, surfaceRel) };
+  // What acts on the host -- [audit] (dir, redact, attest, anchor), where
+  // [verify] runs, its network, extra_roots, the timeout -- comes from the
+  // live surface (read-only to a container), never the base (seventh review,
+  // B2/B4: a base's `[audit.attest] sign` ran on the host). A surface that
+  // appeared below a floored root is a container's to have written: its
+  // host-side settings are not taken either.
+  const liveDir = join(toplevel, surfaceRel);
+  const host = hostSurface(liveDir, governingExecFloor(emptySurface(liveDir)).inherited === true);
+  const liveConfig = host.config;
 
   const agent = opts.agent ?? (typeof opts.transcript === "object" ? opts.transcript.agent : undefined);
   const resolved = resolveCheckRole(config, { role: opts.role, agent });
@@ -581,21 +641,24 @@ async function judge(
       : [...parseNameStatus(git(toplevel, ["diff", "--name-status", "-z", "--no-renames", from])), ...untracked()]
   ).filter((c) => !isOwn(c.path) && !unchangedSinceStart(c));
 
+  const exec = checkExec(config, host, role, opts.base, rulesRev, toplevel, verdict);
   const ctx: ToolContext = {
-    config: { ...config, gnomonDir: join(treeRoot, surfaceRel) },
+    // The base's rules, with the live surface's [audit] (which paths are the
+    // trail's) -- the base names none of what the host does.
+    config: { ...config, config: liveConfig.config, gnomonDir: join(treeRoot, surfaceRel) },
     writeAllow: roleDef?.write_allow,
     root: projRoot,
     sandbox: resolveSandboxLevel(config),
-    // Relative extra_roots resolve against the tree being judged, not the
-    // temporary copy of the rules, which holds .gnomon/ and nothing else.
-    extraRoots: resolveExtraRoots({ ...config, gnomonDir: join(treeRoot, surfaceRel) }),
-    exec: checkExec(config, liveConfig, role, opts.base, rulesRev, toplevel, verdict),
-    network: (config.policy.sandbox as { network?: boolean } | undefined)?.network,
+    // The live surface's extra_roots (a base's could name ~ for the
+    // container), resolved against the tree being judged.
+    extraRoots: host.loaded ? resolveExtraRoots({ ...liveConfig, gnomonDir: join(treeRoot, surfaceRel) }) : [],
+    exec,
+    network: exec.network,
     // Nothing here asks anyone: the declared check is the surface's, and a
     // non-interactive judge has nobody to ask.
     gate: "never",
     approve: async () => false,
-    timeoutMs: toolTimeoutMs(config),
+    timeoutMs: toolTimeoutMs(host.loaded ? liveConfig : config),
     maxOutputBytes: 32_000,
     allow: "strict",
   };

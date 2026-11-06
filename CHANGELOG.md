@@ -175,17 +175,72 @@
     the home directory, gnomon's data dir, or gnomon's own code
     (`GNOMON_ALLOW_SELF_IN_ROOT=1` for working on gnomon itself); MCP servers
     start outside the project while a role is contained.
-v0.4.4 candidate: long hosted-model tasks, from the P2G41 root causes
-(2026-11-05). **One default changes: reasoning replay is on for a hosted
-endpoint that returns reasoning**, adopted by H3's pre-registered decision
-rule; H3 measured hosted endpoints only, so local lanes stay off unless they
-declare it. The
-idle nudge stays at 12, as in 0.4.3: LG1 measured switching it off on the
-local lane and it cost tokens. Everything else is opt-in, record-only or
-robustness. With `replay_reasoning = false` declared, request bodies are
-byte-identical to master; with nothing declared they are byte-identical on
-any local lane (reasoning field or not) and on a hosted endpoint that returns
-no reasoning field (`long_tasks.test.ts` pins all three).
+  - (seventh review) `gnomon check --base <rev>` takes only the policy under
+    judgement from the revision (roles, write_allow, bash_allow/deny,
+    `[verify]`). Everything that acts on the host -- `[audit]` (dir, redact,
+    attest sign/verify/public_key, anchor), where `[verify]` runs, its
+    network, `extra_roots`, the tool timeout -- comes from the live surface
+    (read-only to a container) and the exec floor. A base's
+    `[audit.attest] sign` ran on the host; a base's absolute `[audit] dir`
+    was written; a role named only in the base fell to `*` = off and ran
+    `[verify]` on the host (the floor is now read as its strictest entry); a
+    base's `network = true` reached `[verify]`. `gnomon guard` takes its
+    `[audit]` from the live surface too. The exec floor now records
+    `network`; a loosening needs `gnomon trust grant`.
+  - (seventh review) a committed surface is copied out of git entry by entry,
+    each checked (a plain blob, no `..`/`.`/`.git` component, inside the
+    copy) and written without following anything: a model-built tree with
+    `..` entries made `gnomon check` (and the dashboard's check) and `gnomon
+    guard` overwrite files outside the copy, such as `~/.bashrc`.
+  - (seventh review) each linked worktree's admin dir (`.git/worktrees/<wt>/`)
+    and each submodule's git dir (`.git/modules/**`: config, hooks, info,
+    commondir, config.worktree, recursively) is read-only to a container,
+    with the directories that hold them (and a submodule's `.git` file and the
+    directories down to it) mounted on themselves so they cannot be renamed
+    away. `git commit`, `git checkout` and `git worktree add` inside the
+    container still work. Under `exec = "os"` the same git dirs are passed to
+    gnomon-exec as read-only (macOS), and on Linux the snapshot put back after
+    each command covers them: a linked worktree's redirects (`commondir`,
+    `config.worktree`, `gitdir`; not its index or HEAD, which the user's own
+    git may change meanwhile) and each submodule's config, hooks and info. A
+    worktree or submodule the command made itself is left alone.
+  - (seventh review) the turn's tree count reads untracked files only as
+    regular files in the root, at most 16 MiB (a symlink to `/dev/zero` hung
+    it; one to a host file put its line count in the record); a key or
+    shadow excerpts sent to a LAN, `.local` or tailnet host without a grant
+    is now a grant (only loopback counts as local for that); the write
+    precheck lists an archive's members only for a regular file in the root
+    of at most 256 MiB, with the archiver killed at its deadline.
+  - Known limit (seventh review, L1): a container can still corrupt
+    `.git/HEAD` and plant a bare repository in the root, so the user's own
+    git, run there, discovers the planted repository and its config. Mounting
+    `HEAD` read-only breaks `git checkout`/`git switch` in the container
+    (measured), so it is not done. Set `git config --global
+    safe.bareRepository explicit` on any machine that runs contained
+    sessions. The same holds for any `.git` directory the model creates in a
+    subdirectory: do not run git in a directory the model made without
+    looking.
+
+## [0.4.4] — 2026-11-06
+
+Long hosted-model tasks, from the P2G41 root causes (2026-11-05). **One default
+changes: reasoning replay is on for a hosted endpoint that returns reasoning**,
+adopted by H3's pre-registered decision rule: hidden-test fraction +0.160
+[95% bootstrap +0.042, +0.293], capped runs 19 → 14
+([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+H3 measured hosted endpoints only, so local lanes stay off unless they declare
+it. The idle nudge stays at 12, as in 0.4.3: LG1 measured switching it off on
+the local lane and it cost tokens. New and opt-in: `gnomon task --deadline`.
+Everything else is record-only or robustness. Upgrading from 0.4.3: nothing to
+do. With `replay_reasoning = false` declared, request bodies are
+byte-identical to 0.4.3; with nothing declared they are byte-identical on any
+local lane (reasoning field or not) and on a hosted endpoint that returns no
+reasoning field (`long_tasks.test.ts` pins all three).
+
+**Security note.** `exec = "docker"` in 0.4.4 and earlier does not contain a
+deliberately hostile model against gnomon's own host-side actions (its
+bookkeeping git, audit writes, `gnomon check`). Treat it as protection against
+mistakes, not against an adversarial model. A fix is in review (PR #158).
 
 ### Changed (default)
 
@@ -256,6 +311,13 @@ no reasoning field (`long_tasks.test.ts` pins all three).
   blank, cut re-asks the second cut instead of letting it stand as
   `truncated`. Two cuts in a row still end the turn (P2G41's two `truncated`
   cells were that case).
+- **`gnomon setup` no longer cites the RTX 5090 hybrid result as current.**
+  Its hybrid explanation (catalog data, `packages/gnomon-cli/catalog/models.toml`)
+  still quoted R1H's 87% vs 84% cloud-only at 26% lower cost per solved task,
+  which did not reproduce (R3R; R4H found no build effect, 20 vs 19). It now
+  says the RTX lane showed no measured advantage over cloud-only and, on
+  unified memory, cites the GB10 result that stands (M2: 22/32 vs 16/31
+  local-only, p = 0.07), as docs/benchmarks/HYBRID.md does.
 
 ## [0.4.3] — 2026-11-06
 
@@ -4257,7 +4319,8 @@ was written.
   `git tag`, not a documentation edit as well.
 -->
 
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.4
 [0.4.3]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.3
 [0.4.2]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.2
 [0.4.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.1
