@@ -29,8 +29,9 @@ Update with `gnomon update`; `gnomon uninstall` prints how to remove it.
    project, run `gnomon setup`. It shows your OS, RAM and GPU and which model
    servers are running, then recommends a model from a dated catalog and says
    why. With 24 GB of GPU memory or 64 GB of unified memory that is
-   `qwen3.6:35b`, which solved 24 of 32 tasks alone on an RTX 5090 in
-   gnomon's own runs. Smaller machines get a smaller model, marked "not
+   `qwen3.6:35b`, which solved about two thirds of a 32-task Terminal-Bench
+   set alone on an RTX 5090 in gnomon's own runs (24/32 in R1H; 22/29 and
+   18/32 in later runs of the same lane, R3R and LG1). Smaller machines get a smaller model, marked "not
    measured by gnomon". It downloads only if you say yes, and offers a ~10 s
    speed check.
 2. **Connect a cloud model (optional).** Pick OpenCode Go, OpenRouter,
@@ -536,13 +537,13 @@ in the job that built the file, plus an **SBOM**
 [GitHub CLI](https://cli.github.com) logged in:
 
 ```bash
-scripts/verify-release.sh 0.5.0
+scripts/verify-release.sh 0.4.5
 ```
 
 It downloads the release, checks every file against `SHA256SUMS`, and runs
 `gh attestation verify` on every artifact against GitHub's attestation store
 and against the shipped bundle file, requiring the signer to be exactly
-`build-release.yml` at `refs/tags/v0.5.0` on a GitHub-hosted runner, then
+`build-release.yml` at `refs/tags/v0.4.5` on a GitHub-hosted runner, then
 checks the SBOM attestation. Exit 0 means all of it verified, 1 means
 something did not (do not install it), and 3 means a release from before
 attestation (0.4.0 and earlier): the checksums match, but nothing says who
@@ -551,8 +552,8 @@ built the bytes. `--dir <dir>` checks files you already downloaded.
 One file by hand:
 
 ```bash
-gh attestation verify gnomon-0.5.0-linux-x64.tar.gz --repo eljaplacido/gnomonharness \
-  --cert-identity https://github.com/eljaplacido/gnomonharness/.github/workflows/build-release.yml@refs/tags/v0.5.0
+gh attestation verify gnomon-0.4.5-linux-x64.tar.gz --repo eljaplacido/gnomonharness \
+  --cert-identity https://github.com/eljaplacido/gnomonharness/.github/workflows/build-release.yml@refs/tags/v0.4.5
 ```
 
 This is SLSA Build Level 3 on the path GitHub documents (attestations made
@@ -2128,9 +2129,9 @@ chain = true
 | Data minimisation | `record = "metadata"` writes decisions and outcomes but **no prompt or response text** |
 | What was done | A shell call's `tool_call` record keeps the **whole command** in `target`, after `redact`, under either `record` setting: the command is the action, not prompt or response text. A file tool's `target` is its path |
 | Redaction | Patterns scrubbed from any recorded text, and from every recorded command |
-| Not writable by the agent | `write`, `edit` and a shell command's named outputs (hard links, `ln`, git checkout/apply, archive members and more) are refused with rule `record` inside the trail directory (and `.gnomon-trials/`, `.gnomon-sessions/`) for every role, whatever `write_allow` says, as are a recursive removal of a directory above them and a `git clean -x` or `git stash --all` that would remove them. This is a pattern check, not containment. A path built at run time, a script file's writes and MCP calls are not seen by it. The kernel sandbox (`exec os`) contains those; `[audit.attest]` and `[audit.anchor]` make a forged trail detectable |
+| Not writable by the agent | `write`, `edit` and a shell command's named outputs (hard links, `ln`, git checkout/apply, archive members and more) are refused with rule `record` inside the trail directory (and `.gnomon-trials/`, `.gnomon-sessions/`) for every role, whatever `write_allow` says, as are a recursive removal of a directory above them and a `git clean -x` or `git stash --all` that would remove them. This is a pattern check, not containment. A path built at run time, a script file's writes and MCP calls are not seen by it. Only containment covers those: `exec = "docker"` today (docs/THREAT-MODEL-EXEC.md); a kernel sandbox (`exec os`) is proposed in #74/#156 and **not merged** — `[audit.attest]` and `[audit.anchor]` make a forged trail detectable |
 | A run killed mid-turn | `<session>.record.json` beside the trail is the turn's record as it stands, rewritten after every model reply and tool call (`record_state: "partial"`, `stop_reason: "in_progress"`): what a SIGKILL leaves. SIGINT, SIGTERM or SIGHUP flush it `final` as `stop_reason: "killed"`, append the `turn` record and `session_end`, print it under `gnomon task --json`, then let the signal end the process as before. Before this a run killed at a time cap left no record of its turn (docs/CONTRACTS.md §28) |
-| Changes it did not make | The record guard snapshots the record directories (stat including ctime, plus a hash of the newest files) around every tool call that can write. Any change gnomon's own writer did not make stops the turn as `tamper`, writes a `record_tamper` record, and blocks `gnomon skill accept` until a person runs `gnomon audit resolve`, which needs a terminal or a person-present signer (`[audit.attest] person_present = true`). A checkpoint sealed at each session's end covers the gap between sessions. A new gnomon trail from another process only earns a `record_notice`. This guards against a careless agent and makes tampering visible; against a hostile one, a person-present signer or the kernel sandbox is the guarantee (docs/CONTRACTS.md §14) |
+| Changes it did not make | The record guard snapshots the record directories (stat including ctime, plus a hash of the newest files) around every tool call that can write. Any change gnomon's own writer did not make stops the turn as `tamper`, writes a `record_tamper` record, and blocks `gnomon skill accept` until a person runs `gnomon audit resolve`, which needs a terminal or a person-present signer (`[audit.attest] person_present = true`). A checkpoint sealed at each session's end covers the gap between sessions. A new gnomon trail from another process only earns a `record_notice`. This guards against a careless agent and makes tampering visible; against a hostile one, a person-present signer is the guarantee (the proposed kernel sandbox, `exec os` #74/#156, is not merged; docs/CONTRACTS.md §14) |
 
 ```bash
 gnomon audit show      # trails
@@ -2190,7 +2191,7 @@ this.
 |---|---|---|
 | A key file, or an ssh-agent without confirmation | The trail was not edited afterwards by someone without the key | **No.** Any process of yours, the agent's shell included, can sign, and that includes signing a stubbed trial |
 | ssh-agent with `ssh-add -c`, a FIDO or hardware key that needs a touch, a passphrase prompt | A person confirmed each signature, at the end of the trial they ran | Yes, as long as the person checks what they are confirming |
-| Any signer, with the agent in the kernel sandbox (`exec os`, #74) | The agent could not reach the key | Yes |
+| Any signer, with the agent in the kernel sandbox (`exec os`, proposed in #74/#156, **not merged**: master accepts only `exec = "off"` or `"docker"`) | The agent could not reach the key | Yes, once it ships. Not available today |
 
 `[skills] require_trial` is **off by default**, and opt-in. When it is on,
 gnomon checks evidence against a `public_key` it verifies itself: inline, or a

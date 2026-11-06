@@ -177,8 +177,8 @@ function resolutionCounts(config: GnomonConfig, file: string, res: AuditRecord):
  *
  * Limits, said plainly: a process can allocate a pseudo-terminal (`script`),
  * and a library caller can pass `interactive: true`. Against an agent that
- * would do either, the person-present signer or the kernel sandbox is the
- * guarantee (docs/CONTRACTS.md §14).
+ * would do either, the person-present signer is the guarantee (a kernel
+ * sandbox, `exec os` #74/#156, is proposed and not merged; docs/CONTRACTS.md §14).
  */
 export function resolveTamper(
   config: GnomonConfig,

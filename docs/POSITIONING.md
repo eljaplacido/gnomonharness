@@ -24,6 +24,19 @@ The role chain, the model tier and the timeout-retry instruction each measured
 null as well. No score on any public suite supports a claim that this harness
 completes more tasks than another one, and none is made here.
 
+**That tie is from v0.2 and is not the current picture.** P2G41 (2026-11-05,
+pre-registered, 29 Terminal-Bench tasks, deepseek-v4.1-flash via OpenCode Go,
+1,800 s cap, k = 1) ran gnomon v0.4.1 against opencode. With its **release
+defaults gnomon trailed: 0/28 solved against opencode's 6/29**, solve-rate
+difference −0.179 (95% CI −0.321 to −0.036), hidden-test fraction −0.221. With
+the hosted recipe (B41) it solved 3 against opencode's 5 on 28 paired tasks
+(−0.071, CI −0.250 to +0.107: no difference shown, parity not shown), and
+reached parity on the fraction of hidden tests passed (+0.050, CI −0.097 to
++0.205)
+([P2G41 summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/p2g41-2026-11/summary-p2g41.txt)).
+So on a hosted model the defaults cost task completion, and the recipe
+recovers partial credit but has not shown parity on solves.
+
 That is the finding, not a disappointment: at this model tier the harness is not
 the bottleneck on task completion, so the properties below — determinism,
 capability separation, disclosure, auditability — are what this document is
@@ -92,13 +105,12 @@ deployment.
 
 ## What it costs
 
-**Startup.** ~197ms of the per-invocation overhead is `tsx` transpiling the
-TypeScript sources. Measured against a raw Ollama call on the same prompt:
-126ms raw, 356ms through `gnomon task`. gnomon's own logic is therefore ~33ms;
-the rest is process start. An interactive session pays it once. A script
-calling `gnomon task` in a loop pays it every time. Fixing it means running
-compiled output, which means conditional `exports` across every workspace
-package — a deliberate build change, not yet made.
+**Startup.** A release install runs one bundled, compiled launcher (the `tsx`
+era's ~197 ms of transpiling is gone). Measured on an NVIDIA GB10 (aarch64),
+40 paired rounds against a local stub model (audit 2026-11-06): `gnomon
+--version` 43 ms on v0.4.0 and 61 ms on master before lazy loading; a one-request
+`gnomon task` 87 ms and 106 ms. An interactive session pays it once; a script
+calling `gnomon task` in a loop pays it every time.
 
 **Model support is narrower than the field.** Ollama and any OpenAI-compatible
 endpoint. That covers local inference and most routers, and it does not cover
