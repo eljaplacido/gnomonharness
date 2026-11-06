@@ -42,7 +42,9 @@
  * a measurement that errs towards "changed", never a program run.
  */
 import { spawnSync, type SpawnSyncReturns, type StdioOptions } from "node:child_process";
-import { isAbsolute, resolve } from "node:path";
+import { isAbsolute, resolve, dirname, join } from "node:path";
+import { statSync } from "node:fs";
+import { homedir } from "node:os";
 
 /** `-c` overrides every gnomon-run git gets. */
 export const GIT_HARDENING: readonly string[] = [
@@ -134,7 +136,68 @@ function gitDirOf(cwd: string, args: readonly string[]): string {
  * GIT_CONFIG_COUNT entries. `git config --list` reads the configuration
  * (includes too) and runs nothing.
  */
+/**
+ * What the driver listing depends on: the repository's config files and the
+ * global ones, by size and mtime. Null (do not cache) when the repository's
+ * `.git` is not a plain directory (a linked worktree, a submodule), where
+ * the config lives somewhere this walk does not follow.
+ */
+function configSignature(dir: string, env: NodeJS.ProcessEnv): string | null {
+  const st = (p: string) => {
+    try {
+      const s = statSync(p);
+      return `${s.size}:${s.mtimeMs}:${s.ino}`;
+    } catch {
+      return "-";
+    }
+  };
+  let d = resolve(dir);
+  for (;;) {
+    let g;
+    try {
+      g = statSync(join(d, ".git"));
+    } catch {
+      g = null;
+    }
+    if (g) {
+      if (!g.isDirectory()) return null;
+      break;
+    }
+    const up = dirname(d);
+    if (up === d) return null;
+    d = up;
+  }
+  const home = env.HOME || homedir();
+  const xdg = env.XDG_CONFIG_HOME || join(home, ".config");
+  return [
+    d,
+    st(join(d, ".git", "config")),
+    st(join(d, ".git", "config.worktree")),
+    st(join(home, ".gitconfig")),
+    st(join(xdg, "git", "config")),
+    env.GIT_CONFIG_GLOBAL ?? "",
+  ].join("|");
+}
+
+/**
+ * Driver listings by configSignature, so one `gnomon check` (dozens of git
+ * calls; ~50 ms per spawn on Windows) lists once per config state. A config
+ * file that changes -- size, mtime or inode -- lists again.
+ */
+const driverCache = new Map<string, string[]>();
+
 export function neutralizeDriversEnv(dir: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const sig = configSignature(dir, env);
+  const cached = sig === null ? undefined : driverCache.get(sig);
+  const keys = cached ?? listDriverKeys(dir, env);
+  if (sig !== null && cached === undefined) {
+    if (driverCache.size > 64) driverCache.clear();
+    driverCache.set(sig, keys);
+  }
+  return driverEnv(keys, env);
+}
+
+function listDriverKeys(dir: string, env: NodeJS.ProcessEnv): string[] {
   const r = spawnSync("git", [...GIT_HARDENING, "config", "-z", "--list"], {
     cwd: dir,
     encoding: "utf8",
@@ -172,6 +235,11 @@ export function neutralizeDriversEnv(dir: string, env: NodeJS.ProcessEnv): NodeJ
       if (m) add(`merge.${m[1]}.driver`);
     }
   }
+  return keys;
+}
+
+function driverEnv(keys: readonly string[], env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const seen = new Set(keys);
   const out: NodeJS.ProcessEnv = { ...env };
   keys.forEach((k, i) => {
     out[`GIT_CONFIG_KEY_${i}`] = k;
@@ -212,6 +280,7 @@ export function markGitContained(): void {
 
 /** Tests only. */
 export function _resetGitSafety(): void {
+  driverCache.clear();
   sandbox = null;
   contained = false;
 }

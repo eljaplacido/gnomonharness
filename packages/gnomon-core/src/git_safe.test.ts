@@ -102,6 +102,19 @@ describe.skipIf(onWindows)("finding A — gnomon's own git runs nothing the repo
     expect(existsSync(marker), "control").toBe(true);
   });
 
+  it("a driver added after a listing was cached is still blanked", () => {
+    // The listing is cached per config state; an append changes the state.
+    expect(safeGit(["diff", "--numstat"], { cwd: repo }).status).toBe(0);
+    const marker = join(outside, "late-ran");
+    writeFileSync(join(repo, ".gitattributes"), "*.txt filter=late\n");
+    appendFileSync(join(repo, ".git", "config"), `[filter "late"]\n\tclean = "touch '${marker}'; cat"\n`);
+    writeFileSync(join(repo, "a.txt"), "four\n");
+    expect(safeGit(["diff", "--numstat"], { cwd: repo }).status).toBe(0);
+    expect(existsSync(marker)).toBe(false);
+    spawnSync("git", ["diff"], { cwd: repo, stdio: "ignore" });
+    expect(existsSync(marker), "control").toBe(true);
+  });
+
   it("puts the hardening before the subcommand and the driver flags after it", () => {
     const a = hardenGitArgs(["-C", "/x", "--no-optional-locks", "diff", "--numstat", "HEAD"]);
     expect(a.slice(0, 4)).toEqual(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]);
