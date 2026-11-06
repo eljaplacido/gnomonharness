@@ -430,7 +430,7 @@ irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/i
 The installer ([`scripts/install.sh`](scripts/install.sh),
 [`scripts/install.ps1`](scripts/install.ps1)) checks Node and, if it is missing
 or older than 20, prints the command for your OS instead of running one as root.
-It resolves the latest release (`GNOMON_VERSION=0.4.4` pins one), installs the
+It resolves the latest release (`GNOMON_VERSION=0.4.5` pins one), installs the
 npm package — from the registry when that version is published there, from
 the release's own tarballs when it is not (an older pin, or the minute between
 a release and its npm publish) — and puts the native binaries in
@@ -465,11 +465,11 @@ the release job builds, refuses to publish unless they install and run, and
 then publishes to npm byte for byte:
 
 ```bash
-V=0.4.4; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
+V=0.4.5; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/gnomon-harness-$V.tgz
 ```
 
-<!-- bash only: `V=0.4.4` is not an assignment in PowerShell, and `$B/...` is
+<!-- bash only: `V=0.4.5` is not an assignment in PowerShell, and `$B/...` is
 not a path there. The installer one-liners above are the cross-shell route. -->
 
 From the registry this is `npm i -g gnomon-harness` (or
@@ -1706,11 +1706,6 @@ deletes or copies reaches only the mounted repository, and with
 Not yet measured against G2b's scenarios (#63 option 2); until it is, this
 says what the mechanism is, not that it held.
 
-**Security note.** `exec = "docker"` in 0.4.4 and earlier does not contain a
-deliberately hostile model against gnomon's own host-side actions (its
-bookkeeping git, audit writes, `gnomon check`). Treat it as protection against
-mistakes, not against an adversarial model. A fix is in review (PR #158).
-
 **Two limits, published because both fail open.** `docker` is the only value
 that does anything: the resolver is `raw === "docker" ? "docker" : "off"`, so
 `bwrap`, `podman` or a typo runs **on the host**. Measured 2026-09-02 on a
@@ -1723,13 +1718,14 @@ missing one surfaces as a failing command mid-turn. The reasoning, and what it
 would take to make a rejected backend refuse, is in
 [docs/SANDBOX-DESIGN.md](docs/SANDBOX-DESIGN.md).
 
-**Security note.** In v0.4.3 and earlier, `exec = "docker"` contained what
+**Security note.** In v0.4.4 and earlier, `exec = "docker"` contained what
 the model's commands did to the host directly, but not what gnomon itself then
-did on the host with files those commands had written: a hostile model could
-plant a symlink, a git config entry or a surface edit in the mounted project
-and have gnomon's own host-side writes, git calls or next session act on it,
-up to running code on the host. This release fixes that. If you relied on
-`exec = "docker"` to contain an untrusted model, upgrade.
+did on the host with files those commands had written: its own git, audit
+writes, `gnomon check` and next session could be made to act on them, up to
+running code on the host. v0.4.5 fixes that (below). If you relied on
+`exec = "docker"` to contain an untrusted model, upgrade. What it still does
+not cover is listed under "Your own git" and "Code the host still runs from
+the project" below.
 
 **What the container cannot write.** gnomon's own state and git's control
 files are mounted read-only inside the container: `.gnomon/` (the surface),
