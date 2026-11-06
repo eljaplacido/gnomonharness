@@ -309,6 +309,41 @@ fn readonly_paths_under_the_root_are_refused_where_the_kernel_can() {
     }
 }
 
+/// Sixth review, finding 3: where `--readonly` is enforced, a read-only
+/// path's parent below the root cannot be renamed away from it (`mv .git
+/// .git-old && mkdir .git`), while files inside that parent stay writable.
+#[test]
+fn a_readonly_paths_parent_cannot_be_renamed_where_the_kernel_can() {
+    require_sandbox!(true);
+    if !probe()["readonly_enforced"].as_bool().unwrap() {
+        return;
+    }
+    let s = scene();
+    let git = s.root.join(".git");
+    std::fs::create_dir(&git).unwrap();
+    std::fs::write(git.join("config"), "[core]\n").unwrap();
+    let out = Command::new(bin())
+        .args(["sandbox", "--root"])
+        .arg(&s.root)
+        .arg("--write")
+        .arg(&s.tmp)
+        .arg("--readonly")
+        .arg(git.join("config"))
+        .args(["--network", "on", "--", "/bin/sh", "-c"])
+        .arg(format!(
+            "echo x > {g}/index; mv {g} {r}/.git-old; mkdir -p {g}; echo ok > {r}/work.txt",
+            g = sh_quote(&git),
+            r = sh_quote(&s.root)
+        ))
+        .current_dir(&s.root)
+        .output()
+        .expect("spawn gnomon-exec sandbox");
+    assert_eq!(std::fs::read_to_string(s.root.join("work.txt")).unwrap(), "ok\n", "{out:?}");
+    assert!(!s.root.join(".git-old").exists(), ".git was renamed: {out:?}");
+    assert_eq!(std::fs::read_to_string(git.join("config")).unwrap(), "[core]\n");
+    assert_eq!(std::fs::read_to_string(git.join("index")).unwrap(), "x\n", "files inside .git stay writable: {out:?}");
+}
+
 #[test]
 fn the_probe_reports_what_this_kernel_enforces() {
     let p = probe();

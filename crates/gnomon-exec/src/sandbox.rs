@@ -1015,6 +1015,14 @@ mod macos {
                 let kind = if r.is_dir() { "subpath" } else { "literal" };
                 p.push_str(&format!("  ({kind} {})\n", lit(r)));
             }
+            // Each read-only path's directories below the root, as literals:
+            // the entry itself cannot be renamed or removed, while files
+            // inside it stay writable. Without this `mv .git .git-old && mkdir
+            // .git` moved every read-only path out from under its name
+            // (sixth review, finding 3).
+            for a in super::readonly_ancestors(policy) {
+                p.push_str(&format!("  (literal {})\n", lit(&a)));
+            }
             p.push_str(")\n");
         }
         if !policy.network {
@@ -2636,9 +2644,45 @@ pub mod linux {
     }
 }
 
+/// The directories strictly between the root and each `--readonly` path:
+/// pinned in place (not renamed, not removed) where the kernel enforces
+/// `--readonly`, so a read-only path cannot be moved out from under its name.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn readonly_ancestors(policy: &Policy) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for r in &policy.readonly {
+        let Ok(rel) = r.strip_prefix(&policy.root) else { continue };
+        let mut cur = policy.root.clone();
+        let comps: Vec<_> = rel.components().collect();
+        for c in comps.iter().take(comps.len().saturating_sub(1)) {
+            cur.push(c);
+            if !out.contains(&cur) {
+                out.push(cur.clone());
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod scope_tests {
     use super::*;
+
+    /// Sixth review, finding 3: `.git` itself is pinned when `.git/config` is read-only.
+    #[test]
+    fn a_readonly_paths_parents_below_the_root_are_pinned() {
+        let policy = Policy {
+            root: PathBuf::from("/p"),
+            writable: vec![],
+            readable: vec![],
+            reads: Reads::All,
+            network: false,
+            loopback: true,
+            report_fd: None,
+            readonly: vec![PathBuf::from("/p/.gnomon"), PathBuf::from("/p/.git/config"), PathBuf::from("/p/.git/hooks"), PathBuf::from("/elsewhere/x")],
+        };
+        assert_eq!(readonly_ancestors(&policy), vec![PathBuf::from("/p/.git")]);
+    }
 
     #[test]
     fn a_grant_exposes_a_credential_beneath_it_or_around_it() {

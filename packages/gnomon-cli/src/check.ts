@@ -356,7 +356,13 @@ export function renderVerdict(v: CheckVerdict, ui: ResolvedUi): string[] {
     `${paint(ui, "bold", "gnomon check")}  ${short(v.base)} → ${short(v.head)}` +
       (v.role ? `  ·  role ${paint(ui, "bold", v.role)}` : "")
   );
-  if (v.surface_hash) out.push(paint(ui, "gray", `  rules: surface ${v.surface_hash.slice(0, 16)}… as of base`));
+  if (v.surface_hash) {
+    // The commit, not the name: a ref is movable, the sha is what decided (sixth review).
+    const from = v.rules_rev ? `from commit ${v.rules_rev}` : "as of base";
+    out.push(paint(ui, "gray", `  rules: surface ${v.surface_hash.slice(0, 16)}… ${from}`));
+  }
+  if (v.exec) out.push(paint(ui, "gray", `  [verify] runs: ${v.exec.mode === "off" ? "on this machine" : `${v.exec.mode} (${v.exec.image})`}`));
+  for (const w of v.warnings ?? []) out.push(paint(ui, "yellow", `  ⚠ ${w}`));
   for (const r of v.recovered ?? []) {
     out.push(paint(ui, "yellow", `  ⚠ restored ${r} — an earlier check was interrupted mid re-run`));
   }

@@ -1019,7 +1019,8 @@ describe("log-only", () => {
     // per model request `ms` and `first_byte_ms` -- on each `model_call`
     // record and in the turn record's `model_calls` (§29).
     // What each request SENT (counters.model_calls) is compared.
-    const drop = new Set(["ts", "hash", "prev", "surface_hash", "duration_ms", "session", "shadow", "ms", "first_byte_ms"]);
+    // `started_at` and `duration_ms` on each `tool_call` record too (TB4).
+    const drop = new Set(["ts", "hash", "prev", "surface_hash", "duration_ms", "session", "shadow", "ms", "first_byte_ms", "started_at"]);
     if (opts.seq === false) drop.add("seq");
     const unclocked = (m: any) =>
       m ? { ...m, calls: m.calls.map(({ ms, first_byte_ms, ...c }: any) => c) } : m;

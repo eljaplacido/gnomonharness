@@ -14,8 +14,8 @@
  * tree whatever happens.
  */
 
-import { existsSync, readFileSync, unlinkSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, relative, sep } from "node:path";
+import { relative, sep } from "node:path";
+import { identityOf, readExactIn, removeIn, sameIdentity, writeFileIn, RootWriteError, type FileIdentity } from "./root_fs.js";
 import type { ResolvedVerify } from "./config.js";
 import { globToRegExp, type ToolOutcome } from "./tools.js";
 
@@ -88,6 +88,12 @@ export interface MustFailFirstResult {
   restored: string[];
   /** Why it did not run, when `ran` is false. */
   reason?: string;
+  /**
+   * Files NOT put back after the re-run because something replaced them
+   * while it ran (the re-run executes the model's code): each says which and
+   * why. The tree is left as that code left it, for a person to look at.
+   */
+  warnings?: string[];
 }
 
 /**
@@ -136,23 +142,52 @@ export async function mustFailFirst(
     };
   }
 
-  const current = new Map<string, Buffer | null>(
-    sources.map(([abs]) => [abs, existsSync(abs) ? readFileSync(abs) : null])
-  );
-  const put = (abs: string, content: string | Buffer | null) => {
-    if (content === null) {
-      if (existsSync(abs)) unlinkSync(abs);
-      return;
+  // The re-run puts files back and later restores them, as host gnomon, in a
+  // tree the model's code has been writing (sixth review). Every source path
+  // is read without following anything and must be a regular single-link
+  // file (or absent); a symlink there made the pre-image land in ~/.bashrc and
+  // the "current" copy read a credentials file into src/. Anything else
+  // refuses the check rather than touching it.
+  const current = new Map<string, { data: Buffer; mode: number } | null>();
+  for (const [abs] of sources) {
+    try {
+      current.set(abs, readExactIn(root, abs));
+    } catch (e) {
+      if (!(e instanceof RootWriteError)) throw e;
+      return { ran: false, pinsNothing: false, tests, restored: [], reason: `not re-run: ${e.message}` };
     }
-    mkdirSync(dirname(abs), { recursive: true });
-    writeFileSync(abs, content);
+  }
+  const put = (abs: string, content: string | Buffer | null, mode?: number) => {
+    if (content === null) removeIn(root, abs);
+    else writeFileIn(root, abs, content, mode);
   };
+  // What each path is after gnomon wrote it; compared before the restore.
+  const placed = new Map<string, FileIdentity | null>();
+  const warnings: string[] = [];
   try {
-    for (const [abs, pre] of sources) put(abs, pre);
+    for (const [abs, pre] of sources) {
+      put(abs, pre, current.get(abs)?.mode);
+      placed.set(abs, identityOf(abs));
+    }
     const again = await run(verify.command);
     const stillPasses = again.code === 0 && /exit 0\b/.test(again.summary);
-    return { ran: true, pinsNothing: stillPasses, tests, restored };
+    // `warnings` is filled by the finally below, after this object is built.
+    return { ran: true, pinsNothing: stillPasses, tests, restored, warnings };
   } finally {
-    for (const [abs, now] of current) put(abs, now);
+    for (const [abs, now] of current) {
+      // Not written (put threw first): nothing of gnomon's to undo there.
+      if (!placed.has(abs)) continue;
+      const was = placed.get(abs) ?? null;
+      const is = identityOf(abs);
+      if (!sameIdentity(was, is)) {
+        warnings.push(`${rel(abs)} was replaced while the check re-ran; not restored (left as the re-run left it)`);
+        continue;
+      }
+      try {
+        put(abs, now ? now.data : null, now?.mode);
+      } catch (e) {
+        warnings.push(`${rel(abs)} could not be restored: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
   }
 }

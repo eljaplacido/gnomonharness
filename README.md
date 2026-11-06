@@ -92,8 +92,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2672 TypeScript tests (2153 core, 494 cli, 18
-> natives, 7 tui) and 118 Rust tests — **2790 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2723 TypeScript tests (2201 core, 497 cli, 18
+> natives, 7 tui) and 120 Rust tests — **2843 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -717,6 +717,15 @@ model listing once per session ([GUIDE §5.2](docs/GUIDE.md), [CONTRACTS](docs/C
 Without either, its turns are trimmed to `[defaults] max_context_tokens`, which
 is sized for a local model; a session on a remote endpoint says so at startup.
 
+**Reasoning replay** (`replay_reasoning`) is on by default for **hosted**
+endpoints since v0.4.4: once one answers a tool call with reasoning content,
+that reasoning goes back on every later assistant message. H3 (pre-registered,
+hosted only) adopted it: hidden-test fraction +0.160 [95% +0.042, +0.293],
+capped runs 19 → 14 ([summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+On a **local lane** — a loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local, CGNAT/Tailscale (100.64/10), `*.local` or `host.docker.internal` host, a single-label name, or Ollama's `/api/chat` — it is untested and off unless
+`replay_reasoning = true` is declared. `replay_reasoning = false` turns it off
+anywhere ([GUIDE §5.2](docs/GUIDE.md)).
+
 #### Keys
 
 The surface names the variable and never holds the value — that is what makes
@@ -884,8 +893,10 @@ all_refused_notice = 3            # every call to one tool refused this often �
 max_steps = 12                    # tool calls per leg when a role declares no max_steps
 legs = 8                          # max_steps_total defaults to max_steps × legs
 stall_repeats = 3                 # identical calls in a row that count as going in circles
-nudge_after_idle = 12             # calls without changing a file before the model is nudged
+nudge_after_idle = 12             # calls without changing a file before the model is nudged (0 = never)
 converge_refire = 6               # calls between convergence re-pushes past converge_after
+deadline_notes = [0.5, 0.8]       # gnomon task --deadline: budget fractions that get a time-left note
+deadline_margin_ms = 30000        # gnomon task --deadline: stop this long before it (at most a tenth)
 ```
 
 Every value shown is the default, so a surface that omits the block — or writes
@@ -917,17 +928,20 @@ nothing in the record could say so.
 | `max_steps` | The default for a role that declares no `max_steps`. The role's own value wins where it has one. `/roles` prints which of the two you are getting. |
 | `legs` | `max_steps_total` defaults to `max_steps × legs`. `max_steps` is a checkpoint — the harness compacts and continues — and this is how many checkpoints there are before the wall. `1` restores stop-at-the-first-checkpoint. |
 | `stall_repeats` | Identical consecutive tool calls that mean the model is going in circles. Ends the turn with `stop_reason: stall`. |
-| `nudge_after_idle` | Calls without changing a file before the model is nudged to act or conclude — and re-nudged every this-many after that. A nudge, not a wall: persistence is what wins hard-but-solvable tasks. A shell call counts only when gnomon saw that it changed nothing. It walks a tree of under 2,000 files, asks `git status` about a bigger one in a git work tree, and walks one outside git, where past 20,000 files the answer is unknown and the call is not counted. |
+| `nudge_after_idle` | `12` by default; `0` turns it off (since v0.4.4). Kept on because LG1 (2026-11-06, pre-registered, local lane) measured the nudge-off build at equal solves (18 vs 18) and 1.43× the local tokens, a regression ([summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/lg1-2026-11/summary-lg1.txt)). Calls without changing a file before the model is nudged to act or conclude — and re-nudged every this-many after that. A nudge, not a wall: persistence is what wins hard-but-solvable tasks. A shell call counts only when gnomon saw that it changed nothing. It walks a tree of under 2,000 files, asks `git status` about a bigger one in a git work tree, and walks one outside git, where past 20,000 files the answer is unknown and the call is not counted. |
 | `converge_refire` | Calls between convergence re-pushes once `converge_after` is reached. A single "submit what you have" is easy to ignore. |
+| `deadline_notes` | Read only under `gnomon task --deadline`. Fractions of the wall-clock budget, in (0, 1); when the turn has used one, its next request carries one short note of the time left, as a mid-turn system message (a user message marked `[gnomon]` under `steer_role = "user"`). `[]` sends none. |
+| `deadline_margin_ms` | Read only under `gnomon task --deadline`. The turn stops itself this long before the deadline, and a `bash` command's timeout is clamped to end one margin before that, so the model gets the partial output. Capped at a tenth of the budget. |
 
 Values are floored where a zero would mean the opposite of what it reads:
 `max_run_notes = 0` would keep *every* note (`slice(-0)` returns the whole
 array) and `stall_repeats = 0` would declare a stall on the first tool call of
 every turn, so both floor at 1. `max_consecutive_empty`,
-`max_consecutive_malformed` and `all_refused_notice` accept `0`, where it
-honestly means "never".
+`max_consecutive_malformed`, `all_refused_notice` and `nudge_after_idle`
+accept `0`, where it honestly means "never".
 
-**Known limit.** `[turn]` declares ten of the loop's numbers, not all of them.
+**Known limit.** `[turn]` declares ten of the loop's numbers (and the two the
+deadline reads), not all of them.
 The A-B-A-B alternation test (8-call window, 2 distinct signatures) and the
 *wording* of the nudge and convergence messages are still compiled into the
 harness and still outside the surface hash. The reconciliation document names
@@ -1694,12 +1708,18 @@ of HOME credentials that the other two let through
   modify, truncate, delete, rename and link elsewhere all fail with
   `Permission denied`, `rm -rf` and `shutil.rmtree` included.
 - **Not gnomon's own state or git's control files, even inside the root**:
-  `.gnomon/`, `.gnomon-audit/`, `.gnomon-sessions/`, `.git/config`,
-  `.git/hooks/`, `.git/info/`, `.git/commondir`. On macOS the kernel refuses
-  the write (`gnomon-exec --readonly`). On Linux it cannot: Landlock is an
-  allow-list, and the write grant on the root covers everything beneath it, so
-  gnomon snapshots `.gnomon/` and git's control files before each command,
-  puts back anything the command changed, and says so in the tool result. A
+  `.gnomon/`, `.gnomon-audit/`, `.gnomon-sessions/`, `.gnomon-loops/`,
+  `.git/config`, `.git/hooks/`, `.git/info/`, `.git/commondir`,
+  `.git/config.worktree` (the last two created when absent, as under docker).
+  On macOS the kernel refuses the write (`gnomon-exec --readonly`), and
+  `.git` itself cannot be renamed or removed. On Linux it cannot: Landlock is
+  an allow-list, and the write grant on the root covers everything beneath it,
+  so gnomon snapshots `.gnomon/`, `.gnomon-loops/` and git's control files
+  before each command, puts back anything the command changed, and says so in
+  the tool result — including a `.git` that was renamed away and replaced,
+  which it reports rather than undoes. While the command runs, your own git
+  (an IDE polling `git status`) can read what the command planted there; on
+  Linux, keep it out of the project for the session or use `exec = "docker"`. A
   process the command leaves running in the background can still change them
   after that check; the exec floor, the session pin and gnomon's sandboxed git
   are what hold then. The model cannot change `.gnomon/*.toml` from bash under
@@ -1948,8 +1968,12 @@ up to running code on the host. This release fixes that. If you relied on
 
 **What the container cannot write.** gnomon's own state and git's control
 files are mounted read-only inside the container: `.gnomon/` (the surface),
-`.gnomon-audit/`, `.gnomon-sessions/`, and `.git/config`, `.git/hooks/`,
-`.git/info/` (and `.git/commondir`, or a `.git` file, where present). The model
+`.gnomon-audit/`, `.gnomon-sessions/`, `.gnomon-loops/`, and `.git/config`,
+`.git/hooks/`, `.git/info/`, `.git/commondir` and `.git/config.worktree` (or
+a `.git` file, where present). `.git` itself is mounted on itself, so it
+cannot be renamed away from those mounts (`mv .git .git-old` fails with
+"device or resource busy"). The container runs as your uid with
+`--cap-drop ALL --security-opt no-new-privileges`. The model
 still edits code and can `git add` and `git commit`; it can no longer edit
 `.gnomon/*.toml` from bash under docker, so configuration changes are yours to
 make. gnomon creates `.gnomon-audit/`, `.gnomon-sessions/`, `.git/hooks/` and
@@ -1962,6 +1986,49 @@ the project or `.git/`. Each container carries a `gnomon.root` label, so any
 gnomon process (the dashboard, `gnomon check`, `gnomon guard`, a second
 session) runs no git in a project while a container for it is running, and
 refuses when docker cannot be asked. `image` must be a plain image reference.
+
+**Your own git, and what it is protected from.** When `.git/commondir` or
+`.git/config.worktree` is missing, gnomon creates it (`commondir` holding `.`,
+which git reads as "this directory"; `config.worktree` empty, read only when
+`extensions.worktreeConfig` is set in the read-only config) so that the
+container cannot create one pointing your git at a config it wrote. With
+that, the git you run yourself in the project root — a shell prompt, an IDE
+polling `git status` — reads only config, hooks and redirects the container
+could not write (unless your `.git/config` itself `[include]`s a file
+elsewhere in the project). It is **not** protected from: a nested repository or a
+submodule (a `.git` file or directory in a subdirectory, including
+`.git/modules/`), which the container can create and which your git enters
+when you `cd` into it or when `git status` recurses into a submodule — treat
+any repository below the root that you did not create as hostile; and a
+`.gitattributes` filter or diff driver, which names a program only through
+config the container cannot write but is itself repository content.
+
+**What else refuses to start.** A contained role in a project whose root
+contains your home directory or gnomon's data directory (`cd ~ && gnomon`)
+is refused: the container would write `~/.bashrc` and the exec floors. So is
+one whose root contains gnomon's own code (a checkout of gnomon, or gnomon
+installed in the project's `node_modules`), because the container could
+rewrite the gnomon that runs next; install gnomon outside the project. To
+work on gnomon itself with a contained role, `GNOMON_ALLOW_SELF_IN_ROOT=1`
+accepts that risk. Host reads and writes of files the model names (`read`,
+`write`, `edit`, `grep`, the must-fail-first re-run) take only regular files
+whose real path is in the root — never a FIFO, a device or a symlink out —
+and write by replacing the file, never through a symlink or a hard link.
+`gnomon check` holds `[verify]` to this machine's exec floor for the
+project (a base ref moved to a commit whose policy says `exec = "off"` does
+not move it onto the host), prints the commit the rules came from, and
+warns when that ref moved after a contained session started.
+
+**Code the host still runs from the project.** MCP servers start in an
+empty directory outside the project while any role runs contained (so `npx`
+does not resolve `node_modules/.bin` and Python does not import from the
+project); a server whose arguments name project files must name them by
+absolute path then, and a server command that itself lives in the project
+still runs what the container wrote. Loop guard and act commands
+(`.gnomon/loops.toml`) and declared anchor/attest signer commands run on
+the host as written; if they invoke scripts or packages from the project,
+those are the container's to change. Keep such commands pointing outside
+the project.
 
 **The surface cannot loosen the container across sessions either.**
 `.gnomon/` is inside the mounted repository, read-only to bash but still

@@ -76,11 +76,54 @@ import {
   type RepoCodeRun,
   type WriteTarget,
 } from "./shell.js";
-import { containedReadonlyPaths, ensureDirIn, restoreProtected, RootWriteError, snapshotProtected, writeFileIn } from "./root_fs.js";
+import {
+  containedMountPoints,
+  containedReadonlyPaths,
+  ensureDirIn,
+  readRegular,
+  restoreProtected,
+  RootWriteError,
+  snapshotProtected,
+  writeFileIn,
+  writeRegular,
+} from "./root_fs.js";
+
+/**
+ * The roots host reads and writes of model-named files must stay under (sixth
+ * review): none when sandbox = "off", which confines nothing.
+ */
+function fsRoots(ctx: Pick<ToolContext, "sandbox" | "root" | "extraRoots">): string[] {
+  return ctx.sandbox === "off" ? [] : [ctx.root, ...(ctx.extraRoots ?? [])];
+}
+
+/** A model-named file's text, read only if it is a regular file under the roots. */
+function readModelFile(ctx: Pick<ToolContext, "sandbox" | "root" | "extraRoots">, abs: string): string {
+  return readRegular(fsRoots(ctx), abs).toString("utf-8");
+}
+
+/** A write or edit refused because the file there is not one gnomon will read. */
+function unreadable(tool: "write" | "edit", path: string, err: unknown): ToolOutcome {
+  return {
+    code: TOOL_FAILED,
+    content: `Could not read ${path}: ${err instanceof Error ? err.message : String(err)}`,
+    summary: `${tool} ${path} — not a regular file`,
+  };
+}
+
+/** Write a model-named file: never through a symlink, a hard link, or into a non-regular file. */
+function writeModelFile(ctx: Pick<ToolContext, "sandbox" | "root" | "extraRoots">, abs: string, text: string): void {
+  writeRegular(fsRoots(ctx), abs, text);
+}
 
 // ---------------------------------------------------------------------------
 // Outcome codes
 // ---------------------------------------------------------------------------
+
+/**
+ * The abort reason `gnomon task --deadline` stops a turn with. A turn, or a
+ * command, aborted with it ended at the deadline, not at an operator's Esc.
+ */
+export const DEADLINE_ABORT = "gnomon:deadline";
 
 export const TOOL_OK = 0;
 /** The tool ran and the answer was negative (missing path). Still a result. */
@@ -1038,6 +1081,14 @@ export interface ToolContext {
   approve: Approver;
   /** bash timeout, ms */
   timeoutMs: number;
+  /**
+   * `gnomon task --deadline`: the epoch milliseconds a bash command must be
+   * finished by (the deadline less twice its margin: the turn stops at one
+   * margin, and the model gets the other to act on the output). A command's
+   * timeout is clamped to the time left before it. Absent without a deadline, which is
+   * the behaviour before it existed.
+   */
+  deadlineAt?: number;
   /** Cap on bytes returned to the model from read/bash */
   maxOutputBytes: number;
   /**
@@ -1335,7 +1386,7 @@ async function readTool(
         summary: `read ${path.replace(/\/+$/, "")}/ — ${entries.length} entries`,
       };
     }
-    const raw = readFileSync(abs, "utf-8");
+    const raw = readModelFile(ctx, abs);
     // Split on CRLF too. A trailing \r on every line of a Windows checkout is
     // invisible in the transcript and poison in anything copied from it.
     // `edit` matches LF text against CRLF files, so what is shown here is what
@@ -1822,6 +1873,12 @@ export function sandboxCommand(
     `--name ${name}`,
     ex.network ? "" : "--network none",
     `--user ${uid}:${gid}`,
+    // No capabilities and no setuid way back to any (sixth review): a setuid
+    // binary in the image would make the container root, and root can mknod
+    // a device or leave a setuid-root file in the bind-mounted project.
+    // Commands run as the user's uid and need none.
+    "--cap-drop ALL",
+    "--security-opt no-new-privileges",
     // shq, NOT JSON.stringify. JSON.stringify produces a DOUBLE-quoted word,
     // and `$( )` inside double quotes is still command substitution -- so a
     // project directory named `/tmp/proj-$(cmd)` executed `cmd` on the host the
@@ -1831,6 +1888,9 @@ export function sandboxCommand(
     // which is the more common shape of a quoting bug -- one call site noticed,
     // its neighbours not.
     `-v ${shq(ctx.root)}:${shq(ctx.root)}`,
+    // `.git` a mount point of its own, so it cannot be renamed away from
+    // the read-only mounts inside it (root_fs.ts containedMountPoints).
+    ...containedMountPoints(ctx.root).map((p) => `-v ${shq(p)}:${shq(p)}`),
     ...readonly.map((p) => `-v ${shq(p)}:${shq(p)}:ro`),
     `-w ${shq(ctx.root)}`,
     // Which project the container can write, for any gnomon process to ask
@@ -3274,7 +3334,7 @@ function patchPaths(abs: string): string[] {
   let text: string;
   try {
     if (statSync(abs).size > 8 * 1024 * 1024) return [];
-    text = readFileSync(abs, "utf-8");
+    text = readRegular([], abs).toString("utf-8");
   } catch {
     return [];
   }
@@ -3453,6 +3513,12 @@ async function bashTool(
   }
 
   const startedAt = Date.now();
+  // The timeout, clamped to the time left before `--deadline` (less its
+  // margin). At least a second, so a command started at the wire still gets
+  // to report. Unclamped, and the same number as before, without a deadline.
+  const limitMs =
+    ctx.deadlineAt === undefined ? ctx.timeoutMs : Math.max(1000, Math.min(ctx.timeoutMs, ctx.deadlineAt - startedAt));
+  const clamped = limitMs < ctx.timeoutMs;
   // A stable, unique name so a cancelled or timed-out turn can remove the
   // container. Killing the process group stops `docker run`, not the container
   // it started -- the work would keep going with nobody watching it.
@@ -3567,22 +3633,26 @@ async function bashTool(
       const drift = surfaceDrift(ctx, surfaceBefore);
       const movedTree = worktreeMoved(ctx, worktreeBefore, shellCwd);
       // So the next identical call is refused for free rather than stalling.
-      ctx.timedOutCommands?.add(commandKey);
+      // Not when the deadline cut it short: the command may well fit the
+      // ordinary limit, and the refusal would quote a limit it never had.
+      if (!clamped) ctx.timedOutCommands?.add(commandKey);
       done({
         code: TOOL_FAILED,
         worktree_changed: movedTree,
         content:
-          `Command timed out after ${ctx.timeoutMs}ms and was killed. Output captured before the kill:\n` +
+          (clamped
+            ? `Command stopped after ${limitMs}ms, the time left before this task's deadline, and was killed. Output captured before the kill:\n`
+            : `Command timed out after ${ctx.timeoutMs}ms and was killed. Output captured before the kill:\n`) +
           clampEnds(cappedCapture.text, cappedCapture.ctx, `bash-timeout`) +
           `\n\nIt did not finish, so this output is partial. Re-running it unchanged will time out again: ` +
           `narrow it, or start it in the background and poll:\n      ${backgroundRecipe(command)}\n` +
           `    then read ${JOB_LOG_DIR}/job.log on a later step.` +
           (drift ? `\n\n${drift.notice}` : "") +
           (containerLeft ? CONTAINER_NOT_GONE : ""),
-        summary: `bash — timeout${drift ? " · surface changed" : ""}`,
+        summary: `bash — timeout${clamped ? " (deadline)" : ""}${drift ? " · surface changed" : ""}`,
         surface_drift: drift ?? undefined,
       });
-    }, ctx.timeoutMs);
+    }, limitMs);
 
     // The operator pressing Esc must reach the process, not merely be noticed
     // once it has finished.
@@ -3594,10 +3664,13 @@ async function bashTool(
       await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
       const containerLeft = sandboxed && !(await removeContainer(sandboxName));
       releasePipes(proc);
+      const atDeadline = ctx.signal?.reason === DEADLINE_ABORT;
       done({
         code: TOOL_FAILED,
         content:
-          `Cancelled by the operator after ${Date.now() - startedAt}ms. Output captured before the stop:\n` +
+          (atDeadline
+            ? `Stopped at this task's deadline after ${Date.now() - startedAt}ms. Output captured before the stop:\n`
+            : `Cancelled by the operator after ${Date.now() - startedAt}ms. Output captured before the stop:\n`) +
           clampEnds(
             [stdout ? `stdout:\n${stdout}` : "stdout: (empty)", stderr ? `stderr:\n${stderr}` : ""]
               .filter(Boolean)
@@ -3606,7 +3679,7 @@ async function bashTool(
             `bash-cancelled`
           ) +
           (containerLeft ? CONTAINER_NOT_GONE : ""),
-        summary: `bash — cancelled`,
+        summary: atDeadline ? `bash — stopped at the deadline` : `bash — cancelled`,
       });
     };
     ctx.signal?.addEventListener("abort", onAbort, { once: true });
@@ -5358,7 +5431,7 @@ async function grepTool(
   for (const f of files) {
     let text: string;
     try {
-      const buf = readFileSync(join(ctx.root, f));
+      const buf = readRegular(fsRoots(ctx), join(ctx.root, f));
       // A NUL in the first 8k is the standard binary heuristic. Without it a
       // grep over a repo with fixtures returns pages of mojibake.
       if (buf.subarray(0, 8192).includes(0)) continue;
@@ -5533,7 +5606,12 @@ async function writeTool(
         summary: `write ${path} — is a directory`,
       };
     }
-    const surfaceBefore = existsSync(abs) ? readFileSync(abs, "utf-8") : "";
+    let surfaceBefore: string;
+    try {
+      surfaceBefore = existsSync(abs) ? readModelFile(ctx, abs) : "";
+    } catch (err) {
+      return unreadable("write", path, err);
+    }
     const surfaceDiff = diffLines(surfaceBefore, content);
     const { added: sa, removed: sr } = diffStat(surfaceDiff);
     // custom always asks; all defers to the configured gate.
@@ -5554,8 +5632,7 @@ async function writeTool(
     try {
       // Pinned before the write so the drift report carries both ends.
       const beforeHash = surfaceHashOf(ctx);
-      mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, content, "utf-8");
+      writeModelFile(ctx, abs, content);
       // Signal it. The claim "the next turn runs under the new rules" was made
       // here and was FALSE: the running session holds the config it loaded at
       // startup, and nothing reloaded it. A user who changed a role's model,
@@ -5594,7 +5671,12 @@ async function writeTool(
     };
   }
 
-  const before = existsSync(abs) ? readFileSync(abs, "utf-8") : "";
+  let before: string;
+  try {
+    before = existsSync(abs) ? readModelFile(ctx, abs) : "";
+  } catch (err) {
+    return unreadable("write", path, err);
+  }
   // First write wins: the pre-image is the state at the start of the TURN, not
   // the previous step, so a file edited three times still compares against what
   // the turn inherited.
@@ -5640,7 +5722,12 @@ async function writeTool(
     // Checked only on the approval path, because that await is what opens it:
     // ungated, the read-to-write gap is microseconds and a check there would be
     // cost without a window to guard.
-    const nowOnDisk = existsSync(abs) ? readFileSync(abs, "utf-8") : "";
+    let nowOnDisk: string | null;
+    try {
+      nowOnDisk = existsSync(abs) ? readModelFile(ctx, abs) : "";
+    } catch {
+      nowOnDisk = null;
+    }
     if (nowOnDisk !== before) {
       return {
         code: TOOL_DENIED,
@@ -5655,8 +5742,7 @@ async function writeTool(
   }
 
   try {
-    mkdirSync(dirname(abs), { recursive: true });
-    writeFileSync(abs, content, "utf-8");
+    writeModelFile(ctx, abs, content);
     return {
       code: TOOL_OK,
       content: `Wrote ${path} (+${added} −${removed}).`,
@@ -5701,7 +5787,12 @@ async function editTool(
     };
   }
 
-  const before = readFileSync(abs, "utf-8");
+  let before: string;
+  try {
+    before = readModelFile(ctx, abs);
+  } catch (err) {
+    return unreadable("edit", path, err);
+  }
   if (ctx.preImages && !ctx.preImages.has(abs)) ctx.preImages.set(abs, before);
   // A CRLF file and an LF old_text. Git for Windows checks out with
   // core.autocrlf=true, `read` shows lines without their \r, and the model
@@ -5804,7 +5895,12 @@ async function editTool(
     // pre-approval `before`, so writing it would silently discard anything that
     // changed while the prompt was open -- and the operator approved a diff
     // against a version that no longer exists. The await IS the window.
-    const nowOnDisk = readFileSync(abs, "utf-8");
+    let nowOnDisk: string | null;
+    try {
+      nowOnDisk = readModelFile(ctx, abs);
+    } catch {
+      nowOnDisk = null;
+    }
     if (nowOnDisk !== before) {
       return {
         code: TOOL_DENIED,
@@ -5819,7 +5915,7 @@ async function editTool(
   }
 
   try {
-    writeFileSync(abs, after, "utf-8");
+    writeModelFile(ctx, abs, after);
     if (tier !== undefined && tier !== "exact") {
       return {
         code: TOOL_OK,

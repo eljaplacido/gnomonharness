@@ -27,7 +27,7 @@
  */
 
 import { safeGitBuffer } from "./git_safe.js";
-import { repoStateDir, writeFileIn } from "./root_fs.js";
+import { readExactIn, removeIn, repoStateDir, writeFileIn } from "./root_fs.js";
 import {
   existsSync,
   lstatSync,
@@ -50,7 +50,10 @@ import {
   resolveSandboxLevel,
   resolveVerify,
   type GnomonConfig,
+  type ResolvedExec,
 } from "./config.js";
+import { floorLossNotice, governingExecFloor, uncontainableRootAt } from "./trust.js";
+import { tightenExec } from "./sandbox_pin.js";
 import { AuditTrail, redact, resolveAudit, verifyTrail } from "./audit.js";
 import { harnessBuild } from "./build.js";
 import { mustFailFirst, readVerifyExit, isTestPath, type PreImage } from "./must_fail_first.js";
@@ -119,6 +122,16 @@ export interface CheckVerdict {
   error?: string;
   /** Present only when an interrupted earlier run's re-run had to be undone first. */
   recovered?: string[];
+  /**
+   * The commit the rules were read from: `--base` resolved to a full sha
+   * (sixth review). A branch name is the model's to move; the sha is what
+   * actually decided.
+   */
+  rules_rev?: string;
+  /** Where [verify] and the must-fail-first re-run ran, after this machine's floors. */
+  exec?: { mode: string; image: string; network: boolean };
+  /** Things a person should know about how this verdict was reached. */
+  warnings?: string[];
 }
 
 /** One shell command an agent ran, as a transcript adapter reports it. */
@@ -248,8 +261,7 @@ function restoreJournal(path: string, toplevel: string): string[] {
     if (!f.path || rel === "" || rel.startsWith("..") || isAbsolute(rel)) continue;
     try {
       if (f.b64 === null) {
-        const st = lstatSync(f.path, { throwIfNoEntry: false });
-        if (st && !st.isDirectory()) unlinkSync(f.path);
+        removeIn(root, f.path);
       } else {
         writeFileIn(root, f.path, Buffer.from(f.b64, "base64"));
       }
@@ -264,7 +276,18 @@ function restoreJournal(path: string, toplevel: string): string[] {
 
 async function withJournal<T>(path: string, toplevel: string, files: string[], fn: () => Promise<T>): Promise<T> {
   const j: Journal = {
-    files: files.map((p) => ({ path: p, b64: existsSync(p) ? readFileSync(p).toString("base64") : null })),
+    // Read without following anything (sixth review): a symlink at a source
+    // path read a credentials file into the journal, and a crash restored it
+    // into the tree. A path that is not a plain file is left out -- mustFailFirst
+    // refuses to touch it too.
+    files: files.flatMap((p) => {
+      try {
+        const got = readExactIn(toplevel, p);
+        return [{ path: p, b64: got ? got.data.toString("base64") : null }];
+      } catch {
+        return [];
+      }
+    }),
   };
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   writeFileSync(path, JSON.stringify(j), { mode: 0o600 });
@@ -289,6 +312,81 @@ async function withJournal<T>(path: string, toplevel: string, files: string[], f
 // ---------------------------------------------------------------------------
 // The run
 // ---------------------------------------------------------------------------
+
+/**
+ * Where [verify] runs for `gnomon check`: the base surface's declaration,
+ * held to this machine's exec floor for the project (sixth review).
+ *
+ * The rules are read from `--base`, and a ref is the model's to move: a
+ * contained command can write `.git/refs` and point `main` at a commit whose
+ * policy.toml says `exec = "off"` and whose [verify] command is its own. The
+ * session loop never takes a surface's word for exec over the floor; check
+ * did, so the verify command ran on the host. Now the floor governs here
+ * too: a role that ran contained on this machine is contained here, whatever
+ * the base says (and lost floors are contained, as everywhere). The resolved
+ * sha is on the verdict and in the banner, and a base ref that moved after a
+ * contained session began is warned about.
+ */
+function checkExec(
+  config: GnomonConfig,
+  liveConfig: GnomonConfig,
+  role: string,
+  given: string,
+  rulesRev: string,
+  toplevel: string,
+  verdict: CheckVerdict
+): ResolvedExec {
+  const warnings = (verdict.warnings ??= []);
+  let exec = resolveExec(config, role);
+  const { floor, lost } = governingExecFloor(liveConfig);
+  if (lost) warnings.push(floorLossNotice(lost));
+  let floored = floor ? (floor.roles[role] ?? floor.roles["*"]) : undefined;
+  // No floor yet: the surface in the working tree (read-only to a container)
+  // is the next best word on where this project's bash belongs.
+  if (!floored || floored.mode === "off") {
+    try {
+      const live = resolveExec(loadConfig(dirname(liveConfig.gnomonDir)), role);
+      if (live.mode !== "off") floored = { mode: live.mode, image: live.image };
+    } catch {
+      /* no loadable surface in the tree: the floor alone */
+    }
+  }
+  if (floored && floored.mode !== "off") {
+    const t = tightenExec({ ...exec, mode: floored.mode as ResolvedExec["mode"], image: floored.image }, exec);
+    if (t.loosened.length > 0) {
+      warnings.push(
+        `the rules at ${rulesRev.slice(0, 12)} would run [verify] with ${t.loosened.join(", ")}; ` +
+          `role ${role} ran contained on this machine, so the check runs as it did (${t.exec.mode}, ${t.exec.image})`
+      );
+    }
+    exec = t.exec;
+    // A named ref (not a sha) that moved after the contained session began
+    // may have been moved by it. The reflog is in .git and so the
+    // container's too: this is a warning, the clamp above is the defence.
+    if (floor && !/^[0-9a-f]{40}$/i.test(given)) {
+      const at = Date.parse(floor!.last ?? floor!.at);
+      let moved = NaN;
+      try {
+        moved = Number(gitText(toplevel, ["log", "-g", "-n", "1", "--format=%ct", given])) * 1000;
+      } catch {
+        /* no reflog for it */
+      }
+      if (Number.isFinite(at) && Number.isFinite(moved) && moved > at) {
+        warnings.push(
+          `--base ${given} moved (${new Date(moved).toISOString()}) after a contained session started here (${floor!.last ?? floor!.at}); ` +
+            `the rules were read from ${rulesRev} -- make sure that is the commit you meant`
+        );
+      }
+    }
+  }
+  if (exec.mode !== "off") {
+    const why = uncontainableRootAt(dirname(liveConfig.gnomonDir));
+    if (why) throw new CheckCannotRun(why);
+  }
+  verdict.exec = { mode: exec.mode, image: exec.image, network: exec.network };
+  if (warnings.length === 0) delete verdict.warnings;
+  return exec;
+}
 
 const posix = (p: string) => p.split(sep).join("/");
 
@@ -393,6 +491,7 @@ async function judge(
   // by that. Measured before this: a write outside a tightened write_allow,
   // after a reset to the commit before the tightening, came back HELD (exit 0).
   const rulesRev = baseGiven;
+  verdict.rules_rev = rulesRev;
   const baseTree = mkdtempSync(join(tmpdir(), "gnomon-check-base-"));
   cleanups.push(() => rmSync(baseTree, { recursive: true, force: true }));
   const surfaceFiles = git(toplevel, ["ls-tree", "-r", "-z", "--name-only", rulesRev, "--", surfaceRel])
@@ -490,7 +589,7 @@ async function judge(
     // Relative extra_roots resolve against the tree being judged, not the
     // temporary copy of the rules, which holds .gnomon/ and nothing else.
     extraRoots: resolveExtraRoots({ ...config, gnomonDir: join(treeRoot, surfaceRel) }),
-    exec: resolveExec(config, role),
+    exec: checkExec(config, liveConfig, role, opts.base, rulesRev, toplevel, verdict),
     network: (config.policy.sandbox as { network?: boolean } | undefined)?.network,
     // Nothing here asks anyone: the declared check is the surface's, and a
     // non-interactive judge has nobody to ask.
@@ -636,6 +735,11 @@ async function judge(
       });
     } else {
       verdict.checks.push({ id: "must_fail_first", status: "pass", inspected: mff.tests.length });
+    }
+    // Files the re-run replaced and gnomon therefore did not put back.
+    if (mff.warnings?.length) {
+      const last = verdict.checks[verdict.checks.length - 1]!;
+      last.reason = [last.reason, ...mff.warnings].filter(Boolean).join("; ");
     }
   }
 

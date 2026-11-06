@@ -30,6 +30,8 @@ export interface ExecFloor {
   /** mode is the resolved exec, or "invalid" for one that refuses bash; reads only under "os". */
   roles: Record<string, { mode: string; image: string; reads?: string }>;
   at: string;
+  /** When a session here last started with a role contained. */
+  last?: string;
 }
 
 export interface FloorStore {

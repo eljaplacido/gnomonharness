@@ -156,6 +156,106 @@
   - per-URL and per-remote programs (`credential.<url>.helper`,
     `gpg.<format>.program`, `remote.<name>.uploadpack`/`receivepack`/`vcs`/
     `proxy`) are blanked for gnomon's own git.
+  - (sixth review) the `test_must_fail_first` re-run reads and restores
+    source files without following anything (a symlink there wrote the
+    pre-image into `~/.bashrc`, or copied a credentials file into `src/`),
+    and skips with a warning any file the re-run replaced; `read`, `write`,
+    `edit` and `grep` take only regular files under the root (never a FIFO,
+    a device, or a hard link out) and write by rename.
+  - (sixth review) `gnomon check` holds `[verify]` to this machine's exec
+    floor: a `--base` ref moved to a commit with `exec = "off"` no longer runs
+    the verify command on the host. The verdict carries `rules_rev`, `exec`
+    and `warnings`; the banner prints the commit the rules came from.
+  - (sixth review) `.git` is mounted on itself so it cannot be renamed away
+    from its read-only children; `.git/commondir` (`.`) and
+    `.git/config.worktree` (empty) are created when absent and mounted
+    read-only; `.gnomon-loops/` is read-only; containers run with
+    `--cap-drop ALL --security-opt no-new-privileges`.
+  - (sixth review) a contained role refuses to start in a root that contains
+    the home directory, gnomon's data dir, or gnomon's own code
+    (`GNOMON_ALLOW_SELF_IN_ROOT=1` for working on gnomon itself); MCP servers
+    start outside the project while a role is contained.
+v0.4.4 candidate: long hosted-model tasks, from the P2G41 root causes
+(2026-11-05). **One default changes: reasoning replay is on for a hosted
+endpoint that returns reasoning**, adopted by H3's pre-registered decision
+rule; H3 measured hosted endpoints only, so local lanes stay off unless they
+declare it. The
+idle nudge stays at 12, as in 0.4.3: LG1 measured switching it off on the
+local lane and it cost tokens. Everything else is opt-in, record-only or
+robustness. With `replay_reasoning = false` declared, request bodies are
+byte-identical to master; with nothing declared they are byte-identical on
+any local lane (reasoning field or not) and on a hosted endpoint that returns
+no reasoning field (`long_tasks.test.ts` pins all three).
+
+### Changed (default)
+
+- **Reasoning replay is on by default for hosted endpoints; local lanes
+  untested, off unless declared.** A hosted OpenAI-shaped endpoint that
+  declares no `replay_reasoning` and answers a
+  tool call with reasoning content (`reasoning_content` or `reasoning`) gets
+  that reasoning back on every assistant message from the next request on,
+  for the session. An endpoint that sends no reasoning is sent none. A local
+  lane — a loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local, CGNAT/Tailscale (100.64/10), `*.local` or `host.docker.internal` host, a single-label name, or Ollama's `/api/chat` — is not replayed unless it declares
+  `replay_reasoning = true` (`isLocalLaneUrl`); a fallback is judged by its
+  own URL. A 400 naming `reasoning_content` is
+  resent once without it and replay stays off for that endpoint
+  (`counters.replay_reasoning_refused`). `replay_reasoning = false` still turns
+  it off. The turn record's `wire` adds `replay_reasoning_source`:
+  `declared` or `default`.
+  Evidence: H3 (pre-registered, hosted DeepSeek V4.1 Flash, 30-minute caps,
+  2026-11-06): replay alone (R1) against the 0.4.2 defaults (R0) raised the
+  hidden-test fraction by +0.160 [95% bootstrap +0.042, +0.293] and cut
+  capped runs from 19 to 14; both arms of the decision rule met, verdict
+  ADOPT ([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+  The rest of H3's hosted recipe (a 1M window, nudge off) added +0.017
+  [−0.095, +0.138] on top of replay: not shown, so not a default.
+
+### Unchanged: the idle nudge
+
+- **`[turn] nudge_after_idle` stays 12.** This candidate first switched it
+  off by default; LG1 (pre-registered, local RTX lane, 2026-11-06) ran that
+  build against 0.4.2 and solved 18 vs 18 while spending 1.43× the local
+  tokens [95% 1.04, 2.15], past its 1.20 guard: verdict "regresses". The
+  mechanism was the nudge (0.4.2 sent 547 nudged requests, the candidate 0);
+  replay never fired, because that lane returns no reasoning field
+  ([summary-lg1.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/lg1-2026-11/summary-lg1.txt)).
+  New: a declared `nudge_after_idle = 0` turns the nudge off (it used to be
+  floored to 1, a nudge on every idle call).
+
+### Added
+
+- **`gnomon task --deadline <seconds|ISO time>`** (or `GNOMON_DEADLINE`),
+  opt-in. The turn is told the time left at `[turn] deadline_notes` (default
+  50% and 80%), as a mid-turn system message (`[gnomon]` user message under
+  `steer_role = "user"`); a `bash` timeout is clamped to the time left; and at
+  the deadline less `[turn] deadline_margin_ms` (30 s, at most a tenth of the
+  budget) the turn stops itself: new `stop_reason` `deadline` (13 values,
+  `conformance/stop_reason.json`), exit 2, the record final, the trail sealed.
+  Harbor never signals the process it runs, so capped runs left only partial
+  records (TB1: 29 of 29 in P2G41). Documented for benchmark adapters in
+  docs/GUIDE.md §7.2.
+- **Tool timing (TB4).** Each tool call's `started_at` and `duration_ms` on
+  its `tool_call` audit record and in the task record's
+  `volatile.tool_calls`; a partial record names the call in flight
+  (`volatile.tool_in_flight`).
+- **`[resilience] task_transport_grace_ms`**, default 180 s: an unattended
+  `gnomon task` waits out a provider outage longer than a session (60 s).
+  A declared `transport_grace_ms` with no task value is honoured in a task.
+  P2G41 lost music-harmony to 503s that outlasted 60 s.
+
+### Fixed
+
+- **A read-only working directory (TB7).** `gnomon init` in a directory it
+  cannot write keeps the surface and gnomon's records in
+  `$XDG_STATE_HOME/gnomon/workdirs/<key>`, keyed by the directory's path, and
+  says why; `gnomon task` there finds it, with the directory as the tools'
+  root. "No .gnomon/ surface found" now names the cause when the directory is
+  read-only. P2G41's risk-scorer-replay could not start in a read-only `/app`.
+- **The re-ask after an output-limit truncation is once per streak.** A
+  reply the limit did not cut (a blank one, markup) now ends a streak, so cut,
+  blank, cut re-asks the second cut instead of letting it stand as
+  `truncated`. Two cuts in a row still end the turn (P2G41's two `truncated`
+  cells were that case).
 
 ## [0.4.3] — 2026-11-06
 

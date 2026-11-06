@@ -3,11 +3,11 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig, routeInput, resolveAudit, resolveVerify } from "gnomon-core";
+import { loadConfig, routeInput, resolveAudit, resolveVerify, workdirStateDir, workRootOf } from "gnomon-core";
 import { join } from "node:path";
 import { initSurface, enableAuditBlock } from "./init.js";
 
@@ -264,6 +264,30 @@ describe("template hygiene", () => {
       expect(cfg.tools.tools?.map((t) => t.name)).toContain("skill");
     } finally {
       rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("initSurface — a read-only working directory (TB7)", () => {
+  const canTest = process.platform !== "win32" && process.getuid?.() !== 0;
+  it.skipIf(!canTest)("keeps the surface in the state directory, writes nothing in the directory, and loads from it", async () => {
+    const ro = mkdtempSync(join(tmpdir(), "gnomon-init-ro-"));
+    writeFileSync(join(ro, "app.py"), "print(1)\n");
+    chmodSync(ro, 0o555);
+    try {
+      const r = await initSurface({ dir: ro, models: { large: "m-large", small: "m-small", detected: [] } });
+      expect(r.readOnly).toEqual({ root: ro, stateDir: workdirStateDir(ro) });
+      expect(r.gnomonDir).toBe(join(workdirStateDir(ro), ".gnomon"));
+      expect(r.gitattributes).toBe(false);
+      expect(r.gitignore).toEqual([]);
+      expect(readdirSync(ro)).toEqual(["app.py"]);
+      const config = loadConfig(ro);
+      expect(config.gnomonDir).toBe(r.gnomonDir);
+      expect(workRootOf(config)).toBe(ro);
+    } finally {
+      chmodSync(ro, 0o755);
+      rmSync(ro, { recursive: true, force: true });
+      rmSync(workdirStateDir(ro), { recursive: true, force: true });
     }
   });
 });

@@ -269,6 +269,12 @@ const unclocked = (c: any) => {
   return rest;
 };
 
+/** A tool_call record without its clock: when it started and how long it ran (TB4). */
+const untimed = (c: any) => {
+  const { started_at: _s, duration_ms: _d, ...rest } = c;
+  return rest;
+};
+
 /** The result with the detector's own field and the clock taken out: everything else must match. */
 function withoutSignals(result: any) {
   const { stall_signals: _drop, ...counters } = result.counters;
@@ -291,7 +297,9 @@ describe("property: the stall detectors never change what the model is sent", ()
       expect(withoutSignals(other.result)).toEqual(withoutSignals(real.result));
       // The trail differs only by stall_signal records.
       const strip = (a: any[]) =>
-        a.filter((x) => x.kind !== "stall_signal").map((x) => (x.kind === "model_call" ? unclocked(x) : x));
+        a
+          .filter((x) => x.kind !== "stall_signal")
+          .map((x) => (x.kind === "model_call" ? unclocked(x) : x.kind === "tool_call" ? untimed(x) : x));
       expect(strip(other.audit)).toEqual(strip(real.audit));
     }
     // And the scripts are not vacuous: across the seeds they exercise stops
