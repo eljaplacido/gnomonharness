@@ -52,3 +52,17 @@ It was committed before any P2G41 cell. Later changes go in timestamped addenda.
   - the new v0.4.1 per-call records as mechanism data.
 - **Reporting:** n = 29 at k = 1 has low power for a 10-point margin; the result is reported with its interval, never as
   "equal". The P2G attempt-1 rows (v0.3.1 and peers, time-separated) stay in every table; rows are never pooled.
+
+## Addendum 1 — re-running the owed invalid cells, 2026-11-06 (written before any re-run cell; no change to the analysis)
+
+- **Why:** "fix, don't fail". Six cells were apparatus failures and never scored: vf2-speedup-networkx A41 and B41 (DNS
+  failure while installing gnomon), music-harmony B41 (provider 503 at start), bun-sourcemap-leak all three arms
+  (provider 502s, no verifier). risk-scorer-replay is gnomon's own limitation (read-only /app) and is NOT re-run.
+- **How:** `apparatus/rerun_p2g41.py` calls `run_p2g41.run_cell` unchanged: same adapters, relays, Harbor flags, cap,
+  model and cell ids, and the same pinned v0.4.1 release (this study measures v0.4.1; the re-run completes it, it is not
+  a new arm). The only apparatus change: the gnomon install is served from a local mirror of the same release files,
+  checked against the same SHA256SUMS hash, because vf2's failure was DNS to GitHub.
+- **Superseded cells** move to `runs-superseded/` and `jobs-superseded/`, never deleted.
+- **Deviation:** the re-run cells are time-separated from their partners by about two days; the summary reports the
+  primary comparison with and without them. Budget $5.
+- **Unchanged:** validity rule, scoring, comparisons, margin, seed.
