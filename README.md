@@ -430,7 +430,7 @@ irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/i
 The installer ([`scripts/install.sh`](scripts/install.sh),
 [`scripts/install.ps1`](scripts/install.ps1)) checks Node and, if it is missing
 or older than 20, prints the command for your OS instead of running one as root.
-It resolves the latest release (`GNOMON_VERSION=0.4.3` pins one), installs the
+It resolves the latest release (`GNOMON_VERSION=0.4.4` pins one), installs the
 npm package — from the registry when that version is published there, from
 the release's own tarballs when it is not (an older pin, or the minute between
 a release and its npm publish) — and puts the native binaries in
@@ -465,11 +465,11 @@ the release job builds, refuses to publish unless they install and run, and
 then publishes to npm byte for byte:
 
 ```bash
-V=0.4.3; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
+V=0.4.4; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/gnomon-harness-$V.tgz
 ```
 
-<!-- bash only: `V=0.4.3` is not an assignment in PowerShell, and `$B/...` is
+<!-- bash only: `V=0.4.4` is not an assignment in PowerShell, and `$B/...` is
 not a path there. The installer one-liners above are the cross-shell route. -->
 
 From the registry this is `npm i -g gnomon-harness` (or
@@ -1685,6 +1685,11 @@ deletes or copies reaches only the mounted repository, and with
 `network = false` nothing reaches the network, whatever it is spelled as.
 Not yet measured against G2b's scenarios (#63 option 2); until it is, this
 says what the mechanism is, not that it held.
+
+**Security note.** `exec = "docker"` in 0.4.4 and earlier does not contain a
+deliberately hostile model against gnomon's own host-side actions (its
+bookkeeping git, audit writes, `gnomon check`). Treat it as protection against
+mistakes, not against an adversarial model. A fix is in review (PR #158).
 
 **Two limits, published because both fail open.** `docker` is the only value
 that does anything: the resolver is `raw === "docker" ? "docker" : "off"`, so
