@@ -1,0 +1,52 @@
+root@626cf4506002:/app# source /installed-agent/setup-env.sh; tmux wait -S done
+root@626cf4506002:/app# source /installed-agent/install-agent.sh || echo 'INSTALL_FAIL_STATUS'; tmux wait -S done
+ARM_VERSION=ae17a1ae958d6ccfd316c85ebde2f48ae066d6ac
+GNOMON_INSTALL_OK
+ARM_SETUP_END=1793961403
+root@626cf4506002:/app# bash /opt/gnomon-run.sh 'There'"'"'s something wrong with my system-wide python installation - I can'"'"'t seem to install packages with
+ pip.'; tmux wait -S done
+R1_ARM=L R1_ENTRY=implementor R1_ROUTES=coordinator=local,implementor=local,verifier=local,plan=local,implement=local,critique=local,smol=local N1_STEER_ROLE=us
+er N1_NUDGE_AFTER_IDLE=100000 G1G_GATE=checklist
+  ⚙ bash find / -name "get-pip.py" 2>/dev/null; find / -path "*/pip/_internal*"…
+    ✓ bash — exit 0
+  qwen3.6-35b — 12 tool call(s) so far
+[approval] bash: ls /usr/local/lib/python3.13/ensurepip/_bundled/ 2>&1 — approved
+  ⚙ bash ls /usr/local/lib/python3.13/ensurepip/_bundled/ 2>&1
+    ✓ bash — exit 0
+  qwen3.6-35b — 13 tool call(s) so far
+  │ The pip wheel is bundled with ensurepip. Let me extract it directly:
+[approval] bash: python3 -c "
+import zipfile, os, shutil
+wheel = '/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl'
+dest = '/usr/local/lib/python3.13/site-packages/'
+with zipfile.ZipFile(wheel) as z:
+    for name in z.namelist():
+        if name.startswith('pip/') and not name.endswith('/'):
+            z.extract(name, dest)
+            print(f'extracted: {name}')
+print('done')
+" 2>&1 — approved
+  ⚙ bash python3 -c " import zipfile, os, shutil wheel = '/usr/local/lib/python…
+    ✓ bash — exit 0
+  qwen3.6-35b — 14 tool call(s) so far
+  │ Now let me verify it works:
+[approval] bash: pip3 --version 2>&1 — approved
+  ⚙ bash pip3 --version 2>&1
+    ✓ bash — exit 0
+  qwen3.6-35b — 15 tool call(s) so far
+[approval] bash: python3 -m pip --version 2>&1 — approved
+  ⚙ bash python3 -m pip --version 2>&1
+    ✓ bash — exit 0
+  qwen3.6-35b — 16 tool call(s) so far
+pip is fully restored. Here's what was wrong and what I did:
+
+**Problem:** The `pip` package files were missing from `/usr/local/lib/python3.13/site-packages/` — only the `pip-24.3.1.dist-info` metadata directory remained.
+ The `pip3` binary existed but couldn't import the `pip` module, so every `pip install` failed with `ModuleNotFoundError: No module named 'pip'`.
+
+**Fix:** Extracted the bundled pip wheel (`/usr/local/lib/python3.13/ensurepip/_bundled/pip-24.3.1-py3-none-any.whl`) directly into `site-packages/`. This resto
+red the full pip package including all `_internal` and `_vendor` subpackages.
+
+Both `pip3` and `python3 -m pip` now work correctly.
+
+[refusal] role=implementor model=qwen3.6-35b tools=16 surface=801f9f2a7a86
+root@626cf4506002:/app#

@@ -155,3 +155,290 @@
 2026-11-05T19:58:05Z G1GRUN START g1g-g0-k2-l-polyglot-c-py arm=G0 completion_gate=off k=2 pos=1 order=1/3 load=96.4
 2026-11-06T05:30:00Z G1GRUN ABORT g1g-g0-k2-l-polyglot-c-py (crash): removed ['polyglot-c-py-1-of-1-g1g-g0-k2-l-polyglot-c-py', 'polyglot-c-py-1-of-1-g1g-g0-k2-l-polyglot-c-py_default (network)']; moved to runs-aborted/g1g-g0-k2-l-polyglot-c-py-crash
 2026-11-06T05:30:14Z G1GRUN RECOVERY: crash 2026-11-05T20:17Z (host halt); the in-flight cell moved by run_g1g abort-inflight (above); see PRE-REGISTRATION addendum
+2026-11-06T05:32:51Z CHAIN-G1G G1G chain start (pid 41162); build master-ae17a1a (ae17a1ae, SHA256SUMS d6b6c5f4); arms G0 (off), G1 (checklist), G2 (review), steer_role user, nudge_after_idle 100000; the gx10 lane http://127.0.0.1:18080 (llama-server-qwen-q4.service, never touched), one cell at a time; new-triple deadline 2026-11-06T18:00:00Z
+2026-11-06T05:33:08Z CHAIN-G1G offline test test_run_g1g.py: 48 passed, 0 failed
+2026-11-06T05:33:08Z CHAIN-G1G offline test test_collect_g1g.py: 30 passed, 0 failed
+2026-11-06T05:33:43Z CHAIN-G1G offline test test_chain_g1g.sh: 39 passed, 0 failed
+2026-11-06T05:33:43Z CHAIN-G1G holding the gx10 gpu.lock (/home/eljaplacido/.opencode/central-brain/runtime/decisionbench/gpu.lock) for the rest of this chain
+2026-11-06T05:33:43Z CHAIN-G1G N1 chain's last line: 2026-11-05T09:40:23Z CHAIN-N1 DONE
+2026-11-06T05:33:43Z CHAIN-G1G lane: the lane is R1's/S1's/N1's lane: build b1281-571d0d54, model, alias, template (= R1H's), caps, 1 slot x 98304, speculative, server defaults, unit flags; slots busy now: []; unit: MainPID=2686 ExecMainStartTimestamp=Fri 2026-11-06 07:22:00 EET ActiveState=active 
+2026-11-06T05:33:57Z CHAIN-G1G weights: model sha256 2bee952b218e4a481430c59d8d3bdc7bae20bed0eb501326340c5fca7ae95d42, draft blob 107b7a433cbbdb4656a52b7845b35f6eed94eb0efb0019c8af7faed16d2d52f7
+2026-11-06T05:33:57Z CHAIN-G1G build master-ae17a1a: SHA256SUMS d6b6c5f4a72b66202377f31bf2df9fd8e4002625b8c96cae8589154e316891c8 and 4 tarballs: pinned
+2026-11-06T05:33:57Z CHAIN-G1G delivery gate on the gx10 lane (exit 0; probe-g1g-gx10.txt): pass on shapes from 8078df03e2a28c41753825dcccab13e8a0ac03dd
+    == S1 template probe 2026-11-06T05:33:57Z (live http://127.0.0.1:18080/apply-template)
+    shapes: S0 = gnomon's mid-turn messages as role system; S1 = steerAsUser at 8078df03e2a28c41753825dcccab13e8a0ac03dd (make_probe_shapes.mts (gnomon's own steerAsUser)); marker MARKER-S1Q
+      A nudge after a tool result [S0]: marker absent; prompt 1553 chars, '<think>' x2; around marker: -
+      A nudge after a tool result [S1]: marker PRESENT; prompt 1813 chars, '<think>' x1; around marker: 'tool_response>\n3\n</tool_response><|im_end|>\n<|im_start|>user\n[gnomon] MARKER-S1Q You have run 8 tool calls without changing a file. If you have found '
+      -> A nudge after a tool result: as expected (gate; want S0 absent, S1 present): the negative control: a late system message is dropped (S0) and the same words as a [gnomon] user message are rendered (S1)
+      B nudge, then two more steps [S0]: marker absent; prompt 1775 chars, '<think>' x3; around marker: -
+      B nudge, then two more steps [S1]: marker PRESENT; prompt 2035 chars, '<think>' x2; around marker: 'tool_response>\n3\n</tool_response><|im_end|>\n<|im_start|>user\n[gnomon] MARKER-S1Q You have run 8 tool calls without changing a file. If you have found '
+      -> B nudge, then two more steps: as expected (gate; want S0 absent, S1 present): the steering stays in the history the model sees on later steps (S1) or never appears (S0)
+      C tool-less wrap-up [S0]: marker absent; prompt 439 chars, '<think>' x2; around marker: -
+      C tool-less wrap-up [S1]: marker PRESENT; prompt 551 chars, '<think>' x1; around marker: 'tool_response>\n3\n</tool_response><|im_end|>\n<|im_start|>user\n[gnomon] MARKER-S1Q No tools are attached to this final call, so answer now from what you'
+      -> C tool-less wrap-up: as expected (gate; want S0 absent, S1 present): the wrap-up call is sent with no tools; same rule
+      D folded summary at index 1 (positive control) [S0]: marker PRESENT; prompt 1472 chars, '<think>' x1; around marker: 'turns in this session, folded because they no longer fit the window:\n\nMARKER-S1Q the count was 3.<|im_end|>\n<|im_start|>user\nHow many files are in /ap'
+      D folded summary at index 1 (positive control) [S1]: marker PRESENT; prompt 1473 chars, '<think>' x1; around marker: 'turns in this session, folded because they no longer fit the window:\n\nMARKER-S1Q the count was 3.<|im_end|>\n<|im_start|>user\nHow many files are in /ap'
+      -> D folded summary at index 1 (positive control): as expected (gate; want S0 present, S1 present): the template renders a system message at index 1, so the probe can see a system message it keeps: A's absence is position, not detection
+      E context-drop notice after the instruction [S0]: marker absent; prompt 1553 chars, '<think>' x2; around marker: -
+      E context-drop notice after the instruction [S1]: marker PRESENT; prompt 1670 chars, '<think>' x2; around marker: 'many files are in /app? Write the number to /app/count.txt.\n\n[gnomon] MARKER-S1Q [gnomon context] 3 earlier step(s) in this turn were dropped to stay '
+      -> E context-drop notice after the instruction: as expected (informational; want S0 absent, S1 present): informational: S1 merges the notice into the instruction's user message
+      F verification failure after an answer [S0]: marker absent; prompt 1620 chars, '<think>' x3; around marker: -
+      F verification failure after an answer [S1]: marker PRESENT; prompt 1754 chars, '<think>' x1; around marker: '|>\n<|im_start|>assistant\nDone: 3.<|im_end|>\n<|im_start|>user\n[gnomon] MARKER-S1Q The declared verification for this repository failed after your chang'
+      -> F verification failure after an answer: as expected (informational; want S0 absent, S1 present): informational
+    PROBE_SHAPES_SHA=8078df03e2a28c41753825dcccab13e8a0ac03dd
+    STEER_TEMPLATE_GATE=pass
+2026-11-06T05:33:57Z CHAIN-G1G smoke passed earlier on this lane (smoke-g1g.txt); lane and delivery gate re-checked
+2026-11-06T05:33:57Z CHAIN-G1G the run: 2 attempts, 32 triples, 96 cells, one cell at a time (run_g1g.py full; finished cells skipped; new-triple deadline 2026-11-06T18:00:00Z)
+2026-11-06T05:34:06Z G1GRUN G1G full: build master-ae17a1a (ae17a1ae958d6ccfd316c85ebde2f48ae066d6ac) model=qwen3.6-35b upstream=http://127.0.0.1:18080 arms G0 (off), G1 (checklist), G2 (review), steer_role user, nudge_after_idle 100000; 32 triples, 51 cells finished already; deadline 2026-11-06T18:00:00+00:00
+2026-11-06T05:34:06Z G1GRUN g1g ATTEMPT 1: 16 triples, one cell at a time
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k1-l-fix-code-vulnerability (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k1-l-fix-code-vulnerability (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k1-l-fix-code-vulnerability (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k1-l-parallelize-graph (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k1-l-parallelize-graph (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k1-l-parallelize-graph (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k1-l-acl-permissions-inheritance (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k1-l-acl-permissions-inheritance (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k1-l-acl-permissions-inheritance (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k1-l-sparql-university (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k1-l-sparql-university (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k1-l-sparql-university (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k1-l-install-klee-minimal (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k1-l-install-klee-minimal (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k1-l-install-klee-minimal (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k1-l-hf-train-lora-adapter (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k1-l-hf-train-lora-adapter (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k1-l-hf-train-lora-adapter (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k1-l-git-workflow-hack (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k1-l-git-workflow-hack (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k1-l-git-workflow-hack (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k1-l-mailman (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k1-l-mailman (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k1-l-mailman (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k1-l-jq-data-processing (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k1-l-jq-data-processing (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k1-l-jq-data-processing (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k1-l-polyglot-c-py (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k1-l-polyglot-c-py (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k1-l-polyglot-c-py (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k1-l-tune-mjcf (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k1-l-tune-mjcf (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k1-l-tune-mjcf (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k1-l-broken-python (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k1-l-broken-python (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k1-l-broken-python (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k1-l-prove-plus-comm (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k1-l-prove-plus-comm (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k1-l-prove-plus-comm (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k1-l-pypi-server (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k1-l-pypi-server (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k1-l-pypi-server (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k1-l-pandas-sql-query (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k1-l-pandas-sql-query (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k1-l-pandas-sql-query (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k1-l-hf-lora-adapter (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k1-l-hf-lora-adapter (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k1-l-hf-lora-adapter (finished)
+2026-11-06T05:34:06Z G1GRUN g1g ATTEMPT 2: 16 triples, one cell at a time
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g2-k2-l-prove-plus-comm (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g1-k2-l-prove-plus-comm (finished)
+2026-11-06T05:34:06Z G1GRUN SKIP g1g-g0-k2-l-prove-plus-comm (finished)
+2026-11-06T05:34:06Z G1GRUN START g1g-g0-k2-l-polyglot-c-py arm=G0 completion_gate=off k=2 pos=1 order=1/3 load=1.7
+2026-11-06T05:45:15Z G1GRUN END   g1g-g0-k2-l-polyglot-c-py (tb exit 0) 669 s local_chat=104 cloud_sink_chat=0 note_req=1 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=1 errors=0
+2026-11-06T05:45:15Z G1GRUN START g1g-g1-k2-l-polyglot-c-py arm=G1 completion_gate=checklist k=2 pos=1 order=2/3 load=13.4
+2026-11-06T05:47:19Z G1GRUN END   g1g-g1-k2-l-polyglot-c-py (tb exit 0) 124 s local_chat=30 cloud_sink_chat=0 note_req=8 other_note_req=8 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T05:47:19Z G1GRUN START g1g-g2-k2-l-polyglot-c-py arm=G2 completion_gate=review k=2 pos=1 order=3/3 load=5.8
+2026-11-06T05:55:16Z G1GRUN END   g1g-g2-k2-l-polyglot-c-py (tb exit 0) 477 s local_chat=23 cloud_sink_chat=0 note_req=1 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T05:55:16Z G1GRUN START g1g-g1-k2-l-jq-data-processing arm=G1 completion_gate=checklist k=2 pos=2 order=1/3 load=9.7
+2026-11-06T05:58:02Z G1GRUN END   g1g-g1-k2-l-jq-data-processing (tb exit 0) 166 s local_chat=26 cloud_sink_chat=0 note_req=8 other_note_req=8 nudge_note_req=0 late_sys_req=0 aborts=1 errors=0
+2026-11-06T05:58:02Z G1GRUN START g1g-g2-k2-l-jq-data-processing arm=G2 completion_gate=review k=2 pos=2 order=2/3 load=12.8
+2026-11-06T06:02:21Z G1GRUN END   g1g-g2-k2-l-jq-data-processing (tb exit 0) 259 s local_chat=38 cloud_sink_chat=0 note_req=11 other_note_req=10 nudge_note_req=0 late_sys_req=0 aborts=2 errors=0
+2026-11-06T06:02:21Z G1GRUN START g1g-g0-k2-l-jq-data-processing arm=G0 completion_gate=off k=2 pos=2 order=3/3 load=11.2
+2026-11-06T06:04:09Z G1GRUN END   g1g-g0-k2-l-jq-data-processing (tb exit 0) 108 s local_chat=19 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T06:04:09Z G1GRUN START g1g-g1-k2-l-pypi-server arm=G1 completion_gate=checklist k=2 pos=3 order=1/3 load=9.6
+2026-11-06T06:05:50Z G1GRUN END   g1g-g1-k2-l-pypi-server (tb exit 0) 101 s local_chat=38 cloud_sink_chat=0 note_req=11 other_note_req=11 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T06:05:50Z G1GRUN START g1g-g2-k2-l-pypi-server arm=G2 completion_gate=review k=2 pos=3 order=2/3 load=6.9
+2026-11-06T06:10:17Z G1GRUN END   g1g-g2-k2-l-pypi-server (tb exit 0) 266 s local_chat=114 cloud_sink_chat=0 note_req=26 other_note_req=25 nudge_note_req=0 late_sys_req=0 aborts=3 errors=1
+2026-11-06T06:10:17Z G1GRUN START g1g-g0-k2-l-pypi-server arm=G0 completion_gate=off k=2 pos=3 order=3/3 load=5.0
+2026-11-06T06:11:23Z G1GRUN END   g1g-g0-k2-l-pypi-server (tb exit 0) 66 s local_chat=21 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T06:11:23Z G1GRUN START g1g-g2-k2-l-install-klee-minimal arm=G2 completion_gate=review k=2 pos=4 order=1/3 load=6.8
+2026-11-06T06:13:46Z G1GRUN END   g1g-g2-k2-l-install-klee-minimal (tb exit 0) 143 s local_chat=40 cloud_sink_chat=0 note_req=1 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T06:13:46Z G1GRUN START g1g-g1-k2-l-install-klee-minimal arm=G1 completion_gate=checklist k=2 pos=4 order=2/3 load=9.3
+2026-11-06T06:34:13Z G1GRUN END   g1g-g1-k2-l-install-klee-minimal (tb exit 0) 1227 s local_chat=42 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=1 errors=0
+2026-11-06T06:34:13Z G1GRUN START g1g-g0-k2-l-install-klee-minimal arm=G0 completion_gate=off k=2 pos=4 order=3/3 load=17.3
+2026-11-06T06:37:09Z G1GRUN END   g1g-g0-k2-l-install-klee-minimal (tb exit 0) 176 s local_chat=56 cloud_sink_chat=0 note_req=1 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T06:37:09Z G1GRUN START g1g-g2-k2-l-acl-permissions-inheritance arm=G2 completion_gate=review k=2 pos=5 order=1/3 load=8.7
+2026-11-06T06:38:08Z G1GRUN END   g1g-g2-k2-l-acl-permissions-inheritance (tb exit 0) 59 s local_chat=12 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T06:38:08Z G1GRUN START g1g-g1-k2-l-acl-permissions-inheritance arm=G1 completion_gate=checklist k=2 pos=5 order=2/3 load=7.6
+2026-11-06T06:39:01Z G1GRUN END   g1g-g1-k2-l-acl-permissions-inheritance (tb exit 0) 53 s local_chat=6 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T06:39:01Z G1GRUN START g1g-g0-k2-l-acl-permissions-inheritance arm=G0 completion_gate=off k=2 pos=5 order=3/3 load=5.8
+2026-11-06T06:40:01Z G1GRUN END   g1g-g0-k2-l-acl-permissions-inheritance (tb exit 0) 60 s local_chat=11 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T06:40:01Z G1GRUN START g1g-g2-k2-l-mailman arm=G2 completion_gate=review k=2 pos=6 order=1/3 load=8.8
+2026-11-06T06:48:52Z G1GRUN END   g1g-g2-k2-l-mailman (tb exit 0) 531 s local_chat=118 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T06:48:52Z G1GRUN START g1g-g0-k2-l-mailman arm=G0 completion_gate=off k=2 pos=6 order=2/3 load=7.1
+2026-11-06T07:09:28Z G1GRUN END   g1g-g0-k2-l-mailman (tb exit 0) 1235 s local_chat=203 cloud_sink_chat=0 note_req=108 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=3 errors=0
+2026-11-06T07:09:28Z G1GRUN START g1g-g1-k2-l-mailman arm=G1 completion_gate=checklist k=2 pos=6 order=3/3 load=11.4
+2026-11-06T07:20:42Z G1GRUN END   g1g-g1-k2-l-mailman (tb exit 0) 675 s local_chat=192 cloud_sink_chat=0 note_req=9 other_note_req=9 nudge_note_req=0 late_sys_req=0 aborts=4 errors=1
+2026-11-06T07:20:42Z G1GRUN START g1g-g0-k2-l-git-workflow-hack arm=G0 completion_gate=off k=2 pos=7 order=1/3 load=76.7
+2026-11-06T07:24:28Z G1GRUN END   g1g-g0-k2-l-git-workflow-hack (tb exit 0) 225 s local_chat=26 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T07:24:28Z G1GRUN START g1g-g2-k2-l-git-workflow-hack arm=G2 completion_gate=review k=2 pos=7 order=2/3 load=75.4
+2026-11-06T07:40:30Z G1GRUN END   g1g-g2-k2-l-git-workflow-hack (tb exit 0) 962 s local_chat=118 cloud_sink_chat=0 note_req=33 other_note_req=14 nudge_note_req=0 late_sys_req=0 aborts=3 errors=0
+2026-11-06T07:40:30Z G1GRUN START g1g-g1-k2-l-git-workflow-hack arm=G1 completion_gate=checklist k=2 pos=7 order=3/3 load=5.2
+2026-11-06T07:44:13Z G1GRUN END   g1g-g1-k2-l-git-workflow-hack (tb exit 0) 223 s local_chat=37 cloud_sink_chat=0 note_req=4 other_note_req=4 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T07:44:13Z G1GRUN START g1g-g0-k2-l-pandas-sql-query arm=G0 completion_gate=off k=2 pos=8 order=1/3 load=7.6
+2026-11-06T07:45:53Z G1GRUN END   g1g-g0-k2-l-pandas-sql-query (tb exit 0) 100 s local_chat=11 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T07:45:53Z G1GRUN START g1g-g2-k2-l-pandas-sql-query arm=G2 completion_gate=review k=2 pos=8 order=2/3 load=5.3
+2026-11-06T07:50:33Z G1GRUN END   g1g-g2-k2-l-pandas-sql-query (tb exit 0) 280 s local_chat=62 cloud_sink_chat=0 note_req=8 other_note_req=7 nudge_note_req=0 late_sys_req=0 aborts=0 errors=1
+2026-11-06T07:50:33Z G1GRUN START g1g-g1-k2-l-pandas-sql-query arm=G1 completion_gate=checklist k=2 pos=8 order=3/3 load=3.2
+2026-11-06T07:53:12Z G1GRUN END   g1g-g1-k2-l-pandas-sql-query (tb exit 0) 159 s local_chat=15 cloud_sink_chat=0 note_req=4 other_note_req=4 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T07:53:12Z G1GRUN START g1g-g1-k2-l-hf-lora-adapter arm=G1 completion_gate=checklist k=2 pos=9 order=1/3 load=5.2
+2026-11-06T07:56:50Z G1GRUN END   g1g-g1-k2-l-hf-lora-adapter (tb exit 0) 218 s local_chat=16 cloud_sink_chat=0 note_req=5 other_note_req=5 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T07:56:50Z G1GRUN START g1g-g0-k2-l-hf-lora-adapter arm=G0 completion_gate=off k=2 pos=9 order=2/3 load=6.5
+2026-11-06T07:59:45Z G1GRUN END   g1g-g0-k2-l-hf-lora-adapter (tb exit 0) 175 s local_chat=10 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T07:59:45Z G1GRUN START g1g-g2-k2-l-hf-lora-adapter arm=G2 completion_gate=review k=2 pos=9 order=3/3 load=5.3
+2026-11-06T08:07:31Z G1GRUN END   g1g-g2-k2-l-hf-lora-adapter (tb exit 0) 466 s local_chat=79 cloud_sink_chat=0 note_req=24 other_note_req=24 nudge_note_req=0 late_sys_req=0 aborts=2 errors=0
+2026-11-06T08:07:31Z G1GRUN START g1g-g1-k2-l-parallelize-graph arm=G1 completion_gate=checklist k=2 pos=10 order=1/3 load=4.2
+2026-11-06T08:15:58Z G1GRUN ERROR g1g-g1-k2-l-parallelize-graph arm=G1: OSError: [Errno 28] No space left on device
+2026-11-06T08:15:58Z G1GRUN START g1g-g0-k2-l-parallelize-graph arm=G0 completion_gate=off k=2 pos=10 order=2/3 load=52.7
+2026-11-06T08:16:00Z G1GRUN ERROR g1g-g0-k2-l-parallelize-graph arm=G0: OSError: [Errno 28] No space left on device: '/home/eljaplacido/gnomon-wt/peers/benchmarks/results/g1gate-2026-11/runs/g1g-g0-k2-l-parallelize-graph'
+2026-11-06T08:16:00Z G1GRUN START g1g-g2-k2-l-parallelize-graph arm=G2 completion_gate=review k=2 pos=10 order=3/3 load=52.7
+2026-11-06T08:16:01Z G1GRUN ERROR g1g-g2-k2-l-parallelize-graph arm=G2: OSError: [Errno 28] No space left on device: '/home/eljaplacido/gnomon-wt/peers/benchmarks/results/g1gate-2026-11/runs/g1g-g2-k2-l-parallelize-graph'
+2026-11-06T08:16:01Z G1GRUN START g1g-g2-k2-l-fix-code-vulnerability arm=G2 completion_gate=review k=2 pos=11 order=1/3 load=52.7
+2026-11-06T08:16:03Z G1GRUN ERROR g1g-g2-k2-l-fix-code-vulnerability arm=G2: OSError: [Errno 28] No space left on device: '/home/eljaplacido/gnomon-wt/peers/benchmarks/results/g1gate-2026-11/runs/g1g-g2-k2-l-fix-code-vulnerability'
+2026-2026-11-06T08:17:14Z G1GRUN G1G full: build master-ae17a1a (ae17a1ae958d6ccfd316c85ebde2f48ae066d6ac) model=qwen3.6-35b upstream=http://127.0.0.1:18080 arms G0 (off), G1 (checklist), G2 (review), steer_role user, nudge_after_idle 100000; 32 triples, 78 cells finished already; deadline 2026-11-06T18:00:00+00:00
+2026-11-06T08:17:14Z G1GRUN g1g ATTEMPT 1: 16 triples, one cell at a time
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k1-l-fix-code-vulnerability (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k1-l-fix-code-vulnerability (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k1-l-fix-code-vulnerability (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k1-l-parallelize-graph (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k1-l-parallelize-graph (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k1-l-parallelize-graph (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k1-l-acl-permissions-inheritance (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k1-l-acl-permissions-inheritance (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k1-l-acl-permissions-inheritance (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k1-l-sparql-university (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k1-l-sparql-university (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k1-l-sparql-university (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k1-l-install-klee-minimal (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k1-l-install-klee-minimal (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k1-l-install-klee-minimal (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k1-l-hf-train-lora-adapter (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k1-l-hf-train-lora-adapter (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k1-l-hf-train-lora-adapter (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k1-l-git-workflow-hack (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k1-l-git-workflow-hack (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k1-l-git-workflow-hack (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k1-l-mailman (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k1-l-mailman (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k1-l-mailman (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k1-l-jq-data-processing (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k1-l-jq-data-processing (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k1-l-jq-data-processing (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k1-l-polyglot-c-py (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k1-l-polyglot-c-py (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k1-l-polyglot-c-py (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k1-l-tune-mjcf (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k1-l-tune-mjcf (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k1-l-tune-mjcf (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k1-l-broken-python (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k1-l-broken-python (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k1-l-broken-python (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k1-l-prove-plus-comm (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k1-l-prove-plus-comm (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k1-l-prove-plus-comm (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k1-l-pypi-server (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k1-l-pypi-server (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k1-l-pypi-server (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k1-l-pandas-sql-query (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k1-l-pandas-sql-query (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k1-l-pandas-sql-query (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k1-l-hf-lora-adapter (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k1-l-hf-lora-adapter (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k1-l-hf-lora-adapter (finished)
+2026-11-06T08:17:14Z G1GRUN g1g ATTEMPT 2: 16 triples, one cell at a time
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k2-l-prove-plus-comm (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k2-l-prove-plus-comm (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k2-l-prove-plus-comm (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k2-l-polyglot-c-py (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k2-l-polyglot-c-py (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k2-l-polyglot-c-py (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k2-l-jq-data-processing (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k2-l-jq-data-processing (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k2-l-jq-data-processing (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k2-l-pypi-server (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k2-l-pypi-server (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k2-l-pypi-server (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k2-l-install-klee-minimal (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k2-l-install-klee-minimal (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k2-l-install-klee-minimal (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k2-l-acl-permissions-inheritance (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k2-l-acl-permissions-inheritance (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k2-l-acl-permissions-inheritance (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k2-l-mailman (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k2-l-mailman (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k2-l-mailman (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k2-l-git-workflow-hack (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k2-l-git-workflow-hack (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k2-l-git-workflow-hack (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k2-l-pandas-sql-query (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k2-l-pandas-sql-query (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k2-l-pandas-sql-query (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g1-k2-l-hf-lora-adapter (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g0-k2-l-hf-lora-adapter (finished)
+2026-11-06T08:17:14Z G1GRUN SKIP g1g-g2-k2-l-hf-lora-adapter (finished)
+2026-11-06T08:17:14Z G1GRUN MOVED g1g-g1-k2-l-parallelize-graph to runs-aborted/g1g-g1-k2-l-parallelize-graph-incomplete: a start without cell.json; running it from scratch
+2026-11-06T08:17:14Z G1GRUN START g1g-g1-k2-l-parallelize-graph arm=G1 completion_gate=checklist k=2 pos=10 order=1/3 load=27.9
+2026-11-06T08:19:46Z G1GRUN END   g1g-g1-k2-l-parallelize-graph (tb exit 0) 152 s local_chat=36 cloud_sink_chat=0 note_req=1 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=1 errors=0
+2026-11-06T08:19:46Z G1GRUN START g1g-g0-k2-l-parallelize-graph arm=G0 completion_gate=off k=2 pos=10 order=2/3 load=4.5
+2026-11-06T08:40:12Z G1GRUN END   g1g-g0-k2-l-parallelize-graph (tb exit 0) 1226 s local_chat=35 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=1 errors=0
+2026-11-06T08:40:12Z G1GRUN START g1g-g2-k2-l-parallelize-graph arm=G2 completion_gate=review k=2 pos=10 order=3/3 load=15.2
+2026-11-06T08:42:16Z G1GRUN END   g1g-g2-k2-l-parallelize-graph (tb exit 0) 124 s local_chat=32 cloud_sink_chat=0 note_req=1 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T08:42:16Z G1GRUN START g1g-g2-k2-l-fix-code-vulnerability arm=G2 completion_gate=review k=2 pos=11 order=1/3 load=11.2
+2026-11-06T08:44:39Z G1GRUN END   g1g-g2-k2-l-fix-code-vulnerability (tb exit 0) 143 s local_chat=11 cloud_sink_chat=0 note_req=1 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T08:44:39Z G1GRUN START g1g-g0-k2-l-fix-code-vulnerability arm=G0 completion_gate=off k=2 pos=11 order=2/3 load=6.2
+2026-11-06T08:47:02Z G1GRUN END   g1g-g0-k2-l-fix-code-vulnerability (tb exit 0) 143 s local_chat=27 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T08:47:02Z G1GRUN START g1g-g1-k2-l-fix-code-vulnerability arm=G1 completion_gate=checklist k=2 pos=11 order=3/3 load=7.4
+2026-11-06T08:51:49Z G1GRUN END   g1g-g1-k2-l-fix-code-vulnerability (tb exit 0) 286 s local_chat=39 cloud_sink_chat=0 note_req=6 other_note_req=6 nudge_note_req=0 late_sys_req=0 aborts=1 errors=0
+2026-11-06T08:51:49Z G1GRUN START g1g-g0-k2-l-hf-train-lora-adapter arm=G0 completion_gate=off k=2 pos=12 order=1/3 load=3.6
+2026-11-06T09:09:48Z G1GRUN END   g1g-g0-k2-l-hf-train-lora-adapter (tb exit 0) 1079 s local_chat=36 cloud_sink_chat=0 note_req=1 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T09:09:48Z G1GRUN START g1g-g1-k2-l-hf-train-lora-adapter arm=G1 completion_gate=checklist k=2 pos=12 order=2/3 load=20.3
+2026-11-06T09:27:55Z G1GRUN END   g1g-g1-k2-l-hf-train-lora-adapter (tb exit 0) 1087 s local_chat=38 cloud_sink_chat=0 note_req=1 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=1 errors=0
+2026-11-06T09:27:55Z G1GRUN START g1g-g2-k2-l-hf-train-lora-adapter arm=G2 completion_gate=review k=2 pos=12 order=3/3 load=22.8
+2026-11-06T09:52:13Z G1GRUN END   g1g-g2-k2-l-hf-train-lora-adapter (tb exit 0) 1458 s local_chat=76 cloud_sink_chat=0 note_req=2 other_note_req=2 nudge_note_req=0 late_sys_req=0 aborts=2 errors=1
+2026-11-06T09:52:13Z G1GRUN START g1g-g2-k2-l-sparql-university arm=G2 completion_gate=review k=2 pos=13 order=1/3 load=24.5
+2026-11-06T10:06:01Z G1GRUN END   g1g-g2-k2-l-sparql-university (tb exit 0) 829 s local_chat=74 cloud_sink_chat=0 note_req=26 other_note_req=26 nudge_note_req=0 late_sys_req=0 aborts=2 errors=0
+2026-11-06T10:06:01Z G1GRUN START g1g-g0-k2-l-sparql-university arm=G0 completion_gate=off k=2 pos=13 order=2/3 load=8.7
+2026-11-06T10:07:57Z G1GRUN END   g1g-g0-k2-l-sparql-university (tb exit 0) 115 s local_chat=19 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T10:07:57Z G1GRUN START g1g-g1-k2-l-sparql-university arm=G1 completion_gate=checklist k=2 pos=13 order=3/3 load=5.0
+2026-11-06T10:15:08Z G1GRUN END   g1g-g1-k2-l-sparql-university (tb exit 0) 431 s local_chat=71 cloud_sink_chat=0 note_req=12 other_note_req=12 nudge_note_req=0 late_sys_req=0 aborts=1 errors=0
+2026-11-06T10:15:08Z G1GRUN START g1g-g0-k2-l-tune-mjcf arm=G0 completion_gate=off k=2 pos=14 order=1/3 load=5.5
+2026-11-06T10:21:32Z G1GRUN END   g1g-g0-k2-l-tune-mjcf (tb exit 0) 384 s local_chat=37 cloud_sink_chat=0 note_req=1 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T10:21:32Z G1GRUN START g1g-g2-k2-l-tune-mjcf arm=G2 completion_gate=review k=2 pos=14 order=2/3 load=3.2
+2026-11-06T10:33:29Z G1GRUN END   g1g-g2-k2-l-tune-mjcf (tb exit 0) 717 s local_chat=68 cloud_sink_chat=0 note_req=1 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=1 errors=0
+2026-11-06T10:33:29Z G1GRUN START g1g-g1-k2-l-tune-mjcf arm=G1 completion_gate=checklist k=2 pos=14 order=3/3 load=8.0
+2026-11-06T10:36:29Z G1GRUN END   g1g-g1-k2-l-tune-mjcf (tb exit 0) 180 s local_chat=25 cloud_sink_chat=0 note_req=1 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T10:36:29Z G1GRUN START g1g-g1-k2-l-broken-python arm=G1 completion_gate=checklist k=2 pos=15 order=1/3 load=8.7
+2026-11-06T10:37:27Z G1GRUN END   g1g-g1-k2-l-broken-python (tb exit 0) 58 s local_chat=12 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T10:37:27Z G1GRUN START g1g-g2-k2-l-broken-python arm=G2 completion_gate=review k=2 pos=15 order=2/3 load=10.7
+2026-11-06T10:38:16Z G1GRUN END   g1g-g2-k2-l-broken-python (tb exit 0) 49 s local_chat=9 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T10:38:16Z G1GRUN START g1g-g0-k2-l-broken-python arm=G0 completion_gate=off k=2 pos=15 order=3/3 load=6.1
+2026-11-06T10:39:13Z G1GRUN END   g1g-g0-k2-l-broken-python (tb exit 0) 57 s local_chat=11 cloud_sink_chat=0 note_req=0 other_note_req=0 nudge_note_req=0 late_sys_req=0 aborts=0 errors=0
+2026-11-06T10:39:13Z G1GRUN G1G full finished: {'triples_started': 32, 'not_started': 0, 'cells_done': 18, 'cells_skipped': 78, 'aborted': 0}
+2026-11-06T10:39:13Z CHAIN-G1G the run finished (runner exit 0; 96 of 96 cells finished); lane: MainPID=2686 ExecMainStartTimestamp=Fri 2026-11-06 07:22:00 EET ActiveState=active 
+2026-11-06T10:39:13Z CHAIN-G1G collected (summary-g1g.txt): VERDICT G1 vs G0: no difference shown VERDICT G2 vs G0: no difference shown 
+    PRIMARY (solved; exact two-sided McNemar on (task, attempt) pairs valid in both arms; Holm over G1 and G2 vs G0):
+      G1 vs G0: pairs=30  solved 18 vs 16  G1-only=3 G0-only=1  exact McNemar p=0.6250  paired difference +0.067 [-0.073, +0.198]
+      G2 vs G0: pairs=30  solved 17 vs 16  G2-only=2 G0-only=1  exact McNemar p=1.0000  paired difference +0.033 [-0.091, +0.153]
+      VERDICT G1 vs G0: no difference shown
+      VERDICT G2 vs G0: no difference shown
+      discordant pairs:
+          G1 vs G0 k1 fix-code-vulnerability       solved only by G1  (stop G1: answered, G0: stall; gate rounds 1, checks 4, reviews 0, findings 0, outcome passed; capped G1/G0: False/False; tests 373/373 vs 368/373; order ['G1', 'G0', 'G2'])
+          G1 vs G0 k1 mailman                      solved only by G1  (stop G1: answered, G0: answered; gate rounds 0, checks 0, reviews 0, findings 0, outcome not_applicable; capped G1/G0: False/False; tests 3/3 vs 2/3; order ['G1', 'G0', 'G2'])
+          G1 vs G0 k1 prove-plus-comm              solved only by G0  (stop G1: stall, G0: answered; gate rounds 0, checks 0, reviews 0, findings 0, outcome not_reached; capped G1/G0: False/False; tests 2/4 vs 4/4; order ['G0', 'G1', 'G2'])
+          G1 vs G0 k2 mailman                      solved only by G1  (stop G1: answered, G0: None; gate rounds 1, checks 13, reviews 0, findings 0, outcome passed; capped G1/G0: False/True; tests 3/3 vs 2/3; order ['G2', 'G0', 'G1'])
+          G2 vs G0 k1 fix-code-vulnerability       solved only by G2  (stop G2: answered, G0: stall; gate rounds 2, checks 4, reviews 1, findings 7, outcome passed; capped G2/G0: False/False; tests 373/373 vs 368/373; order ['G1', 'G0', 'G2'])
+          G2 vs G0 k1 pypi-server                  solved only by G2  (stop G2: answered, G0: answered; gate rounds 2, checks 16, reviews 1, findings 10, outcome passed; capped G2/G0: False/False; tests 1/1 vs 0/1; order ['G0', 'G2', 'G1'])
+          G2 vs G0 k2 fix-code-vulnerability       solved only by G0  (stop G2: stall, G0: answered; gate rounds 0, checks 0, reviews 0, findings 0, outcome not_reached; capped G2/G0: False/False; tests 368/373 vs 373/373; order ['G2', 'G0', 'G1'])
+    
+    SECONDARY (paired, descriptive; same pairs):
+      CHECK G0 runs no gate (no counters, no records, no gate notes): negative control: yes; G1 gate acted in >= 1 cell, mode checklist only, no review: yes; G2 gate acted and reviewed in >= 1 cell, mode review only: yes; no idle nudge in any arm: yes; late system messages = 0 in every arm (steer_role user): yes; steer_role_adapted = 0 in every arm: yes; cloud sink requests = 0 in every arm: yes; surfaces as declared: NO; every cell on the gx10 lane: yes
