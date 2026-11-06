@@ -566,6 +566,15 @@ extra produces none of the records below.
 **Task record** — `gnomon task --json` carries the same object, without `root`,
 as `trust`. Absent when the surface grants nothing extra.
 
+Optional keys, in both: `tools_changed` (on a clamp for MCP tools that changed,
+below) and `floor_held` — present only on `decision: "trusted"` when the run
+was held to this machine's exec floor (`--trust`, `GNOMON_TRUST` or the store
+trusted a surface that moves a role out of the container it ran in, or to
+another image). It lists the sorted grant keys held back (`exec:<role>:off`,
+`exec:<role>:image`), so the record says that bash ran somewhere other than
+`surface_hash` declares ([THREAT-MODEL-EXEC.md](THREAT-MODEL-EXEC.md), row 9).
+`--trust-exec-downgrade` runs as declared and writes no `floor_held`.
+
 | `decision` | Meaning |
 |---|---|
 | `trusted` | Already trusted; `by` says how |
@@ -699,7 +708,8 @@ more. Some writes are invisible to it: a path built at run time (`$D/a.jsonl`,
 `os.path.join(...)`, string concatenation), a command run through `xargs`,
 `eval` or `sh -c` on computed text, and anything a script file does. MCP tool
 calls are not checked by these rules at all. **This is not containment.**
-Containment is the kernel-enforced sandbox (`exec os`, #74). The precheck
+Containment is a sandbox: `exec = "docker"` today (docs/THREAT-MODEL-EXEC.md);
+a kernel-enforced sandbox (`exec os`, #74/#156) is proposed and **not merged**. The precheck
 exists so that the routes a person can name are refused with a reason, before
 anything runs.
 
@@ -743,7 +753,8 @@ does: an `ask` for such a call names it in `reason` (and the loop's approval
 prompt lists the package.json scripts that would run, as the file spells
 them), and `[approval] repo_code = true` makes every such call `ask`, whatever
 `gate` says. Off by default. **Only a sandbox contains what that code does**
-(`exec = "docker"`; `exec os`, #74). Running a repository file by name
+(`exec = "docker"`; a kernel sandbox, `exec os` #74/#156, is proposed, not
+merged). Running a repository file by name
 (`python x.py`, `./x.sh`) and test runners (`pytest`, `go test`) also run the
 repository's code and are not listed: the call names the code it runs.
 
@@ -874,15 +885,17 @@ A signer proves provenance only against whoever cannot make it sign:
 - **A signer that needs a person for each signature** does: ssh-agent with
   `ssh-add -c`, a FIDO or hardware key that needs a touch, or a passphrase
   prompt.
-- **The kernel sandbox** (`exec os`, #74) also does, because it keeps the agent
-  away from the key.
+- **A kernel sandbox** (`exec os`, #74/#156) would also do, because it keeps
+  the agent away from the key. It is proposed and **not merged**; master
+  accepts only `exec = "off"` or `"docker"`.
 
 `recordTrial` signs only a report that `runTrial` produced in the same
 process, frozen, with its own cells. **That does not stop forgery.** A script
 can run `runTrial` with a stubbed runner, and a key-file signer will sign the
 result, which gets a skill accepted. Against an agent with a shell, the
 guarantee comes **only** from a signer that needs a person to confirm each
-signature (made at the end of the trial), or from the kernel sandbox.
+signature (made at the end of the trial). (A kernel sandbox, `exec os`, would
+also give it; it is proposed in #74/#156 and not merged.)
 `require_trial` is off by default, and opt-in.
 
 `[skills] require_trial = true` in `policy.toml` makes accept refuse in three
@@ -1143,13 +1156,16 @@ The record `record_tamper_resolved` has keys `tamper` (`{trail, seq, hash}`),
 `person_present_signer`), `user` and `host`. A resolution counts only when its
 trail verifies and it was authorised the way it says.
 
-**Threat model, stated once.**
+**Threat model, stated once** (for the record guard; the threat model for
+`[sandbox] exec`, its invariant and which layer enforces what, is
+[THREAT-MODEL-EXEC.md](THREAT-MODEL-EXEC.md)).
 - **Against a careless or accidental agent**, these protections both guard and
   make tampering visible: the `record` rule's patterns, this guard, the
   checkpoints, and the records it writes.
 - **Against a hostile one** that sets out to get round them, the guarantee is a
-  person-present signer (§11) or the kernel sandbox (`exec os`, #74), which
-  keeps the agent away from the records and the key. After the fact, an
+  person-present signer (§11). A kernel sandbox (`exec os`, #74/#156), which
+  would keep the agent away from the records and the key, is proposed and
+  **not merged**. For `exec = "docker"` see docs/THREAT-MODEL-EXEC.md. After the fact, an
   external anchor (§21) on an append-only witness makes a re-chained, deleted
   or rolled-back trail detectable even when the agent could write the records.
 
@@ -1818,7 +1834,9 @@ The self-modification paths gnomon offers, and what each must do:
 | `bash` | refuse, or be detected: `surface_drift` for `.gnomon/`, the record guard (§14) for the records |
 
 `bash` may be detected rather than refused because its rules are a pattern
-check over text (§10). The kernel sandbox (`exec os`) is what contains it.
+check over text (§10). Only a sandbox contains it: `exec = "docker"` today
+(docs/THREAT-MODEL-EXEC.md); a kernel sandbox (`exec os`, #74/#156) is
+proposed, not merged.
 Detection includes a surface that can no longer be hashed after the call, such
 as a dangling link. That is reported as drift with `after: "unhashable"`.
 

@@ -1,5 +1,13 @@
 # Declared execution sandboxes — design note, and what shipped from it
 
+> **For what `exec = "docker"` defends against today, read
+> [THREAT-MODEL-EXEC.md](THREAT-MODEL-EXEC.md).** The docker parts of this
+> note predate v0.4.5 (PR #158): "repo mounted and writable" is no longer the
+> whole story (gnomon's state and git's control files are mounted read-only,
+> capabilities are dropped, and host-side gnomon treats everything the
+> container can write as untrusted). This file is kept as the design history
+> and for the rejected-backend measurements.
+
 *Written 2026-09-01 as scoping. **Re-headed 2026-09-02: the docker half of it
 shipped.*** `[sandbox] exec` is live — `resolveExec` in `config.ts` reads it,
 `sandboxCommand` in `tools.ts` rewrites the command, and a per-role `exec` in

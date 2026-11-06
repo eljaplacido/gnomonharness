@@ -1229,6 +1229,15 @@ export interface TrustOutcome {
    * pinned (clampForChangedTools): each server, what was pinned, what it offers.
    */
   tools_changed?: Array<{ server: string; pinned: string; now: string }>;
+  /**
+   * Present only when a trusted run (`--trust`, `GNOMON_TRUST`, the store) was
+   * held to this machine's exec floor: the grant keys (`exec:<role>:off`,
+   * `exec:<role>:image`) the declared surface asked for and did not get. With
+   * it, the record says that what ran differs from what `surface_hash`
+   * declares; without it, two machines with the same hash could run bash in
+   * different places and the record would not show it (audit 2026-11-06).
+   */
+  floor_held?: string[];
 }
 
 /** The published vocabulary, pinned by conformance/trust_record.json. */
@@ -1321,7 +1330,10 @@ export function settleTrustHeadless(
       return {
         config: withExecFloor(config, evaluation.keepExecFloor),
         evaluation,
-        outcome: outcomeOf(evaluation, "trusted", evaluation.via ?? "store"),
+        outcome: {
+          ...outcomeOf(evaluation, "trusted", evaluation.via ?? "store"),
+          floor_held: held.map((g) => g.key).sort(),
+        },
       };
     }
     return { config, evaluation, outcome: outcomeOf(evaluation, "trusted", evaluation.via ?? "store") };

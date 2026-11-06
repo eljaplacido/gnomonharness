@@ -27,8 +27,10 @@
  * What it cannot see, said plainly: a change made and undone within one tool
  * call (the snapshot compares the ends of the call), and anything that rewrites
  * a file while preserving size, mtime, ctime and inode -- which needs root, a
- * clock change, or a raw device. The kernel sandbox (`exec os`) is what keeps
- * the agent away from the records in the first place.
+ * clock change, or a raw device. Only containment keeps the agent away from
+ * the records in the first place: `exec = "docker"` today
+ * (docs/THREAT-MODEL-EXEC.md); a kernel sandbox (`exec os`, #74/#156) is
+ * proposed and not merged.
  */
 
 import { readdirSync, lstatSync, readFileSync, readlinkSync, existsSync, statSync, type Stats } from "node:fs";

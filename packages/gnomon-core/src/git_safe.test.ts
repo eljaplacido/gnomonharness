@@ -32,8 +32,15 @@ let outside: string;
  */
 const copyTree = (from: string, to: string) => execFileSync("cp", ["-R", from, to], { stdio: "ignore" });
 
+// No auto-maintenance: newer git (macOS runners) detaches a background
+// `maintenance` after a commit, which takes and drops locks in .git/objects
+// while a test copies it -- the cause of the macOS "ENOENT .../objects" copy
+// failures (audit 2026-11-06; prompt_loop.test.ts found the same).
 const git = (...args: string[]) =>
-  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd: repo, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "maintenance.auto=false", "-c", "gc.auto=0", ...args], {
+    cwd: repo,
+    stdio: "ignore",
+  });
 
 beforeEach(() => {
   _resetGitSafety();
