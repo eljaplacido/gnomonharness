@@ -124,17 +124,7 @@
     sessions. The same holds for any `.git` directory the model creates in a
     subdirectory: do not run git in a directory the model made without
     looking.
-v0.4.4 candidate: long hosted-model tasks, from the P2G41 root causes
-(2026-11-05). **One default changes: reasoning replay is on for a hosted
-endpoint that returns reasoning**, adopted by H3's pre-registered decision
-rule; H3 measured hosted endpoints only, so local lanes stay off unless they
-declare it. The
-idle nudge stays at 12, as in 0.4.3: LG1 measured switching it off on the
-local lane and it cost tokens. Everything else is opt-in, record-only or
-robustness. With `replay_reasoning = false` declared, request bodies are
-byte-identical to master; with nothing declared they are byte-identical on
-any local lane (reasoning field or not) and on a hosted endpoint that returns
-no reasoning field (`long_tasks.test.ts` pins all three).
+
 ## [0.4.4] — 2026-11-06
 
 Long hosted-model tasks, from the P2G41 root causes (2026-11-05). **One default
