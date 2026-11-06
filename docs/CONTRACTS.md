@@ -2383,6 +2383,9 @@ a finish hook, a structured checklist, a read-only auditor sub-agent.
   findings are not used; that is announced, counted as `review_failures`, and
   recorded as `review_failed`.
 
+**Superseded** by the finish gate (§33): with `finish_gate = "v2"` declared,
+this gate does not run and `counters.completion_gate` is absent.
+
 **When it applies.** Only to the turn a person asked for (not a delegated
 sub-turn), only to an answer (not a failed request, a blank or a cut-off
 reply), after the declared `[verify]` check, and only when the turn changed
@@ -2608,7 +2611,8 @@ and audit kind `bootstrap`, with `id: "env_snapshot"`. A declared
 `[context] bootstrap` wins over it, and the audit says `env_snapshot` does
 nothing there.
 
-**Todo gate.** With `todo_gate = true`, an answer given while the checklist
+**Todo gate.** Superseded by the finish gate (§33): with `finish_gate = "v2"`
+it does not run. With `todo_gate = true`, an answer given while the checklist
 this turn wrote has open items (any not `completed`) is not accepted: the
 harness hands the turn back once, as a system message after the answer,
 naming each open item. It applies, like the completion gate (§30), only to the
@@ -2669,3 +2673,137 @@ lists hosts, and an admitted call's `tool_call` record carries
 code's lists and defaults to it, this section to its keys and values, the
 byte-identity above, and, against a scripted model per knob, what goes out on
 the wire and into the records.
+
+## 33. Finish gate — `[verify] finish_gate`, `counters.finish_gate`, audit kind `finish_gate`, `v: 1`
+
+Harness control at the end of a turn, opt-in, built for long tasks. It reads
+the answer, which the completion gate (§30) does not, and it respects the
+clock.
+
+Why it exists. The 2026-11-06 near-miss analysis (P2G41 and H3, 35 cells with
+at least 60% of the hidden tests passing and reward 0) found 6 cells whose
+final answer named the defect the hidden test checks ("one judgement call
+worth flagging … I kept it in the catalogue", "the plan reports
+`route_feasible: false`", "the plan necessarily carries lateness") and ended
+anyway, and 5 whose own checks never exercised the hidden property. The
+completion gate's checklist does not read the answer, and on hosted
+time-capped runs it hurt because it is blind to the deadline (H4-lite).
+
+**Surface** (`.gnomon/policy.toml`, under `[verify]`, content-hashed with it):
+
+| key | default | meaning |
+|---|---|---|
+| `finish_gate` | `off` | `off` or `v2`. Anything else is reported by the surface audit and runs as `off` |
+
+One key on purpose: the rounds (2) and the budget floor (0.15) are fixed, so a
+benchmark arm is one line.
+
+**Supersedes.** With `finish_gate = "v2"`, the completion gate (§30, any mode)
+and the todo gate (§32) do not run, and their counters are absent: v2's
+hand-back carries the task (the checklist's source), the targeted checks and
+the open todos. The surface audit names each superseded key (not fatal). The
+old knobs keep their behaviour when v2 is off.
+
+**The end-of-turn pipeline.** Every check that can refuse an answer is a stage
+of one ordered pipeline in the loop: the declared `[verify]` check (with
+`test_must_fail_first`), the todo gate, the completion gate, the finish gate.
+The first stage that hands back wins; a hand-back is the rejected answer
+followed by one message whose role the stage chooses. With v2 off, every stage
+sends what it sent before (pinned by the byte-identity tests of §30 and §32).
+The output-limit re-ask and the idle nudge are not stages: they act before a
+turn has answered.
+
+**Modes.**
+- `off`: nothing below runs. The request bodies a turn sends are
+  byte-identical to a build without the gate (`finish_gate_loop.test.ts`
+  hashes a scripted turn's bodies against the same master hash as §30).
+- `v2`: the first answer of a turn that changed the worktree is not accepted.
+  The harness hands the turn back once with:
+  1. the task, verbatim (its last user message, up to 16,000 characters);
+  2. the open items of a checklist this turn wrote with `todo`, if any;
+  3. a **caveat audit**: a deterministic scan of the answer's prose (not its
+     fenced code or reasoning) for admitted deviations, each sentence quoted
+     back with "The task requires the strict reading; fix it or show
+     concretely why the task text allows it." At most 8 sentences; a negated
+     phrase ("no TODOs", "nothing skipped") is not a hit. Caveat ids:
+     `judgement_call`, `flagged`, `infeasible`, `not_possible`, `could_not`,
+     `skipped`, `approximate`, `only_the`, `carries`, `over_limit`, `late`,
+     `false_literal`, `todo`, `workaround`, `assumed`, `not_implemented`,
+     `partial`, `interpretation`, `unverified`;
+  4. **claims against evidence** (after clnkr's completion gate): a claim the
+     answer makes that no tool call after the turn's last `write` or `edit`
+     supports. Evidence ids: `artifact_unchecked` (created or wrote an output;
+     needs a `read`/`glob`, or `ls`, `cat`, `head`, `test -f`, …),
+     `service_unchecked` (a server is running; needs `curl`, `nc`, `ss`, …),
+     `behavior_unchecked` (it works, fixed, passes; needs a command that runs
+     something). clnkr checks claims against checks the model reports; this
+     checks them against the calls the turn made;
+  5. targeted checks: every output path and format exists as the task says;
+     each requirement mapped to evidence; tests are evidence only after
+     confirming they cover the requirement, so add one for any stated property
+     not exercised (ordering, concurrency, edge inputs, changed values); no
+     narrower or easier-to-test substitute; scratch files this turn made
+     removed, never an input or a file the task names.
+
+  The next answer is accepted once at least one tool call has run since the
+  hand-back. An answer with none is handed back again (`no_tool`), at most 2
+  rounds a turn.
+
+**Delivery.** Each hand-back is a **user-role** message after the rejected
+answer, starting with the `[gnomon] ` marker, whatever the endpoint's
+`steer_role`: local chat templates drop a system message after the first, and
+a gate the model never sees costs a round for nothing. Every step after it
+counts against `max_steps_total`.
+
+**When it applies.** As §30: only to the turn a person asked for, only to an
+answer (not a failed request, a blank or a cut-off reply), after the declared
+`[verify]` check, and only when the turn changed the
+worktree by any route.
+
+**Each end it applies to**, in order:
+1. a round was handed back and a tool call ran since: accept, `passed`;
+2. 2 rounds spent: accept, `exhausted`;
+3. less than 0.15 of the budget left (the smaller of the steps left of
+   `max_steps_total` and, under `--deadline`, the time left): accept,
+   `skipped_budget`;
+4. no round yet: `fire`; otherwise `no_tool`.
+
+**Actions**: `fire`, `no_tool`, `accept`. **Outcomes:** `passed`,
+`exhausted`, `skipped_budget`, `not_applicable` (the turn answered without
+changing the worktree), `not_reached` (the turn ended some other way).
+
+**`counters.finish_gate`**, on the `turn` record, the `TaskRecord` and the
+session's exchange, present only when declared: `v`, `mode`, `max_rounds`,
+`min_remaining`, `rounds`, `tool_calls` (tool calls that ran after a
+hand-back), `caveats` (caveat sentences in the answer it fired on),
+`outcome`; and when they apply `caveats_final` (caveat sentences in the
+answer accepted after a hand-back: whether the admission survived),
+`evidence_gaps` (claims without evidence when it fired) and `open_todos`.
+Nothing in it is a clock, so all of it reproduces.
+
+**`finish_gate`** (audit kind), when `[audit]` is on: one record per end the
+gate judged. Keys `role`, `round`, `action`, `step`, `budget_left` (three
+decimals), `budget_by` (`steps` or `deadline`), `caveats` (a count),
+`caveat_ids` (sorted), and when they apply `outcome` and `tools_since` (on
+`accept`), `open_todos` and `evidence_gaps` (the ids, on `fire`).
+
+**Limits.**
+- The caveat audit is phrase matching: it misses an admission worded
+  otherwise and quotes some sentences that admit nothing. The hand-back asks
+  for the strict reading or the task text that allows the other, so a false
+  hit costs words, not a wrong change forced on the model.
+- "A tool call ran" is any call that ran. Which one, and whether it checked
+  anything, is the model's choice.
+- The audit is one implementation of a seam (`FinishAudit`): a later variant
+  may fill it from a bounded judge call instead; none exists yet.
+
+**Fixture**: `conformance/finish_gate.json`. `finish_gate.test.ts` checks the
+module's modes, actions, outcomes, bounds, caveat and evidence ids against it,
+a true and a false positive per caveat pattern, the near-miss answers it was
+built from, and that this section names the kind and every value and key.
+`finish_gate_loop.test.ts` checks, against a scripted model on an Ollama
+`/api/chat` lane, byte identity when off, the hand-back's content and role,
+acceptance after a tool call, the `no_tool` round and the bound, the skip on
+the step budget and on the deadline, precedence over the completion and todo
+gates, and
+that every record carries only the fixture's keys.

@@ -21,6 +21,7 @@ import { loadSkills } from "./skills.js";
 import { harnessBuild } from "./build.js";
 import { AUTO_WINDOW, rememberedWindow, type ContextSource } from "./context_window.js";
 import { COMPLETION_GATE_MODES, auditCompletionGate } from "./completion_gate.js";
+import { FINISH_GATE_MODES, auditFinishGate } from "./finish_gate.js";
 import {
   ENV_SNAPSHOT_ID,
   ENV_SNAPSHOT_LIMITS,
@@ -412,6 +413,8 @@ export interface Policy {
     completion_rounds?: number;
     completion_min_remaining?: number;
     completion_reviewer?: string;
+    /** The finish gate (finish_gate.ts): "off" or "v2". Replaces the completion gate. */
+    finish_gate?: string;
   };
   exit_codes?: Record<string, string>;
   /** Environment bootstraps, by id; `[context] bootstrap` picks one. */
@@ -2458,6 +2461,8 @@ const ENUM_KEYS: EnumSpec[] = [
   // resolveCompletionGate (completion_gate.ts): anything else is "off", so a
   // misspelt "reveiw" would silently turn the gate off.
   { block: "verify", key: "completion_gate", values: COMPLETION_GATE_MODES, falls_back_to: "off" },
+  // resolveFinishGate (finish_gate.ts): anything but "v2" is "off".
+  { block: "verify", key: "finish_gate", values: FINISH_GATE_MODES, falls_back_to: "off" },
   // [context] token_estimate: a misspelt "calibrated" would run as "chars4".
   { block: "context", key: "token_estimate", values: TOKEN_ESTIMATES, falls_back_to: "chars4" },
 ];
@@ -3103,6 +3108,7 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
 // The completion gate: a review naming no role cannot run (fatal); a
 // reviewer role declaring tools the review withholds reads as more than it is.
 problems.push(...auditCompletionGate(config));
+problems.push(...auditFinishGate(config));
 // The sweep knobs (sweep_knobs.ts): each opt-in, none fatal.
 problems.push(...auditSweepKnobs(config, (ep) => endpointKind(ep)));
 

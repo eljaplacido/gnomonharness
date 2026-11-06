@@ -260,6 +260,10 @@ export type AuditKind =
   // judged: the round, hand_back or accept, the open items and the budget
   // left. Its own kind for the reason completion_gate has one.
   | "todo_gate"
+  // One per end of a turn the finish gate (`[verify] finish_gate = "v2"`,
+  // finish_gate.ts) judged: fire, no_tool or accept, the budget left, the
+  // caveat ids its audit found, claims without evidence, the open todos.
+  | "finish_gate"
   // One per model request a turn made, when [audit] is on: what it carried
   // (gnomon's estimate, replayed reasoning, steering and its role, the trim
   // before it) and what came back (provider tokens, reasoning, code, clock).
