@@ -1451,6 +1451,66 @@ completion_min_remaining = 0.2    # skip with less than a fifth of the budget le
 completion_reviewer = "verifier"  # a read-only role (no write/edit; a bash_allow)
 ```
 
+**Opt-in: the sweep knobs.** Six settings, each off (or the old behaviour)
+unless declared, so a benchmark sweep can test one long-task hypothesis per
+arm as a surface change ([CONTRACTS.md §32](CONTRACTS.md)). Undeclared, or
+declared at their defaults, a turn sends the same request bytes as before.
+
+- `reasoning_effort` on an endpoint, or a role to override it: sent as
+  `reasoning_effort` (`low`, `medium`, `high`, `max`; `"provider"` sends
+  none). Other values are not sent and the surface audit says so; Ollama's
+  `/api/chat` is never sent one.
+- `sampling = "provider"` on an endpoint, or `temperature`/`top_p =
+  "provider"` on a role: the field is not sent, so the provider's default
+  applies. The turn record's `wire` names what was left out.
+- `[context] env_snapshot = true`: before the first model call, a fixed
+  read-only probe (directory, git status, OS, CPUs, memory, toolchain
+  versions, package managers, and the network policy) goes into the system
+  prompt. About 2 s and 1.5k tokens at most; it runs through `bash`, so the
+  role's policy applies to it. Like a declared bootstrap it is a trust grant
+  (§7.9): `gnomon task` on a surface nobody has trusted needs `--trust`, or
+  it runs clamped, without the snapshot.
+- `[turn] todo_gate = true`: an answer given while this turn's checklist has
+  open items is handed back once, naming them; skipped when less than
+  `completion_min_remaining` of the budget is left.
+- `variant = "compat"` on the `edit` tool: `old_string`/`new_string`, and an
+  edit that does not match exactly is matched with whitespace, then
+  indentation, ignored, always uniquely.
+- `allow_package_index` under `[sandbox] network = false`: package downloads
+  (pip, uv or npm install or download; curl or wget GET) naming only those
+  hosts are not refused. It cannot open `exec = "docker"`'s container.
+
+```toml
+# config.toml
+[endpoints.go]
+url = "https://opencode.ai/zen/go/v1/chat/completions"
+kind = "openai"
+reasoning_effort = "high"
+sampling = "provider"
+
+[context]
+env_snapshot = true
+
+[turn]
+todo_gate = true
+```
+
+```toml
+# tools.toml
+[[tools]]
+name = "edit"
+description = "Replace one place in a file."
+enabled = true
+variant = "compat"
+```
+
+```toml
+# policy.toml: inside the existing [sandbox] block
+[sandbox]
+network = false
+allow_package_index = ["pypi.org", "files.pythonhosted.org", "registry.npmjs.org"]
+```
+
 A declared chain is sequencing with a gate, not proof of quality: an ungated
 chain measured 48.7% against 56.6% without one, within noise
 ([README → Known Limits](../README.md#known-limits)). Full contract:

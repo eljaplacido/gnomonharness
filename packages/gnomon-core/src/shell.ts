@@ -2285,49 +2285,233 @@ export interface NetworkEgress {
  * "docker"`, `network = false` runs the command with `--network none`, which
  * is.
  */
-export function bashNetworkEgress(command: string): NetworkEgress | null {
+export function bashNetworkEgress(
+  command: string,
+  /**
+   * `[sandbox] allow_package_index` (sweep_knobs.ts): hosts a package
+   * download may name. Empty -- the default -- is the filter as it was.
+   */
+  packageIndex: readonly string[] = [],
+  /** Filled with the listed hosts the line names in downloads it admitted. */
+  admitted?: string[]
+): NetworkEgress | null {
   const { invocations } = readShellCommand(command);
   for (const inv of invocations) {
     if (inv.synthetic) continue;
-    const argv = inv.argv;
-    const prog = programName(argv[0]);
-    const shown = describeInvocation(inv);
-    const args = argv.slice(1);
-    for (const w of [...argv, ...inv.redirects.map((r) => r.target)]) {
-      if (/^\/dev\/(tcp|udp)\//.test(w)) return { command: shown, why: `${w} opens a network connection` };
-    }
-    if (NET_CLIENTS.has(prog)) {
-      if (args.length > 0 && args.every((a) => SELF_ONLY.has(a))) continue;
-      // The whole call, not just argv: the parser drops `http_proxy=…` prefixes, and any
-      // proxy anywhere in the command can carry a loopback-looking request elsewhere.
-      if (LOOPBACK_CLIENTS.has(prog) && !/proxy/i.test(command) && onlyLoopback(args)) continue;
-      return { command: shown, why: `${prog} is a network client` };
-    }
-    if (REMOTE_COPY.has(prog)) {
-      const remote = args.find(isRemote);
-      if (remote) return { command: shown, why: `${prog} to a remote (${remote})` };
-      continue;
-    }
-    if (prog === "git") {
-      const g = gitEgress(argv);
-      if (g) return { command: shown, why: g };
-      continue;
-    }
-    if (PACKAGE_MANAGERS.test(prog)) {
-      const p = packageEgress(argv);
-      if (p) return { command: shown, why: `${prog} ${p}` };
-    }
-    for (const rule of CODE_EGRESS) {
-      if (!rule.prog.test(prog)) continue;
-      const hit = inlineCode(argv, rule.flags, inv.redirects).find((c) => rule.code.test(c));
-      if (hit !== undefined) {
-        const m = rule.code.exec(hit);
-        const what = m ? m[0].replace(/[\s(]+$/, "") : "network";
-        return { command: shown, why: `${prog} code that opens a connection (${what})` };
+    const hit = invocationEgress(inv, command);
+    if (!hit) continue;
+    if (packageIndex.length > 0 && hit.admissible) {
+      const hosts = packageDownloadHosts(inv.argv, packageIndex);
+      if (hosts) {
+        admitted?.push(...hosts);
+        continue;
       }
+    }
+    return { command: hit.command, why: hit.why };
+  }
+  return null;
+}
+
+/**
+ * One invocation's egress, as bashNetworkEgress has always read it.
+ * `admissible`: a curl or wget, or a package manager naming a URL -- the only
+ * shapes `allow_package_index` can admit. /dev/tcp, ssh, nc, scp, rsync, git
+ * and interpreter one-liners never are.
+ */
+function invocationEgress(
+  inv: ShellInvocation,
+  command: string
+): (NetworkEgress & { admissible: boolean }) | null {
+  const argv = inv.argv;
+  const prog = programName(argv[0]);
+  const shown = describeInvocation(inv);
+  const args = argv.slice(1);
+  for (const w of [...argv, ...inv.redirects.map((r) => r.target)]) {
+    if (/^\/dev\/(tcp|udp)\//.test(w)) return { command: shown, why: `${w} opens a network connection`, admissible: false };
+  }
+  if (NET_CLIENTS.has(prog)) {
+    if (args.length > 0 && args.every((a) => SELF_ONLY.has(a))) return null;
+    // The whole call, not just argv: the parser drops `http_proxy=…` prefixes, and any
+    // proxy anywhere in the command can carry a loopback-looking request elsewhere.
+    if (LOOPBACK_CLIENTS.has(prog) && !/proxy/i.test(command) && onlyLoopback(args)) return null;
+    return { command: shown, why: `${prog} is a network client`, admissible: prog === "curl" || prog === "wget" };
+  }
+  if (REMOTE_COPY.has(prog)) {
+    const remote = args.find(isRemote);
+    if (remote) return { command: shown, why: `${prog} to a remote (${remote})`, admissible: false };
+    return null;
+  }
+  if (prog === "git") {
+    const g = gitEgress(argv);
+    if (g) return { command: shown, why: g, admissible: false };
+    return null;
+  }
+  if (PACKAGE_MANAGERS.test(prog)) {
+    const p = packageEgress(argv);
+    if (p) return { command: shown, why: `${prog} ${p}`, admissible: true };
+  }
+  for (const rule of CODE_EGRESS) {
+    if (!rule.prog.test(prog)) continue;
+    const hit = inlineCode(argv, rule.flags, inv.redirects).find((c) => rule.code.test(c));
+    if (hit !== undefined) {
+      const m = rule.code.exec(hit);
+      const what = m ? m[0].replace(/[\s(]+$/, "") : "network";
+      return { command: shown, why: `${prog} code that opens a connection (${what})`, admissible: false };
     }
   }
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Package downloads under `[sandbox] allow_package_index`
+// ---------------------------------------------------------------------------
+//
+// The narrowest exception the intent filter can express. A line is admitted
+// only when it is a download, in a shape read here option by option, and
+// every URL it names is http(s) on a listed host with no port, no userinfo
+// and nothing that could send the connection elsewhere (a proxy, curl's
+// --connect-to or --resolve, a config file, wget's -e). Anything not read
+// here is refused as before. It changes nothing under exec = "docker": the
+// container's --network none is not an intent filter, and no host list can
+// open it.
+
+/** A URL whose host is listed: http(s), a bare host, no port or userinfo. */
+function listedUrlHost(w: string, hosts: readonly string[]): string | null {
+  const m = /^https?:\/\/([^/?#]*)(?:[/?#]\S*)?$/i.exec(w);
+  if (!m || !/^[A-Za-z0-9.-]+$/.test(m[1]!)) return null;
+  const host = m[1]!.toLowerCase();
+  return hosts.includes(host) ? host : null;
+}
+
+interface ClientSpec {
+  /** Whole arguments that take no value (wget's -nv is one argument, not -n -v). */
+  flags: ReadonlySet<string>;
+  /** Short options that take no value, clusterable. */
+  shortNoValue: string;
+  /** Short options whose value follows, attached or as the next argument. */
+  shortValue: string;
+  /** Long options whose value follows, after `=` or as the next argument. */
+  longValue: ReadonlySet<string>;
+}
+
+/** Reading and writing a download: no upload, no proxy, no redirection of the connection. */
+const CURL_SPEC: ClientSpec = {
+  flags: new Set([
+    "--silent", "--show-error", "--fail", "--fail-with-body", "--location", "--remote-name",
+    "--remote-name-all", "--remote-header-name", "--progress-bar", "--compressed", "--disable",
+    "--verbose", "--create-dirs", "--globoff", "--remote-time", "--no-progress-meter",
+  ]),
+  shortNoValue: "sSfLOJ#qvgR",
+  shortValue: "om",
+  longValue: new Set([
+    "--output", "--output-dir", "--retry", "--retry-delay", "--retry-max-time", "--max-time",
+    "--connect-timeout", "--max-filesize",
+  ]),
+};
+const WGET_SPEC: ClientSpec = {
+  flags: new Set([
+    "-nv", "-nc", "-nd", "--quiet", "--no-verbose", "--continue", "--timestamping", "--no-clobber",
+    "--show-progress", "--no-directories",
+  ]),
+  shortNoValue: "qcN",
+  shortValue: "OPtT",
+  longValue: new Set([
+    "--output-document", "--directory-prefix", "--tries", "--timeout", "--progress", "--read-timeout",
+    "--connect-timeout", "--wait",
+  ]),
+};
+
+/** The listed hosts a curl or wget download names, or null when it is not one this reads as safe. */
+function clientDownloadHosts(args: string[], spec: ClientSpec, hosts: readonly string[]): string[] | null {
+  const named: string[] = [];
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k]!;
+    if (a === "--") {
+      for (const rest of args.slice(k + 1)) {
+        const h = listedUrlHost(rest, hosts);
+        if (!h) return null;
+        named.push(h);
+      }
+      break;
+    }
+    if (spec.flags.has(a)) continue;
+    if (a.startsWith("--")) {
+      const eq = a.indexOf("=");
+      if (!spec.longValue.has(eq >= 0 ? a.slice(0, eq) : a)) return null;
+      if (eq < 0) k++;
+      continue;
+    }
+    if (a.startsWith("-") && a.length > 1) {
+      for (let i = 1; i < a.length; i++) {
+        const c = a[i]!;
+        if (spec.shortNoValue.includes(c)) continue;
+        if (!spec.shortValue.includes(c)) return null;
+        if (i === a.length - 1) k++;
+        break;
+      }
+      continue;
+    }
+    const h = listedUrlHost(a, hosts);
+    if (!h) return null;
+    named.push(h);
+  }
+  return named.length > 0 ? named : null;
+}
+
+/** Subcommands that download and install, or only read the index. Never publish. */
+const PIP_DOWNLOADS = new Set(["install", "download", "wheel", "index"]);
+const UV_PIP_DOWNLOADS = new Set(["install", "compile", "sync"]);
+const UV_DOWNLOADS = new Set(["add", "sync", "lock"]);
+const NPM_DOWNLOADS = new Set([
+  "install", "i", "add", "ci", "clean-install", "update", "up", "upgrade", "view", "info", "show", "v", "pack", "fetch",
+]);
+/** Package-manager options whose value is a URL (or a name standing for one). */
+const URL_OPTIONS = /^(?:--(?:registry|index-url|extra-index-url|find-links|index|default-index)|-[if])$/;
+
+/**
+ * The listed hosts a package download names, or null when the line is not
+ * a download, or names any URL that is not http(s) on a listed host, or a
+ * registry by name rather than by URL.
+ */
+function packageDownloadHosts(argv: string[], hosts: readonly string[]): string[] | null {
+  const prog = programName(argv[0]);
+  if (prog === "curl") return clientDownloadHosts(argv.slice(1), CURL_SPEC, hosts);
+  if (prog === "wget") return clientDownloadHosts(argv.slice(1), WGET_SPEC, hosts);
+  const args = argv.slice(1);
+  const words: string[] = [];
+  const named: string[] = [];
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k]!;
+    const flag = /^(--?[A-Za-z][\w-]*)(?:=(.*))?$/s.exec(a);
+    if (flag && URL_OPTIONS.test(flag[1]!)) {
+      const v = flag[2] ?? args[++k] ?? "";
+      const h = listedUrlHost(v, hosts);
+      if (!h) return null;
+      named.push(h);
+      continue;
+    }
+    if (a.startsWith("-")) {
+      if (/:\/\//.test(a)) return null;
+      continue;
+    }
+    // Any URL in an operand, wherever it sits (`name@https://…` is npm's
+    // alias form), must be the whole operand and on a listed host.
+    if (/:\/\//.test(a)) {
+      if (/^file:\/\//i.test(a)) continue;
+      const h = listedUrlHost(a, hosts);
+      if (!h) return null;
+      named.push(h);
+      continue;
+    }
+    words.push(a);
+  }
+  const [sub, sub2] = words;
+  const ok = /^pip[0-9.]*$/.test(prog)
+    ? PIP_DOWNLOADS.has(sub ?? "")
+    : prog === "uv"
+      ? sub === "pip" ? UV_PIP_DOWNLOADS.has(sub2 ?? "") : UV_DOWNLOADS.has(sub ?? "")
+      : ["npm", "pnpm", "yarn", "bun"].includes(prog) && NPM_DOWNLOADS.has(sub ?? "");
+  return ok && named.length > 0 ? named : null;
 }
 
 // ---------------------------------------------------------------------------

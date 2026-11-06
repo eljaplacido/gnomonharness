@@ -36,8 +36,13 @@ Update with `gnomon update`; `gnomon uninstall` prints how to remove it.
 2. **Connect a cloud model (optional).** Pick OpenCode Go, OpenRouter,
    OpenCode Zen or any OpenAI-compatible URL. The key is read hidden and kept
    outside the repository, as `gnomon key set` does. With one, setup suggests
-   hybrid, where the cloud plans and your machine builds. On an RTX 5090 that
-   solved 87% vs 84% cloud-only at 26% lower cost per solved task.
+   hybrid, where the cloud plans and your machine builds. On an NVIDIA GB10
+   that solved 22/32 against 16/31 local-only (+17 points, McNemar p = 0.07).
+   The earlier RTX 5090 result (87% vs 84% cloud-only, at 26% lower cost per
+   solved task) did not reproduce: on v0.4.0 the same lane gave hybrid 19/31
+   against cloud-only 24/31 (R3R), and the old and new builds run side by side
+   showed no build effect (20 vs 19, p = 1.0; R4H), so the cause is open. See
+   [docs/benchmarks/HYBRID.md](docs/benchmarks/HYBRID.md).
 3. **Accept the diff, then `gnomon launch`.** Setup shows its change to
    `.gnomon/` as a diff and writes it only on your yes. `gnomon doctor`
    re-checks the machine any time and never changes anything.
@@ -87,8 +92,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2534 TypeScript tests (2013 core, 496 cli, 18
-> natives, 7 tui) and 61 Rust tests — **2595 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2549 TypeScript tests (2031 core, 493 cli, 18
+> natives, 7 tui) and 61 Rust tests — **2610 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -425,7 +430,7 @@ irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/i
 The installer ([`scripts/install.sh`](scripts/install.sh),
 [`scripts/install.ps1`](scripts/install.ps1)) checks Node and, if it is missing
 or older than 20, prints the command for your OS instead of running one as root.
-It resolves the latest release (`GNOMON_VERSION=0.4.2` pins one), installs the
+It resolves the latest release (`GNOMON_VERSION=0.4.3` pins one), installs the
 npm package — from the registry when that version is published there, from
 the release's own tarballs when it is not (an older pin, or the minute between
 a release and its npm publish) — and puts the native binaries in
@@ -460,11 +465,11 @@ the release job builds, refuses to publish unless they install and run, and
 then publishes to npm byte for byte:
 
 ```bash
-V=0.4.2; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
+V=0.4.3; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/gnomon-harness-$V.tgz
 ```
 
-<!-- bash only: `V=0.4.2` is not an assignment in PowerShell, and `$B/...` is
+<!-- bash only: `V=0.4.3` is not an assignment in PowerShell, and `$B/...` is
 not a path there. The installer one-liners above are the cross-shell route. -->
 
 From the registry this is `npm i -g gnomon-harness` (or
@@ -855,6 +860,15 @@ system prompt. See [docs/GUIDE.md §8](docs/GUIDE.md) and
 [CONTRACTS.md §19](docs/CONTRACTS.md). Whether either helps is for the
 pre-registered A/B in
 [docs/benchmarks/prereg/CX-AB.md](docs/benchmarks/prereg/CX-AB.md) to decide.
+
+Six more opt-in keys exist so a benchmark sweep can test one long-task
+hypothesis per arm as a surface setting: `reasoning_effort` (endpoint or
+role), `sampling = "provider"` (or a role's `temperature`/`top_p =
+"provider"`), `[context] env_snapshot`, `[turn] todo_gate`, the `edit` tool's
+`variant = "compat"`, and `[sandbox] allow_package_index`. Undeclared, or
+declared at their defaults, a turn sends the request bytes it sent before
+them. See [docs/GUIDE.md §8](docs/GUIDE.md) and
+[CONTRACTS.md §32](docs/CONTRACTS.md).
 
 #### `[turn]` — when a turn stops, is nudged, or converges
 

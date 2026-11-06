@@ -33,6 +33,7 @@
  * else's agent and its start-up time is that agent's latency.
  */
 
+import { resolvePackageIndex } from "./sweep_knobs.js";
 import { spawnSync } from "node:child_process";
 import {
   closeSync,
@@ -569,6 +570,8 @@ export async function decide(
     extraRoots: resolveExtraRoots(live),
     exec: resolveExec(config, role),
     network: (config.policy?.sandbox as { network?: boolean } | undefined)?.network,
+    // `[sandbox] allow_package_index` (sweep_knobs.ts), as the loop reads it.
+    ...((hosts) => (hosts.length > 0 ? { packageIndex: hosts } : {}))(resolvePackageIndex(config)),
     gate: resolveApprovalGate(config),
     // Nothing is ever asked from here: `ask` is the answer, not a prompt.
     approve: async () => false,

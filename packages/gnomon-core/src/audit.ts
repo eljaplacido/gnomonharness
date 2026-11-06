@@ -249,6 +249,10 @@ export type AuditKind =
   // review, accept), the budget left, findings and the clock. Its own kind
   // because it is harness control, not a tool call and not the declared check.
   | "completion_gate"
+  // One per end of a turn the todo gate (`[turn] todo_gate`, sweep_knobs.ts)
+  // judged: the round, hand_back or accept, the open items and the budget
+  // left. Its own kind for the reason completion_gate has one.
+  | "todo_gate"
   // One per model request a turn made, when [audit] is on: what it carried
   // (gnomon's estimate, replayed reasoning, steering and its role, the trim
   // before it) and what came back (provider tokens, reasoning, code, clock).

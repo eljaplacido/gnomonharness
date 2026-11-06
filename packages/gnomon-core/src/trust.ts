@@ -317,7 +317,7 @@ function keyHostIsDefault(url: string): boolean {
  * - `network = true`, `extra_roots`: reach beyond the checkout.
  * - an MCP server: a process the surface starts before the first prompt.
  * - a `[verify]` command that is not the project's own check, an
- *   `[audit.attest]` signer, and a `[context] bootstrap`: commands that run
+ *   `[audit.attest]` signer, and a `[context] bootstrap` (or `env_snapshot`): commands that run
  *   without an approval prompt.
  * - an `[audit.anchor]` witness: a push to a remote, a request to a
  *   time-stamp authority, or a command, each made at session end, unasked.
@@ -377,7 +377,13 @@ export function surfaceGrants(config: GnomonConfig): Grant[] {
     add({
       key: `bootstrap:${boot.id}:${boot.platform}:${createHash("sha256").update(boot.command).digest("hex").slice(0, 16)}`,
       subject: `bootstrap ${boot.id}`,
-      grants: `runs ${boot.probes!.length} ${boot.platform} probe(s) of [bootstrap.${boot.id}] when a session starts, unasked`,
+      // The built-in snapshot (`[context] env_snapshot`, sweep_knobs.ts):
+      // gnomon's command, not the surface's, but it still runs tools in the
+      // repository before anyone has typed anything, and a repository's own
+      // tool configuration can decide what a version probe executes.
+      grants: boot.builtin
+        ? `runs gnomon's built-in read-only environment probe (${boot.platform}) when a session starts, unasked`
+        : `runs ${boot.probes!.length} ${boot.platform} probe(s) of [bootstrap.${boot.id}] when a session starts, unasked`,
       default: "no bootstrap",
     });
   }
@@ -500,6 +506,7 @@ export function clampToDefaults(config: GnomonConfig): GnomonConfig {
   // No bootstrap runs on a clamped surface; the turn runs without a snapshot.
   const context = c.config.context as Record<string, any> | undefined;
   if (context && "bootstrap" in context) delete context.bootstrap;
+  if (context && "env_snapshot" in context) delete context.env_snapshot;
 
   for (const ep of Object.values(c.config.endpoints ?? {}) as Array<Record<string, any>>) {
     if (str(ep.api_key_env) && str(ep.url) && !keyHostIsDefault(str(ep.url))) delete ep.api_key_env;
