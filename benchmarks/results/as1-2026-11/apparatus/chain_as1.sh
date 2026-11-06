@@ -21,8 +21,15 @@ Claude-Session: https://claude.ai/code/session_01WtxrR5ELFRUqRYfmuxttRH" -- "$ST
 [ "${AS1_APPROVED:-}" = yes ] || { echo "refusing: AS1_APPROVED=yes"; exit 2; }
 cd "$HERE"
 say "pid $$ started: screen then interact (lean budget, build.toml pin)"
-python3 run_as1.py run --stage screen --push > "$ROOT/run-screen.log" 2>&1
-rc=$?
+if [ -n "${AS1_SCREEN_PID:-}" ]; then
+  # re-attach to a screening runner already running (it is not our child, so its exit code is read from STATUS)
+  say "waiting on screening runner pid $AS1_SCREEN_PID"
+  while kill -0 "$AS1_SCREEN_PID" 2>/dev/null; do sleep 60; done
+  if tail -5 "$STATUS" | grep -q "AS1 screen DONE"; then rc=0; else rc=1; fi
+else
+  python3 run_as1.py run --stage screen --push > "$ROOT/run-screen.log" 2>&1
+  rc=$?
+fi
 [ $rc -eq 0 ] || { fin "screening exited rc=$rc (see run-screen.log); interaction NOT started"; exit 1; }
 python3 run_as1.py run --stage interact --push > "$ROOT/run-interact.log" 2>&1
 rc=$?
