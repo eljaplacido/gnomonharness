@@ -56,6 +56,7 @@ import {
 } from "./config.js";
 import { bashPolicy } from "./tools.js";
 import { gnomonDataDir, restrictToOwner } from "./credentials.js";
+import { pinRepository } from "./git_safe.js";
 
 // ---------------------------------------------------------------------------
 // The scaffold, as data
@@ -688,8 +689,9 @@ export function grantTrust(config: GnomonConfig, by: string, path = trustPath())
   store.entries.push(entry);
   saveTrust(store, path);
   // Accepting the surface accepts where its bash runs: a role it moves out of
-  // a container is no longer asked about.
-  recordExecFloor(config, path);
+  // a container, or into another image, is no longer asked about. The one
+  // place the floor is lowered.
+  recordExecFloor(config, path, { lower: true });
   return entry;
 }
 
@@ -713,16 +715,34 @@ export function execFloorOf(config: GnomonConfig, path = trustPath()): ExecFloor
  * Record where `config` runs each role's bash, as this project's floor: call
  * when a session starts, with the configuration it runs (settled through
  * trust, so a downgrade nobody accepted was already put back). Writes only
- * when it changed, and drops the entry when nothing runs contained any more.
+ * when it changed.
+ *
+ * It only RAISES the floor (fourth review, finding 5). A role that ran
+ * contained here keeps its floor however this session runs it: a session the
+ * dedicated flag let out of the container, or one handed a configuration a
+ * container wrote, no longer erases the protection for every later one. A
+ * role that ran in an image keeps that image. `lower` -- `gnomon trust
+ * grant`, a person accepting the surface -- records the configuration as it
+ * is, and is the only way down.
  */
-export function recordExecFloor(config: GnomonConfig, path = trustPath()): void {
+export function recordExecFloor(config: GnomonConfig, path = trustPath(), opts: { lower?: boolean } = {}): void {
   try {
     const root = projectRootOf(config);
-    const roles = execMap(config);
-    const any = Object.values(roles).some((e) => contained(e.mode));
+    const now = execMap(config);
     const store = loadTrust(path);
     const floors = store.exec ?? [];
     const had = floors.find((f) => f.root === root);
+    let roles: Record<string, { mode: string; image: string }> = now;
+    if (had && !opts.lower) {
+      roles = { ...had.roles };
+      for (const [role, e] of Object.entries(now)) {
+        const was = had.roles[role] ?? had.roles["*"];
+        if (!was || !contained(was.mode)) roles[role] = e;
+        else if (contained(e.mode) && !(was.mode === "docker" && e.mode === "docker" && was.image !== e.image)) roles[role] = e;
+        else roles[role] = was;
+      }
+    }
+    const any = Object.values(roles).some((e) => contained(e.mode));
     if (!any && !had) return;
     if (had && JSON.stringify(had.roles) === JSON.stringify(roles)) return;
     const rest = floors.filter((f) => f.root !== root);
@@ -734,33 +754,69 @@ export function recordExecFloor(config: GnomonConfig, path = trustPath()): void 
   }
 }
 
-/** The roles `config` moves out of the container they ran in here: each a grant. */
+/**
+ * Pin the repository of `config`'s project for the session about to start
+ * (git_safe.ts pinRepository): every gnomon git under the root names that
+ * repository from now on. Strict when any role's bash runs contained -- then
+ * a repository that changes under the session is refused, not found again.
+ */
+export function pinSessionRepository(config: GnomonConfig): void {
+  try {
+    const strict = Object.values(execMap(config)).some((e) => contained(e.mode));
+    pinRepository(projectRootOf(config), { strict });
+  } catch {
+    /* unpinned: each call finds the repository itself */
+  }
+}
+
+/**
+ * The roles `config` moves out of the container they ran in here, or into an
+ * image other than the one they ran in (fourth review, finding 7): each a
+ * grant. The image is what the container is; a different one is a different
+ * sandbox, whatever exec still says.
+ */
 export function execDowngrades(config: GnomonConfig, floor: ExecFloor | undefined): Grant[] {
   if (!floor) return [];
   const out: Grant[] = [];
   for (const role of listRoles(config)) {
     const was = floor.roles[role] ?? floor.roles["*"];
     if (!was || !contained(was.mode)) continue;
-    if (resolveExec(config, role).mode !== "off") continue;
-    out.push({
-      key: `exec:${role}:off`,
-      subject: `role ${role}`,
-      grants: `runs bash on this machine (exec = "off"); it ran in ${was.mode} here`,
-      default: `exec = "${was.mode}", as this project last ran`,
-    });
+    const now = resolveExec(config, role);
+    if (now.mode === "off") {
+      out.push({
+        key: `exec:${role}:off`,
+        subject: `role ${role}`,
+        grants: `runs bash on this machine (exec = "off"); it ran in ${was.mode} here`,
+        default: `exec = "${was.mode}", as this project last ran`,
+      });
+    } else if (was.mode === "docker" && now.mode === "docker" && now.image !== was.image) {
+      out.push({
+        key: `exec:${role}:image`,
+        subject: `role ${role}`,
+        grants: `runs bash in image ${now.image}; it ran in ${was.image} here`,
+        default: `image = "${was.image}", as this project last ran`,
+      });
+    }
   }
   return out;
 }
 
-/** Put every role `execDowngrades` names back in the container it ran in. */
+/** Put every role `execDowngrades` names back where it ran: its exec and its image. */
 function restoreExecFloor(c: GnomonConfig, floor: ExecFloor): void {
   for (const g of execDowngrades(c, floor)) {
-    const role = g.key.slice("exec:".length, -":off".length);
+    const role = /^exec:(.*):(off|image)$/.exec(g.key)![1]!;
     const was = floor.roles[role] ?? floor.roles["*"]!;
     const def = (c.roles[role] ??= {} as RoleDef) as RoleDef & { exec?: string; image?: string };
     def.exec = was.mode;
     def.image = was.image;
   }
+}
+
+/** `config` with every role back where this machine's floor says it ran; the rest as declared. */
+export function withExecFloor(config: GnomonConfig, floor: ExecFloor): GnomonConfig {
+  const c = structuredClone(config) as GnomonConfig;
+  restoreExecFloor(c, floor);
+  return c;
 }
 
 /** Forget every trust recorded for this project. Returns how many entries went. */
@@ -910,6 +966,12 @@ export interface TrustEvaluation {
   envMismatch?: string;
   /** Present when a role leaves the container it ran in here: what a clamp puts back. */
   execFloor?: ExecFloor;
+  /**
+   * Trusted by --trust or GNOMON_TRUST, which do not cover leaving the
+   * container: run as declared except that every role goes back where this
+   * floor says it ran (settleTrustHeadless).
+   */
+  keepExecFloor?: ExecFloor;
 }
 
 export interface TrustOptions {
@@ -917,6 +979,14 @@ export interface TrustOptions {
   flag?: boolean;
   /** GNOMON_TRUST: accepted only when it names THIS surface's hash. */
   env?: string;
+  /**
+   * `--trust-exec-downgrade`: this invocation also accepts a role leaving the
+   * container (or the image) it ran in here. --trust and GNOMON_TRUST alone do
+   * not: a container that rewrote exec = "off" would otherwise ride out on
+   * the operator's blanket yes (fourth review, finding 5). It does not lower
+   * the floor; only `gnomon trust grant` does.
+   */
+  execDowngrade?: boolean;
   path?: string;
 }
 
@@ -938,11 +1008,15 @@ export function evaluateTrust(config: GnomonConfig, opts: TrustOptions = {}): Tr
   const surface_hash = surfaceHashOfConfig(config);
   const base = { root, surface_hash, grants, ...(downgrades.length > 0 ? { execFloor: floor } : {}) };
   if (grants.length === 0) return { ...base, status: "default", uncovered: [] };
-  if (opts.flag) return { ...base, status: "trusted", via: "flag:--trust", uncovered: [] };
+  // --trust and GNOMON_TRUST accept the surface's grants, not a role leaving
+  // the container it ran in here: that stays where it ran unless the
+  // dedicated flag says otherwise.
+  const keep = downgrades.length > 0 && !opts.execDowngrade && floor ? { keepExecFloor: floor } : {};
+  if (opts.flag) return { ...base, ...keep, status: "trusted", via: "flag:--trust", uncovered: [] };
 
   const env = opts.env?.trim();
   if (env && envNames(env, surface_hash)) {
-    return { ...base, status: "trusted", via: "env:GNOMON_TRUST", uncovered: [] };
+    return { ...base, ...keep, status: "trusted", via: "env:GNOMON_TRUST", uncovered: [] };
   }
   const envMismatch = env ? env : undefined;
 
@@ -1066,6 +1140,19 @@ export function settleTrustHeadless(
   const evaluation = evaluateTrust(config, opts);
   if (evaluation.status === "default") return { config, evaluation };
   if (evaluation.status === "trusted") {
+    if (evaluation.keepExecFloor) {
+      const held = execDowngrades(config, evaluation.keepExecFloor);
+      (opts.warn ?? ((l: string) => process.stderr.write(`${l}\n`)))(
+        `gnomon: ${evaluation.via === "env:GNOMON_TRUST" ? "GNOMON_TRUST" : "--trust"} does not cover moving bash out of the container it ran in here ` +
+          `(${held.map((g) => `${g.subject}: ${g.grants}`).join("; ")}) — kept where it ran. ` +
+          `\`gnomon trust grant\` accepts it, or --trust-exec-downgrade for this run.`
+      );
+      return {
+        config: withExecFloor(config, evaluation.keepExecFloor),
+        evaluation,
+        outcome: outcomeOf(evaluation, "trusted", evaluation.via ?? "store"),
+      };
+    }
     return { config, evaluation, outcome: outcomeOf(evaluation, "trusted", evaluation.via ?? "store") };
   }
   (opts.warn ?? ((l: string) => process.stderr.write(`${l}\n`)))(clampNotice(evaluation));

@@ -490,7 +490,7 @@ describe("the exec floor: a role that ran contained here does not leave it unask
     expect(evaluateTrust(loadConfig(root), { path }).status).toBe("default");
   });
 
-  it("a role's own exec = off under a contained default is a grant too; --trust accepts it", () => {
+  it("a role's own exec = off under a contained default is a grant too; --trust does not accept it", () => {
     const path = storeIn();
     const root = project({ policy: dockerPolicy });
     recordExecFloor(loadConfig(root), path);
@@ -500,7 +500,60 @@ describe("the exec floor: a role that ran contained here does not leave it unask
     );
     const ev = evaluateTrust(loadConfig(root), { path });
     expect(ev.uncovered.map((g) => g.key)).toEqual(["exec:verifier:off"]);
-    expect(evaluateTrust(loadConfig(root), { path, flag: true }).status).toBe("trusted");
+    const s = settleTrustHeadless(loadConfig(root), { path, flag: true, warn: () => {} });
+    expect(resolveExec(s.config, "verifier").mode).toBe("docker");
+  });
+
+  // Fourth review, finding 5: --trust returned "trusted" before downgrades
+  // were looked at, so a container-written exec = "off" ran on the host --
+  // and the session start then recorded the lowered floor, so no later
+  // session was asked either.
+  it("finding 5: --trust runs the rest as declared but keeps bash contained, and the floor stays", () => {
+    const path = storeIn();
+    const root = project({ policy: dockerPolicy.replace("network = false", "network = true") });
+    recordExecFloor(loadConfig(root), path);
+    writeFileSync(join(root, ".gnomon", "policy.toml"), offPolicy.replace("network = false", "network = true"));
+    const warned: string[] = [];
+    const s = settleTrustHeadless(loadConfig(root), { path, flag: true, warn: (l) => void warned.push(l) });
+    for (const r of ["implement", "verifier", "plan"]) {
+      expect(resolveExec(s.config, r), r).toMatchObject({ mode: "docker", image: "img:1" });
+    }
+    expect(warned.join(" ")).toMatch(/--trust does not cover/);
+    // The session starts with what it settled, and with what the disk says: neither lowers the floor.
+    recordExecFloor(s.config, path);
+    recordExecFloor(loadConfig(root), path);
+    expect(evaluateTrust(loadConfig(root), { path }).status).toBe("untrusted");
+    expect(evaluateTrust(loadConfig(root), { path, flag: true }).keepExecFloor?.roles.implement?.mode ?? evaluateTrust(loadConfig(root), { path, flag: true }).keepExecFloor?.roles["*"]?.mode).toBe("docker");
+  });
+
+  it("finding 5: the dedicated flag runs this session on the host and still does not lower the floor; `trust grant` does", () => {
+    const path = storeIn();
+    const root = project({ policy: dockerPolicy });
+    recordExecFloor(loadConfig(root), path);
+    writeFileSync(join(root, ".gnomon", "policy.toml"), offPolicy);
+    const s = settleTrustHeadless(loadConfig(root), { path, flag: true, execDowngrade: true, warn: () => {} });
+    expect(resolveExec(s.config, "implement").mode).toBe("off");
+    recordExecFloor(s.config, path);
+    expect(evaluateTrust(loadConfig(root), { path }).status).toBe("untrusted");
+    grantTrust(loadConfig(root), "human", path);
+    expect(evaluateTrust(loadConfig(root), { path }).status).toBe("default");
+  });
+
+  // Fourth review, finding 7: the image a role ran in is part of where it ran.
+  it("finding 7: a different image between sessions is a grant: clamped back headless, not covered by --trust", () => {
+    const path = storeIn();
+    const root = project({ policy: dockerPolicy });
+    recordExecFloor(loadConfig(root), path);
+    writeFileSync(join(root, ".gnomon", "policy.toml"), dockerPolicy.replace('image = "img:1"', 'image = "evil:latest"'));
+    const ev = evaluateTrust(loadConfig(root), { path });
+    expect(ev.status).toBe("untrusted");
+    expect(ev.uncovered.map((g) => g.key)).toContain("exec:implement:image");
+    const headless = settleTrustHeadless(loadConfig(root), { path, warn: () => {} });
+    expect(resolveExec(headless.config, "implement")).toMatchObject({ mode: "docker", image: "img:1" });
+    const flagged = settleTrustHeadless(loadConfig(root), { path, flag: true, warn: () => {} });
+    expect(resolveExec(flagged.config, "implement")).toMatchObject({ mode: "docker", image: "img:1" });
+    recordExecFloor(loadConfig(root), path);
+    expect(evaluateTrust(loadConfig(root), { path }).status).toBe("untrusted");
   });
 
   it("a trusted surface's other grants do not cover a downgrade", () => {

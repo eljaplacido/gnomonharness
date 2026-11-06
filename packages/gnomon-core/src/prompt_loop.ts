@@ -183,7 +183,7 @@ import {
 import { resolveContextWindow, type ContextSource } from "./context_window.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
 import { applyCredentials } from "./credentials.js";
-import { clampToDefaults, recordExecFloor, type TrustOutcome } from "./trust.js";
+import { clampToDefaults, recordExecFloor, pinSessionRepository, type TrustOutcome } from "./trust.js";
 import {
   resolveSessionStore,
   saveSession,
@@ -7548,6 +7548,8 @@ export async function runTask(
   // Where this task's bash runs, recorded for the next session (trust.ts
   // exec floor): a role that ran contained here may not leave it unasked.
   recordExecFloor(config);
+  // The repository every gnomon git of this task names (git_safe.ts).
+  pinSessionRepository(config);
   const ui: ResolvedUi = { ...resolveUi(config), spinner: false, color: false };
   // `let`, as are `shadow` and `trust` below: an MCP server whose tools
   // changed since they were pinned clamps the run after its servers connect
@@ -10253,6 +10255,8 @@ export async function runPromptLoop(
   // this machine's record of it for the next session (trust.ts exec floor).
   state.sandboxPin ??= pinSandbox(state.config);
   recordExecFloor(state.config);
+  // The repository every gnomon git of this session names (git_safe.ts).
+  pinSessionRepository(state.config);
 
   // Rotating and switching need the loop's id and its persist(), so they are
   // supplied here rather than reached for from a command.
