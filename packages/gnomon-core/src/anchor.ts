@@ -80,7 +80,8 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createHash, randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import { canonicalJson, recordHash, type AuditRecord } from "./audit.js";
@@ -710,19 +711,18 @@ export function redactRemote(remote: string): string {
 }
 
 /**
- * What `remote` names. A bare word is the name of a remote of the workspace's
- * own repository, read from it; a relative path is relative to the root;
- * anything else (a URL, `host:path`, an absolute path) is used as it is.
- */
-/**
- * A bare-name remote resolved through the workspace's own repository, pinned
- * per process by (root, name). The workspace's .git/config is inside the root
- * a sandboxed bash may write -- `remote.<name>.url` and `url.<x>.insteadOf`
- * included -- so what the name meant when this process first asked (the
- * session's start: audit settings are resolved before the first turn) is
- * what it pushes to at the end. The detached delivery is handed the pinned
- * target (`--remote-target`) rather than reading the name again (third
- * review, finding 5).
+ * Where a session's anchors go, decided ONCE per process by (root, remote) and
+ * pinned: the first resolve in a process is the session's start (audit
+ * settings are resolved before the first turn), and a detached delivery is
+ * handed the pinned target (`--remote-target`, or the sealed settings file)
+ * rather than deciding again.
+ *
+ * Everything the decision reads is inside the root a sandboxed bash may
+ * write: the workspace's .git/config (`remote.<name>.url`, `insteadOf`), and
+ * whether `<root>/<word>` exists -- a bare word is a remote's NAME only while
+ * no such path does. Deciding again at session end let a container turn the
+ * name `origin` into the path `<root>/origin`, a bare repository it had made
+ * with a pre-receive hook (fourth review, finding 1).
  */
 const pinnedTargets = new Map<string, string>();
 
@@ -734,22 +734,87 @@ function namesWorkspaceRemote(s: Pick<ResolvedAnchor, "root" | "remote">): boole
 }
 
 function resolveWorkspaceRemote(root: string, name: string, timeoutSec: number): string | null {
-  // git_safe: hardened, every driver blanked, no system config.
+  // git_safe: hardened, every driver blanked, no system config, the repository named.
   const got = safeGit(["-C", root, "remote", "get-url", name], { cwd: root, timeout: timeoutSec * 1000 });
   if (got.status !== 0 || typeof got.stdout !== "string") return null;
   const url = got.stdout.trim();
   return url && !url.startsWith("-") ? url : null;
 }
 
-/** Resolve and pin `s`'s remote now, when it names a remote of the workspace. The session's start calls it. */
+/**
+ * The filesystem path a git remote names, or null when git would reach it
+ * over a network: git's own rule (connect.c url_is_local_not_ssh) -- a
+ * `scheme://` that is not file://, or a colon before the first slash
+ * (`host:path`), is remote; anything else, a Windows drive path included, is
+ * a path.
+ */
+export function localRemotePath(target: string): string | null {
+  if (/^file:\/\//i.test(target)) {
+    try {
+      return fileURLToPath(target);
+    } catch {
+      return target.slice("file://".length);
+    }
+  }
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(target)) return null;
+  if (/^[A-Za-z]:[\\/]/.test(target)) return target;
+  const colon = target.indexOf(":");
+  const slash = target.search(/[\\/]/);
+  if (colon >= 0 && (slash < 0 || colon < slash)) return null;
+  return target;
+}
+
+/** `p` with every existing ancestor resolved through symlinks. */
+function realish(p: string): string {
+  let cur = resolve(p);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return join(realpathSync(cur), ...rest.reverse());
+    } catch {
+      const up = dirname(cur);
+      if (up === cur) return resolve(p);
+      rest.push(basename(cur));
+      cur = up;
+    }
+  }
+}
+
+function within(p: string, root: string): boolean {
+  const a = realish(p);
+  const r = realish(root);
+  return a === r || a.startsWith(r.endsWith(sep) ? r : r + sep);
+}
+
+/** What `s`'s remote names now: the decision pinAnchorTarget makes once. */
+function decideTarget(s: ResolvedAnchor): string | null {
+  const r = s.remote!;
+  let target: string;
+  if (namesWorkspaceRemote(s)) {
+    const url = resolveWorkspaceRemote(s.root, r, s.timeout_sec);
+    if (url === null) return null;
+    target = url;
+  } else if (isAbsolute(r) || /^[a-z][a-z0-9+.-]*:\/\//i.test(r) || localRemotePath(r) === null) {
+    target = r;
+  } else {
+    target = join(s.root, r);
+  }
+  // A relative path, from the workspace's config or the block itself, is the
+  // root's: the anchor git runs in no particular directory.
+  const local = localRemotePath(target);
+  if (local !== null && !isAbsolute(local) && !/^file:/i.test(target)) target = resolve(s.root, local);
+  return target;
+}
+
+/** Resolve and pin `s`'s remote now. The session's start calls it (resolveAnchor). */
 export function pinAnchorTarget(s: ResolvedAnchor): string | null {
-  if (s.backend !== "git" || !s.remote || !namesWorkspaceRemote(s)) return null;
+  if (s.backend !== "git" || !s.remote) return null;
   const key = targetKey(s.root, s.remote);
   const had = pinnedTargets.get(key);
   if (had !== undefined) return had;
-  const url = resolveWorkspaceRemote(s.root, s.remote, s.timeout_sec);
-  if (url !== null) pinnedTargets.set(key, url);
-  return url;
+  const target = decideTarget(s);
+  if (target !== null) pinnedTargets.set(key, target);
+  return target;
 }
 
 /** What the parent pinned, handed to a detached delivery. */
@@ -768,20 +833,86 @@ export function _resetAnchorTargets(): void {
 }
 
 /**
- * What `remote` names. A bare word is the name of a remote of the workspace's
- * own repository, read from it once per process (pinAnchorTarget); a relative
- * path is relative to the root; anything else (a URL, `host:path`, an absolute
- * path) is used as it is.
+ * The settings a session hands its detached delivery, sealed where no
+ * sandboxed command reaches: a file of its own in gnomon's data directory.
+ *
+ * WHY (fourth review, finding 6). The delivery is `gnomon audit anchor
+ * --background`, a child started at session end, and it read [audit.anchor]
+ * afresh from the project root -- after a session whose contained commands
+ * could write it. backend = "cmd" with a command of the container's choosing
+ * then ran on the host, under the --trust the session was started with. Now
+ * the child is handed the settings the session started with, the target
+ * pinned with them, and reads nothing from the root.
+ */
+function handoffDir(): string {
+  return join(gnomonDataDir(), "anchors", "handoff");
+}
+
+export function writeAnchorHandoff(s: ResolvedAnchor): string {
+  const dir = handoffDir();
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (within(dir, s.root)) throw new Error(`gnomon's data directory is inside the project root (${s.root}); refusing to hand anchor settings through it`);
+  const file = join(dir, `${randomBytes(12).toString("hex")}.json`);
+  writeFileSync(file, JSON.stringify({ v: 1, settings: s, target: pinnedAnchorTarget(s) ?? null }), { mode: 0o600, flag: "wx" });
+  return file;
+}
+
+/** The settings a session sealed for this delivery. Read once: the file is removed. Throws on anything else. */
+export function readAnchorHandoff(file: string): ResolvedAnchor {
+  const dir = realpathSync(handoffDir());
+  const real = realpathSync(file);
+  if (dirname(real) !== dir || !lstatSync(file).isFile()) throw new Error(`not a sealed anchor handoff: ${file}`);
+  let data: { v?: number; settings?: ResolvedAnchor; target?: string | null };
+  try {
+    data = JSON.parse(readFileSync(real, "utf-8")) as typeof data;
+  } finally {
+    try {
+      unlinkSync(real);
+    } catch {
+      /* already gone */
+    }
+  }
+  const s = data.settings;
+  if (data.v !== 1 || !s || typeof s.root !== "string" || !Array.isArray(s.problems)) throw new Error(`a malformed anchor handoff: ${file}`);
+  if (within(dir, s.root)) throw new Error(`gnomon's data directory is inside the project root (${s.root})`);
+  if (typeof data.target === "string") usePinnedAnchorTarget(s, data.target);
+  return s;
+}
+
+/**
+ * Where `s`'s anchors go: the pinned target, refused when it is a path inside
+ * the project root. Everything there is the container's to write -- a
+ * witness the forger can rewrite witnesses nothing, and its hooks run in the
+ * receive-pack this host starts.
  */
 async function remoteTarget(s: ResolvedAnchor, _now: Date): Promise<string> {
-  const r = s.remote!;
-  if (namesWorkspaceRemote(s)) {
-    const got = pinAnchorTarget(s);
-    if (got === null) throw new Error(`"${r}" is not a remote of the repository at ${s.root}`);
-    return got;
+  const target = pinAnchorTarget(s);
+  if (target === null) throw new Error(`"${s.remote}" is not a remote of the repository at ${s.root}`);
+  if (target.startsWith("-")) throw new Error(`refusing a remote that reads as an option: ${redactRemote(target)}`);
+  const local = localRemotePath(target);
+  if (local !== null && within(local, s.root)) {
+    throw new Error(
+      `the anchor remote ${redactRemote(target)} is inside the project root (${s.root}), which a sandboxed command can write — nothing is anchored there. ` +
+        `Use a repository outside the root, or a URL.`
+    );
   }
-  if (isAbsolute(r) || /^[a-z][a-z0-9+.-]*:\/\//i.test(r) || /^[^/\\]+:/.test(r)) return r;
-  return join(s.root, r);
+  return target;
+}
+
+/**
+ * The program a LOCAL remote runs on this host: receive-pack for a push,
+ * upload-pack for a fetch or ls-remote, in the remote repository. git clears
+ * GIT_CONFIG_PARAMETERS (every `-c`) for it, so the hardening has to be on
+ * its own command line, or the remote's hooks -- pre-receive, update,
+ * post-receive, reference-transaction -- run with nothing switched off.
+ */
+const PACK_HARDENING =
+  "-c core.hooksPath=/dev/null -c core.fsmonitor=false -c receive.autogc=false -c gc.auto=0 " +
+  "-c maintenance.auto=false -c core.alternateRefsCommand= -c protocol.ext.allow=never";
+
+function packProgram(target: string, which: "receive-pack" | "upload-pack"): string[] {
+  if (localRemotePath(target) === null) return [];
+  return [`--${which}=git ${PACK_HARDENING} ${which}`];
 }
 
 async function ensureRepo(repo: string, s: ResolvedAnchor, now: Date): Promise<void> {
@@ -794,7 +925,7 @@ async function ensureRepo(repo: string, s: ResolvedAnchor, now: Date): Promise<v
 
 /** The remote's tip of the anchor ref: a sha, null when the ref does not exist yet. Throws when unreachable. */
 async function remoteTip(repo: string, target: string, s: ResolvedAnchor, now: Date): Promise<string | null> {
-  const r = await git(repo, ["ls-remote", target, s.ref], s, now);
+  const r = await git(repo, ["ls-remote", ...packProgram(target, "upload-pack"), target, s.ref], s, now);
   if (r.code !== 0) throw new Error(`remote ${redactRemote(target)} unreachable: ${firstLine(r.err) || `git exit ${r.code}`}`);
   for (const line of r.out.split("\n")) {
     const [sha, name] = line.trim().split(/\s+/);
@@ -827,7 +958,7 @@ async function deliverGit(s: ResolvedAnchor, entries: QueueEntry[], now: Date): 
   for (let attempt = 0; attempt < 2; attempt++) {
     const tip = await remoteTip(repo, target, s, now);
     if (tip) {
-      const f = await git(repo, ["fetch", "-q", "--no-tags", target, `+${s.ref}:${s.ref}`], s, now);
+      const f = await git(repo, ["fetch", "-q", "--no-tags", ...packProgram(target, "upload-pack"), target, `+${s.ref}:${s.ref}`], s, now);
       if (f.code !== 0) throw new Error(`fetch from ${redactRemote(target)} failed: ${firstLine(f.err)}`);
     }
     const blob = await git(repo, ["hash-object", "-w", "--stdin"], s, now, body);
@@ -841,7 +972,7 @@ async function deliverGit(s: ResolvedAnchor, entries: QueueEntry[], now: Date): 
     await git(repo, ["update-ref", s.ref, sha], s, now);
     // Never forced. A remote that moved since the tip was read rejects this,
     // and the loop rebuilds on top of what it holds now.
-    const push = await git(repo, ["push", "-q", "--no-verify", target, `${sha}:${s.ref}`], s, now);
+    const push = await git(repo, ["push", "-q", "--no-verify", ...packProgram(target, "receive-pack"), target, `${sha}:${s.ref}`], s, now);
     if (push.code === 0) {
       const out: Delivered = new Map();
       for (const e of entries) out.set(e.digest, { remote: redactRemote(target), ref: s.ref, commit: sha });
@@ -1251,7 +1382,7 @@ async function collectGit(s: ResolvedAnchor, offline: boolean, now: Date): Promi
         }
         return log;
       }
-      const f = await git(repo, ["fetch", "-q", "--no-tags", target, `+${s.ref}:${verifyRef}`], s, now);
+      const f = await git(repo, ["fetch", "-q", "--no-tags", ...packProgram(target, "upload-pack"), target, `+${s.ref}:${verifyRef}`], s, now);
       if (f.code !== 0) throw new Error(`fetch failed: ${firstLine(f.err)}`);
       const seen = readState(s).remote_tip;
       if (seen && seen !== tip) {

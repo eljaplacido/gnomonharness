@@ -58,8 +58,8 @@ import {
   collectAnchors,
   verifyAgainstAnchors,
   setAnchorScheduler,
-  pinnedAnchorTarget,
-  usePinnedAnchorTarget,
+  writeAnchorHandoff,
+  readAnchorHandoff,
   redactRemote,
   CHECKPOINT_DIR,
   type ResolvedAnchor,
@@ -228,6 +228,10 @@ export function parseArgs(args: string[]): CliArgs {
       // next argument as its value -- `task --trust "fix it"` would lose the
       // task text into flags.trust.
       result.trust = true;
+    } else if (arg === "--trust-exec-downgrade") {
+      // Bare as well. Accepts a role leaving the container it ran in here,
+      // for this run, which --trust alone does not (trust.ts).
+      result.flags["trust-exec-downgrade"] = "true";
     } else if (arg === "-p") {
       // Already handled above
     } else if (arg.startsWith("-")) {
@@ -1252,30 +1256,31 @@ async function listModelsAt(endpoint: {
  * them can exit at once. Errors land in the anchors' state file, which the
  * next session announces (anchor.ts announceAnchorBacklog).
  */
-function detachedAnchorFlush(s: ResolvedAnchor, trustFlag = false): void {
+function detachedAnchorFlush(s: ResolvedAnchor): void {
+  // The settings this session started with, not the ones the session ended
+  // with: a reload may have picked up what a contained command wrote.
+  const settings = sessionAnchorFor(s);
+  if (!settings?.enabled) return;
   // The launcher beside src/ (checkout) or dist/ (the published package):
   // gnomon.js in a checkout, bin/gnomon.mjs in the package (self_launcher.ts).
   // With neither, the flush runs in-process; flushAnchors releases its lock
   // on exit, and whatever it did not deliver stays queued for the next one.
   const launcher = selfLauncher(import.meta.url);
   if (!launcher) {
-    void flushAnchors(s).catch(() => undefined);
+    void flushAnchors(settings).catch(() => undefined);
     return;
   }
   try {
-    // `--trust` carries over when this run was trusted by the flag, which the
-    // child cannot see; GNOMON_TRUST and the trust store it reads itself.
-    // The remote as this session resolved it at its start (anchor.ts
-    // pinAnchorTarget): the workspace's .git/config may have been rewritten
-    // since, from inside a sandbox, and the child would read it afresh.
-    const target = pinnedAnchorTarget(s);
-    const args = [
-      launcher, "audit", "anchor", "--background", "--dir", s.root,
-      ...(trustFlag ? ["--trust"] : []),
-      ...(target ? ["--remote-target", target] : []),
-    ];
+    // Sealed in gnomon's data directory, outside the root (anchor.ts
+    // writeAnchorHandoff): the settings and the remote as this session
+    // resolved them at its start. The child reads nothing from the project
+    // root -- a contained command may have rewritten [audit.anchor] there, and
+    // the child would have run what it says (fourth review, finding 6). No
+    // --trust either: the session already settled trust for these settings.
+    const handoff = writeAnchorHandoff(settings);
+    const args = [launcher, "audit", "anchor", "--background", "--anchor-handoff", handoff, "--dir", settings.root];
     const child = spawn(process.execPath, args, {
-      cwd: s.root,
+      cwd: settings.root,
       detached: true,
       stdio: "ignore",
       windowsHide: true,
@@ -1286,6 +1291,24 @@ function detachedAnchorFlush(s: ResolvedAnchor, trustFlag = false): void {
   } catch {
     /* stays queued; the next session announces it */
   }
+}
+
+/** [audit.anchor] as each session of this process started, by root. */
+const sessionAnchors = new Map<string, ResolvedAnchor | undefined>();
+
+/** Call where a session's trust is settled: these are the anchor settings its delivery uses. */
+function pinSessionAnchor(config: GnomonConfig): void {
+  try {
+    const a = resolveAudit(config).anchor;
+    sessionAnchors.set(resolve(config.gnomonDir, ".."), a);
+  } catch {
+    /* unresolvable: nothing is pinned, and nothing is delivered from it */
+  }
+}
+
+function sessionAnchorFor(s: ResolvedAnchor): ResolvedAnchor | undefined {
+  const root = resolve(s.root);
+  return sessionAnchors.has(root) ? sessionAnchors.get(root) : s;
 }
 
 function anchorLabel(a: ResolvedAnchor): string {
@@ -1353,6 +1376,17 @@ function printAnchorLine(r: AnchorTrailResult | undefined, acceptUnchecked = fal
  * missing — that is an anchor that was removed.
  */
 async function cmdAudit(args: CliArgs): Promise<void> {
+  // The detached delivery a session end starts: its settings are the sealed
+  // ones the session handed it, and nothing is read from the project root.
+  const handoff = args.flags["anchor-handoff"];
+  if (args.subcommand === "anchor" && args.flags.background === "true" && handoff && handoff !== "true") {
+    try {
+      await flushAnchors(readAnchorHandoff(handoff));
+    } catch {
+      /* stays queued; the next session announces it */
+    }
+    return;
+  }
   const config = loadConfig(args.dir, args.flags['profile']);
   const settings = resolveAudit(config);
   // [audit.anchor] pushes to a remote, posts to an authority or runs a
@@ -1420,8 +1454,6 @@ async function cmdAudit(args: CliArgs): Promise<void> {
       if (!background) for (const p of anchor.problems) console.error(p);
       process.exit(1);
     }
-    const handed = args.flags["remote-target"];
-    if (background && handed && handed !== "true") usePinnedAnchorTarget(anchor, handed);
     const r = await flushAnchors(anchor);
     if (background) return;
     for (const p of anchor.problems) console.error(p);
@@ -1654,6 +1686,7 @@ async function cmdTask(args: CliArgs): Promise<void> {
       loadConfig(args.dir, args.flags['profile']),
       trustOptions(args)
     );
+    pinSessionAnchor(settled.config);
     record = await runTask(settled.config, text, {
       role: args.role,
       yes: args.yes,
@@ -2286,6 +2319,7 @@ async function cmdPrompt(args: CliArgs): Promise<void> {
     console.log("  Not started. Nothing ran.");
     process.exit(3);
   }
+  pinSessionAnchor(settled.config);
   // A resumed session keeps its own role unless one is named here.
   const role = args.resume ? args.subcommand || undefined : args.subcommand || "implement";
   await runPromptLoop(settled.config, role, {
@@ -2299,7 +2333,7 @@ async function cmdPrompt(args: CliArgs): Promise<void> {
 
 /** What the invocation says about trust: --trust, and GNOMON_TRUST=<surface hash>. */
 function trustOptions(args: CliArgs): Omit<SettleOptions, "interactive"> {
-  return { flag: Boolean(args.trust), env: process.env.GNOMON_TRUST };
+  return { flag: Boolean(args.trust), env: process.env.GNOMON_TRUST, execDowngrade: args.flags["trust-exec-downgrade"] === "true" };
 }
 
 /**
@@ -2618,7 +2652,9 @@ Commands:
     nobody to ask. Exit code: 0 result, 2 refusal, 10 apparatus_failure.
     A surface granting more than the defaults that this machine has not
     trusted runs CLAMPED to the defaults, with one line on stderr; --trust
-    (or GNOMON_TRUST=<surface hash>) runs it as declared.
+    (or GNOMON_TRUST=<surface hash>) runs it as declared -- except a role
+    leaving the container (or image) it ran in here, which stays where it
+    ran unless --trust-exec-downgrade is given too.
 
   trust [list|grant|revoke] [--dir <path>]
     Whether this machine's user trusts what this project's .gnomon/ grants
@@ -2754,7 +2790,7 @@ async function main(): Promise<void> {
   // In this process that delivery would die with `gnomon task`'s exit, so the
   // CLI hands it to a detached `gnomon audit anchor --background`. Inert when
   // nothing is queued, and absent [audit.anchor] nothing ever is.
-  setAnchorScheduler((s) => detachedAnchorFlush(s, Boolean(args.trust)));
+  setAnchorScheduler((s) => detachedAnchorFlush(s));
 
   // Deliberately NOT applied here. This is before any surface is loaded, so
   // there is nothing to say which names are credentials -- and injecting the
