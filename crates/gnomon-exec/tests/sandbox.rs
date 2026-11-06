@@ -716,3 +716,242 @@ fn the_probe_publishes_the_read_scope_and_its_limits() {
         assert_eq!(p["reads_scoped_supported"], false);
     }
 }
+
+// ── review fixes (PR #156): temp-dir cleanup, unix sockets, env, signals, /dev ──
+
+/// A unix-socket server at `path` (pathname) that answers "outside\n" to every
+/// connection, for as long as the returned handle lives.
+#[cfg(target_os = "linux")]
+fn unix_server(path: &Path) -> std::thread::JoinHandle<()> {
+    let l = std::os::unix::net::UnixListener::bind(path).unwrap();
+    l.set_nonblocking(true).unwrap();
+    std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            match l.accept() {
+                Ok((mut c, _)) => {
+                    let _ = c.write_all(b"outside\n");
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+    })
+}
+
+#[cfg(target_os = "linux")]
+const UNIX_CLIENT: &str = "python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect(sys.argv[1]); print(\"REPLY:\" + s.recv(64).decode().strip())'";
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_unix_socket_outside_the_sandbox_is_refused_under_either_network_mode() {
+    // The systemd-run --user escape: a daemon on a socket outside the root acts
+    // for whoever connects. The server here stands in for that daemon.
+    require_sandbox!(true);
+    require_tool!("python3");
+    let s = scene();
+    let sock = s.outside.join("daemon.sock");
+    let _h = unix_server(&sock);
+    for network in [false, true] {
+        let out = sandboxed(&s, network, &format!("{UNIX_CLIENT} {}", sh_quote(&sock)));
+        let t = text(&out);
+        assert!(!t.contains("REPLY:outside"), "network={network}: reached a daemon outside the sandbox: {t}");
+        assert!(t.contains("blocked connect to unix socket"), "network={network}: {t}");
+    }
+    // Control: the same client, unsandboxed, reaches it -- so the refusal above is the sandbox's.
+    let out = Command::new("sh").arg("-c").arg(format!("{UNIX_CLIENT} {}", sh_quote(&sock))).output().unwrap();
+    assert!(text(&out).contains("REPLY:outside"), "control: {}", text(&out));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_unix_socket_inside_the_root_still_works() {
+    require_sandbox!(true);
+    require_tool!("python3");
+    let s = scene();
+    for (network, name) in [(false, "a.sock"), (true, "b.sock")] {
+        let sock = s.root.join(name);
+        let _h = unix_server(&sock);
+        // Relative, from the root: resolved against the caller's cwd.
+        let out = sandboxed(&s, network, &format!("{UNIX_CLIENT} {name}"));
+        assert!(text(&out).contains("REPLY:outside"), "network={network}: {}", text(&out));
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_symlink_in_the_root_to_an_outside_socket_is_refused() {
+    require_sandbox!(true);
+    require_tool!("python3");
+    let s = scene();
+    let sock = s.outside.join("d.sock");
+    let _h = unix_server(&sock);
+    std::os::unix::fs::symlink(&sock, s.root.join("link.sock")).unwrap();
+    let out = sandboxed(&s, true, &format!("{UNIX_CLIENT} link.sock"));
+    assert!(!text(&out).contains("REPLY:outside"), "{}", text(&out));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn an_abstract_unix_socket_is_refused() {
+    require_sandbox!(true);
+    require_tool!("python3");
+    let s = scene();
+    let name = format!("gnomon-test-{}", std::process::id());
+    let l = std::os::unix::net::UnixListener::bind_addr(
+        &<std::os::unix::net::SocketAddr as std::os::linux::net::SocketAddrExt>::from_abstract_name(name.as_bytes()).unwrap(),
+    )
+    .unwrap();
+    l.set_nonblocking(true).unwrap();
+    let client = format!(
+        "python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(3); s.connect(\"\\0{name}\"); print(\"CONNECTED\")'"
+    );
+    for network in [false, true] {
+        let out = sandboxed(&s, network, &client);
+        assert!(!text(&out).contains("CONNECTED"), "network={network}: {}", text(&out));
+    }
+    let out = Command::new("sh").arg("-c").arg(&client).output().unwrap();
+    assert!(text(&out).contains("CONNECTED"), "control: {}", text(&out));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn bus_agent_and_multiplexer_variables_are_not_inherited() {
+    require_sandbox!(false);
+    let s = scene();
+    for network in [false, true] {
+        if !network && skip_reason(true).is_some() {
+            continue;
+        }
+        let out = Command::new(bin())
+            .args(["sandbox", "--root"])
+            .arg(&s.root)
+            .arg("--write")
+            .arg(&s.tmp)
+            .args(["--network", if network { "on" } else { "off" }, "--", "/bin/sh", "-c", "env"])
+            .env("DBUS_SESSION_BUS_ADDRESS", "unix:path=/run/user/0/bus")
+            .env("SSH_AUTH_SOCK", "/tmp/ssh-x/agent.1")
+            .env("TMUX", "/tmp/tmux-0/default,1,0")
+            .env("XDG_RUNTIME_DIR", "/run/user/0")
+            .env("GNOMON_KEEP_ME", "1")
+            .current_dir(&s.root)
+            .output()
+            .unwrap();
+        let env = String::from_utf8_lossy(&out.stdout);
+        for gone in ["DBUS_SESSION_BUS_ADDRESS=", "SSH_AUTH_SOCK=", "TMUX=", "XDG_RUNTIME_DIR="] {
+            assert!(!env.lines().any(|l| l.starts_with(gone)), "{gone} leaked: {env}");
+        }
+        assert!(env.contains("GNOMON_KEEP_ME=1"), "an ordinary variable must pass: {env}");
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn signals_do_not_reach_a_process_outside_the_call_on_abi_6() {
+    require_sandbox!(false);
+    if probe()["landlock_abi"].as_i64().unwrap_or(0) < 6 {
+        eprintln!("SKIPPED: Landlock ABI < 6 has no signal scoping");
+        return;
+    }
+    let s = scene();
+    let mut victim = Command::new("sleep").arg("30").spawn().unwrap();
+    for network in [false, true] {
+        if !network && skip_reason(true).is_some() {
+            continue;
+        }
+        let out = sandboxed(&s, network, &format!("kill -TERM {} && echo SENT; sleep 0.2 & kill $! && echo OWN-OK", victim.id()));
+        let t = text(&out);
+        assert!(!t.contains("SENT"), "network={network}: signalled a process outside the sandbox: {t}");
+        assert!(t.contains("OWN-OK"), "network={network}: its own child must stay signallable: {t}");
+    }
+    assert!(victim.try_wait().unwrap().is_none(), "the outside process was killed");
+    let _ = victim.kill();
+    let _ = victim.wait();
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn scoped_reads_do_not_grant_dev_shm() {
+    require_sandbox!(false);
+    require_scoped!();
+    let s = scene();
+    let home = fake_home(&s);
+    if !Path::new("/dev/shm").is_dir() {
+        eprintln!("SKIPPED: no /dev/shm here");
+        return;
+    }
+    let out = scoped_in(&s, &home, true, &[], "ls /dev/shm >/dev/null && echo SHM-LISTED; head -c 4 /dev/urandom | wc -c");
+    let t = text(&out);
+    assert!(!t.contains("SHM-LISTED"), "{t}");
+    assert!(t.contains('4'), "/dev/urandom and /dev/null must stay usable: {t}");
+}
+
+// ── sandbox-clean ──
+
+/// A tree like a per-call temp dir after a hostile command: a real
+/// subdirectory, a symlink to the victim, and a symlink to a victim FILE.
+#[cfg(unix)]
+fn hostile_tmp(s: &Scene) -> PathBuf {
+    let t = s.tmp.join("call");
+    std::fs::create_dir_all(t.join("d/deeper")).unwrap();
+    std::fs::write(t.join("d/f"), "x").unwrap();
+    std::fs::write(t.join("d/deeper/g"), "x").unwrap();
+    std::os::unix::fs::symlink(&s.outside, t.join("s")).unwrap();
+    std::os::unix::fs::symlink(s.outside.join("keep.txt"), t.join("f-link")).unwrap();
+    std::os::unix::fs::symlink(&s.outside, t.join("d/inner-link")).unwrap();
+    t
+}
+
+#[test]
+#[cfg(unix)]
+fn sandbox_clean_empties_the_dir_and_follows_no_link() {
+    let s = scene();
+    let t = hostile_tmp(&s);
+    let out = Command::new(bin()).arg("sandbox-clean").arg(&t).output().unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(std::fs::read_dir(&t).unwrap().count(), 0, "the temp dir is emptied");
+    assert!(t.is_dir(), "the dir itself is left for the caller's rmdir");
+    intact(&s);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_clean_survives_a_directory_swapped_for_a_symlink_mid_removal() {
+    // The PoC: a job left running exchanges a full directory with a symlink to
+    // the victim (renameat2 RENAME_EXCHANGE) while the cleaner works. An
+    // unsandboxed `rm -rf` lost hundreds of the victim's files to this.
+    let s = scene();
+    let victim = s.outside.join("victim");
+    let mut lost = 0;
+    for _ in 0..20 {
+        std::fs::create_dir_all(&victim).unwrap();
+        for i in 0..100 {
+            std::fs::write(victim.join(format!("f{i}")), "v").unwrap();
+        }
+        let t = s.tmp.join("race");
+        std::fs::create_dir_all(t.join("d")).unwrap();
+        for i in 0..100 {
+            std::fs::write(t.join(format!("d/f{i}")), "x").unwrap();
+        }
+        let _ = std::fs::remove_file(t.join("s"));
+        std::os::unix::fs::symlink(&victim, t.join("s")).unwrap();
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (tt, st) = (t.clone(), stop.clone());
+        let racer = std::thread::spawn(move || {
+            let d = std::ffi::CString::new(tt.join("d").as_os_str().as_encoded_bytes()).unwrap();
+            let l = std::ffi::CString::new(tt.join("s").as_os_str().as_encoded_bytes()).unwrap();
+            while !st.load(std::sync::atomic::Ordering::Relaxed) {
+                // SAFETY: renameat2(AT_FDCWD, d, AT_FDCWD, s, RENAME_EXCHANGE).
+                unsafe { libc::syscall(libc::SYS_renameat2, libc::AT_FDCWD, d.as_ptr(), libc::AT_FDCWD, l.as_ptr(), 2u32) };
+            }
+        });
+        std::thread::sleep(Duration::from_millis(20));
+        let _ = Command::new(bin()).arg("sandbox-clean").arg(&t).output().unwrap();
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        racer.join().unwrap();
+        lost += 100 - std::fs::read_dir(&victim).unwrap().count();
+        let _ = std::fs::remove_file(t.join("s"));
+        let _ = std::fs::remove_file(t.join("d"));
+        let _ = std::fs::remove_dir_all(&t);
+    }
+    assert_eq!(lost, 0, "sandbox-clean deleted {lost} files outside the temp dir");
+}

@@ -77,9 +77,41 @@ pub struct Policy {
 /// views and the device files. An allow-list, so whatever these hold stays
 /// readable -- /etc included.
 pub const SYSTEM_READ: &[&str] = &[
-    "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt", "/proc", "/sys", "/dev",
+    "/usr", "/bin", "/sbin", "/lib", "/lib32", "/lib64", "/libx32", "/etc", "/opt", "/proc", "/sys",
     "/snap", "/nix/store", "/home/linuxbrew/.linuxbrew",
 ];
+
+/// The device files a scoped command may read, file by file. Not `/dev` as a
+/// whole: that would grant `/dev/shm` (another process's shared memory, POSIX
+/// semaphores), `/dev/mqueue`, and any block or character device the user's
+/// groups can open. `/dev/fd` and `/dev/std*` are links into `/proc/self`,
+/// which is granted with `/proc`.
+pub const DEVICE_READ: &[&str] = &["/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty", "/dev/ptmx", "/dev/pts"];
+
+/// Environment variables that name a channel to something OUTSIDE the
+/// sandbox: a session bus, an agent holding keys, a terminal multiplexer, a
+/// display server, an editor's IPC socket. Each is removed from the command's
+/// environment. Removing a variable is hygiene, not containment -- a command
+/// can guess the default path -- so under the supervisor the connect itself is
+/// checked as well (see `linux::unix_allowed`).
+pub const SCRUBBED_ENV: &[&str] = &[
+    "DBUS_SESSION_BUS_ADDRESS", "DBUS_SYSTEM_BUS_ADDRESS", "DBUS_STARTER_ADDRESS", "DBUS_STARTER_BUS_TYPE",
+    "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GPG_AGENT_INFO", "GNOME_KEYRING_CONTROL", "GNOME_KEYRING_PID",
+    "XDG_RUNTIME_DIR", "TMUX", "TMUX_PANE", "STY", "ZELLIJ", "ZELLIJ_SESSION_NAME",
+    "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "SWAYSOCK", "I3SOCK", "HYPRLAND_INSTANCE_SIGNATURE",
+    "KITTY_LISTEN_ON", "KITTY_WINDOW_ID", "WEZTERM_UNIX_SOCKET", "ALACRITTY_SOCKET",
+    "NVIM", "NVIM_LISTEN_ADDRESS", "VSCODE_IPC_HOOK", "VSCODE_IPC_HOOK_CLI", "VSCODE_GIT_IPC_HANDLE",
+    "DOCKER_HOST", "CONTAINER_HOST", "PODMAN_HOST", "PULSE_SERVER", "PIPEWIRE_REMOTE",
+    "SYSTEMD_EXEC_PID", "NOTIFY_SOCKET", "LISTEN_FDS", "LISTEN_PID", "INVOCATION_ID", "JOURNAL_STREAM",
+];
+
+/// Remove `SCRUBBED_ENV` from this process's environment, so the command
+/// inherits none of it. Called while single-threaded, before anything forks.
+pub fn scrub_env() {
+    for v in SCRUBBED_ENV {
+        std::env::remove_var(v);
+    }
+}
 
 /// Toolchain and package-cache paths under `$HOME` a scoped command may read,
 /// when they exist. Chosen to hold programs and downloaded packages, never a
@@ -216,6 +248,11 @@ pub fn read_grants(policy: &Policy) -> Result<Vec<(PathBuf, bool)>, String> {
             }
         }
     }
+    for d in DEVICE_READ {
+        if let Ok(c) = std::fs::canonicalize(d) {
+            push(c, &mut grants);
+        }
+    }
     // /etc/resolv.conf is a symlink into /run on systemd hosts; a resolver that
     // cannot read it falls back to 127.0.0.1:53, so grant the one file.
     if let Ok(c) = std::fs::canonicalize("/etc/resolv.conf") {
@@ -274,19 +311,23 @@ pub struct Probe {
 pub const NOT_ENFORCED: &[&str] = &[
     "reads, under reads = \"all\" (the default): the command can read any file your user can (secrets in $HOME included); reads = \"scoped\" narrows this on Linux",
     "writes inside the root: .gnomon/, .git/ and every other file under the project root stay writable",
-    "unix sockets: a daemon reachable over one (the docker socket, the systemd user bus via systemd-run, a running tmux) can act outside the sandbox",
+    "unix sockets, where the supervisor cannot run (see degraded) or on macOS: a daemon reachable over one (the docker socket, the systemd user bus via systemd-run, a running tmux) can act outside the sandbox. On Linux with the supervisor, connect() to a pathname socket outside the root and the writable directories, and to any abstract socket, is refused; a datagram sent with sendto/sendmsg to a socket path is not vetted",
     "loopback: a local service that itself reaches the network (a proxy, a DNS resolver) is reachable",
     "inbound: a server the command binds on a non-loopback address accepts connections",
-    "signals: the command can signal other processes your user owns",
+    "signals: on Landlock ABI 6+ the command cannot signal a process outside its own call (so not a job an EARLIER bash call started); below ABI 6, and on macOS, it can signal any process your user owns",
+    "metadata outside the root: chmod, chown, utime and extended attributes of files outside the root are not confined by Landlock",
     "already-open descriptors: anything inherited is used as inherited",
+    "the environment, beyond the variables gnomon removes (bus, agent and multiplexer sockets; the credentials gnomon itself supplied): anything else exported to gnomon is inherited",
 ];
 
 /// The limits of `--reads scoped`: what it does not hide.
 pub const SCOPED_NOT_ENFORCED: &[&str] = &[
     "an allow-list, not a deny-list: everything under the system directories stays readable, /etc included (and whatever an administrator or a tool left world-readable there)",
     "inside the root everything is readable: a .env, a token in .git/config, a key someone committed",
-    "the environment: bash inherits gnomon's, so a token in an environment variable is readable with printenv",
-    "unix sockets: an agent that holds a key (ssh-agent, gpg-agent, a keyring over D-Bus, the docker socket) can still be asked to use it; the key file stays unreadable, the capability does not",
+    "the environment: bash inherits gnomon's, minus the bus and agent sockets and the credentials gnomon supplied from its own store; a token exported in your shell is readable with printenv",
+    "unix sockets, where the supervisor cannot run: an agent that holds a key (ssh-agent, gpg-agent, a keyring over D-Bus, the docker socket) can still be asked to use it; the key file stays unreadable, the capability does not",
+    "only bash is scoped: gnomon's own read and grep tools are governed by [sandbox] level, not by reads = scoped",
+    "Landlock ABI 1-2 (Linux before 6.2): truncate(2) of a file outside the root is not blocked",
     "a hard link to a credential placed inside the root beforehand is readable: Landlock judges the path, not the inode (creating one from inside the sandbox is refused)",
     "already-open descriptors: anything inherited is used as inherited",
     "command lines of your other processes (/proc/<pid>/cmdline) are readable; their environments and memory are not (Landlock denies ptrace-mode access to processes outside the sandbox)",
@@ -362,7 +403,190 @@ pub fn run(policy: &Policy, argv: &[String]) -> ! {
             Err(e) => refuse(&e),
         },
     };
+    scrub_env();
     platform::run(&policy, grants.as_deref(), argv)
+}
+
+/// `gnomon-exec sandbox-clean <dir>`: empty a per-call temp directory the
+/// sandboxed command could write, without ever acting outside it.
+///
+/// The caller (bashTool) used to `rm -rf` the directory itself, unsandboxed,
+/// after the call. A job the command left running could swap a subdirectory
+/// for a symlink to anywhere (renameat2 RENAME_EXCHANGE) between the remover's
+/// check and its descent, and the remover followed it: measured, 604 files
+/// outside the root deleted. Two independent guards here, so either alone
+/// holds:
+///   1. every step is relative to a directory descriptor this process opened
+///      with O_NOFOLLOW, and no entry is ever followed -- a symlink is unlinked
+///      as a symlink, wherever it points;
+///   2. on Linux the process first confines its own writes, with Landlock, to
+///      `dir` -- so even a path that did escape would be refused by the kernel.
+///
+/// `dir` itself is left in place (removing it needs a write right on its
+/// parent, which the confinement does not grant); the caller removes the then
+/// empty directory with rmdir, which follows nothing either.
+pub fn clean(dir: &Path) -> Result<(), String> {
+    let dir = canonical_dir(dir, "sandbox-clean")?;
+    #[cfg(target_os = "linux")]
+    linux::confine_writes_to(&dir)?;
+    #[cfg(unix)]
+    {
+        fs_nofollow::empty_dir(&dir).map_err(|e| format!("sandbox-clean {}: {e}", dir.display()))
+    }
+    #[cfg(not(unix))]
+    {
+        Err("sandbox-clean is implemented on Unix only".into())
+    }
+}
+
+/// Removal that never follows a symbolic link. See `clean`.
+#[cfg(unix)]
+pub mod fs_nofollow {
+    use std::ffi::{CStr, CString};
+    use std::io;
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Path;
+
+    /// Deeper than any real scratch tree; a tree built to exhaust descriptors
+    /// is left behind rather than chased.
+    const MAX_DEPTH: usize = 256;
+
+    fn last() -> io::Error {
+        io::Error::last_os_error()
+    }
+
+    /// Empty `dir` (opened O_NOFOLLOW), leaving `dir` itself.
+    pub fn empty_dir(dir: &Path) -> io::Result<()> {
+        let c = CString::new(dir.as_os_str().as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+        // SAFETY: c is a valid NUL-terminated path.
+        let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+        if fd < 0 {
+            return Err(last());
+        }
+        let r = empty_at(fd, 0);
+        // SAFETY: closed once.
+        unsafe { libc::close(fd) };
+        r
+    }
+
+    /// The names in the directory `fd`, without `.` and `..`.
+    fn names(fd: i32) -> io::Result<Vec<CString>> {
+        // SAFETY: dup of an fd this process owns; fdopendir takes ownership of the dup.
+        let d = unsafe { libc::dup(fd) };
+        if d < 0 {
+            return Err(last());
+        }
+        // SAFETY: d is a directory fd.
+        let dirp = unsafe { libc::fdopendir(d) };
+        if dirp.is_null() {
+            let e = last();
+            // SAFETY: fdopendir failed, so d is still ours.
+            unsafe { libc::close(d) };
+            return Err(e);
+        }
+        // SAFETY: rewind, since the dup shares the offset with fd.
+        unsafe { libc::rewinddir(dirp) };
+        let mut out = Vec::new();
+        loop {
+            // SAFETY: dirp is a valid DIR*.
+            let ent = unsafe { libc::readdir(dirp) };
+            if ent.is_null() {
+                break;
+            }
+            // SAFETY: d_name is NUL-terminated.
+            let name = unsafe { CStr::from_ptr((*ent).d_name.as_ptr()) };
+            let b = name.to_bytes();
+            if b == b"." || b == b".." {
+                continue;
+            }
+            out.push(name.to_owned());
+        }
+        // SAFETY: closes d as well.
+        unsafe { libc::closedir(dirp) };
+        Ok(out)
+    }
+
+    fn empty_at(fd: i32, depth: usize) -> io::Result<()> {
+        let mut first_err: Option<io::Error> = None;
+        for name in names(fd)? {
+            if let Err(e) = remove_at(fd, &name, depth) {
+                first_err.get_or_insert(e);
+            }
+        }
+        match first_err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
+
+    /// Remove one entry of `fd`: a directory recursively, anything else --
+    /// a symlink included -- with a plain unlink of the entry itself.
+    fn remove_at(fd: i32, name: &CStr, depth: usize) -> io::Result<()> {
+        // SAFETY: a zeroed stat is valid output space.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: fstatat with AT_SYMLINK_NOFOLLOW never follows the entry.
+        if unsafe { libc::fstatat(fd, name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+            let e = last();
+            return if e.raw_os_error() == Some(libc::ENOENT) { Ok(()) } else { Err(e) };
+        }
+        if (st.st_mode & libc::S_IFMT) != libc::S_IFDIR {
+            // SAFETY: unlinkat of a name relative to fd; a symlink is removed, not followed.
+            if unsafe { libc::unlinkat(fd, name.as_ptr(), 0) } != 0 {
+                let e = last();
+                // A directory swapped in since the stat: try once as one.
+                if e.raw_os_error() == Some(libc::EISDIR) || e.raw_os_error() == Some(libc::EPERM) {
+                    return remove_dir_at(fd, name, depth);
+                }
+                if e.raw_os_error() != Some(libc::ENOENT) {
+                    return Err(e);
+                }
+            }
+            return Ok(());
+        }
+        remove_dir_at(fd, name, depth)
+    }
+
+    fn remove_dir_at(fd: i32, name: &CStr, depth: usize) -> io::Result<()> {
+        if depth >= MAX_DEPTH {
+            return Err(io::Error::new(io::ErrorKind::Other, "directory tree too deep"));
+        }
+        // O_NOFOLLOW: if the entry became a symlink since the stat, this fails
+        // (ELOOP / ENOTDIR) instead of opening wherever it points.
+        // SAFETY: openat relative to fd.
+        let sub = unsafe {
+            libc::openat(fd, name.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        };
+        if sub < 0 {
+            let e = last();
+            return match e.raw_os_error() {
+                Some(libc::ENOENT) => Ok(()),
+                // Now a symlink or a file: remove the entry itself, never its target.
+                Some(libc::ELOOP) | Some(libc::ENOTDIR) => {
+                    // SAFETY: unlinkat of a name relative to fd.
+                    if unsafe { libc::unlinkat(fd, name.as_ptr(), 0) } != 0 {
+                        let e = last();
+                        if e.raw_os_error() != Some(libc::ENOENT) {
+                            return Err(e);
+                        }
+                    }
+                    Ok(())
+                }
+                _ => Err(e),
+            };
+        }
+        let r = empty_at(sub, depth + 1);
+        // SAFETY: closed once.
+        unsafe { libc::close(sub) };
+        r?;
+        // SAFETY: rmdir of a name relative to fd; fails on a non-empty or non-directory entry.
+        if unsafe { libc::unlinkat(fd, name.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
+            let e = last();
+            if e.raw_os_error() != Some(libc::ENOENT) {
+                return Err(e);
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The probe's description of `--reads scoped` on this machine.
@@ -603,9 +827,27 @@ pub mod linux {
     /// Rights a rule on a non-directory may carry. Anything else is EINVAL.
     const FILE_RIGHTS: u64 = FS_EXECUTE | FS_WRITE_FILE | FS_READ_FILE | FS_TRUNCATE;
 
+    /// `struct landlock_ruleset_attr` as of ABI 6. The kernel takes a size, so
+    /// an older kernel is handed only the fields it knows (see apply_landlock).
     #[repr(C)]
     struct RulesetAttr {
         handled_access_fs: u64,
+        handled_access_net: u64,
+        scoped: u64,
+    }
+
+    /// ABI 6 (Linux 6.12): a process may not connect to an abstract unix
+    /// socket, or signal a process, created outside its own Landlock domain.
+    pub const SCOPE_ABSTRACT_UNIX_SOCKET: u64 = 1 << 0;
+    pub const SCOPE_SIGNAL: u64 = 1 << 1;
+
+    /// The scopes this ABI can enforce.
+    pub fn scopes(abi: i32) -> u64 {
+        if abi >= 6 {
+            SCOPE_ABSTRACT_UNIX_SOCKET | SCOPE_SIGNAL
+        } else {
+            0
+        }
     }
 
     #[repr(C, packed)]
@@ -768,9 +1010,13 @@ pub mod linux {
         out
     }
 
-    /// The `--network off` filter. See the module comment for the reasoning.
+    /// The seccomp filter. `network` false: the `--network off` filter (see
+    /// the module comment). `network` true: only `connect(2)` goes to the
+    /// supervisor -- so it can refuse a unix socket outside the sandbox (see
+    /// `unix_allowed`) -- and io_uring, whose CONNECT op would bypass that,
+    /// is ENOSYS; every other socket call is allowed.
     #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
-    pub fn network_filter() -> Vec<libc::sock_filter> {
+    pub fn network_filter(network: bool) -> Vec<libc::sock_filter> {
         use Ins::*;
         use T::*;
         let mut p = vec![
@@ -782,6 +1028,22 @@ pub mod linux {
         ];
         #[cfg(target_arch = "x86_64")]
         p.push(Jge(0x4000_0000, L("enosys"), Next)); // the x32 ABI
+        if network {
+            p.extend([
+                Jeq(libc::SYS_connect as u32, L("notify"), Next),
+                Jeq(libc::SYS_io_uring_setup as u32, L("enosys"), Next),
+                Jeq(libc::SYS_io_uring_enter as u32, L("enosys"), Next),
+                Jeq(libc::SYS_io_uring_register as u32, L("enosys"), Next),
+                Ret(RET_ALLOW),
+                Label("notify"),
+                Ret(RET_USER_NOTIF),
+                Label("enosys"),
+                Ret(RET_ERRNO | libc::ENOSYS as u32),
+                Label("kill"),
+                Ret(RET_KILL_PROCESS),
+            ]);
+            return assemble(&p);
+        }
         p.extend([
             Jeq(libc::SYS_connect as u32, L("notify"), Next),
             Jeq(libc::SYS_socket as u32, L("socket"), Next),
@@ -826,7 +1088,7 @@ pub mod linux {
     }
 
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-    pub fn network_filter() -> Vec<libc::sock_filter> {
+    pub fn network_filter(_network: bool) -> Vec<libc::sock_filter> {
         Vec::new()
     }
 
@@ -906,8 +1168,21 @@ pub mod linux {
                 );
             }
         }
+        if let Ok(a) = abi {
+            if a < 6 {
+                degraded.push(
+                    "signals are not scoped: the command can signal any process your user owns (needs Landlock ABI 6, \
+                     Linux 6.12)"
+                        .to_string(),
+                );
+            }
+        }
         if let Some(n) = &net {
             degraded.push(format!("network = false cannot be enforced: {n}"));
+            degraded.push(format!(
+                "unix sockets are not vetted, so a daemon outside the sandbox (the session bus via systemd-run, \
+                 docker, tmux, an ssh agent) can be asked to act for the command: {n}"
+            ));
         }
         let ok = abi.is_ok();
         let (scoped_reads, scoped_protected) = if ok { scoped_description() } else { (vec![], vec![]) };
@@ -967,15 +1242,14 @@ pub mod linux {
     fn apply_landlock(policy: &Policy, grants: Option<&[(PathBuf, bool)]>) -> Result<(), String> {
         let abi = landlock_abi().map_err(landlock_unavailable)?;
         let handled = write_rights(abi) | if grants.is_some() { READ_RIGHTS } else { 0 };
-        let attr = RulesetAttr { handled_access_fs: handled };
-        // SAFETY: attr outlives the call; the size is the struct's.
+        let scoped = scopes(abi);
+        let attr = RulesetAttr { handled_access_fs: handled, handled_access_net: 0, scoped };
+        // Only the fields this kernel knows: before ABI 6 a larger struct with
+        // a non-zero tail is E2BIG, so hand it the first field alone.
+        let size = if scoped != 0 { std::mem::size_of::<RulesetAttr>() } else { std::mem::size_of::<u64>() };
+        // SAFETY: attr outlives the call, and `size` never exceeds it.
         let ruleset = unsafe {
-            libc::syscall(
-                libc::SYS_landlock_create_ruleset,
-                &attr as *const RulesetAttr,
-                std::mem::size_of::<RulesetAttr>(),
-                0u32,
-            )
+            libc::syscall(libc::SYS_landlock_create_ruleset, &attr as *const RulesetAttr, size, 0u32)
         } as i32;
         if ruleset < 0 {
             return Err(format!("landlock_create_ruleset: {}", io::Error::last_os_error()));
@@ -1005,6 +1279,13 @@ pub mod linux {
         result
     }
 
+    /// `sandbox-clean`: confine THIS process's writes to beneath `dir`, reads
+    /// unconfined. See `super::clean`.
+    pub fn confine_writes_to(dir: &Path) -> Result<(), String> {
+        let policy = Policy { root: dir.to_path_buf(), writable: vec![], readable: vec![], reads: Reads::All, network: true };
+        apply_landlock(&policy, None)
+    }
+
     /// Required by both Landlock and seccomp for an unprivileged caller, and a
     /// guarantee of its own: setuid binaries (sudo, su, pkexec) cannot gain
     /// privilege inside the sandbox.
@@ -1017,8 +1298,8 @@ pub mod linux {
     }
 
     /// Install the network filter and return the notification listener fd.
-    fn install_network_filter() -> Result<i32, String> {
-        let filter = network_filter();
+    fn install_network_filter(network: bool) -> Result<i32, String> {
+        let filter = network_filter(network);
         if filter.is_empty() {
             return Err(network_unavailable().unwrap_or_else(|| "no network filter for this arch".into()));
         }
@@ -1055,8 +1336,17 @@ pub mod linux {
 
     pub fn run(policy: &Policy, grants: Option<&[(PathBuf, bool)]>, argv: &[String]) -> ! {
         if policy.network {
-            // Filesystem only: confine this process and become the command.
-            // No fork, no supervisor -- the cheap path.
+            // The network is open, but a unix socket outside the sandbox is
+            // not "the network": it is a daemon (the session bus, docker,
+            // tmux, an ssh agent) that acts outside the sandbox for whoever
+            // connects. Where the supervisor can run, it vets every connect
+            // for that (connect-only filter, `unix_allowed`).
+            if network_unavailable().is_none() && landlock_abi().is_ok() {
+                supervised(policy, grants, argv)
+            }
+            // Where it cannot (a container whose seccomp profile refuses
+            // pidfd_getfd), filesystem only -- and the probe says so in
+            // `degraded`, so it is not a silent difference.
             if let Err(e) = apply_landlock(policy, grants) {
                 refuse(&e);
             }
@@ -1222,7 +1512,20 @@ pub mod linux {
             std::process::exit(0);
         };
 
-        serve(listener, child, pidfd, status_w)
+        let ctx = Arc::new(Vetting {
+            allowed: policy.writable_dirs().into_iter().map(Path::to_path_buf).collect(),
+            network: policy.network,
+        });
+        serve(listener, child, pidfd, status_w, ctx)
+    }
+
+    /// What the supervisor vets a connect against.
+    pub struct Vetting {
+        /// Directories a pathname unix socket may live beneath: the root and
+        /// the writable directories (canonical).
+        pub allowed: Vec<PathBuf>,
+        /// `--network on`: any inet destination. Off: loopback only.
+        pub network: bool,
     }
 
     /// C: confine, filter, hand the listener to S, become the command.
@@ -1230,7 +1533,7 @@ pub mod linux {
         if let Err(e) = apply_landlock(policy, grants) {
             refuse(&e);
         }
-        let listener = match install_network_filter() {
+        let listener = match install_network_filter(policy.network) {
             Ok(fd) => fd,
             Err(e) => refuse(&e),
         };
@@ -1301,7 +1604,7 @@ pub mod linux {
 
     /// S's loop: answer connect() notifications until no filtered process is
     /// left, reporting C's status to G the moment C exits.
-    fn serve(listener: i32, child: i32, pidfd: i32, status_w: i32) -> ! {
+    fn serve(listener: i32, child: i32, pidfd: i32, status_w: i32, ctx: Arc<Vetting>) -> ! {
         let notices = Arc::new(AtomicUsize::new(0));
         let mut status_w = Some(status_w);
         loop {
@@ -1354,9 +1657,10 @@ pub mod linux {
                 let r = unsafe { libc::ioctl(listener, libc::SECCOMP_IOCTL_NOTIF_RECV as _, &mut req) };
                 if r == 0 {
                     let notices = notices.clone();
+                    let ctx = ctx.clone();
                     // A connect can block (a unix socket with a full backlog),
                     // and one stalled connect must not stall every other.
-                    std::thread::spawn(move || answer_connect(listener, req, &notices));
+                    std::thread::spawn(move || answer_connect(listener, req, &notices, &ctx));
                 }
             }
             if fds[0].revents & (libc::POLLHUP | libc::POLLERR) != 0 && status_w.is_none() {
@@ -1416,9 +1720,9 @@ pub mod linux {
         s.lines().find_map(|l| l.strip_prefix("Tgid:")).and_then(|v| v.trim().parse().ok())
     }
 
-    fn answer_connect(listener: i32, req: libc::seccomp_notif, notices: &AtomicUsize) {
+    fn answer_connect(listener: i32, req: libc::seccomp_notif, notices: &AtomicUsize, ctx: &Vetting) {
         let mut resp = libc::seccomp_notif_resp { id: req.id, val: 0, error: 0, flags: 0 };
-        let error = connect_for(listener, &req, notices);
+        let error = connect_for(listener, &req, notices, ctx);
         match error {
             Ok(()) => {}
             Err(e) => resp.error = -e,
@@ -1428,9 +1732,101 @@ pub mod linux {
         unsafe { libc::ioctl(listener, libc::SECCOMP_IOCTL_NOTIF_SEND as _, &mut resp) };
     }
 
+    /// Is a pathname unix socket at `p` (absolute) inside the sandbox -- beneath
+    /// the root or a writable directory? `Ok` carries its canonical path, which
+    /// is what gets connected to. A socket elsewhere (the session bus, docker,
+    /// tmux, an ssh agent, systemd's private socket) is a daemon that would act
+    /// OUTSIDE the sandbox on the command's behalf: `systemd-run --user --pipe`
+    /// read keys under reads = scoped, wrote outside the root and reached the
+    /// network under network = false, until this check.
+    /// System sockets that answer lookups and act on nothing: glibc's name
+    /// service cache, systemd-resolved (nss-resolve -- DNS fails without it on
+    /// a host whose nsswitch.conf says `resolve`), systemd's user database
+    /// (nss-systemd), and journald's log sockets. Each is matched exactly,
+    /// after canonicalising, so nothing else under /run is reachable.
+    pub const SYSTEM_QUERY_SOCKETS: &[&str] = &[
+        "/run/nscd/socket",
+        "/run/systemd/resolve/io.systemd.Resolve",
+        "/run/systemd/userdb/io.systemd.Multiplexer",
+        "/run/systemd/userdb/io.systemd.NameServiceSwitch",
+        "/run/systemd/userdb/io.systemd.DynamicUser",
+        "/run/systemd/journal/stdout",
+        "/run/systemd/journal/socket",
+        "/run/systemd/journal/dev-log",
+    ];
+
+    pub fn unix_allowed(p: &Path, allowed: &[PathBuf]) -> Result<PathBuf, i32> {
+        let canon = match std::fs::canonicalize(p) {
+            Ok(c) => c,
+            Err(_) => {
+                // Not there (yet): judge where it would be, and let the connect
+                // say ENOENT if it is inside.
+                let (Some(parent), Some(name)) = (p.parent(), p.file_name()) else { return Err(libc::EACCES) };
+                match std::fs::canonicalize(parent) {
+                    Ok(d) => d.join(name),
+                    // Nothing there to reach: say so, as the connect would.
+                    Err(_) => return Err(libc::ENOENT),
+                }
+            }
+        };
+        if allowed.iter().any(|a| canon.starts_with(a)) || SYSTEM_QUERY_SOCKETS.iter().any(|q| canon == Path::new(q)) {
+            Ok(canon)
+        } else {
+            Err(libc::EACCES)
+        }
+    }
+
+    /// A sockaddr_un for `path`, or None if it does not fit.
+    fn sun_path(path: &Path) -> Option<Vec<u8>> {
+        let bytes = path.as_os_str().as_bytes();
+        if bytes.len() >= 108 {
+            return None;
+        }
+        let mut a = (libc::AF_UNIX as u16).to_ne_bytes().to_vec();
+        a.extend_from_slice(bytes);
+        a.push(0);
+        Some(a)
+    }
+
+    /// The peer a connected unix socket reached, as the server bound it.
+    enum Peer {
+        Path(PathBuf),
+        Abstract,
+        /// Unnamed, or bound by a relative name we cannot place.
+        Unknown,
+    }
+
+    fn peer_of(fd: i32) -> Peer {
+        // SAFETY: a zeroed sockaddr_un is valid output space of the given size.
+        let mut sa: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t;
+        // SAFETY: sa has `len` bytes.
+        if unsafe { libc::getpeername(fd, (&mut sa as *mut libc::sockaddr_un).cast(), &mut len) } != 0 {
+            return Peer::Unknown;
+        }
+        let n = (len as usize).saturating_sub(2).min(sa.sun_path.len());
+        let raw: Vec<u8> = sa.sun_path[..n].iter().map(|c| *c as u8).collect();
+        match raw.first() {
+            None => Peer::Unknown,
+            Some(0) => Peer::Abstract,
+            Some(b'/') => {
+                let end = raw.iter().position(|b| *b == 0).unwrap_or(raw.len());
+                Peer::Path(PathBuf::from(std::ffi::OsStr::from_bytes(&raw[..end])))
+            }
+            Some(_) => Peer::Unknown,
+        }
+    }
+
+    fn notice(notices: &AtomicUsize, what: std::fmt::Arguments) {
+        if notices.fetch_add(1, Ordering::Relaxed) < 5 {
+            eprintln!("gnomon-exec: {what}");
+        }
+    }
+
     /// Perform the caller's connect() on its behalf, if the destination is
-    /// local. Returns the errno the caller should see.
-    fn connect_for(listener: i32, req: &libc::seccomp_notif, notices: &AtomicUsize) -> Result<(), i32> {
+    /// allowed: under `--network off` a loopback address, under either mode a
+    /// unix socket inside the sandbox. Returns the errno the caller should see.
+    fn connect_for(listener: i32, req: &libc::seccomp_notif, notices: &AtomicUsize, ctx: &Vetting) -> Result<(), i32> {
         let args = req.data.args;
         let fd = args[0] as i32;
         let len = (args[2] as u32 as usize).min(std::mem::size_of::<libc::sockaddr_storage>());
@@ -1451,20 +1847,58 @@ pub mod linux {
         if !id_valid(listener, req.id) {
             return Err(libc::EINTR); // the caller is gone; nobody reads this
         }
+        if len < 2 {
+            return Err(libc::EINVAL);
+        }
 
         // 2. Decide.
-        match is_local(&addr) {
-            None => return Err(libc::EINVAL),
-            Some(false) => {
-                if notices.fetch_add(1, Ordering::Relaxed) < 5 {
-                    eprintln!(
-                        "gnomon-exec: network = false: blocked connect to {} (only loopback is allowed)",
-                        describe(&addr)
-                    );
-                }
+        let family = u16::from_ne_bytes([addr[0], addr[1]]) as i32;
+        let unix_path = family == libc::AF_UNIX && len > 2;
+        if unix_path {
+            if addr[2] == 0 {
+                // Abstract: no file, no directory to judge it by, and the
+                // namespace is shared with every daemon on the machine (a D-Bus
+                // bus, X11). Refused; a socket the command itself makes inside
+                // the root works.
+                notice(notices, format_args!("blocked connect to an abstract unix socket (only sockets beneath the root or the temp dir are allowed)"));
                 return Err(libc::EACCES);
             }
-            Some(true) => {}
+            let end = addr[2..].iter().position(|b| *b == 0).map(|i| i + 2).unwrap_or(len);
+            let named = Path::new(std::ffi::OsStr::from_bytes(&addr[2..end])).to_path_buf();
+            // A relative path names a file relative to the CALLER's working
+            // directory, not this process's.
+            let abs = if named.is_absolute() {
+                named
+            } else {
+                let Ok(cwd) = std::fs::read_link(format!("/proc/{}/cwd", req.pid)) else { return Err(libc::ENOENT) };
+                cwd.join(named)
+            };
+            match unix_allowed(&abs, &ctx.allowed) {
+                Ok(canon) => {
+                    // Connect to the canonical path: no symlink left to swap.
+                    addr = sun_path(&canon).ok_or(libc::ENAMETOOLONG)?;
+                }
+                Err(e) if e != libc::EACCES => return Err(e),
+                Err(e) => {
+                    notice(
+                        notices,
+                        format_args!(
+                            "blocked connect to unix socket {} (outside the root and the temp dir: a daemon there acts outside the sandbox)",
+                            abs.display()
+                        ),
+                    );
+                    return Err(e);
+                }
+            }
+        } else if !ctx.network {
+            match is_local(&addr) {
+                None => return Err(libc::EINVAL),
+                Some(false) => {
+                    notice(notices, format_args!("network = false: blocked connect to {} (only loopback is allowed)", describe(&addr)));
+                    return Err(libc::EACCES);
+                }
+                Some(true) => {}
+            }
         }
 
         // 3. Connect the caller's own socket, from here.
@@ -1490,46 +1924,35 @@ pub mod linux {
             if getfd_err == libc::EBADF {
                 return Err(libc::EBADF);
             }
-            if notices.fetch_add(1, Ordering::Relaxed) < 5 {
-                eprintln!(
-                    "gnomon-exec: network = false: could not verify a connect (pidfd_getfd: errno {getfd_err}); refused"
-                );
-            }
+            notice(notices, format_args!("could not verify a connect (pidfd_getfd: errno {getfd_err}); refused"));
             return Err(libc::EACCES);
-        }
-
-        // A relative unix socket path names a file relative to the CALLER's
-        // working directory, not this process's.
-        if u16::from_ne_bytes([addr[0], addr[1]]) as i32 == libc::AF_UNIX && len > 2 && addr[2] != 0 && addr[2] != b'/' {
-            let rel_end = addr[2..].iter().position(|b| *b == 0).map(|i| i + 2).unwrap_or(len);
-            let rel = Path::new(std::ffi::OsStr::from_bytes(&addr[2..rel_end])).to_path_buf();
-            let Ok(cwd) = std::fs::read_link(format!("/proc/{}/cwd", req.pid)) else {
-                // SAFETY: closed once.
-                unsafe { libc::close(theirs) };
-                return Err(libc::ENOENT);
-            };
-            let abs = cwd.join(rel);
-            let bytes = abs.as_os_str().as_bytes();
-            if bytes.len() >= 108 {
-                // SAFETY: closed once.
-                unsafe { libc::close(theirs) };
-                return Err(libc::ENAMETOOLONG);
-            }
-            addr.truncate(2);
-            addr.extend_from_slice(bytes);
-            addr.push(0);
         }
 
         // SAFETY: addr holds a sockaddr of addr.len() bytes.
         let r = unsafe { libc::connect(theirs, addr.as_ptr().cast(), addr.len() as libc::socklen_t) };
         let e = errno();
+        let mut result = if r < 0 { Err(e) } else { Ok(()) };
+
+        // 4. A unix connect that went through: check whom it reached. The
+        //    path was checked before, but a directory under the root can be
+        //    swapped for a symlink between that check and the connect; the
+        //    server's own bound name cannot.
+        if unix_path && result.is_ok() {
+            let outside = match peer_of(theirs) {
+                Peer::Abstract => Some("an abstract socket".to_string()),
+                Peer::Path(p) => unix_allowed(&p, &ctx.allowed).err().map(|_| p.display().to_string()),
+                Peer::Unknown => None,
+            };
+            if let Some(what) = outside {
+                // SAFETY: shutting down the caller's socket through our duplicate.
+                unsafe { libc::shutdown(theirs, libc::SHUT_RDWR) };
+                notice(notices, format_args!("blocked connect to unix socket {what} (reached outside the sandbox; shut down)"));
+                result = Err(libc::EACCES);
+            }
+        }
         // SAFETY: closed once.
         unsafe { libc::close(theirs) };
-        if r < 0 {
-            Err(e)
-        } else {
-            Ok(())
-        }
+        result
     }
 
     #[cfg(test)]
@@ -1593,10 +2016,13 @@ pub mod linux {
         fn the_network_filter_assembles() {
             // assemble() panics on an unknown label or an over-long jump; this
             // is what catches either before a kernel ever sees the program.
-            let f = network_filter();
+            let f = network_filter(false);
+            let on = network_filter(true);
             if NETWORK_ARCH_SUPPORTED {
                 assert!(f.len() > 20 && f.len() < 100, "{} instructions", f.len());
                 assert_eq!(f.last().unwrap().k, RET_KILL_PROCESS);
+                assert!(on.len() > 5 && on.len() < 20, "{} instructions", on.len());
+                assert_eq!(on.last().unwrap().k, RET_KILL_PROCESS);
             }
         }
 

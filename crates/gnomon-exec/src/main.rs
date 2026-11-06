@@ -544,6 +544,7 @@ fn print_usage() {
     println!("  gnomon-exec sandbox    --root <dir> [--write <dir>]... [--network on|off]");
     println!("                         [--reads all|scoped] [--read <path>]... -- <program> [args...]");
     println!("  gnomon-exec sandbox-probe");
+    println!("  gnomon-exec sandbox-clean <dir>   (empty a per-call temp dir; follows no link)");
 }
 
 /// `gnomon-exec sandbox`. Every usage error is a refusal (exit 125): a wrapper
@@ -758,6 +759,19 @@ fn main() {
         }
 
         "sandbox" => sandbox_cmd(&args[2..]),
+
+        "sandbox-clean" => {
+            // Empty a per-call temp dir without following any link out of it.
+            // See sandbox::clean.
+            let Some(dir) = args.get(2) else {
+                eprintln!("gnomon-exec: sandbox-clean needs a directory");
+                std::process::exit(2);
+            };
+            if let Err(e) = sandbox::clean(Path::new(dir)) {
+                eprintln!("gnomon-exec: {e}");
+                std::process::exit(1);
+            }
+        }
 
         "sandbox-probe" => {
             println!("{}", serde_json::to_string_pretty(&sandbox::probe()).unwrap());
