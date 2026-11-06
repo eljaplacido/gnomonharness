@@ -1,0 +1,47 @@
+# SH: C + the soft-timeout shell (PR #161, CONTRACTS §34): tools.toml bash soft_timeout = "handle" with a 30 s yield.
+#
+# One mechanism, declared as a two-key edit: the yield IS bash's timeout_seconds (§34: "there is no separate yield
+# key"), so the mechanism has exactly one parameter and it must be chosen. 30 s, not the scaffold's 120 s and not 10 s:
+# - at 120 s the arm would differ from C only for commands C kills (0.4% of bash calls in AS1's v0.4.4 cells, 2 of
+#   520), and the model would still sit blocked for two minutes on every long build/test/training run: the Codex /
+#   OpenHands behaviour the evidence points to is getting control back early, not merely not being killed;
+# - 30 s is the upper clamp of Codex's yield_time_ms (250-30,000 ms) and OpenHands' NO_CHANGE_TIMEOUT_SECONDS = 30
+#   (reverse-engineering 01 §Codex, 02 §OpenHands), and the value 04-hybrid-long-horizon.md planned for its W1 arm;
+# - 10 s (Codex's default) would turn ordinary pip/npm installs and test runs (17 of 520 bash calls > 10 s, 5 > 30 s in
+#   AS1's v0.4.4 cells) into job round-trips, each a model request, against the 1.3x spend guard.
+# A command that would run 30-120 s now needs a `job wait` where C waited inside bash: that is part of the mechanism.
+[arm]
+id = "SH"
+family = "soft_timeout"
+level = "handle@30s"
+status = "ready"
+branches = ["FG1"]
+requires = ["soft_timeout"]
+title = "tools.toml bash soft_timeout = \"handle\", timeout_seconds = 30"
+hypothesis = "a long command no longer blocks or dies: the model keeps working (CAP-PERIPH, sleep-polling near misses)"
+evidence = "reverse-engineering/01 (Codex yield), 02 (OpenHands soft timeout), 03 (data-anonymization R2 sleep 30/90 polling)"
+cost_factor = 1.05
+
+[[edit]]
+file = "tools.toml"
+table = "tools[name=bash]"
+key = "soft_timeout"
+value = "handle"
+
+[[edit]]
+file = "tools.toml"
+table = "tools[name=bash]"
+key = "timeout_seconds"
+value = 30
+
+[[expect]]   # replaces C's `absent`
+on = "surface"
+path = "tools.toml:tools[name=bash].soft_timeout"
+op = "equals"
+value = "handle"
+
+[[expect]]
+on = "surface"
+path = "tools.toml:tools[name=bash].timeout_seconds"
+op = "equals"
+value = 30

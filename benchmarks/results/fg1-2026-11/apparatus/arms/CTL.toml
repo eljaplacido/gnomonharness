@@ -1,0 +1,75 @@
+# FG1 control C: the pinned master build's own release scaffold (`gnomon init`) + P2G's attempt-1 _PATCH + ONE
+# declared line, [endpoints.bench] replay_reasoning = true (AS1 Amendment 1's CTL.C, unchanged), run with
+# `gnomon task --deadline 1740` (every FG1 arm runs with the same deadline: the finish gate reads it, PRE-REG §3).
+#
+# Why the declared line: every cell reaches Go through a log relay at http://172.17.0.1:474x, a private 172.16/12
+# address, which the build (isLocalLaneUrl, CONTRACTS §31) classifies as a LOCAL lane, so the hosted replay default
+# would stay off; declared, the control is what a user on Go gets from this build (AS1 A1.2).
+# Why the deadline is in the control, not an arm: --deadline is a long-task flag every arm uses identically, so it is
+# not a variable of this study. 1740 s = the 1,800 s cap minus 60 s for gnomon to stop cleanly and write its record.
+# The trust grant (fg1 cell script, not a surface edit) is identical in every arm: see PRE-REGISTRATION §4.
+[arm]
+id = "C"
+family = "control"
+level = "master+replay+deadline1740"
+status = "ready"
+branches = ["FG1"]
+requires = ["replay_default", "deadline"]
+title = "Control C: release scaffold + _PATCH, replay declared, --deadline 1740"
+hypothesis = "none: the current best default, run in every wave"
+evidence = "as1-2026-11 Amendment 1 (CTL.C); h3-2026-11 (replay ADOPT)"
+cost_factor = 1.0
+
+[run]
+task_args = ["--deadline", "1740"]
+
+[[edit]]
+file = "config.toml"
+table = "endpoints.bench"
+key = "replay_reasoning"
+value = true
+
+[[expect]]
+on = "surface"
+path = "config.toml:endpoints.bench.replay_reasoning"
+op = "equals"
+value = true
+
+[[expect]]   # the release window, not the 1M recipe window
+on = "record"
+path = "counters.model_calls.window"
+op = "equals"
+value = 65536
+
+[[expect]]   # the idle nudge stays at the release's 12
+on = "surface"
+path = "config.toml:turn.nudge_after_idle"
+op = "equals"
+value = 12
+
+[[expect]]   # the deadline reached gnomon (a record exists only for an uncapped run; capped = unverifiable)
+on = "record"
+path = "volatile.deadline"
+op = "present"
+
+[[expect]]   # the control carries neither mechanism (an arm's own expectation on the same path replaces this one)
+on = "surface"
+path = "policy.toml:verify.finish_gate"
+op = "absent"
+
+[[expect]]
+on = "surface"
+path = "tools.toml:tools[name=bash].soft_timeout"
+op = "absent"
+
+[[expect]]
+on = "record"
+path = "counters.finish_gate"
+op = "absent"
+
+[[expect]]   # replay is behavioural (the model must answer a tool call with reasoning): a warning only
+on = "record"
+path = "counters.model_calls.replayed_calls"
+op = "gt"
+value = 0
+severity = "warn"

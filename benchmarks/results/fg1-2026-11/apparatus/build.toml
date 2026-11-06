@@ -1,0 +1,22 @@
+# The one build every FG1 arm runs (benchmark arms use the current build). run_fg1.py refuses to run unless
+# status = "ready", and its launch check re-hashes SHA256SUMS and each tarball against these pins.
+#
+# gnomon master AFTER PR #162 (finish gate v2, merge 2bd67c6) and PR #161 (soft-timeout shell, merge f8c8a39 =
+# master HEAD at pin time, 2026-11-06T16:15Z). Not a release: built here from that commit by build_release.sh exactly
+# as build-release.yml's `npm` job builds a release's tarballs (pnpm install --frozen-lockfile; pnpm -r run build;
+# gnomonBuild stamped into gnomon-core only; pnpm pack x4; check-publishable.sh with EXPECT_REVISION = the stamp),
+# into apparatus/build/v0.4.5/ (gitignored; regenerable byte-for-byte: pnpm pack is deterministic here — natives, tui
+# and harness tarballs hash identically across two builds of different commits that do not touch them).
+# The package version on master is still 0.4.5 (no bump since v0.4.5), so the stamp carries the identity:
+# `gnomon --version` = gnomon/0.4.5+master-f8c8a39. Served by run_fg1.py from 172.17.0.1:4749 (source = "mirror");
+# the adapter's three-way pin (SHA256SUMS hash, each tarball, gnomonBuild + --version) runs in every cell.
+[build]
+status = "ready"
+version = "0.4.5"
+commit = "f8c8a396435127f7adafd6c50878986c4263f157"
+build_stamp = "master-f8c8a39"
+sums_sha256 = "b36543653e7c4a2149eb4a61accc4c5b0708f426a1b9f5179524e2af60df27dc"
+source = "mirror"
+contains = ["#162 finish gate v2 (2bd67c6)", "#161 soft-timeout shell (f8c8a39)", "#163 audit cleanup", "v0.4.5 security (key grant)"]
+knobs = ["replay_default", "deadline", "finish_gate", "soft_timeout"]
+wiretest = "a52dd39eb4dd202c741ad9b1a18e410e336c5e20fd2ab42adad4281b30e1a0a0"  # sha256 of ../wiretest-fg1.txt (PASS on master-f8c8a39: C, FG, SH, negative control, read-only cwd)

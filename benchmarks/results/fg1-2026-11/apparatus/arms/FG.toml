@@ -1,0 +1,39 @@
+# FG: C + [verify] finish_gate = "v2" (PR #162, CONTRACTS §33). One surface line.
+# The first answer of a turn that changed the worktree is handed back once (user-role [gnomon] message: the task
+# verbatim, open todos, a caveat audit of the answer, claims without evidence, targeted checks); accepted after one
+# tool call; at most 2 rounds; skipped with < 15% of the budget left, the budget being the smaller of the steps left
+# and, under --deadline (every FG1 arm), the time left. Supersedes completion_gate and todo_gate (both off here).
+[arm]
+id = "FG"
+family = "finish_gate"
+level = "v2"
+status = "ready"
+branches = ["FG1"]
+requires = ["finish_gate"]
+title = "[verify] finish_gate = \"v2\""
+hypothesis = "the gate stops answers that admit a deviation (FLAG) or claim untested properties (BLIND) while time is left"
+evidence = "reverse-engineering/03-own-near-misses.md (6 FLAG, 5 BLIND of 35 near misses); CONTRACTS §33"
+cost_factor = 1.1
+
+[[edit]]
+file = "policy.toml"
+table = "verify"
+key = "finish_gate"
+value = "v2"
+
+[[expect]]
+on = "surface"
+path = "policy.toml:verify.finish_gate"
+op = "equals"
+value = "v2"
+
+[[expect]]   # replaces C's `counters.finish_gate absent`: present on every final record of an FG cell
+on = "record"
+path = "counters.finish_gate"
+op = "present"
+
+[[expect]]
+on = "record"
+path = "counters.finish_gate.mode"
+op = "equals"
+value = "v2"
