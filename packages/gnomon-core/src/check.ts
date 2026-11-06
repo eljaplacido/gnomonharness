@@ -59,7 +59,7 @@ import { readsRank } from "./sandbox_pin.js";
 import { parseSurfaceTree, readSurfaceBlobs, SurfaceTreeError, writeSurfaceTree, type SurfaceEntry } from "./surface_tree.js";
 import { AuditTrail, redact, resolveAudit, verifyTrail } from "./audit.js";
 import { harnessBuild } from "./build.js";
-import { mustFailFirst, readVerifyExit, isTestPath, type PreImage } from "./must_fail_first.js";
+import { mustFailFirst, readVerifyExit, isTestPath, unwritablePreImage, type PreImage } from "./must_fail_first.js";
 import {
   bashPolicy,
   executeTool,
@@ -778,10 +778,24 @@ async function judge(
     // Same rule as the loop: only when the change added or edited a test. A
     // deleted test is not a test written, so it is left out of the map.
     const preImages = new Map<string, PreImage>();
+    const refused: string[] = [];
     for (const c of paths) {
+      // Eighth review: the base is a commit the model can make, and its tree
+      // can name `.git/config` or a surface other than the live one. Neither
+      // is put back for the re-run, nor journalled; the verdict says so.
+      const why = unwritablePreImage(c.path);
+      if (why) {
+        refused.push(`${c.path} (${why})`);
+        continue;
+      }
       const rel = posix(relative(projRoot, abs(c.path)));
       if (c.status === "D" && isTestPath(verify.test_paths, rel)) continue;
       preImages.set(abs(c.path), c.status === "A" ? null : git(toplevel, ["show", `${from}:${c.path}`]));
+    }
+    if (refused.length) {
+      (verdict.warnings ??= []).push(
+        `must-fail-first did not put back ${refused.join(", ")}: gnomon never writes .git/, its surface or its own state for the re-run`
+      );
     }
     const sources = [...preImages.keys()].filter((p) => !isTestPath(verify.test_paths, posix(relative(projRoot, p))));
     const reRun = () =>

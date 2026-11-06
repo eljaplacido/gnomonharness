@@ -211,6 +211,15 @@
     is now a grant (only loopback counts as local for that); the write
     precheck lists an archive's members only for a regular file in the root
     of at most 256 MiB, with the archiver killed at its deadline.
+  - (eighth review) must-fail-first no longer puts back a path with a `.git`
+    component, a `..` or absolute path, or one under `.gnomon/` or a gnomon
+    state dir. `gnomon check --base <rev>` read its pre-images from
+    `git diff <base>`, and a base commit the model made could hold
+    `.git/config` (an fsmonitor) and its own `.gnomon/policy.toml`: host
+    gnomon wrote both into the real tree for the re-run, and a SIGKILL in that
+    window left them there. `check` skips such paths and names them in the
+    verdict's warnings; the re-run itself refuses them; `writeFileIn` refuses
+    a target outside the root it is given instead of writing it unchecked.
   - Known limit (seventh review, L1): a container can still corrupt
     `.git/HEAD` and plant a bare repository in the root, so the user's own
     git, run there, discovers the planted repository and its config. Mounting
