@@ -288,8 +288,8 @@ Older kernels give less, and the probe says what.
   `systemd-run --user --pipe` over the user bus had read keys under
   `reads = "scoped"`, written outside the root and reached the network under
   `network = false`. The path is checked before the connect, by canonical
-  path, and the server's own bound name (`getpeername`) after it, so a
-  directory swapped for a symlink in between is caught. Lookup-only system
+  path, and the server's own bound name (`getpeername`) after it. (That was
+  still racy: see the second review, finding C, below.) Lookup-only system
   sockets stay allowed (`SYSTEM_QUERY_SOCKETS`: nscd, systemd-resolved, the
   userdb, journald). The socket-naming variables (`DBUS_SESSION_BUS_ADDRESS`,
   `SSH_AUTH_SOCK`, `TMUX`, `XDG_RUNTIME_DIR`, …) are removed from the
@@ -302,8 +302,8 @@ Older kernels give less, and the probe says what.
   rejected earlier because a per-call domain stops a later call from
   signalling a job an earlier call started, and that is still the cost: a
   server started in one call cannot be `kill`ed from the next. The review
-  asked for it, and signalling any process the user owns was the larger hole;
-  revisit if that workflow matters more.
+  asked for it, and signalling any process the user owns was the larger hole.
+  The second review added the way back: `sandbox-kill` (below).
 - **The temp-dir cleanup** no longer `rm -rf`s unsandboxed: `gnomon-exec
   sandbox-clean` empties it fd-relative with `O_NOFOLLOW`, inside a Landlock
   domain that can write only beneath it, and gnomon `rmdir`s the empty
@@ -318,6 +318,111 @@ Older kernels give less, and the probe says what.
 - **An unknown `exec` value refuses** bash instead of resolving to `"off"`.
 - **`/dev` is no longer granted whole** under `reads = "scoped"`; only the
   usual device files are (`DEVICE_READ`), so not `/dev/shm`.
+
+### Second review of PR #156 (2026-11-06)
+
+A second, independent review found ways out that did not go through the
+kernel at all, but through gnomon acting on files the command may write.
+
+- **A — gnomon's own git (also affected the released `exec = "docker"`).**
+  `.git/config` and `.gitattributes` are inside the root. A command that set
+  `core.fsmonitor = <cmd>`, a hook, or a `filter.<x>.clean` driver had
+  gnomon's per-turn bookkeeping (`[tree]`, the surface stamp, `git clean`'s
+  reach check) run `<cmd>` on the host. Every git gnomon runs now goes
+  through `git_safe.ts`: `-c core.fsmonitor=false -c core.hooksPath=/dev/null`,
+  no external diff, textconv, pager, auto-gc or submodule recursion, no system
+  config, and every filter and diff driver the configuration names blanked
+  (`GIT_CONFIG_COUNT`, which can spell any key). Under `exec = "os"`, from the
+  first sandboxed call on, git itself runs inside `gnomon-exec sandbox
+  --network off`, writable only in an empty directory, so a driver defined
+  between the listing and the run executes where the command could have run it
+  anyway. A repository whose tracked content depends on a clean filter (LFS)
+  can show more files as changed in `[tree]`: errs towards "changed", never
+  towards running something.
+- **B — key routing through a reload.** A command rewrote
+  `.gnomon/config.toml` so an endpoint's `url` pointed at a loopback listener
+  it had started (loopback is "local", which the trust gate does not hold) or
+  `api_key_env` pointed at another variable (the environment scrub read the
+  reloaded config, so the real key was no longer dropped). Endpoints' `url`
+  and `api_key_env`, role fallbacks and MCP server definitions are now pinned
+  at session start (`credential_pin.ts`); a reload that changes one is held and
+  reported (`key routing NOT applied … restart gnomon`), in every exec mode.
+  bash's drop set under `exec = "os"` is the union of every key variable any
+  surface named in the process, plus names matching common secret conventions
+  (`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*PASSWORD*`, `AWS_SECRET_ACCESS_KEY`, …).
+  Not done: an allow-listed environment. A deny list misses a secret under an
+  unconventional name that no surface declares; an allow-list would break
+  every toolchain variable nobody listed. Revisit with a declared
+  `[sandbox] env_pass`.
+- **C — the unix-socket check raced.** The supervisor canonicalised the path
+  and then connected by path; a directory swapped for a symlink in between
+  reached the daemon outside (measured: 100 of 400 connects in the regression
+  test). The socket is now opened `O_PATH` with `openat2(RESOLVE_BENEATH |
+  RESOLVE_NO_SYMLINKS)` from a directory descriptor of the allowed tree,
+  opened before the command ran (or of `/` for `SYSTEM_QUERY_SOCKETS`),
+  checked to be a socket, and connected through `/proc/self/fd/N`. A server
+  `getpeername` cannot name (bound by a relative path) is refused: bind it by
+  an absolute path.
+- **D — `sandbox-clean` canonicalised the temp dir.** With the temp dir's
+  parent writable, the dir could become a symlink to `$HOME`, which was then
+  emptied. gnomon records the dir's device and inode at `mkdtemp` (in the
+  real `tmpdir()`), `sandbox-clean` opens it with `RESOLVE_NO_SYMLINKS`,
+  checks the identity, and confines Landlock to that descriptor; the final
+  `rmdir` checks it again. An `extra_roots` entry (or a root) that contains
+  `tmpdir()` is refused.
+- **E — `/dev/pts`.** Under `reads = "scoped"` only the call's own pty (its
+  stdin/stdout/stderr) is readable and writable, not every terminal the user
+  has open. **Limit:** a pty the command creates through `/dev/ptmx` cannot be
+  granted ahead of time, so under `reads = "scoped"` programs that open a new
+  pty's slave (`script`, `expect`, pexpect) fail. Under `reads = "all"`,
+  `/dev/pts` stays writable (reads are unconfined there anyway).
+- **I.** `keyctl`, `add_key` and `request_key` are `EPERM` in every filter
+  (also where the supervisor cannot run). `extra_roots` and `read_roots` are
+  pinned by the real path they had at session start: a root that is a link
+  the command re-points keeps granting what it granted.
+- **Fails closed.** The command gets `PR_SET_PDEATHSIG(SIGKILL)`: it dies
+  with its supervisor. A gnomon-exec that loses its supervisor kills its
+  process group and exits 125. On a timeout or a cancel, gnomon kills the
+  supervisor's whole subtree (it is a subreaper, so a `setsid`'d job is still
+  beneath it), then the process group.
+- **Signals: `sandbox-kill`.** `LANDLOCK_SCOPE_SIGNAL` stays on, so a later
+  call cannot `kill` a server an earlier call started. The way back is
+  `sandbox-kill <pid> [signal]` as the WHOLE bash command (or `gnomon
+  sandbox-kill …`): gnomon runs `gnomon-exec sandbox-kill` outside the
+  sandbox, which signals the pid only if it descends from one of this
+  session's supervisors — each reported by gnomon-exec on `--report-fd`,
+  closed before the command can reach it, and named with its start time so a
+  reused pid does not pass — through a pidfd taken before the check. Anything
+  else is refused. Signals: HUP INT QUIT KILL USR1 USR2 TERM CONT STOP, or a
+  number. When a `kill` fails with `Operation not permitted`, the tool result
+  says so and names `sandbox-kill`.
+
+Documented, not fixed:
+
+- **F — macOS gives write confinement only, not containment.** Seatbelt runs
+  `(allow default)` and denies writes; mach-lookup, `launchctl`, `osascript`,
+  Apple Events and every other IPC service are reachable, and any of them can
+  act outside the sandbox for the command (start a process, drive another
+  app). Treat `exec = "os"` on macOS as "writes stay in the root", nothing
+  more.
+- **G — gnomon inside the root.** When gnomon's own packages or the node
+  runtime it runs on live under the root or an `extra_roots` entry (a checkout
+  being dogfooded), a command can change gnomon itself, and the next gnomon
+  run is the changed one. gnomon prints a warning at startup under
+  `exec = "os"` when that is so. Run it from an install outside the project.
+- **H — exfiltration channels that remain under `network = false`.** DNS
+  through systemd-resolved (`/run/systemd/resolve/io.systemd.Resolve` is an
+  allowed query socket, and `127.0.0.53:53` is loopback): a name lookup
+  carries data to whoever serves the zone. Any loopback daemon that itself
+  reaches the network (a proxy, a local model server that fetches, a
+  database with foreign tables) does too.
+- **J — POSIX shared memory.** `/dev/shm` is not granted, so `shm_open` and
+  everything built on it fail under `reads = "scoped"`, and under
+  `reads = "all"` creating a segment fails (writes outside the root are
+  refused). Python `multiprocessing` locks, queues and pools use POSIX
+  semaphores there and fail with `PermissionError`/`FileNotFoundError`. Use
+  threads, or run that step with `exec = "off"`. No `shm` grant is offered:
+  `/dev/shm` is shared with every other process of the user.
 
 ## `reads = "scoped"` — read scoping, added 2026-11-05
 

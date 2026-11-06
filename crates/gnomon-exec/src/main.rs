@@ -544,7 +544,8 @@ fn print_usage() {
     println!("  gnomon-exec sandbox    --root <dir> [--write <dir>]... [--network on|off]");
     println!("                         [--reads all|scoped] [--read <path>]... -- <program> [args...]");
     println!("  gnomon-exec sandbox-probe");
-    println!("  gnomon-exec sandbox-clean <dir>   (empty a per-call temp dir; follows no link)");
+    println!("  gnomon-exec sandbox-clean <dir> [--dev N --ino N]   (empty a per-call temp dir; follows no link)");
+    println!("  gnomon-exec sandbox-kill --supervisor <pid>:<start>... -- <pid> [signal]");
 }
 
 /// `gnomon-exec sandbox`. Every usage error is a refusal (exit 125): a wrapper
@@ -555,6 +556,7 @@ fn sandbox_cmd(args: &[String]) -> ! {
     let mut readable = Vec::new();
     let mut reads = sandbox::Reads::All;
     let mut network = false;
+    let mut report_fd: Option<i32> = None;
     let mut i = 0;
     while i < args.len() {
         let a = args[i].as_str();
@@ -582,6 +584,15 @@ fn sandbox_cmd(args: &[String]) -> ! {
                 };
                 i += 2;
             }
+            "--report-fd" => {
+                // Where to write the supervisor's pid (gnomon's sandbox-kill).
+                // 0-2 are the command's own stdio: never those.
+                report_fd = match value(i).parse::<i32>() {
+                    Ok(n) if n > 2 => Some(n),
+                    _ => sandbox::refuse("--report-fd must be a descriptor number above 2"),
+                };
+                i += 2;
+            }
             "--network" => {
                 network = match value(i).as_str() {
                     "on" => true,
@@ -602,7 +613,7 @@ fn sandbox_cmd(args: &[String]) -> ! {
     if reads == sandbox::Reads::All && !readable.is_empty() {
         sandbox::refuse("--read is meaningful only with --reads scoped (under --reads all every path is readable)");
     }
-    let policy = sandbox::Policy { root, writable, readable, reads, network };
+    let policy = sandbox::Policy { root, writable, readable, reads, network, report_fd };
     sandbox::run(&policy, &args[i..])
 }
 
@@ -761,16 +772,41 @@ fn main() {
         "sandbox" => sandbox_cmd(&args[2..]),
 
         "sandbox-clean" => {
-            // Empty a per-call temp dir without following any link out of it.
-            // See sandbox::clean.
+            // Empty a per-call temp dir without following any link out of it,
+            // and only the directory gnomon made (`--dev`/`--ino`, recorded at
+            // mkdtemp). See sandbox::clean.
             let Some(dir) = args.get(2) else {
                 eprintln!("gnomon-exec: sandbox-clean needs a directory");
                 std::process::exit(2);
             };
-            if let Err(e) = sandbox::clean(Path::new(dir)) {
+            let num = |flag: &str| -> Option<u64> {
+                let i = args.iter().position(|a| a == flag)?;
+                match args.get(i + 1).and_then(|v| v.parse::<u64>().ok()) {
+                    Some(v) => Some(v),
+                    None => {
+                        eprintln!("gnomon-exec: sandbox-clean {flag} needs a number");
+                        std::process::exit(2);
+                    }
+                }
+            };
+            let id = match (num("--dev"), num("--ino")) {
+                (Some(d), Some(i)) => Some((d, i)),
+                (None, None) => None,
+                _ => {
+                    eprintln!("gnomon-exec: sandbox-clean takes --dev and --ino together");
+                    std::process::exit(2);
+                }
+            };
+            if let Err(e) = sandbox::clean(Path::new(dir), id) {
                 eprintln!("gnomon-exec: {e}");
                 std::process::exit(1);
             }
+        }
+
+        "sandbox-kill" => {
+            // Signal a process an earlier sandboxed call started -- and only
+            // such a process. Run by gnomon, outside the sandbox.
+            std::process::exit(sandbox::kill_cmd(&args[2..]));
         }
 
         "sandbox-probe" => {

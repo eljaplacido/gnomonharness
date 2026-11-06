@@ -955,3 +955,350 @@ fn sandbox_clean_survives_a_directory_swapped_for_a_symlink_mid_removal() {
     }
     assert_eq!(lost, 0, "sandbox-clean deleted {lost} files outside the temp dir");
 }
+
+// ── second review (PR #156): C, D, E, I, fail-closed, sandbox-kill ──
+
+/// renameat2(RENAME_EXCHANGE) of `a` and `b`, in a loop, until `stop`.
+#[cfg(target_os = "linux")]
+fn swapper(a: PathBuf, b: PathBuf, stop: std::sync::Arc<std::sync::atomic::AtomicBool>) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let a = std::ffi::CString::new(a.as_os_str().as_encoded_bytes()).unwrap();
+        let b = std::ffi::CString::new(b.as_os_str().as_encoded_bytes()).unwrap();
+        while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+            // SAFETY: renameat2(AT_FDCWD, a, AT_FDCWD, b, RENAME_EXCHANGE).
+            unsafe { libc::syscall(libc::SYS_renameat2, libc::AT_FDCWD, a.as_ptr(), libc::AT_FDCWD, b.as_ptr(), 2u32) };
+        }
+    })
+}
+
+/// A unix server that counts the connections it accepts.
+#[cfg(target_os = "linux")]
+fn counting_server(path: &Path, secs: u64) -> (std::sync::Arc<std::sync::atomic::AtomicUsize>, std::thread::JoinHandle<()>) {
+    let l = std::os::unix::net::UnixListener::bind(path).unwrap();
+    l.set_nonblocking(true).unwrap();
+    let n = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let n2 = n.clone();
+    let h = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(secs);
+        while Instant::now() < deadline {
+            match l.accept() {
+                Ok((mut c, _)) => {
+                    n2.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let _ = c.write_all(b"x\n");
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(1)),
+            }
+        }
+    });
+    (n, h)
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn c_a_directory_swapped_for_a_symlink_never_reaches_an_outside_socket() {
+    // Second review, C: the supervisor canonicalised the path and then
+    // connected BY PATH, so a directory swapped for a symlink in between
+    // reached the daemon outside. Now the socket is opened O_PATH with no
+    // symlink on the way and connected through the descriptor.
+    require_sandbox!(true);
+    require_tool!("python3");
+    let s = scene();
+    let real = s.root.join("x");
+    std::fs::create_dir(&real).unwrap();
+    let (inside, _hi) = counting_server(&real.join("s.sock"), 20);
+    let (outside_hits, _ho) = counting_server(&s.outside.join("s.sock"), 20);
+    std::os::unix::fs::symlink(&s.outside, s.root.join("y")).unwrap();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let sw = swapper(real.clone(), s.root.join("y"), stop.clone());
+    let client = format!(
+        "python3 -c 'import socket\nfor _ in range(400):\n s=socket.socket(socket.AF_UNIX)\n try:\n  s.connect(\"{}\")\n except OSError:\n  pass\n s.close()\nprint(\"DONE\")'",
+        real.join("s.sock").display()
+    );
+    let out = sandboxed(&s, false, &client);
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    sw.join().unwrap();
+    assert!(text(&out).contains("DONE"), "{}", text(&out));
+    let reached = outside_hits.load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(reached, 0, "{reached} connect(s) reached the socket outside the sandbox through the swap");
+    assert!(inside.load(std::sync::atomic::Ordering::Relaxed) > 0, "the inside socket must stay reachable");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn c_a_server_bound_by_a_relative_name_is_refused() {
+    // Peer::Unknown is refused: getpeername cannot place it.
+    require_sandbox!(true);
+    require_tool!("python3");
+    let s = scene();
+    let server = "import socket,os,time\ns=socket.socket(socket.AF_UNIX); s.bind(\"rel.sock\"); s.listen(4); time.sleep(5)";
+    let mut srv = Command::new("python3").arg("-c").arg(server).current_dir(&s.root).spawn().unwrap();
+    for _ in 0..100 {
+        if s.root.join("rel.sock").exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let out = sandboxed(&s, true, &format!("{UNIX_CLIENT} rel.sock"));
+    let _ = srv.kill();
+    let _ = srv.wait();
+    assert!(text(&out).contains("cannot be named"), "{}", text(&out));
+}
+
+#[test]
+#[cfg(unix)]
+fn d_sandbox_clean_refuses_a_temp_dir_swapped_for_a_symlink() {
+    // Second review, D: with the temp dir's PARENT writable, the dir itself
+    // can become a symlink to $HOME before the clean. It was canonicalised,
+    // so $HOME was emptied.
+    use std::os::unix::fs::MetadataExt;
+    let s = scene();
+    let t = s.tmp.join("call");
+    std::fs::create_dir(&t).unwrap();
+    let m = std::fs::metadata(&t).unwrap();
+    let (dev, ino) = (m.dev().to_string(), m.ino().to_string());
+    // The command swaps it: the real dir moves aside, a link to the victim takes its name.
+    std::fs::rename(&t, s.tmp.join("aside")).unwrap();
+    std::os::unix::fs::symlink(&s.outside, &t).unwrap();
+    let out = Command::new(bin()).args(["sandbox-clean"]).arg(&t).args(["--dev", &dev, "--ino", &ino]).output().unwrap();
+    assert!(!out.status.success(), "a symlinked temp dir must be refused: {}", text(&out));
+    intact(&s);
+    // A different real directory under the recorded name: identity mismatch.
+    std::fs::remove_file(&t).unwrap();
+    std::fs::create_dir(&t).unwrap();
+    std::fs::write(t.join("other"), "o").unwrap();
+    let out = Command::new(bin()).args(["sandbox-clean"]).arg(&t).args(["--dev", &dev, "--ino", &ino]).output().unwrap();
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("not the directory gnomon made"), "{}", text(&out));
+    assert!(t.join("other").exists(), "a directory gnomon did not make is left alone");
+    // A symlink HIGHER up the path is refused too (Linux: RESOLVE_NO_SYMLINKS).
+    #[cfg(target_os = "linux")]
+    {
+        std::os::unix::fs::symlink(&s.tmp, s.root.join("tlink")).unwrap();
+        let aside = std::fs::metadata(s.tmp.join("aside")).unwrap();
+        let out = Command::new(bin())
+            .arg("sandbox-clean")
+            .arg(s.root.join("tlink/aside"))
+            .args(["--dev", &aside.dev().to_string(), "--ino", &aside.ino().to_string()])
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "{}", text(&out));
+    }
+    // The right directory, by its own path: cleaned.
+    std::fs::write(s.tmp.join("aside/junk"), "j").unwrap();
+    let aside = std::fs::metadata(s.tmp.join("aside")).unwrap();
+    let out = Command::new(bin())
+        .arg("sandbox-clean")
+        .arg(s.tmp.join("aside"))
+        .args(["--dev", &aside.dev().to_string(), "--ino", &aside.ino().to_string()])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(std::fs::read_dir(s.tmp.join("aside")).unwrap().count(), 0);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn e_scoped_reads_cannot_open_another_terminal() {
+    // Second review, E: /dev/pts was readable and writable under scoped reads,
+    // so another terminal's input could be read. A pty the test opens stands
+    // in for the operator's other terminal.
+    require_sandbox!(false);
+    require_scoped!();
+    require_tool!("python3");
+    let s = scene();
+    let home = fake_home(&s);
+    // SAFETY: posix_openpt / grantpt / unlockpt / ptsname on a fresh master.
+    let (master, slave) = unsafe {
+        let m = libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY);
+        assert!(m >= 0);
+        assert_eq!(libc::grantpt(m), 0);
+        assert_eq!(libc::unlockpt(m), 0);
+        let p = std::ffi::CStr::from_ptr(libc::ptsname(m)).to_string_lossy().into_owned();
+        (m, p)
+    };
+    let probe = format!("python3 -c 'import os; os.open(\"{slave}\", os.O_RDWR|os.O_NOCTTY|os.O_NONBLOCK); print(\"OPENED\")'");
+    let out = scoped_in(&s, &home, true, &[], &probe);
+    assert!(!text(&out).contains("OPENED"), "another terminal was opened under scoped reads: {}", text(&out));
+    // Control: unsandboxed, it opens.
+    let out = Command::new("sh").arg("-c").arg(&probe).output().unwrap();
+    assert!(text(&out).contains("OPENED"), "control: {}", text(&out));
+    // SAFETY: closed once.
+    unsafe { libc::close(master) };
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn i_the_kernel_keyring_is_refused() {
+    require_sandbox!(false);
+    require_tool!("python3");
+    let s = scene();
+    // keyctl(KEYCTL_GET_KEYRING_ID, KEY_SPEC_SESSION_KEYRING, 0)
+    let script = format!(
+        "python3 -c 'import ctypes; c=ctypes.CDLL(None, use_errno=True); r=c.syscall({}, 0, -3, 0); print(\"R=%d E=%d\" % (r, ctypes.get_errno()))'",
+        libc::SYS_keyctl
+    );
+    for network in [false, true] {
+        if !network && skip_reason(true).is_some() {
+            continue;
+        }
+        let out = sandboxed(&s, network, &script);
+        assert!(text(&out).contains(&format!("R=-1 E={}", libc::EPERM)), "network={network}: {}", text(&out));
+    }
+    // Control: unsandboxed, keyctl is not refused with EPERM.
+    let out = Command::new("sh").arg("-c").arg(&script).output().unwrap();
+    assert!(!text(&out).contains(&format!("R=-1 E={}", libc::EPERM)), "control: {}", text(&out));
+}
+
+/// Children of `pid`, from /proc.
+#[cfg(target_os = "linux")]
+fn children_of(pid: u32) -> Vec<u32> {
+    let mut out = Vec::new();
+    for e in std::fs::read_dir("/proc").unwrap().flatten() {
+        let Ok(p) = e.file_name().to_string_lossy().parse::<u32>() else { continue };
+        let Ok(st) = std::fs::read_to_string(format!("/proc/{p}/stat")) else { continue };
+        let Some(rest) = st.rfind(')').map(|i| &st[i + 2..]) else { continue };
+        if rest.split_whitespace().nth(1).and_then(|v| v.parse::<u32>().ok()) == Some(pid) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+#[cfg(target_os = "linux")]
+fn alive(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .map(|s| s.rfind(')').map(|i| !s[i + 2..].starts_with('Z')).unwrap_or(false))
+        .unwrap_or(false)
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn the_command_dies_with_its_supervisor() {
+    // Fail-closed gap: a supervisor that died left the command running,
+    // unsupervised and unreaped.
+    require_sandbox!(true);
+    let s = scene();
+    let mut g = Command::new(bin())
+        .args(["sandbox", "--root"])
+        .arg(&s.root)
+        .args(["--network", "off", "--", "/bin/sh", "-c", "echo $$ > cmd.pid; exec sleep 30"])
+        .current_dir(&s.root)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut cmd = 0u32;
+    for _ in 0..200 {
+        if let Some(p) = std::fs::read_to_string(s.root.join("cmd.pid")).ok().and_then(|t| t.trim().parse().ok()) {
+            cmd = p;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(cmd > 0, "the command never started");
+    let sup = children_of(g.id());
+    assert_eq!(sup.len(), 1, "one supervisor under gnomon-exec: {sup:?}");
+    // SAFETY: SIGKILL to the supervisor this test started.
+    unsafe { libc::kill(sup[0] as i32, libc::SIGKILL) };
+    let st = g.wait().unwrap();
+    assert_eq!(st.code(), Some(125), "gnomon-exec reports the lost supervisor as a refusal");
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while alive(cmd) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let still = alive(cmd);
+    if still {
+        // SAFETY: cleaning up the orphan this test caused.
+        unsafe { libc::kill(cmd as i32, libc::SIGKILL) };
+    }
+    assert!(!still, "the command outlived its supervisor");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn report_fd_names_the_supervisor_and_the_command_cannot_write_it() {
+    use std::os::unix::process::CommandExt;
+    require_sandbox!(true);
+    let s = scene();
+    let mut fds = [0i32; 2];
+    // SAFETY: a plain pipe.
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+    let w = fds[1];
+    let mut c = Command::new(bin());
+    c.args(["sandbox", "--root"])
+        .arg(&s.root)
+        .args(["--network", "off", "--report-fd", "3", "--", "/bin/sh", "-c", "echo PPID=$PPID; echo forged >&3 && echo WROTE"])
+        .current_dir(&s.root);
+    // SAFETY: dup2 in the child before exec.
+    unsafe {
+        c.pre_exec(move || {
+            if libc::dup2(w, 3) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let out = c.output().unwrap();
+    // SAFETY: the parent's copy of the write end, closed once.
+    unsafe { libc::close(w) };
+    let mut buf = String::new();
+    // SAFETY: the read end, owned from here.
+    let mut r = unsafe { <std::fs::File as std::os::fd::FromRawFd>::from_raw_fd(fds[0]) };
+    r.read_to_string(&mut buf).unwrap();
+    let t = text(&out);
+    assert!(!t.contains("WROTE"), "the command wrote the report fd: {t}");
+    let ppid = t.lines().find_map(|l| l.strip_prefix("PPID=")).unwrap_or("").trim().to_string();
+    assert!(ppid.parse::<u32>().is_ok(), "the command did not run: {t}");
+    assert_eq!(buf.trim(), ppid, "the reported pid is the command's parent, the supervisor: {buf:?} vs {t}");
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sandbox_kill_signals_a_job_an_earlier_call_started_and_nothing_else() {
+    require_sandbox!(true);
+    let s = scene();
+    // Call 1 starts a server-like job and says who its supervisor is ($PPID
+    // of the shell) and the job's pid.
+    let out = sandboxed(&s, false, "echo SUP=$PPID; sleep 30 >/dev/null 2>&1 & echo JOB=$!");
+    let t = text(&out);
+    let get = |k: &str| t.lines().find_map(|l| l.strip_prefix(k)).and_then(|v| v.trim().parse::<i32>().ok()).unwrap();
+    let (sup, job) = (get("SUP="), get("JOB="));
+    let start = std::fs::read_to_string(format!("/proc/{sup}/stat")).unwrap();
+    let start: u64 = start[start.rfind(')').unwrap() + 2..].split_whitespace().nth(19).unwrap().parse().unwrap();
+    // Call 2 cannot (ABI 6 scoping) -- the reason the escape hatch exists.
+    if probe()["landlock_abi"].as_i64().unwrap_or(0) >= 6 {
+        let out = sandboxed(&s, false, &format!("kill {job} && echo KILLED"));
+        assert!(!text(&out).contains("KILLED"), "{}", text(&out));
+    }
+    let mut victim = Command::new("sleep").arg("30").spawn().unwrap();
+    let kill = |sups: &[String], pid: i32| {
+        let mut c = Command::new(bin());
+        c.arg("sandbox-kill");
+        for s in sups {
+            c.args(["--supervisor", s]);
+        }
+        c.args(["--", &pid.to_string(), "TERM"]).output().unwrap()
+    };
+    let me = vec![format!("{sup}:{start}")];
+    // Refused: a process no sandboxed call started.
+    let out = kill(&me, victim.id() as i32);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(victim.try_wait().unwrap().is_none(), "an unrelated process was signalled");
+    // Refused: the supervisor named with the wrong start time (a reused pid).
+    let out = kill(&[format!("{sup}:{}", start + 1)], job);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(alive(job as u32));
+    // Refused: the supervisor itself.
+    let out = kill(&me, sup);
+    assert!(!out.status.success(), "{}", text(&out));
+    // Signalled: the job.
+    let out = kill(&me, job);
+    assert!(out.status.success(), "{}", text(&out));
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while alive(job as u32) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!alive(job as u32), "the job survived sandbox-kill");
+    let _ = victim.kill();
+    let _ = victim.wait();
+}

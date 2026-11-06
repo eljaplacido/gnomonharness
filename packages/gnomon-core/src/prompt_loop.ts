@@ -93,6 +93,8 @@ import {
   DIFF_ELIDED,
   osSandboxSummary,
   osSandboxForbid,
+  gnomonInstallWritable,
+  gnomonInstallReadRoots,
   loadOsSandboxProbe,
 } from "./tools.js";
 import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
@@ -11039,6 +11041,19 @@ export async function runPromptLoop(
           )
         : undefined;
     if (osSummary) console.log(paint(ui, osSummary.ok ? "gray" : "red", `  ${osSummary.line}`));
+    if (osSummary?.ok) {
+      const writable = osSandboxForbid(resolve(config.gnomonDir, ".."), resolveExtraRoots(config)).slice(0, -1);
+      const probed = (await loadOsSandboxProbe())(osSandboxForbid(resolve(config.gnomonDir, ".."), resolveExtraRoots(config)));
+      const inside = "error" in probed ? [] : gnomonInstallWritable(writable, gnomonInstallReadRoots(probed.bin));
+      if (inside.length > 0) {
+        console.log(
+          paint(ui, "yellow",
+            `  sandbox: gnomon itself is inside a tree bash may write (${inside.join(", ")}) — a command can change ` +
+            `gnomon, and the next gnomon you run is the changed one. Run gnomon from an install outside the project ` +
+            `and its extra_roots to keep it out of reach.`)
+        );
+      }
+    }
     if (sandboxLevel !== "off" && networkDeclared === false && !(osSummary?.ok)) {
       // One line. It printed four on every launch, which is a wall nobody
       // reads by the third session; the substance fits in one, and `/network`

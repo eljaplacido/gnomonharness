@@ -1891,15 +1891,121 @@ export function osSandboxEnv(
  * and using it in the next is a supported workflow (backgroundRecipe), and
  * cleanup that cannot follow a link does not need the tree to be quiet.
  */
-export function cleanOsSandboxTmp(bin: string, tmp: string): boolean {
-  const r = spawnSync(bin, ["sandbox-clean", tmp], { stdio: "ignore", timeout: 30_000 });
+export function cleanOsSandboxTmp(bin: string, tmp: string, id?: OsTmpId): boolean {
+  // The device and inode recorded at mkdtemp: gnomon-exec empties only that
+  // directory, opened with no symlink on its path (second review, finding D).
+  const r = spawnSync(bin, ["sandbox-clean", tmp, ...(id ? ["--dev", id.dev, "--ino", id.ino] : [])], {
+    stdio: "ignore",
+    timeout: 30_000,
+  });
   if (r.status !== 0) return false;
   try {
+    if (id) {
+      const st = lstatSync(tmp, { bigint: true });
+      if (!st.isDirectory() || st.dev.toString() !== id.dev || st.ino.toString() !== id.ino) return false;
+    }
     rmdirSync(tmp);
     return true;
   } catch {
     return false;
   }
+}
+
+/** A per-call temp dir's identity, as recorded when gnomon made it. */
+export interface OsTmpId {
+  dev: string;
+  ino: string;
+}
+
+/**
+ * The supervisors of this session's sandboxed calls, by pid, with the start
+ * time /proc gave each when it was reported. `sandbox-kill` signals only
+ * processes beneath one of these (gnomon-exec checks the start time again, so
+ * a reused pid is not one).
+ */
+const sessionSupervisors = new Map<number, string>();
+
+/** /proc/<pid>/stat: parent and start time, or null. Linux only. */
+function procStat(pid: number): { ppid: number; start: string } | null {
+  try {
+    const st = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const f = st.slice(st.lastIndexOf(")") + 2).split(" ");
+    return { ppid: Number(f[1]), start: f[19] ?? "" };
+  } catch {
+    return null;
+  }
+}
+
+/** Record the supervisor gnomon-exec `parent` reported on its --report-fd. */
+function registerSupervisor(parent: number | undefined, reported: string): number | null {
+  const pid = Number(reported.trim().split("\n")[0]);
+  if (!Number.isInteger(pid) || pid <= 1 || parent === undefined) return null;
+  const st = procStat(pid);
+  // Only the reporting gnomon-exec's own child is believed.
+  if (!st || st.ppid !== parent) return null;
+  for (const [p, start] of sessionSupervisors) if (procStat(p)?.start !== start) sessionSupervisors.delete(p);
+  sessionSupervisors.set(pid, st.start);
+  return pid;
+}
+
+/**
+ * SIGKILL `pid` and everything beneath it: on a timeout or a cancel, the job a
+ * call started under its supervisor goes with it even when it left the
+ * process group (setsid). The supervisor is a subreaper, so nothing the call
+ * started can have left its subtree.
+ */
+function killSupervisedTree(pid: number): void {
+  const start = sessionSupervisors.get(pid);
+  if (start === undefined || procStat(pid)?.start !== start) return;
+  const kids = new Map<number, number[]>();
+  try {
+    for (const e of readdirSync("/proc")) {
+      const p = Number(e);
+      if (!Number.isInteger(p)) continue;
+      const st = procStat(p);
+      if (!st) continue;
+      const l = kids.get(st.ppid) ?? [];
+      l.push(p);
+      kids.set(st.ppid, l);
+    }
+  } catch {
+    return;
+  }
+  const order: number[] = [];
+  const walk = (p: number) => {
+    order.push(p);
+    for (const c of kids.get(p) ?? []) walk(c);
+  };
+  walk(pid);
+  for (const p of order) {
+    try {
+      process.kill(p, "SIGKILL");
+    } catch {
+      // gone already
+    }
+  }
+  sessionSupervisors.delete(pid);
+}
+
+/** `sandbox-kill <pid> [signal]`, the whole command (optionally `gnomon sandbox-kill`). */
+export const SANDBOX_KILL = /^\s*(?:gnomon\s+)?sandbox-kill\s+(\d+)(?:\s+(-?[A-Za-z0-9]+))?\s*;?\s*$/;
+
+/**
+ * Under exec = "os", a call cannot signal a process an EARLIER call started
+ * (Landlock ABI 6 scopes signals to the call). `sandbox-kill <pid> [signal]`,
+ * as a whole bash command, is gnomon doing it from outside the sandbox -- for
+ * a pid that descends from one of this session's supervisors, and no other.
+ */
+export function sandboxKill(bin: string, pid: string, sig: string | undefined): ToolOutcome {
+  const sups = [...sessionSupervisors].flatMap(([p, start]) => ["--supervisor", `${p}:${start}`]);
+  const r = spawnSync(bin, ["sandbox-kill", ...sups, "--", pid, ...(sig ? [sig] : [])], { encoding: "utf8", timeout: 10_000 });
+  const out = `${r.stdout ?? ""}${r.stderr ?? ""}`.trim();
+  return {
+    code: TOOL_OK,
+    shell_exit: r.status ?? undefined,
+    content: `exit: ${r.status}\n${out}`,
+    summary: `bash — sandbox-kill ${pid}${sig ? ` ${sig}` : ""} — ${r.status === 0 ? "signalled" : "refused"}`,
+  };
 }
 
 /**
@@ -1935,7 +2041,7 @@ export function osSandboxPlan(
   installRoots: (bin: string) => string[] = gnomonInstallReadRoots
 ):
   | { refusal: ToolOutcome }
-  | { file: string; args: string[]; env: NodeJS.ProcessEnv; tmp: string; network: boolean } {
+  | { file: string; args: string[]; env: NodeJS.ProcessEnv; tmp: string; tmpId: OsTmpId; network: boolean } {
   const refuse = (why: string, summary: string): { refusal: ToolOutcome } => ({
     refusal: {
       code: TOOL_FAILED,
@@ -1996,7 +2102,35 @@ export function osSandboxPlan(
   // (git_safe.ts): this command can write .git/config, and a host-side git
   // would run whatever core.fsmonitor or a filter driver it names.
   registerGitSandbox(sb.bin);
-  const tmp = mkdtempSync(join(tmpdir(), "gnomon-sbx-"));
+  // The temp dir's parent must not be writable by the command: an extra root
+  // (or the root) holding tmpdir() could swap the per-call dir for a symlink
+  // before it is cleaned (second review, finding D). Refused, not trimmed.
+  const tmpBase = (() => {
+    try {
+      return realpathSync(tmpdir());
+    } catch {
+      return resolve(tmpdir());
+    }
+  })();
+  for (const r of [ctx.root, ...(ctx.extraRoots ?? [])]) {
+    let real: string;
+    try {
+      real = realpathSync(r);
+    } catch {
+      continue;
+    }
+    if (tmpBase === real || tmpBase.startsWith(real.endsWith(sep) ? real : real + sep)) {
+      return refuse(
+        `${r === ctx.root ? "the project root" : `extra_roots entry ${r}`} contains the temp directory (${tmpBase}), ` +
+          `so a command could replace its own per-call temp dir with a link before gnomon cleans it. ` +
+          `Point TMPDIR somewhere outside the writable roots, or narrow the root.`,
+        "temp dir inside a writable root"
+      );
+    }
+  }
+  const tmp = mkdtempSync(join(tmpBase, "gnomon-sbx-"));
+  const tmpStat = statSync(tmp, { bigint: true });
+  const tmpId: OsTmpId = { dev: tmpStat.dev.toString(), ino: tmpStat.ino.toString() };
   // Only roots that exist: gnomon-exec refuses a --write it cannot resolve,
   // and a granted root that is not there grants nothing anyway.
   const extra = (ctx.extraRoots ?? []).filter((r) => {
@@ -2030,6 +2164,8 @@ export function osSandboxPlan(
       ...extra.flatMap((r) => ["--write", r]),
       "--network", network ? "on" : "off",
       ...readArgs,
+      // fd 3: gnomon-exec writes the supervisor's pid there (sandbox-kill).
+      "--report-fd", "3",
       "--",
       shellBin, "-c", command,
     ],
@@ -2038,6 +2174,7 @@ export function osSandboxPlan(
     // the bus/agent channels and gnomon's own secrets (osSandboxEnv).
     env: { ...osSandboxEnv(process.env, ctx.config), TMPDIR: tmp, TMP: tmp, TEMP: tmp },
     tmp,
+    tmpId,
     network,
   };
 }
@@ -2104,6 +2241,27 @@ export function gnomonInstallReadRoots(bin: string, here: string = fileURLToPath
   return [...new Set(out.map((p) => resolve(p)))].filter(
     (p) => existsPath(p) && p !== home && !home.startsWith(p.endsWith(sep) ? p : p + sep)
   );
+}
+
+/**
+ * Second review, finding G: when gnomon itself -- its packages, the node
+ * runtime it runs on -- lives under a tree a sandboxed command can write (a
+ * checkout being dogfooded as the project root, or under an extra root), the
+ * command can change gnomon, and the next gnomon to run is the changed one.
+ * The sandbox cannot help with that; the operator is told at startup.
+ */
+export function gnomonInstallWritable(writable: readonly string[], installRoots: readonly string[]): string[] {
+  const real = (p: string) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolve(p);
+    }
+  };
+  const w = writable.map(real);
+  return installRoots
+    .map(real)
+    .filter((i) => w.some((d) => i === d || i.startsWith(d.endsWith(sep) ? d : d + sep)));
 }
 
 /**
@@ -3152,9 +3310,20 @@ async function bashTool(
     };
   }
 
+  // exec = "os": `sandbox-kill <pid> [signal]` is gnomon's, not the shell's.
+  const killMatch = ctx.exec?.mode === "os" ? SANDBOX_KILL.exec(command) : null;
+  if (killMatch) {
+    const sb = (await loadOsSandboxProbe())(osSandboxForbid(ctx.root, ctx.extraRoots));
+    if ("error" in sb) {
+      return { code: TOOL_FAILED, content: `sandbox-kill: gnomon-exec is unavailable: ${sb.error}`, summary: "bash — sandbox-kill unavailable" };
+    }
+    return sandboxKill(sb.bin, killMatch[1]!, killMatch[2]);
+  }
+
   // exec = "os": run through gnomon-exec instead, or refuse. See osSandboxPlan.
   const osPlan = ctx.exec?.mode === "os" ? osSandboxPlan(command, ctx, shellBin, await loadOsSandboxProbe()) : undefined;
   if (osPlan && "refusal" in osPlan) return osPlan.refusal;
+  let supervisor: number | null = null;
 
   const running = new Promise<ToolOutcome>((done) => {
     const proc = spawn(osPlan ? osPlan.file : shellBin, osPlan ? osPlan.args : ["-c", spawned], {
@@ -3166,7 +3335,8 @@ async function bashTool(
       // ever writes to makes any command that reads stdin block until the tool
       // timeout kills it -- `cat` with no argument, an npm prompt, a git
       // credential ask. Nothing here can answer them, so they get EOF instead.
-      stdio: ["ignore", "pipe", "pipe"],
+      // Under exec = "os" a fourth pipe: gnomon-exec's --report-fd 3.
+      stdio: osPlan ? ["ignore", "pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"],
       // detached puts the command in its own process group, so killTree can
       // signal the group rather than only the `sh -c` in front of the real
       // work. Windows has no process groups to signal and `detached` there
@@ -3180,6 +3350,15 @@ async function bashTool(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    if (osPlan) {
+      let report = "";
+      const fd3 = proc.stdio[3] as NodeJS.ReadableStream | null | undefined;
+      fd3?.on("data", (d: Buffer) => {
+        report += d.toString();
+        if (supervisor === null && report.includes("\n")) supervisor = registerSupervisor(proc.pid, report);
+      });
+      fd3?.on("error", () => {});
+    }
     // Resolves when the shell itself has exited, however that happened.
     const exited = new Promise<void>((ok) => {
       if (proc.exitCode !== null || proc.signalCode !== null) ok();
@@ -3189,6 +3368,9 @@ async function bashTool(
     const timer = setTimeout(async () => {
       if (settled) return;
       settled = true;
+      // exec = "os": the supervisor's whole subtree, setsid'd jobs included --
+      // first, while the supervisor is alive to hold them beneath it.
+      if (supervisor !== null) killSupervisedTree(supervisor);
       await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
       // What the command printed before it was killed is evidence the harness
       // already holds: the failing test, the last line of a build, the prompt it
@@ -3230,6 +3412,7 @@ async function bashTool(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (supervisor !== null) killSupervisedTree(supervisor);
       await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
       releasePipes(proc);
       done({
@@ -3335,6 +3518,11 @@ async function bashTool(
             ? clampEnds(capped.text, capped.ctx, `bash-exit`)
             : clamp(capped.text, capped.ctx, `bash-exit`)) +
           pipelineStatusNote(command) +
+          (osPlan && failed && /\bkill\b[\s\S]*(Operation not permitted|not permitted)/i.test(stderr + stdout)
+            ? `\n\nUnder [sandbox] exec = "os" a call cannot signal a process an earlier call started. ` +
+              `Run \`sandbox-kill <pid> [signal]\` as the whole command: gnomon signals it from outside the sandbox, ` +
+              `if it is a process one of this session's sandboxed calls started.`
+            : "") +
           (drift ? `\n\n${drift.notice}` : ""),
         // `exit` is null when the child died on a signal, and "exit null" then
         // failed the verify gate's /exit (-?\d+)/ and fell through to its
@@ -3355,7 +3543,7 @@ async function bashTool(
   // repository, which is where the background recipe already logs. Removed
   // by cleanOsSandboxTmp, never by an unsandboxed recursive rm: see there.
   return running.finally(() => {
-    cleanOsSandboxTmp(osPlan.file, osPlan.tmp);
+    cleanOsSandboxTmp(osPlan.file, osPlan.tmp, osPlan.tmpId);
   });
 }
 

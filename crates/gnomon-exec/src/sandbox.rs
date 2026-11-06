@@ -70,6 +70,9 @@ pub struct Policy {
     pub reads: Reads,
     /// May the command reach hosts other than this one?
     pub network: bool,
+    /// `--report-fd N`: write the supervisor's pid to this descriptor, once,
+    /// and close it in every process the command can reach (sandbox-kill).
+    pub report_fd: Option<i32>,
 }
 
 /// System directories a scoped command may read, when they exist: where
@@ -86,7 +89,31 @@ pub const SYSTEM_READ: &[&str] = &[
 /// semaphores), `/dev/mqueue`, and any block or character device the user's
 /// groups can open. `/dev/fd` and `/dev/std*` are links into `/proc/self`,
 /// which is granted with `/proc`.
-pub const DEVICE_READ: &[&str] = &["/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty", "/dev/ptmx", "/dev/pts"];
+///
+/// Not `/dev/pts` either: that is every terminal of every session the user
+/// has open, and reading one races its shell for the keystrokes typed there
+/// (PR #156 second review, finding E). The call's OWN terminal -- whatever
+/// pty its stdin, stdout or stderr is -- is granted by name (`own_ptys`).
+/// A pty the command creates through /dev/ptmx cannot be granted ahead of
+/// time (Landlock rules name existing files), so under reads = "scoped" a
+/// program that opens a new pty's slave (`script`, `expect`, pexpect) fails.
+pub const DEVICE_READ: &[&str] = &["/dev/null", "/dev/zero", "/dev/full", "/dev/random", "/dev/urandom", "/dev/tty", "/dev/ptmx"];
+
+/// The ptys this process's stdin, stdout and stderr are, if any: the call's
+/// own terminal, which it may read and write under reads = "scoped".
+pub fn own_ptys() -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    for fd in 0..=2 {
+        if let Ok(t) = std::fs::read_link(format!("/proc/self/fd/{fd}")) {
+            let ok = t.starts_with("/dev/pts/")
+                && t.file_name().map(|n| n.to_string_lossy().bytes().all(|b| b.is_ascii_digit())).unwrap_or(false);
+            if ok && !out.contains(&t) {
+                out.push(t);
+            }
+        }
+    }
+    out
+}
 
 /// Environment variables that name a channel to something OUTSIDE the
 /// sandbox: a session bus, an agent holding keys, a terminal multiplexer, a
@@ -253,6 +280,9 @@ pub fn read_grants(policy: &Policy) -> Result<Vec<(PathBuf, bool)>, String> {
             push(c, &mut grants);
         }
     }
+    for t in own_ptys() {
+        push(t, &mut grants);
+    }
     // /etc/resolv.conf is a symlink into /run on systemd hosts; a resolver that
     // cannot read it falls back to 127.0.0.1:53, so grant the one file.
     if let Ok(c) = std::fs::canonicalize("/etc/resolv.conf") {
@@ -312,19 +342,23 @@ pub const NOT_ENFORCED: &[&str] = &[
     "reads, under reads = \"all\" (the default): the command can read any file your user can (secrets in $HOME included); reads = \"scoped\" narrows this on Linux",
     "writes inside the root: .gnomon/, .git/ and every other file under the project root stay writable",
     "unix sockets, where the supervisor cannot run (see degraded) or on macOS: a daemon reachable over one (the docker socket, the systemd user bus via systemd-run, a running tmux) can act outside the sandbox. On Linux with the supervisor, connect() to a pathname socket outside the root and the writable directories, and to any abstract socket, is refused; a datagram sent with sendto/sendmsg to a socket path is not vetted",
-    "loopback: a local service that itself reaches the network (a proxy, a DNS resolver) is reachable",
+    "loopback: a local service that itself reaches the network (a proxy, a DNS resolver -- systemd-resolved's socket and 127.0.0.53 included, so a DNS lookup can carry data out under network = false) is reachable",
     "inbound: a server the command binds on a non-loopback address accepts connections",
-    "signals: on Landlock ABI 6+ the command cannot signal a process outside its own call (so not a job an EARLIER bash call started); below ABI 6, and on macOS, it can signal any process your user owns",
+    "signals: on Landlock ABI 6+ the command cannot signal a process outside its own call (so not a job an EARLIER bash call started: gnomon's `sandbox-kill <pid>` does that from outside); below ABI 6, and on macOS, it can signal any process your user owns",
+    "macOS: Seatbelt confines writes only; mach services, launchctl, osascript and other IPC run outside the sandbox and can act for the command",
+    "POSIX shared memory (/dev/shm): not granted, so shm_open and Python multiprocessing locks fail",
     "metadata outside the root: chmod, chown, utime and extended attributes of files outside the root are not confined by Landlock",
     "already-open descriptors: anything inherited is used as inherited",
-    "the environment, beyond the variables gnomon removes (bus, agent and multiplexer sockets; the credentials gnomon itself supplied): anything else exported to gnomon is inherited",
+    "the environment, beyond the variables gnomon removes (bus, agent and multiplexer sockets; every key variable a surface named; names that look like secrets): anything else exported to gnomon is inherited",
+    "/dev/pts under reads = \"all\": every terminal stays writable (reads are unconfined there anyway)",
 ];
 
 /// The limits of `--reads scoped`: what it does not hide.
 pub const SCOPED_NOT_ENFORCED: &[&str] = &[
     "an allow-list, not a deny-list: everything under the system directories stays readable, /etc included (and whatever an administrator or a tool left world-readable there)",
     "inside the root everything is readable: a .env, a token in .git/config, a key someone committed",
-    "the environment: bash inherits gnomon's, minus the bus and agent sockets and the credentials gnomon supplied from its own store; a token exported in your shell is readable with printenv",
+    "the environment: bash inherits gnomon's, minus the bus and agent sockets, every key variable a surface named, and names that look like secrets; a token exported in your shell under another name is readable with printenv",
+    "ptys: only the call's own terminal is granted; a program that opens a NEW pty's slave (script, expect, pexpect) fails",
     "unix sockets, where the supervisor cannot run: an agent that holds a key (ssh-agent, gpg-agent, a keyring over D-Bus, the docker socket) can still be asked to use it; the key file stays unreadable, the capability does not",
     "only bash is scoped: gnomon's own read and grep tools are governed by [sandbox] level, not by reads = scoped",
     "Landlock ABI 1-2 (Linux before 6.2): truncate(2) of a file outside the root is not blocked",
@@ -375,6 +409,7 @@ impl Policy {
                 .collect::<Result<_, _>>()?,
             reads: self.reads,
             network: self.network,
+            report_fd: self.report_fd,
         })
     }
 
@@ -425,18 +460,199 @@ pub fn run(policy: &Policy, argv: &[String]) -> ! {
 /// `dir` itself is left in place (removing it needs a write right on its
 /// parent, which the confinement does not grant); the caller removes the then
 /// empty directory with rmdir, which follows nothing either.
-pub fn clean(dir: &Path) -> Result<(), String> {
-    let dir = canonical_dir(dir, "sandbox-clean")?;
-    #[cfg(target_os = "linux")]
-    linux::confine_writes_to(&dir)?;
+///
+/// SECOND REVIEW, finding D. `dir` used to be canonicalised first. When the
+/// temp dir's PARENT is writable by a sandboxed command (an extra root holding
+/// /tmp, a TMPDIR inside the root), the command could replace `dir` with a
+/// symlink to $HOME between the call and the clean, and the canonical path --
+/// $HOME -- was then confined to and emptied. Now `dir` is opened with no
+/// symlink anywhere on its path (openat2 RESOLVE_NO_SYMLINKS), its identity is
+/// checked against the device and inode gnomon recorded when it made the
+/// directory, and the Landlock confinement names that DESCRIPTOR, not a path.
+pub fn clean(dir: &Path, id: Option<(u64, u64)>) -> Result<(), String> {
     #[cfg(unix)]
     {
-        fs_nofollow::empty_dir(&dir).map_err(|e| format!("sandbox-clean {}: {e}", dir.display()))
+        let fd = fs_nofollow::open_dir_strict(dir).map_err(|e| format!("sandbox-clean {}: {e}", dir.display()))?;
+        let r = (|| {
+            if let Some((dev, ino)) = id {
+                let (d, i) = fs_nofollow::dev_ino(fd).map_err(|e| format!("sandbox-clean {}: {e}", dir.display()))?;
+                if (d, i) != (dev, ino) {
+                    return Err(format!(
+                        "sandbox-clean {}: not the directory gnomon made (device/inode {d}/{i}, expected {dev}/{ino}); left alone",
+                        dir.display()
+                    ));
+                }
+            }
+            #[cfg(target_os = "linux")]
+            linux::confine_writes_to_fd(fd)?;
+            fs_nofollow::empty_fd(fd).map_err(|e| format!("sandbox-clean {}: {e}", dir.display()))
+        })();
+        // SAFETY: closed once.
+        unsafe { libc::close(fd) };
+        r
     }
     #[cfg(not(unix))]
     {
+        let _ = (dir, id);
         Err("sandbox-clean is implemented on Unix only".into())
     }
+}
+
+/// `gnomon-exec sandbox-kill --supervisor <pid>:<start>... -- <pid> [signal]`.
+///
+/// Signals scoped to the call (Landlock ABI 6, `SCOPE_SIGNAL`) mean a bash
+/// call cannot stop a server an EARLIER call started: each call is its own
+/// domain. This is the narrow way back, run by gnomon OUTSIDE the sandbox: it
+/// signals `pid` only if `pid` descends from one of this session's
+/// supervisors -- each a child subreaper, so everything a call started, however
+/// it daemonised, stays beneath it -- named with its start time so a reused
+/// pid is not mistaken for one. Anything else is refused. Exit 0: signalled;
+/// 1: refused or failed, with the reason on stderr; 2: usage.
+pub fn kill_cmd(args: &[String]) -> i32 {
+    let mut sups: Vec<(i32, u64)> = Vec::new();
+    let mut i = 0;
+    while i < args.len() && args[i] != "--" {
+        if args[i] == "--supervisor" {
+            let parsed = args.get(i + 1).and_then(|v| {
+                let (p, t) = v.split_once(':')?;
+                Some((p.parse::<i32>().ok()?, t.parse::<u64>().ok()?))
+            });
+            match parsed {
+                Some(x) => sups.push(x),
+                None => {
+                    eprintln!("gnomon-exec: sandbox-kill --supervisor needs <pid>:<start>");
+                    return 2;
+                }
+            }
+            i += 2;
+        } else {
+            eprintln!("gnomon-exec: sandbox-kill: unknown argument {:?}", args[i]);
+            return 2;
+        }
+    }
+    let rest = if i < args.len() { &args[i + 1..] } else { &args[args.len()..] };
+    let Some(target) = rest.first().and_then(|v| v.parse::<i32>().ok()) else {
+        eprintln!("gnomon-exec: sandbox-kill needs a pid");
+        return 2;
+    };
+    let sig = match rest.get(1) {
+        None => 15,
+        Some(v) => match signal_number(v) {
+            Some(n) => n,
+            None => {
+                eprintln!("gnomon-exec: sandbox-kill: unknown signal {v:?}");
+                return 2;
+            }
+        },
+    };
+    match kill_descendant(&sups, target, sig) {
+        Ok(()) => {
+            println!("signalled {target} with {sig}");
+            0
+        }
+        Err(e) => {
+            eprintln!("gnomon-exec: sandbox-kill refused: {e}");
+            1
+        }
+    }
+}
+
+/// A signal by name (TERM, SIGTERM) or number, limited to the ones a person
+/// stops a server with.
+pub fn signal_number(v: &str) -> Option<i32> {
+    let name = v.trim_start_matches('-').to_ascii_uppercase();
+    let name = name.strip_prefix("SIG").unwrap_or(&name);
+    #[cfg(unix)]
+    let table: &[(&str, i32)] = &[
+        ("HUP", libc::SIGHUP),
+        ("INT", libc::SIGINT),
+        ("QUIT", libc::SIGQUIT),
+        ("KILL", libc::SIGKILL),
+        ("USR1", libc::SIGUSR1),
+        ("USR2", libc::SIGUSR2),
+        ("TERM", libc::SIGTERM),
+        ("CONT", libc::SIGCONT),
+        ("STOP", libc::SIGSTOP),
+    ];
+    #[cfg(not(unix))]
+    let table: &[(&str, i32)] = &[];
+    if let Some((_, n)) = table.iter().find(|(n, _)| *n == name) {
+        return Some(*n);
+    }
+    match name.parse::<i32>() {
+        Ok(n) if (0..=31).contains(&n) => Some(n),
+        _ => None,
+    }
+}
+
+/// `pid`'s parent and start time (clock ticks since boot), from /proc.
+#[cfg(target_os = "linux")]
+pub fn proc_parent_and_start(pid: i32) -> Option<(i32, u64)> {
+    let s = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // The command name is in parentheses and may hold anything, spaces and
+    // parentheses included: count fields from the LAST `)`.
+    let rest = s.get(s.rfind(')')? + 2..)?;
+    let f: Vec<&str> = rest.split_whitespace().collect();
+    // rest starts at field 3 (state); ppid is field 4, starttime field 22.
+    Some((f.get(1)?.parse().ok()?, f.get(19)?.parse().ok()?))
+}
+
+#[cfg(target_os = "linux")]
+fn kill_descendant(sups: &[(i32, u64)], target: i32, sig: i32) -> Result<(), String> {
+    if target <= 1 {
+        return Err(format!("{target} is not a process a sandboxed call started"));
+    }
+    if sups.iter().any(|(p, _)| *p == target) {
+        return Err(format!("{target} is a sandbox supervisor, not a process the command started"));
+    }
+    // Pin the target's identity first: from here on a pid reused by another
+    // process cannot be the one signalled.
+    // SAFETY: pidfd_open with an integer pid.
+    let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, target, 0) } as i32;
+    if pidfd < 0 {
+        return Err(format!("no process {target} ({})", std::io::Error::last_os_error()));
+    }
+    let r = (|| {
+        let mut cur = target;
+        let mut found = false;
+        for _ in 0..4096 {
+            let Some((ppid, _)) = proc_parent_and_start(cur) else { break };
+            if let Some((_, start)) = sups.iter().find(|(p, _)| *p == ppid) {
+                if proc_parent_and_start(ppid).map(|(_, s)| s) == Some(*start) {
+                    found = true;
+                    break;
+                }
+            }
+            if ppid <= 1 {
+                break;
+            }
+            cur = ppid;
+        }
+        if !found {
+            return Err(format!(
+                "{target} was not started by a sandboxed bash call of this session; only those can be signalled this way"
+            ));
+        }
+        // Still the process the walk looked at: a pidfd to a process that has
+        // exited (whose pid may since name another) fails here with ESRCH.
+        // SAFETY: pidfd_send_signal with signal 0 sends nothing.
+        if unsafe { libc::syscall(libc::SYS_pidfd_send_signal, pidfd, 0, std::ptr::null::<u8>(), 0) } != 0 {
+            return Err(format!("{target} has exited"));
+        }
+        // SAFETY: as above, with the requested signal.
+        if unsafe { libc::syscall(libc::SYS_pidfd_send_signal, pidfd, sig, std::ptr::null::<u8>(), 0) } != 0 {
+            return Err(format!("signal {sig} to {target}: {}", std::io::Error::last_os_error()));
+        }
+        Ok(())
+    })();
+    // SAFETY: closed once.
+    unsafe { libc::close(pidfd) };
+    r
+}
+
+#[cfg(not(target_os = "linux"))]
+fn kill_descendant(_sups: &[(i32, u64)], _target: i32, _sig: i32) -> Result<(), String> {
+    Err("sandbox-kill is implemented on Linux only; signals are not scoped elsewhere, so `kill` works inside the call".into())
 }
 
 /// Removal that never follows a symbolic link. See `clean`.
@@ -455,7 +671,59 @@ pub mod fs_nofollow {
         io::Error::last_os_error()
     }
 
+    /// Open `dir` (absolute) as a directory, following no symlink in ANY
+    /// component: openat2 RESOLVE_NO_SYMLINKS on Linux; elsewhere O_NOFOLLOW,
+    /// which covers the last component only.
+    pub fn open_dir_strict(dir: &Path) -> io::Result<i32> {
+        if !dir.is_absolute() {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "not an absolute path"));
+        }
+        #[cfg(target_os = "linux")]
+        {
+            // SAFETY: plain open of "/".
+            let slash = unsafe { libc::open(c"/".as_ptr(), libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC) };
+            if slash < 0 {
+                return Err(last());
+            }
+            let rel = dir.strip_prefix("/").unwrap_or(dir);
+            let r = super::linux::openat2_strict(slash, rel, libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+                .map_err(io::Error::from_raw_os_error);
+            // SAFETY: closed once.
+            unsafe { libc::close(slash) };
+            r
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let c = CString::new(dir.as_os_str().as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
+            // SAFETY: c is a valid NUL-terminated path.
+            let fd = unsafe { libc::open(c.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
+            if fd < 0 {
+                Err(last())
+            } else {
+                Ok(fd)
+            }
+        }
+    }
+
+    /// The device and inode of `fd`.
+    pub fn dev_ino(fd: i32) -> io::Result<(u64, u64)> {
+        // SAFETY: a zeroed stat is valid output space.
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: fd is a descriptor the caller owns.
+        if unsafe { libc::fstat(fd, &mut st) } != 0 {
+            return Err(last());
+        }
+        #[allow(clippy::unnecessary_cast)]
+        Ok((st.st_dev as u64, st.st_ino as u64))
+    }
+
+    /// Empty the directory `fd`, leaving it.
+    pub fn empty_fd(fd: i32) -> io::Result<()> {
+        empty_at(fd, 0)
+    }
+
     /// Empty `dir` (opened O_NOFOLLOW), leaving `dir` itself.
+    #[allow(dead_code)]
     pub fn empty_dir(dir: &Path) -> io::Result<()> {
         let c = CString::new(dir.as_os_str().as_bytes()).map_err(|_| io::Error::from(io::ErrorKind::InvalidInput))?;
         // SAFETY: c is a valid NUL-terminated path.
@@ -598,6 +866,7 @@ fn scoped_description() -> (Vec<String>, Vec<String>) {
         readable: vec![],
         reads: Reads::Scoped,
         network: true,
+        report_fd: None,
     };
     let reads = read_grants(&probe_policy)
         .map(|g| g.into_iter().map(|(p, _)| p.display().to_string()).collect())
@@ -746,6 +1015,11 @@ mod macos {
         if !policy.network {
             refuse(NETWORK_UNVERIFIED);
         }
+        // No supervisor to report: the command must not inherit the fd.
+        if let Some(r) = policy.report_fd {
+            // SAFETY: closed once.
+            unsafe { libc::close(r) };
+        }
         let err = std::process::Command::new(SANDBOX_EXEC)
             .arg("-p")
             .arg(profile(policy))
@@ -856,8 +1130,10 @@ pub mod linux {
         parent_fd: i32,
     }
 
-    /// Device files every program expects to be able to write.
-    const WRITABLE_DEVICES: &[&str] = &["/dev/null", "/dev/zero", "/dev/full", "/dev/tty", "/dev/ptmx", "/dev/pts"];
+    /// Device files every program expects to be able to write. `/dev/pts` --
+    /// every terminal -- only under reads = "all", where reads are not confined
+    /// anyway; under reads = "scoped" only the call's own pty (`own_ptys`).
+    const WRITABLE_DEVICES: &[&str] = &["/dev/null", "/dev/zero", "/dev/full", "/dev/tty", "/dev/ptmx"];
 
     fn errno() -> i32 {
         io::Error::last_os_error().raw_os_error().unwrap_or(0)
@@ -1028,6 +1304,11 @@ pub mod linux {
         ];
         #[cfg(target_arch = "x86_64")]
         p.push(Jge(0x4000_0000, L("enosys"), Next)); // the x32 ABI
+        // The kernel keyrings: a session keyring the command inherits can hold
+        // another program's secrets (an SSO token, a kerberos ticket), and
+        // keyctl reads them by id. Nothing a build or test needs. EPERM, in
+        // both network modes (PR #156 second review, finding I).
+        p.extend(key_syscalls());
         if network {
             p.extend([
                 Jeq(libc::SYS_connect as u32, L("notify"), Next),
@@ -1039,6 +1320,8 @@ pub mod linux {
                 Ret(RET_USER_NOTIF),
                 Label("enosys"),
                 Ret(RET_ERRNO | libc::ENOSYS as u32),
+                Label("eperm"),
+                Ret(RET_ERRNO | libc::EPERM as u32),
                 Label("kill"),
                 Ret(RET_KILL_PROCESS),
             ]);
@@ -1081,14 +1364,43 @@ pub mod linux {
             Ret(RET_ERRNO | libc::EACCES as u32),
             Label("enosys"),
             Ret(RET_ERRNO | libc::ENOSYS as u32),
+            Label("eperm"),
+            Ret(RET_ERRNO | libc::EPERM as u32),
             Label("kill"),
             Ret(RET_KILL_PROCESS),
         ]);
         assemble(&p)
     }
 
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    fn key_syscalls() -> [Ins; 3] {
+        use T::*;
+        [
+            Ins::Jeq(libc::SYS_keyctl as u32, L("eperm"), Next),
+            Ins::Jeq(libc::SYS_add_key as u32, L("eperm"), Next),
+            Ins::Jeq(libc::SYS_request_key as u32, L("eperm"), Next),
+        ]
+    }
+
+    /// The filter where the supervisor cannot run (network on, pidfd_getfd
+    /// refused): the keyring calls alone, no notification.
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    pub fn keys_filter() -> Vec<libc::sock_filter> {
+        use Ins::*;
+        use T::*;
+        let mut p = vec![Ld(OFF_ARCH), Jeq(AUDIT_ARCH, Next, L("kill")), Ld(OFF_NR)];
+        p.extend(key_syscalls());
+        p.extend([Ret(RET_ALLOW), Label("eperm"), Ret(RET_ERRNO | libc::EPERM as u32), Label("kill"), Ret(RET_KILL_PROCESS)]);
+        assemble(&p)
+    }
+
     #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
     pub fn network_filter(_network: bool) -> Vec<libc::sock_filter> {
+        Vec::new()
+    }
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    pub fn keys_filter() -> Vec<libc::sock_filter> {
         Vec::new()
     }
 
@@ -1258,11 +1570,11 @@ pub mod linux {
             for d in policy.writable_dirs() {
                 add_rule(ruleset, d, handled)?;
             }
-            for dev in WRITABLE_DEVICES {
-                let p = Path::new(dev);
-                let Ok(meta) = std::fs::metadata(p) else { continue };
+            let ptys: Vec<PathBuf> = if grants.is_some() { own_ptys() } else { vec![PathBuf::from("/dev/pts")] };
+            for p in WRITABLE_DEVICES.iter().map(PathBuf::from).chain(ptys) {
+                let Ok(meta) = std::fs::metadata(&p) else { continue };
                 let access = if meta.is_dir() { FS_WRITE_FILE } else { (FS_WRITE_FILE | FS_TRUNCATE) & handled & FILE_RIGHTS };
-                add_rule(ruleset, p, access)?;
+                add_rule(ruleset, &p, access)?;
             }
             for (p, is_dir) in grants.unwrap_or(&[]) {
                 add_rule(ruleset, p, if *is_dir { READ_RIGHTS } else { FS_READ_FILE })?;
@@ -1279,11 +1591,39 @@ pub mod linux {
         result
     }
 
-    /// `sandbox-clean`: confine THIS process's writes to beneath `dir`, reads
+    /// `sandbox-clean`: confine THIS process's writes to beneath the directory
+    /// `fd` -- the descriptor, not a path that could be re-pointed -- reads
     /// unconfined. See `super::clean`.
-    pub fn confine_writes_to(dir: &Path) -> Result<(), String> {
-        let policy = Policy { root: dir.to_path_buf(), writable: vec![], readable: vec![], reads: Reads::All, network: true };
-        apply_landlock(&policy, None)
+    pub fn confine_writes_to_fd(fd: i32) -> Result<(), String> {
+        let abi = landlock_abi().map_err(landlock_unavailable)?;
+        let handled = write_rights(abi);
+        let attr = RulesetAttr { handled_access_fs: handled, handled_access_net: 0, scoped: 0 };
+        // SAFETY: attr outlives the call; only its first field is passed.
+        let ruleset = unsafe {
+            libc::syscall(libc::SYS_landlock_create_ruleset, &attr as *const RulesetAttr, std::mem::size_of::<u64>(), 0u32)
+        } as i32;
+        if ruleset < 0 {
+            return Err(format!("landlock_create_ruleset: {}", io::Error::last_os_error()));
+        }
+        let result = (|| {
+            let rule = PathBeneathAttr { allowed_access: handled, parent_fd: fd };
+            // SAFETY: rule is a valid landlock_path_beneath_attr for the call.
+            if unsafe {
+                libc::syscall(libc::SYS_landlock_add_rule, ruleset, RULE_PATH_BENEATH, &rule as *const PathBeneathAttr, 0)
+            } < 0
+            {
+                return Err(format!("landlock_add_rule: {}", io::Error::last_os_error()));
+            }
+            set_no_new_privs()?;
+            // SAFETY: ruleset is a valid Landlock ruleset fd.
+            if unsafe { libc::syscall(libc::SYS_landlock_restrict_self, ruleset, 0u32) } < 0 {
+                return Err(format!("landlock_restrict_self: {}", io::Error::last_os_error()));
+            }
+            Ok(())
+        })();
+        // SAFETY: closed once.
+        unsafe { libc::close(ruleset) };
+        result
     }
 
     /// Required by both Landlock and seccomp for an unprivileged caller, and a
@@ -1319,6 +1659,20 @@ pub mod linux {
         Ok(fd as i32)
     }
 
+    /// The keyring filter alone (see `keys_filter`), best effort: where seccomp
+    /// itself is refused, the keyring is the one thing not denied, and the
+    /// probe already says the supervisor cannot run here.
+    fn install_keys_filter() {
+        let filter = keys_filter();
+        if filter.is_empty() {
+            return;
+        }
+        let prog = libc::sock_fprog { len: filter.len() as u16, filter: filter.as_ptr() as *mut libc::sock_filter };
+        // SAFETY: prog points at `filter`, which outlives the call; no_new_privs
+        // was set by apply_landlock.
+        unsafe { libc::syscall(libc::SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, &prog as *const libc::sock_fprog) };
+    }
+
     fn exec_argv(argv: &[String]) -> ! {
         let cargs: Vec<CString> = argv
             .iter()
@@ -1349,6 +1703,12 @@ pub mod linux {
             // `degraded`, so it is not a silent difference.
             if let Err(e) = apply_landlock(policy, grants) {
                 refuse(&e);
+            }
+            install_keys_filter();
+            // No supervisor to report: the command must not inherit the fd.
+            if let Some(r) = policy.report_fd {
+                // SAFETY: closed once.
+                unsafe { libc::close(r) };
             }
             exec_argv(argv);
         }
@@ -1412,19 +1772,29 @@ pub mod linux {
             -1 => refuse(&format!("fork: {}", io::Error::last_os_error())),
             0 => {
                 // S
-                // SAFETY: closing fds this process owns.
+                // SAFETY: closing fds this process owns. The report fd first:
+                // a command that could write it could name any process as a
+                // supervisor, and sandbox-kill would then signal its children.
                 unsafe {
                     libc::close(status[0]);
+                    if let Some(r) = policy.report_fd {
+                        libc::close(r);
+                    }
                 }
                 supervisor(policy, grants, argv, status[1], chan)
             }
-            _ => {
+            s_pid => {
                 // G
                 // SAFETY: closing fds this process owns.
                 unsafe {
                     libc::close(status[1]);
                     libc::close(chan[0]);
                     libc::close(chan[1]);
+                }
+                if let Some(r) = policy.report_fd {
+                    write_all(r, format!("{s_pid}\n").as_bytes());
+                    // SAFETY: closed once.
+                    unsafe { libc::close(r) };
                 }
                 let mut buf = [0u8; 4];
                 let mut got = 0;
@@ -1435,7 +1805,23 @@ pub mod linux {
                         continue;
                     }
                     if n <= 0 {
-                        refuse("the sandbox supervisor exited without reporting the command's status");
+                        // FAIL CLOSED. S is gone, so nothing vets the command's
+                        // connects and nothing reaps it; the command itself
+                        // dies with S (PR_SET_PDEATHSIG), and whatever it
+                        // started in this process group goes now. Only when G
+                        // leads its own group, as gnomon starts it: anywhere
+                        // else the group is the caller's.
+                        eprintln!(
+                            "gnomon-exec: sandbox refused: the sandbox supervisor exited without reporting the command's \
+                             status; the command and its process group are killed"
+                        );
+                        // SAFETY: plain calls with integer arguments.
+                        unsafe {
+                            if libc::getpgrp() == libc::getpid() {
+                                libc::kill(0, libc::SIGKILL);
+                            }
+                        }
+                        std::process::exit(SANDBOX_REFUSED);
                     }
                     got += n as usize;
                 }
@@ -1512,10 +1898,12 @@ pub mod linux {
             std::process::exit(0);
         };
 
-        let ctx = Arc::new(Vetting {
-            allowed: policy.writable_dirs().into_iter().map(Path::to_path_buf).collect(),
-            network: policy.network,
-        });
+        // Directory descriptors for the allowed trees, opened now, before
+        // the command runs: every unix-socket path is resolved relative to
+        // one of these, so no later rename above them can redirect it.
+        let allowed: Vec<PathBuf> = policy.writable_dirs().into_iter().map(Path::to_path_buf).collect();
+        let dirfds = allowed.iter().map(|d| open_dir_path(d)).collect();
+        let ctx = Arc::new(Vetting { allowed, dirfds, slash: open_dir_path(Path::new("/")), network: policy.network });
         serve(listener, child, pidfd, status_w, ctx)
     }
 
@@ -1524,12 +1912,26 @@ pub mod linux {
         /// Directories a pathname unix socket may live beneath: the root and
         /// the writable directories (canonical).
         pub allowed: Vec<PathBuf>,
+        /// O_PATH descriptors of `allowed`, index for index (-1: could not open).
+        pub dirfds: Vec<i32>,
+        /// O_PATH descriptor of `/`, for SYSTEM_QUERY_SOCKETS.
+        pub slash: i32,
         /// `--network on`: any inet destination. Off: loopback only.
         pub network: bool,
     }
 
     /// C: confine, filter, hand the listener to S, become the command.
     fn command(policy: &Policy, grants: Option<&[(PathBuf, bool)]>, argv: &[String], chan: i32) -> ! {
+        // Die with the supervisor. Without it a killed S left the command
+        // running, unsupervised, with nobody waiting on it (fail-closed gap).
+        // SAFETY: plain prctl / getppid.
+        unsafe {
+            let s = libc::getppid();
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0);
+            if libc::getppid() != s {
+                libc::_exit(SANDBOX_REFUSED);
+            }
+        }
         if let Err(e) = apply_landlock(policy, grants) {
             refuse(&e);
         }
@@ -1776,6 +2178,105 @@ pub mod linux {
         }
     }
 
+    #[repr(C)]
+    struct OpenHow {
+        flags: u64,
+        mode: u64,
+        resolve: u64,
+    }
+    const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
+    const RESOLVE_NO_SYMLINKS: u64 = 0x04;
+    const RESOLVE_BENEATH: u64 = 0x08;
+
+    /// openat2(2): `rel` beneath `dirfd`, following no symlink at all -- not
+    /// in the middle, not at the end -- and never leaving `dirfd` by `..`.
+    pub fn openat2_strict(dirfd: i32, rel: &Path, flags: i32) -> Result<i32, i32> {
+        let c = CString::new(rel.as_os_str().as_bytes()).map_err(|_| libc::EINVAL)?;
+        let how = OpenHow {
+            flags: (flags | libc::O_CLOEXEC) as u64,
+            mode: 0,
+            resolve: RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
+        };
+        // SAFETY: c and how outlive the call; the size is how's.
+        let fd = unsafe {
+            libc::syscall(libc::SYS_openat2, dirfd, c.as_ptr(), &how as *const OpenHow, std::mem::size_of::<OpenHow>())
+        } as i32;
+        if fd < 0 {
+            Err(errno())
+        } else {
+            Ok(fd)
+        }
+    }
+
+    fn open_dir_path(d: &Path) -> i32 {
+        let c = cstr(d);
+        // SAFETY: c is a valid path.
+        unsafe { libc::open(c.as_ptr(), libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC) }
+    }
+
+    /// Normalise `.` and `..` lexically (no filesystem access).
+    fn lexical(p: &Path) -> PathBuf {
+        let mut out = PathBuf::new();
+        for c in p.components() {
+            match c {
+                std::path::Component::ParentDir => {
+                    out.pop();
+                }
+                std::path::Component::CurDir => {}
+                other => out.push(other.as_os_str()),
+            }
+        }
+        out
+    }
+
+    /// The socket at `abs`, opened O_PATH beneath an allowed tree (or as one
+    /// of SYSTEM_QUERY_SOCKETS beneath `/`) with no symlink anywhere on the
+    /// way, and checked to BE a socket. EACCES: not allowed; ENOENT: nothing
+    /// there. The caller connects through the descriptor, so what was checked
+    /// is what is reached.
+    pub fn open_unix_target(abs: &Path, ctx: &Vetting) -> Result<i32, i32> {
+        let lex = lexical(abs);
+        // A path spelled through a symlink to the root (a symlinked cwd):
+        // judge where it lands, then open THAT spelling, symlink-free, so a
+        // swap after this point fails the open instead of redirecting it.
+        let canon = unix_allowed(&lex, &ctx.allowed);
+        // Nothing there to reach, inside or out: say so, as the connect would.
+        let mut last = if canon == Err(libc::ENOENT) { libc::ENOENT } else { libc::EACCES };
+        let candidates = [Some(lex.clone()), canon.ok()];
+        for cand in candidates.iter().flatten() {
+            let (base, rel): (i32, PathBuf) = if let Some((i, a)) = ctx.allowed.iter().enumerate().find(|(_, a)| cand.starts_with(a)) {
+                let rel = cand.strip_prefix(a).unwrap_or(Path::new("")).to_path_buf();
+                (ctx.dirfds.get(i).copied().unwrap_or(-1), rel)
+            } else if SYSTEM_QUERY_SOCKETS.iter().any(|q| cand == Path::new(q)) {
+                (ctx.slash, cand.strip_prefix("/").unwrap_or(cand).to_path_buf())
+            } else {
+                continue;
+            };
+            if base < 0 || rel.as_os_str().is_empty() {
+                continue;
+            }
+            match openat2_strict(base, &rel, libc::O_PATH | libc::O_NOFOLLOW) {
+                Ok(fd) => {
+                    // SAFETY: a zeroed stat is valid output space.
+                    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+                    // SAFETY: fd is ours.
+                    let isock = unsafe { libc::fstat(fd, &mut st) } == 0 && (st.st_mode & libc::S_IFMT) == libc::S_IFSOCK;
+                    if isock {
+                        return Ok(fd);
+                    }
+                    // SAFETY: closed once.
+                    unsafe { libc::close(fd) };
+                    return Err(libc::ECONNREFUSED);
+                }
+                Err(libc::ENOENT) => last = libc::ENOENT,
+                // ELOOP (a symlink on the way), EXDEV (`..` out of the tree),
+                // ENOSYS (no openat2, Linux < 5.6): refused.
+                Err(_) => last = libc::EACCES,
+            }
+        }
+        Err(last)
+    }
+
     /// A sockaddr_un for `path`, or None if it does not fit.
     fn sun_path(path: &Path) -> Option<Vec<u8>> {
         let bytes = path.as_os_str().as_bytes();
@@ -1854,6 +2355,13 @@ pub mod linux {
         }
 
         // 2. Decide.
+        let mut target_fd: Option<i32> = None;
+        let close_target = |t: Option<i32>| {
+            if let Some(fd) = t {
+                // SAFETY: closed once.
+                unsafe { libc::close(fd) };
+            }
+        };
         let family = u16::from_ne_bytes([addr[0], addr[1]]) as i32;
         let unix_path = family == libc::AF_UNIX && len > 2;
         if unix_path {
@@ -1875,17 +2383,23 @@ pub mod linux {
                 let Ok(cwd) = std::fs::read_link(format!("/proc/{}/cwd", req.pid)) else { return Err(libc::ENOENT) };
                 cwd.join(named)
             };
-            match unix_allowed(&abs, &ctx.allowed) {
-                Ok(canon) => {
-                    // Connect to the canonical path: no symlink left to swap.
-                    addr = sun_path(&canon).ok_or(libc::ENAMETOOLONG)?;
+            // Resolve the socket file ONCE, race-free, to a descriptor, and
+            // connect through that descriptor (/proc/self/fd/N), never by
+            // the path again. Canonicalising and then connecting by name
+            // (the first fix) lost to a symlink swapped in between; the
+            // check after the connect came too late, since a forked child
+            // sharing the socket had already written (second review, C).
+            match open_unix_target(&abs, ctx) {
+                Ok(fd) => {
+                    target_fd = Some(fd);
+                    addr = sun_path(Path::new(&format!("/proc/self/fd/{fd}"))).ok_or(libc::ENAMETOOLONG)?;
                 }
                 Err(e) if e != libc::EACCES => return Err(e),
                 Err(e) => {
                     notice(
                         notices,
                         format_args!(
-                            "blocked connect to unix socket {} (outside the root and the temp dir: a daemon there acts outside the sandbox)",
+                            "blocked connect to unix socket {} (outside the root and the temp dir, or reached through a symlink: a daemon there acts outside the sandbox)",
                             abs.display()
                         ),
                     );
@@ -1904,6 +2418,20 @@ pub mod linux {
         }
 
         // 3. Connect the caller's own socket, from here.
+        let r = connect_caller(listener, req, notices, ctx, fd, &addr, unix_path);
+        close_target(target_fd);
+        r
+    }
+
+    fn connect_caller(
+        listener: i32,
+        req: &libc::seccomp_notif,
+        notices: &AtomicUsize,
+        ctx: &Vetting,
+        fd: i32,
+        addr: &[u8],
+        unix_path: bool,
+    ) -> Result<(), i32> {
         let tgid = tgid_of(req.pid).ok_or(libc::ESRCH)?;
         // SAFETY: pidfd_open with an integer pid.
         let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, tgid, 0) } as i32;
@@ -1943,7 +2471,9 @@ pub mod linux {
             let outside = match peer_of(theirs) {
                 Peer::Abstract => Some("an abstract socket".to_string()),
                 Peer::Path(p) => unix_allowed(&p, &ctx.allowed).err().map(|_| p.display().to_string()),
-                Peer::Unknown => None,
+                // A server bound by a relative name, or one getpeername cannot
+                // name: nothing to judge it by, so refused (second review, C).
+                Peer::Unknown => Some("a socket whose server cannot be named (bind it by an absolute path)".to_string()),
             };
             if let Some(what) = outside {
                 // SAFETY: shutting down the caller's socket through our duplicate.
@@ -2023,8 +2553,10 @@ pub mod linux {
             if NETWORK_ARCH_SUPPORTED {
                 assert!(f.len() > 20 && f.len() < 100, "{} instructions", f.len());
                 assert_eq!(f.last().unwrap().k, RET_KILL_PROCESS);
-                assert!(on.len() > 5 && on.len() < 20, "{} instructions", on.len());
+                assert!(on.len() > 5 && on.len() < 24, "{} instructions", on.len());
                 assert_eq!(on.last().unwrap().k, RET_KILL_PROCESS);
+                let k = keys_filter();
+                assert!(k.len() > 5 && k.len() < 12, "{} instructions", k.len());
             }
         }
 

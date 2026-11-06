@@ -1758,23 +1758,34 @@ network lines let a connect to 192.0.2.1 through, so `bash` refuses under
   scoped. A datagram sent with `sendto` to a socket path is not vetted on
   Linux either.
 - **Loopback services can reach out for it.** A local proxy or DNS resolver is
-  reachable, and DNS lookups through the system resolver still leave the
-  machine.
+  reachable, and DNS lookups through the system resolver (systemd-resolved's
+  socket, `127.0.0.53`) still leave the machine — a lookup can carry data out
+  under `network = false`. So can any loopback daemon that fetches.
 - **Inbound is not blocked.** A server bound to a non-loopback address accepts
   connections from elsewhere.
 - **Signals.** On Landlock ABI 6+ (Linux 6.12) a command can signal only
   processes of its own call — which also means it cannot stop a server an
-  EARLIER `bash` call started; let that call's job exit on its own, or end it
-  from the call that started it. Below ABI 6, and on macOS, it can signal any
-  process your user owns.
+  EARLIER `bash` call started. For that, run `sandbox-kill <pid> [signal]` as
+  the whole bash command: gnomon signals the pid from outside the sandbox, and
+  only if one of this session's sandboxed calls started it. Below ABI 6, and on
+  macOS, a command can signal any process your user owns.
+- **POSIX shared memory.** `/dev/shm` is not granted, so `shm_open` — and
+  Python `multiprocessing` locks, queues and pools — fail. Use threads, or run
+  that step with `exec = "off"`.
 - **Metadata outside the root.** Landlock does not confine `chmod`, `chown`,
   `utime` or extended attributes, so those still work on files outside the
   root.
 - **Package caches in `$HOME` are read-only**, so a tool that writes one (npm,
   pip, cargo's registry) fails unless it is pointed at the temp dir or the
   cache is granted with `extra_roots`.
-- **On macOS, only the write half.** `network = false` refuses (above), and
-  `reads = "scoped"` refuses; set `network = true` to run with writes confined.
+- **On macOS, write confinement only — not containment.** `network = false`
+  refuses (above), and `reads = "scoped"` refuses; set `network = true` to run
+  with writes confined. Seatbelt is allow-by-default for everything else:
+  mach services, `launchctl`, `osascript` and other IPC run outside the
+  sandbox and can act for the command.
+- **gnomon inside the root.** If gnomon's own install (a checkout you are
+  dogfooding) is under the root or an `extra_roots` entry, a command can
+  change gnomon itself; gnomon warns at startup when that is so.
 - **Older kernels give less.** Below Landlock ABI 3 (Linux 6.2), `truncate(2)`
   of a file outside the root is not blocked; below ABI 2 (5.19), renaming a file
   into another directory fails even inside the root. The probe names what this

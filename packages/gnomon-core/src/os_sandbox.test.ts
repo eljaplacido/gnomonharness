@@ -19,13 +19,13 @@
  *    say why rather than read as a pass.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync, readdirSync, symlinkSync, copyFileSync, chmodSync, appendFileSync, realpathSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync, readdirSync, symlinkSync, copyFileSync, chmodSync, appendFileSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, type Server } from "node:http";
 import { execFileSync } from "node:child_process";
 import { osSandbox, _resetOsSandbox, type OsSandbox } from "gnomon-natives";
-import { executeTool, osSandboxPlan, gnomonInstallReadRoots, packageIndexOf, osSandboxEnv, cleanOsSandboxTmp, type ToolContext } from "./tools.js";
+import { executeTool, osSandboxPlan, gnomonInstallReadRoots, gnomonInstallWritable, packageIndexOf, osSandboxEnv, cleanOsSandboxTmp, type ToolContext } from "./tools.js";
 import { pinSandbox, applySandboxPin, describeLoosening } from "./sandbox_pin.js";
 import { EXEC_VALUES, auditSurface, resolveExec, type GnomonConfig } from "./config.js";
 import { homedir } from "node:os";
@@ -639,20 +639,42 @@ describe("finding 2 — gnomon-exec is never taken from a tree the command can w
 });
 
 describe("finding 3 — a reload may tighten the pinned sandbox, never loosen it", () => {
-  const start = surfaceOf({ exec: "os", reads: "scoped", read_roots: ["/opt/a"], network: false, level: "confined", extra_roots: ["/x"] });
+  // Real directories: a granted root is pinned by its real path (second
+  // review, I), and one that does not exist grants nothing.
+  const rootsDir = mkdtempSync(join(tmpdir(), "gnomon-pin-roots-"));
+  const [X, Y] = ["x", "y"].map((n) => {
+    mkdirSync(join(rootsDir, n));
+    return realpathSync(join(rootsDir, n));
+  }) as [string, string];
+  const start = surfaceOf({ exec: "os", reads: "scoped", read_roots: ["/opt/a"], network: false, level: "confined", extra_roots: [X] });
 
   it("exec = off, reads = all, network = true, wider roots, level off: none applied, each named", () => {
     const pin = pinSandbox(start);
-    const loose = surfaceOf({ exec: "off", reads: "all", read_roots: ["/opt/a", "/opt/b"], network: true, level: "off", extra_roots: ["/x", "/y"] });
+    const loose = surfaceOf({ exec: "off", reads: "all", read_roots: ["/opt/a", "/opt/b"], network: true, level: "off", extra_roots: [X, Y] });
     const got = applySandboxPin(pin, loose, "implement");
     expect(got.exec).toMatchObject({ mode: "os", reads: "scoped", network: false });
     expect(got.level).toBe("confined");
     expect(got.network).toBe(false);
-    expect(got.extraRoots).toEqual([resolve("/x")]);
+    expect(got.extraRoots).toEqual([X]);
     expect(got.loosened.join("\n")).toMatch(/exec = "off"[\s\S]*level = "off"|level = "off"[\s\S]*exec = "off"/);
     expect(describeLoosening(pin, loose).length).toBeGreaterThan(0);
     // A role that sets its own exec = "off" is held the same way.
     expect(applySandboxPin(pin, surfaceOf({ exec: "os" }, { r: { exec: "off" } }), "r").exec.mode).toBe("os");
+  });
+
+  it("second review, I: a root re-pointed after the session started keeps granting its pinned real path", () => {
+    const link = join(rootsDir, "link");
+    symlinkSync(X, link);
+    const s0 = surfaceOf({ exec: "os", extra_roots: [link], read_roots: [link], reads: "scoped" });
+    const pin = pinSandbox(s0);
+    // The command re-points the link at something else it would like granted.
+    rmSync(link);
+    symlinkSync(Y, link);
+    const got = applySandboxPin(pin, s0, "implement");
+    expect(got.extraRoots).toEqual([X]);
+    expect(got.exec.readRoots).toEqual([X]);
+    // CONTROL: unpinned, the same surface now names Y.
+    expect(realpathSync(link)).toBe(Y);
   });
 
   it("tightening applies at once and ratchets: off -> os cannot go back to off", () => {
@@ -721,4 +743,172 @@ describe("finding 6 — an unknown exec value refuses bash instead of running it
     const audit = auditSurface({ ...surfaceOf({ exec: "landlock" }) } as GnomonConfig).map((p) => p.problem).join("\n");
     expect(audit).not.toMatch(/exec = "landlock"[^\n]*silently falls back/);
   });
+});
+
+// ── PR #156 second review ──
+
+describe("second review, D — the per-call temp dir's parent is never a writable root", () => {
+  it.skipIf(process.platform === "win32")("refuses an extra root (or a root) that contains tmpdir(), and runs nothing", () => {
+    const t = realpathSync(tmpdir());
+    for (const c of [
+      { root: "/repo", extraRoots: [parse(t).dir === t ? t : resolve(t, "..")], exec: { network: true } },
+      { root: t, exec: { network: true } },
+    ]) {
+      const r = osSandboxPlan("touch ran", c, "/bin/sh", okProbe(), () => []);
+      expect("refusal" in r, JSON.stringify(c)).toBe(true);
+      if ("refusal" in r) expect(r.refusal.content).toContain("contains the temp directory");
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("records the temp dir's identity and asks gnomon-exec for the supervisor's pid", () => {
+    const r = osSandboxPlan("ls", { root: "/repo", exec: { network: true } }, "/bin/sh", okProbe(), () => []);
+    if (!("file" in r)) throw new Error("expected a plan");
+    try {
+      expect(r.args.slice(r.args.indexOf("--report-fd"), r.args.indexOf("--report-fd") + 2)).toEqual(["--report-fd", "3"]);
+      const st = statSync(r.tmp, { bigint: true });
+      expect(r.tmpId).toEqual({ dev: st.dev.toString(), ino: st.ino.toString() });
+      expect(r.tmp).toBe(realpathSync(r.tmp));
+    } finally {
+      rmSync(r.tmp, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!!skipWhy)(label("cleanOsSandboxTmp leaves alone a directory that is not the one gnomon made", skipWhy), () => {
+    const scratch = mkdtempSync(join(tmpdir(), "gnomon-os-clean-id-"));
+    try {
+      const tmp = join(scratch, "call");
+      mkdirSync(tmp);
+      const st = statSync(tmp, { bigint: true });
+      const id = { dev: st.dev.toString(), ino: st.ino.toString() };
+      // Swapped: the made dir moves aside, a link to a victim takes its name.
+      const victim = join(scratch, "victim");
+      mkdirSync(victim);
+      writeFileSync(join(victim, "keep.txt"), "keep");
+      execFileSync("mv", [tmp, join(scratch, "aside")]);
+      symlinkSync(victim, tmp);
+      expect(cleanOsSandboxTmp((real as { bin: string }).bin, tmp, id)).toBe(false);
+      expect(readFileSync(join(victim, "keep.txt"), "utf8")).toBe("keep");
+      expect(existsSync(tmp)).toBe(true);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("second review, B — bash's environment drops every secret it can name", () => {
+  it("drops names matching secret conventions, and every key variable ANY surface in this process named", () => {
+    // An earlier surface named this variable; a later one points api_key_env elsewhere.
+    osSandboxEnv({}, surfaceOf({}, {}, { config: { endpoints: { e: { api_key_env: "PINTEST_FIRST_NAME" } } } }), []);
+    const later = surfaceOf({}, {}, { config: { endpoints: { e: { api_key_env: "PINTEST_DECOY" } } } });
+    const env = osSandboxEnv(
+      {
+        PATH: "/usr/bin",
+        HOME: "/home/u",
+        GIT_AUTHOR_NAME: "t",
+        TOKENIZERS_PARALLELISM: "false",
+        PINTEST_FIRST_NAME: "dummy-1",
+        GITHUB_TOKEN: "dummy-2",
+        AWS_SECRET_ACCESS_KEY: "dummy-3",
+        OPENAI_API_KEY: "dummy-4",
+        DB_PASSWORD: "dummy-5",
+        NPM_CONFIG__AUTH: "dummy-6",
+      },
+      later,
+      []
+    );
+    expect(Object.keys(env).sort()).toEqual(["GIT_AUTHOR_NAME", "HOME", "PATH", "TOKENIZERS_PARALLELISM"]);
+  });
+});
+
+describe("second review, G — gnomon inside a writable tree is named", () => {
+  it("lists the install roots under the root or an extra root, and nothing else", () => {
+    const scratch = realpathSync(mkdtempSync(join(tmpdir(), "gnomon-install-")));
+    try {
+      const proj = join(scratch, "proj");
+      mkdirSync(join(proj, "node_modules"), { recursive: true });
+      mkdirSync(join(scratch, "elsewhere"));
+      expect(gnomonInstallWritable([proj], [join(proj, "node_modules"), join(scratch, "elsewhere")])).toEqual([join(proj, "node_modules")]);
+      expect(gnomonInstallWritable([join(scratch, "elsewhere2")], [join(proj, "node_modules")])).toEqual([]);
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("second review — signals: a later call stops an earlier call's job only through sandbox-kill", () => {
+  const why = netSkipWhy || (linux ? "" : "Linux only");
+
+  const pidIn = (out: { content: string }, key: string): number => {
+    const m = new RegExp(`${key}=(\\d+)`).exec(out.content);
+    if (!m) throw new Error(`no ${key} in ${out.content}`);
+    return Number(m[1]);
+  };
+  const aliveP = (pid: number): boolean => {
+    try {
+      const st = readFileSync(`/proc/${pid}/stat`, "utf8");
+      return !st.slice(st.lastIndexOf(")") + 2).startsWith("Z");
+    } catch {
+      return false;
+    }
+  };
+  const waitDead = async (pid: number) => {
+    for (let i = 0; i < 150 && aliveP(pid); i++) await new Promise((ok) => setTimeout(ok, 20));
+  };
+
+  it.skipIf(!!why)(label("kill from a later call fails and says how; sandbox-kill stops the job; an unrelated pid is refused", why), async () => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-os-kill-"));
+    const ex = { mode: "os" as const, image: "unused", network: false };
+    const victim = execFileSync("sh", ["-c", "sleep 30 >/dev/null 2>&1 & echo $!"], { encoding: "utf8" }).trim();
+    try {
+      const started = await executeTool("bash", { command: "sleep 30 >/dev/null 2>&1 & echo JOB=$!" }, bashCtx(root, ex), new Set(["bash"]));
+      const job = pidIn(started, "JOB");
+      expect(aliveP(job)).toBe(true);
+      if ((real as { probe: { landlock_abi?: number } }).probe.landlock_abi! >= 6) {
+        const tried = await executeTool("bash", { command: `kill ${job}` }, bashCtx(root, ex), new Set(["bash"]));
+        expect(aliveP(job), tried.content).toBe(true);
+        expect(tried.content).toContain("sandbox-kill <pid>");
+      }
+      const refused = await executeTool("bash", { command: `sandbox-kill ${victim}` }, bashCtx(root, ex), new Set(["bash"]));
+      expect(refused.content).toMatch(/refused/);
+      expect(aliveP(Number(victim)), "an unrelated process was signalled").toBe(true);
+      const killed = await executeTool("bash", { command: `sandbox-kill ${job} TERM` }, bashCtx(root, ex), new Set(["bash"]));
+      expect(killed.shell_exit, killed.content).toBe(0);
+      await waitDead(job);
+      expect(aliveP(job), "the job survived sandbox-kill").toBe(false);
+    } finally {
+      try {
+        process.kill(Number(victim), "SIGKILL");
+      } catch {
+        // gone
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it.skipIf(!!why || !has("setsid"))(label("a timeout kills the call's whole subtree, a setsid'd job included", why), async () => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-os-timeout-"));
+    const ex = { mode: "os" as const, image: "unused", network: false };
+    let job = 0;
+    try {
+      const out = await executeTool(
+        "bash",
+        { command: "setsid sleep 30 >/dev/null 2>&1 < /dev/null & echo $! > job.pid; sleep 20" },
+        bashCtx(root, ex, { timeoutMs: 1500 }),
+        new Set(["bash"])
+      );
+      expect(out.content).toContain("timed out");
+      job = Number(readFileSync(join(root, "job.pid"), "utf8").trim());
+      await waitDead(job);
+      expect(aliveP(job), "a setsid'd job outlived the call's timeout").toBe(false);
+    } finally {
+      if (job > 0) {
+        try {
+          process.kill(job, "SIGKILL");
+        } catch {
+          // gone
+        }
+      }
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

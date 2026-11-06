@@ -32,6 +32,7 @@ import {
   resolveSandboxLevel,
 } from "./config.js";
 import type { SandboxLevel } from "./tools.js";
+import { realpathSync } from "node:fs";
 
 export interface SandboxPin {
   level: SandboxLevel;
@@ -42,6 +43,37 @@ export interface SandboxPin {
   defaultExec: ResolvedExec;
   /** Per role, as pinned (and ratcheted). */
   roles: Map<string, ResolvedExec>;
+  /**
+   * Each granted root (extra_roots, read_roots) by the REAL path it had when
+   * first pinned, or null when it did not exist then. A root declared as a
+   * path the command can re-point (a symlink inside the root) keeps granting
+   * what it granted at the start, not wherever it points now (second
+   * review, finding I). Null: not granted this session.
+   */
+  real: Map<string, string | null>;
+}
+
+function realOf(pin: SandboxPin, p: string): string | null {
+  if (!pin.real.has(p)) {
+    let r: string | null;
+    try {
+      r = realpathSync(p);
+    } catch {
+      r = null;
+    }
+    pin.real.set(p, r);
+  }
+  return pin.real.get(p) ?? null;
+}
+
+/** `roots` mapped to their pinned real paths; the ones that had none are dropped. */
+function pinnedReal(pin: SandboxPin, roots: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const r of roots) {
+    const real = realOf(pin, r);
+    if (real !== null && !out.includes(real)) out.push(real);
+  }
+  return out;
 }
 
 const LEVEL_RANK: Record<SandboxLevel, number> = { off: 0, confined: 1, strict: 2 };
@@ -55,13 +87,17 @@ function declaredNetwork(config: GnomonConfig): boolean | undefined {
 export function pinSandbox(config: GnomonConfig): SandboxPin {
   const roles = new Map<string, ResolvedExec>();
   for (const r of listRoles(config)) roles.set(r, resolveExec(config, r));
-  return {
+  const pin: SandboxPin = {
     level: resolveSandboxLevel(config),
     network: declaredNetwork(config),
     extraRoots: resolveExtraRoots(config),
     defaultExec: resolveExec(config),
     roles,
+    real: new Map(),
   };
+  for (const r of pin.extraRoots) realOf(pin, r);
+  for (const e of [pin.defaultExec, ...roles.values()]) for (const r of e.readRoots ?? []) realOf(pin, r);
+  return pin;
 }
 
 function readsRank(r: string): number {
@@ -156,7 +192,14 @@ export function applySandboxPin(pin: SandboxPin, config: GnomonConfig, role: str
   pin.network = network;
   pin.extraRoots = extraRoots;
   pin.roles.set(role, t.exec);
-  return { level, network, extraRoots, exec: t.exec, loosened };
+  // What the call is granted: the roots by the real paths pinned for them.
+  return {
+    level,
+    network,
+    extraRoots: pinnedReal(pin, extraRoots),
+    exec: { ...t.exec, readRoots: pinnedReal(pin, t.exec.readRoots ?? []) },
+    loosened,
+  };
 }
 
 /**
@@ -170,6 +213,7 @@ export function describeLoosening(pin: SandboxPin, config: GnomonConfig): string
     extraRoots: [...pin.extraRoots],
     defaultExec: pin.defaultExec,
     roles: new Map(pin.roles),
+    real: new Map(pin.real),
   };
   const out = new Set<string>();
   for (const r of new Set([...listRoles(config), ...pin.roles.keys()])) {
