@@ -73,7 +73,11 @@ export function gitHardenedEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.Pr
     delete env[k];
   }
   for (const k of Object.keys(env)) if (/^GIT_CONFIG_(KEY|VALUE)_\d+$/.test(k)) delete env[k];
-  env.GIT_CONFIG_NOSYSTEM = "1";
+  // No system config -- except on Windows, where Git for Windows keeps its
+  // own defaults there (autocrlf, fscache, symlinks) and neither contained
+  // mode exists (exec = "docker" and "os" both refuse on native Windows), so
+  // no sandboxed command could have written anything for it to guard.
+  if (process.platform !== "win32") env.GIT_CONFIG_NOSYSTEM = "1";
   env.GIT_TERMINAL_PROMPT = "0";
   env.GIT_PAGER = "cat";
   env.PAGER = "cat";
