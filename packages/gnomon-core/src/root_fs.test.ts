@@ -79,7 +79,7 @@ describe("containedReadonlyPaths — what a container gets read-only", () => {
     execFileSync("git", ["init", "-q", root]);
     rmSync(join(root, ".git", "hooks"), { recursive: true, force: true });
     const paths = containedReadonlyPaths(root).map((p) => p.slice(root.length + 1));
-    expect(paths).toEqual([".gnomon", ".gnomon-audit", ".gnomon-sessions", ".git/config", ".git/hooks", ".git/info"]);
+    expect(paths).toEqual([".gnomon", ".gnomon-audit", ".gnomon-sessions", join(".git", "config"), join(".git", "hooks"), join(".git", "info")]);
   });
 
   it.skipIf(!posix)("refuses to set up a sandbox over a symlinked record directory", () => {
