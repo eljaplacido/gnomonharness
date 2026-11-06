@@ -84,6 +84,8 @@ describe.skipIf(onWindows)("finding A — gnomon's own git runs nothing the repo
       utimesSync(join(repo, "a.txt"), t2, t2);
       spawnSync("git", ["status"], { cwd: repo, stdio: "ignore" });
       spawnSync("git", ["diff", "HEAD"], { cwd: repo, stdio: "ignore" });
+      // An add always writes the index, so post-index-change always fires.
+      if (kind === "hook") spawnSync("git", ["add", "a.txt"], { cwd: repo, stdio: "ignore" });
       expect(existsSync(marker), `control: ${kind} did not run under plain git, so this test proves nothing`).toBe(true);
     });
   }
