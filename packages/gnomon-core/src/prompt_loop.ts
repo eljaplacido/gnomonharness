@@ -11,6 +11,7 @@
 import * as readline from "node:readline";
 import { safeGit } from "./git_safe.js";
 import { pinCredentials, holdCredentials, heldNotice, type CredentialPin } from "./credential_pin.js";
+import { pinSandbox, applySandboxPin, describeLoosening, type SandboxPin } from "./sandbox_pin.js";
 import { checkCitations } from "./citations.js";
 import { mustFailFirst, readVerifyExit } from "./must_fail_first.js";
 import { resolve, dirname, join, basename, sep } from "node:path";
@@ -182,7 +183,7 @@ import {
 import { resolveContextWindow, type ContextSource } from "./context_window.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
 import { applyCredentials } from "./credentials.js";
-import { clampToDefaults, type TrustOutcome } from "./trust.js";
+import { clampToDefaults, recordExecFloor, type TrustOutcome } from "./trust.js";
 import {
   resolveSessionStore,
   saveSession,
@@ -289,6 +290,11 @@ export interface PromptState {
    */
   network?: boolean;
   sandbox?: SandboxLevel;
+  /**
+   * The sandbox the session started under (sandbox_pin.ts): a later reload
+   * of the surface may tighten it, never loosen it. Set at the session's start.
+   */
+  sandboxPin?: SandboxPin;
   /**
    * Where the session's keys go, as it started (credential_pin.ts): a reload
    * that moves an endpoint's url or api_key_env, or an MCP server, is held.
@@ -4504,10 +4510,14 @@ export async function runAgenticTurn(
   // One resolver each, shared with `gnomon guard`, so another harness's call
   // is gated by the same reading of the surface this loop makes.
   const gate: ApprovalGate = resolveApprovalGate(config);
-  const sandbox: SandboxLevel = state.sandbox ?? resolveSandboxLevel(config);
+  // The sandbox as the session started it, tightened by any reload since and
+  // never loosened (sandbox_pin.ts): policy.toml and roles.toml are inside the
+  // root a contained bash can write.
+  const pinned = applySandboxPin((state.sandboxPin ??= pinSandbox(config)), config, role);
+  const sandbox: SandboxLevel = state.sandbox ?? pinned.level;
 
   // Session grant wins over the declared default; the surface is unchanged.
-  const declaredNetwork = (policy.sandbox as { network?: boolean } | undefined)?.network;
+  const declaredNetwork = pinned.network;
   const network = state.network ?? declaredNetwork;
   const packageIndex = resolvePackageIndex(config);
   const editVariant = resolveEditVariant(config);
@@ -4542,11 +4552,11 @@ export async function runAgenticTurn(
     sandbox,
     // Declared in policy.toml, hashed with the surface. A grant that does not
     // move the surface hash would be a grant nobody could audit.
-    extraRoots: resolveExtraRoots(config),
+    extraRoots: pinned.extraRoots,
     taskAllow: config.roles[role]?.task_allow,
     // Where bash runs. "off" by default, so nothing moves unless a surface
-    // asks for it.
-    exec: resolveExec(config, role),
+    // asks for it -- and, once the session has started, only ever tighter.
+    exec: pinned.exec,
     gate,
     approve,
     timeoutMs: toolTimeoutMs(config),
@@ -7535,6 +7545,9 @@ export async function runTask(
   const chainGate = resolveChainGate(config);
 
   const state: PromptState = { config, exchanges: [], currentRole: role };
+  // Where this task's bash runs, recorded for the next session (trust.ts
+  // exec floor): a role that ran contained here may not leave it unasked.
+  recordExecFloor(config);
   const ui: ResolvedUi = { ...resolveUi(config), spinner: false, color: false };
   // `let`, as are `shadow` and `trust` below: an MCP server whose tools
   // changed since they were pinned clamps the run after its servers connect
@@ -8157,6 +8170,14 @@ export const LIVE_SAFE_COMMANDS = new Set([
  * so the note keeps saying what it is not, and points at the setting that is
  * isolation: [sandbox] exec = "docker", which runs bash with --network none.
  */
+/** The operator's line for a reload whose looser sandbox was not applied (sandbox_pin.ts). */
+export function sandboxKeptNotice(kept: readonly string[]): string {
+  return (
+    `sandbox NOT loosened: the surface now asks for ${kept.join("; ")}. ` +
+    `This session keeps the sandbox it started with; restart gnomon to apply a looser one.`
+  );
+}
+
 export const NETWORK_OFF_NOTE =
   "  note: network = false refuses webfetch and curl/ssh in bash — a filter, not isolation (see exec)";
 
@@ -9945,6 +9966,9 @@ export async function runSessionTurn(
       state.config = reloaded;
       const heldLine = heldNotice(held);
       if (heldLine) print(paint(ui, "yellow", `  ${heldLine}`));
+      // A loosened sandbox is not applied (sandbox_pin.ts). Said, not hidden.
+      const kept = state.sandboxPin ? describeLoosening(state.sandboxPin, reloaded) : [];
+      if (kept.length > 0) print(paint(ui, "yellow", `  ${sandboxKeptNotice(kept)}`));
       const short = recomputeManifest(reloaded.gnomonDir).surface_hash.slice(0, 16);
       print(
         paint(ui, "green", `  ✓ surface reloaded — now ${short}… · this session runs under it from the next turn`)
@@ -10225,6 +10249,10 @@ export async function runPromptLoop(
   // Where the keys go, as this session starts (credential_pin.ts): a reload
   // may not move an endpoint's url or api_key_env, or an MCP server.
   state.credentialPin ??= pinCredentials(state.config);
+  // The sandbox this session is held to from here on (sandbox_pin.ts), and
+  // this machine's record of it for the next session (trust.ts exec floor).
+  state.sandboxPin ??= pinSandbox(state.config);
+  recordExecFloor(state.config);
 
   // Rotating and switching need the loop's id and its persist(), so they are
   // supplied here rather than reached for from a command.
@@ -11348,6 +11376,8 @@ export async function runPromptLoop(
           state.config = fresh;
           const heldLine = heldNotice(held);
           if (heldLine) console.log(paint(ui0, "yellow", `  ${heldLine}`));
+          const kept = state.sandboxPin ? describeLoosening(state.sandboxPin, fresh) : [];
+          if (kept.length > 0) console.log(paint(ui0, "yellow", `  ${sandboxKeptNotice(kept)}`));
           console.log(
             `\n  ${paint(ui0, "green", "✓")} ${paint(ui0, "bold", pickedRole)} → ` +
               `${modelTag} @${pickedEndpoint}`

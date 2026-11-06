@@ -1684,6 +1684,19 @@ missing one surfaces as a failing command mid-turn. The reasoning, and what it
 would take to make a rejected backend refuse, is in
 [docs/SANDBOX-DESIGN.md](docs/SANDBOX-DESIGN.md).
 
+**The container can write the surface, so the surface cannot loosen it.**
+`.gnomon/` and `.git/` are inside the mounted repository. A session pins each
+role's `exec`, `image`, `network`, `level` and `extra_roots` when it starts; a
+reload of the surface mid-session may tighten them and never loosens them (it
+says `sandbox NOT loosened … restart gnomon to apply`). Across sessions, this
+machine records where each role's bash ran in the project (beside the trust
+store): a role that ran in docker and now resolves to `exec = "off"` is a
+trust grant, asked about on a terminal and clamped back into the container
+when nobody is there (`--trust`, `GNOMON_TRUST` or `gnomon trust grant`
+accept it). gnomon's own git on the host — the per-turn tree measurement,
+the anchor delivery — runs with every hook, fsmonitor and filter/diff driver
+the repository's config names switched off.
+
 ### `bash_allow` — why `tools` alone is not enough
 
 **`bash` can write anything.** A role holding it is not read-only however its
