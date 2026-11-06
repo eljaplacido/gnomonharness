@@ -78,6 +78,10 @@ describe.skipIf(onWindows)("finding A — gnomon's own git runs nothing the repo
       expect(existsSync(marker), `${kind} ran from gnomon's bookkeeping`).toBe(false);
 
       // CONTROL: the same repository, plain git. The planted program is live.
+      // A fresh stat first: gnomon's own status may already have refreshed
+      // the index, and post-index-change fires only on a status that does.
+      const t2 = new Date(Date.now() + 10000);
+      utimesSync(join(repo, "a.txt"), t2, t2);
       spawnSync("git", ["status"], { cwd: repo, stdio: "ignore" });
       spawnSync("git", ["diff", "HEAD"], { cwd: repo, stdio: "ignore" });
       expect(existsSync(marker), `control: ${kind} did not run under plain git, so this test proves nothing`).toBe(true);

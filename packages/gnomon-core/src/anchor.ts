@@ -69,6 +69,7 @@ import {
   appendFileSync,
   closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -533,14 +534,65 @@ function gitEnv(now: Date): NodeJS.ProcessEnv {
 }
 
 async function git(repo: string, args: string[], s: ResolvedAnchor, now: Date, input?: string): Promise<Ran> {
+  // The local anchor repository lives under the audit dir, inside the project
+  // root -- which a sandboxed bash may write. Its config must still be the one
+  // `git init --bare` wrote, or a command could have planted a program for
+  // this host-side git to run at session end (PR #156 second review, A).
+  assertAnchorRepoConfig(repo);
   return runProcess(
     "git",
     // No hooks: a pre-push hook from a global core.hooksPath would run, and
-    // could wait on a terminal nobody is at. No `ext::` transport: a remote
-    // must not be a way to run a command.
-    ["-c", `core.hooksPath=${join(repo, "no-hooks")}`, "-c", "protocol.ext.allow=never", "--git-dir", repo, ...args],
+    // could wait on a terminal nobody is at -- and a hooks dir inside the
+    // repository (as `no-hooks` was) is one a sandboxed command can fill:
+    // `update-ref` runs reference-transaction. No `ext::` transport: a remote
+    // must not be a way to run a command. No fsmonitor.
+    ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "protocol.ext.allow=never", "--git-dir", repo, ...args],
     { input, env: gitEnv(now), timeoutSec: s.timeout_sec }
   );
+}
+
+/** The keys `git init --bare` writes. Anything else in the anchor repo's config was put there by someone else. */
+const ANCHOR_REPO_KEYS = new Set([
+  "core.repositoryformatversion",
+  "core.filemode",
+  "core.bare",
+  "core.logallrefupdates",
+  "core.ignorecase",
+  "core.precomposeunicode",
+  "core.symlinks",
+  "extensions.objectformat",
+  "extensions.refstorage",
+]);
+
+/** Throws when the anchor repository's config holds a key `git init --bare` does not write. */
+export function assertAnchorRepoConfig(repo: string): void {
+  const path = join(repo, "config");
+  if (!existsSync(path)) return;
+  if (!lstatSync(path).isFile()) throw new Error(`the local anchor repository's config is not a plain file (${path}); refusing to run git there`);
+  const text = readFileSync(path, "utf8");
+  let section = "";
+  const bad: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/^\s+/, "");
+    if (!line || line.startsWith("#") || line.startsWith(";")) continue;
+    const sec = /^\[\s*([^\]\s"]+)(?:\s+"[^"]*")?\s*\]/.exec(line);
+    if (sec) {
+      // A subsection ([remote "x"], [include], [includeIf ...]) is never written by init.
+      section = /"/.test(line) ? `${sec[1]!.toLowerCase()}.<sub>` : sec[1]!.toLowerCase();
+      const rest = line.slice(sec[0].length).trim();
+      if (!rest || rest.startsWith("#") || rest.startsWith(";")) continue;
+      bad.push(`${section}.${rest.split(/[\s=]/)[0]!.toLowerCase()}`);
+      continue;
+    }
+    const key = `${section}.${line.split(/[\s=]/)[0]!.toLowerCase()}`;
+    if (!ANCHOR_REPO_KEYS.has(key)) bad.push(key);
+  }
+  if (bad.length > 0) {
+    throw new Error(
+      `the local anchor repository's config was changed (${[...new Set(bad)].join(", ")}): ${path}. ` +
+        `Nothing is anchored until it is restored; delete ${repo} to have gnomon recreate it.`
+    );
+  }
 }
 
 /** A remote URL or path with any credentials stripped, for receipts and messages. */
@@ -556,7 +608,7 @@ export function redactRemote(remote: string): string {
 async function remoteTarget(s: ResolvedAnchor, now: Date): Promise<string> {
   const r = s.remote!;
   if (/^[A-Za-z0-9._-]+$/.test(r) && !existsSync(join(s.root, r))) {
-    const got = await runProcess("git", ["-C", s.root, "remote", "get-url", r], { env: gitEnv(now), timeoutSec: s.timeout_sec });
+    const got = await runProcess("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-C", s.root, "remote", "get-url", r], { env: gitEnv(now), timeoutSec: s.timeout_sec });
     if (got.code !== 0) throw new Error(`"${r}" is not a remote of the repository at ${s.root}`);
     return got.out.trim();
   }
