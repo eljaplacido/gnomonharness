@@ -2965,8 +2965,9 @@ hashes §32 pinned, held again in `deliverable_first.test.ts`). The same with
 **`deliverable_first = true`, under `--deadline` only.**
 
 - At the session's start the task text is read for the output paths it names
-  (`extractDeliverables`): an absolute path, or a quoted (backtick or double
-  quote) filename with a lower-case extension, within a short window after an
+  (`extractDeliverables`): an absolute path (POSIX `/x`, `~/x`, or Windows
+  `C:\x`, `C:/x`; no spaces), or a quoted (backtick or double quote) filename
+  with a lower-case extension, within a short window after an
   instruction verb in its base form: `write`, `save`, `create`, `produce`,
   `output`, `emit`, `generate`, `build`, `implement`, `add`, `put`, `place`,
   `store`, `export`. The verb does not count after a determiner ("the output

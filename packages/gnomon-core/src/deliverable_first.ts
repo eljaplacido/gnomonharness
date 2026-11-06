@@ -33,7 +33,7 @@
  * conformance/deliverable_first.json).
  */
 import { existsSync } from "node:fs";
-import { isAbsolute, join, posix, resolve } from "node:path";
+import { isAbsolute, join, posix, resolve, win32 } from "node:path";
 import type { GnomonConfig } from "./config.js";
 
 /** Fractions of the `--deadline` budget at which the deliverables are checked. Fixed: one knob, one arm. */
@@ -149,25 +149,35 @@ function tokenize(sentence: string): Tok[] {
 }
 
 /** A file: a last segment with a stem and a lower-case extension. */
-const FILE_TAIL = /(?:^|\/)[A-Za-z0-9_][A-Za-z0-9_.+-]*\.[a-z0-9]{1,8}$/;
-const PATHISH = /^[A-Za-z0-9_./~+-]+$/;
+const FILE_TAIL = /(?:^|[\\/])[A-Za-z0-9_][A-Za-z0-9_.+-]*\.[a-z0-9]{1,8}$/;
+/** Path characters: POSIX, and Windows (backslashes, one drive colon, checked below). */
+const PATHISH = /^[A-Za-z0-9_.\/\\~+:-]+$/;
+/** A Windows absolute path: `C:\x` or `C:/x`. */
+const WIN_ABSOLUTE = /^[A-Za-z]:[\\/]/;
 
 /**
  * What a token names, if it names a path: `file` (has an extension), `dir`
- * (absolute, no extension, or a trailing slash), or nothing. A bare relative
- * word is never a path; quoted, it is one if it is a file.
+ * (absolute, no extension, or a trailing separator), or nothing. A bare
+ * relative word is never a path; quoted, it is one if it is a file. Absolute
+ * means POSIX (`/x`, `~/x`) or Windows (`C:\x`, `C:/x`): a task given on
+ * Windows names its outputs in its own form, and a path the extractor cannot
+ * read is a deliverable the note never mentions.
  */
 function pathOf(tok: Tok): { kind: "file" | "dir"; path: string; relative: boolean } | undefined {
   let s = tok.raw;
   if (tok.quoted) s = s.slice(1, -1).trim();
   else s = s.replace(/^[(\[]+/, "").replace(/[.,;:)\]!?*]+$/, "");
   if (!s || s.includes("://") || !PATHISH.test(s)) return undefined;
-  const absolute = s.startsWith("/") || s.startsWith("~/");
-  const dotted = s.startsWith("./") || s.startsWith("../");
+  const windows = WIN_ABSOLUTE.test(s);
+  // A colon anywhere but a drive letter's is not a path ("key:value", "a::b").
+  if (s.indexOf(":") !== (windows ? 1 : -1) || s.lastIndexOf(":") !== s.indexOf(":")) return undefined;
+  const absolute = windows || s.startsWith("/") || s.startsWith("~/");
+  const dotted = /^\.\.?[\\/]/.test(s);
   if (!absolute && !dotted && !tok.quoted) return undefined;
-  if (absolute && s.length < 2) return undefined;
-  const trimmed = s.length > 1 ? s.replace(/\/+$/, "") : s;
-  if (!s.endsWith("/") && FILE_TAIL.test(trimmed)) {
+  if (absolute && s.replace(/[\\/]+$/, "").length < (windows ? 3 : 2)) return undefined;
+  const trailing = /[\\/]$/.test(s);
+  const trimmed = s.length > 1 ? s.replace(/[\\/]+$/, "") : s;
+  if (!trailing && FILE_TAIL.test(trimmed)) {
     return { kind: "file", path: trimmed, relative: !absolute };
   }
   if (absolute || dotted) return { kind: "dir", path: trimmed, relative: !absolute };
@@ -279,7 +289,9 @@ export function extractDeliverables(task: string): string[] {
         const p = pathOf(toks[j]!);
         if (p?.kind !== "file" || !p.relative) continue;
         if (dirs.length === 0) out.push(p.path);
-        else if (!p.path.includes("/")) for (const d of dirs) out.push(posix.join(d, p.path));
+        else if (!/[\\/]/.test(p.path)) {
+          for (const d of dirs) out.push(WIN_ABSOLUTE.test(d) ? win32.join(d, p.path) : posix.join(d, p.path));
+        }
       }
     }
   }

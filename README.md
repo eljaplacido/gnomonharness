@@ -93,8 +93,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2866 TypeScript tests (2341 core, 500 cli, 18
-> natives, 7 tui) and 63 Rust tests — **2929 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2872 TypeScript tests (2347 core, 500 cli, 18
+> natives, 7 tui) and 63 Rust tests — **2935 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method

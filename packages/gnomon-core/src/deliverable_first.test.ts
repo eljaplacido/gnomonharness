@@ -110,6 +110,13 @@ describe("extractDeliverables", () => {
     ["Write `notes.md` summarising the repository.", ["notes.md"]],
     ["Save the plot as `plot.png` and the data to /tmp/data.csv.", ["plot.png", "/tmp/data.csv"]],
     ["3. Tracebacks must still resolve. Emit the source map as an external file at `/app/dist/a.js.map`.", ["/app/dist/a.js.map"]],
+    // Windows forms, read the same on every OS: a task given on Windows names
+    // its outputs that way, and the --deadline tests below use the OS's own
+    // temp paths.
+    ["Write the log to `D:\\a\\_temp\\logs\\run.log` and the summary to `C:/out/summary.md`.", ["D:\\a\\_temp\\logs\\run.log", "C:/out/summary.md"]],
+    ["Save the report as C:\\Users\\RUNNER~1\\out\\report.json.", ["C:\\Users\\RUNNER~1\\out\\report.json"]],
+    ["Provide a CSV file named `Answers.csv` and save it inside `C:\\results\\`.", ["C:\\results\\Answers.csv"]],
+    ["Write the summary to `.\\out\\summary.md`.", [".\\out\\summary.md"]],
   ])("names the deliverable: %s", (task, expected) => {
     expect(extractDeliverables(task)).toEqual(expected);
   });
@@ -136,6 +143,8 @@ describe("extractDeliverables", () => {
     "Implement `fnx.Graph` and `fnx.DiGraph`.",
     "Write it to `/app/<name>.json`.",
     "Save it to https://example.com/a.json.",
+    "Write the pair `key:value.txt` out.",
+    "Write it to `C:\\out\\`.",
     "Run it as:\n\n```bash\npython /app/x.py --output /app/out.json\n```\n",
   ])("names nothing: %s", (task) => {
     expect(extractDeliverables(task)).toEqual([]);
