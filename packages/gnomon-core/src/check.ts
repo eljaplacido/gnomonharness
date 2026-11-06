@@ -27,8 +27,10 @@
  */
 
 import { safeGitBuffer } from "./git_safe.js";
+import { repoStateDir, writeFileIn } from "./root_fs.js";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -222,33 +224,53 @@ interface Journal {
   files: Array<{ path: string; b64: string | null }>;
 }
 
+/**
+ * Under gnomon's data dir, keyed by the git dir -- not inside it. A journal in
+ * `.git/` was a contained command's to write, and the next `check` restored
+ * whatever it named: `{ path: "~/.bashrc", b64: … }` (fifth review).
+ */
 function journalPath(toplevel: string): string {
-  return join(gitText(toplevel, ["rev-parse", "--absolute-git-dir"]), "gnomon-check-restore.json");
+  return join(repoStateDir(gitText(toplevel, ["rev-parse", "--absolute-git-dir"])), "check-restore.json");
 }
 
-function restoreJournal(path: string): string[] {
+/**
+ * Put back what a journal saved. Only paths inside `toplevel`, and through
+ * root_fs.ts: a journal is gnomon's own, but what it names is still the
+ * worktree, which a contained command may have re-pointed.
+ */
+function restoreJournal(path: string, toplevel: string): string[] {
   if (!existsSync(path)) return [];
   const j = JSON.parse(readFileSync(path, "utf-8")) as Journal;
+  const root = resolve(toplevel);
+  const restored: string[] = [];
   for (const f of j.files) {
-    if (f.b64 === null) {
-      if (existsSync(f.path)) unlinkSync(f.path);
-    } else {
-      mkdirSync(dirname(f.path), { recursive: true });
-      writeFileSync(f.path, Buffer.from(f.b64, "base64"));
+    const rel = relative(root, resolve(f.path));
+    if (!f.path || rel === "" || rel.startsWith("..") || isAbsolute(rel)) continue;
+    try {
+      if (f.b64 === null) {
+        const st = lstatSync(f.path, { throwIfNoEntry: false });
+        if (st && !st.isDirectory()) unlinkSync(f.path);
+      } else {
+        writeFileIn(root, f.path, Buffer.from(f.b64, "base64"));
+      }
+      restored.push(f.path);
+    } catch {
+      /* not restorable through a symlink or into a directory: left as found */
     }
   }
   unlinkSync(path);
-  return j.files.map((f) => f.path);
+  return restored;
 }
 
-async function withJournal<T>(path: string, files: string[], fn: () => Promise<T>): Promise<T> {
+async function withJournal<T>(path: string, toplevel: string, files: string[], fn: () => Promise<T>): Promise<T> {
   const j: Journal = {
     files: files.map((p) => ({ path: p, b64: existsSync(p) ? readFileSync(p).toString("base64") : null })),
   };
-  writeFileSync(path, JSON.stringify(j));
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, JSON.stringify(j), { mode: 0o600 });
   const onSignal = (sig: NodeJS.Signals) => {
     try {
-      restoreJournal(path);
+      restoreJournal(path, toplevel);
     } finally {
       process.exit(sig === "SIGINT" ? 130 : 143);
     }
@@ -334,7 +356,7 @@ async function judge(
   // An interrupted earlier run left someone's work rewritten. Undo that before
   // reading anything, or this run would judge the half-restored tree.
   const journal = journalPath(toplevel);
-  const recovered = restoreJournal(journal);
+  const recovered = restoreJournal(journal, toplevel);
   if (recovered.length) verdict.recovered = recovered;
 
   // Where the surface lives, relative to the toplevel. Usually `.gnomon`.
@@ -602,7 +624,7 @@ async function judge(
     const sources = [...preImages.keys()].filter((p) => !isTestPath(verify.test_paths, posix(relative(projRoot, p))));
     const reRun = () =>
       mustFailFirst(projRoot, verify, preImages, (command) => executeTool("bash", { command }, ctx, new Set(["bash"])));
-    const mff = inPlace ? await withJournal(journal, sources, reRun) : await reRun();
+    const mff = inPlace ? await withJournal(journal, toplevel, sources, reRun) : await reRun();
     if (!mff.ran) {
       verdict.checks.push({ id: "must_fail_first", status: "skipped", reason: mff.reason ?? "did not run" });
     } else if (mff.pinsNothing) {

@@ -14,7 +14,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { safeGit, setGitSandbox, containerStarted, containerGone, dockerContainerGone } from "./git_safe.js";
+import { safeGit, setGitSandbox, containerStarted, containerGone, dockerContainerGone, CONTAINER_ROOT_LABEL } from "./git_safe.js";
 import { recordDegradation, type DegradationSink } from "./degradation.js";
 import {
   readFileSync,
@@ -47,6 +47,7 @@ import {
   isToolEnabled,
   recomputeManifest,
   toolMaxLines,
+  isValidImageRef,
 } from "./config.js";
 import { suppliedByStore } from "./credentials.js";
 import { noteKeyVars, sessionKeyVars } from "./credential_pin.js";
@@ -75,6 +76,7 @@ import {
   type RepoCodeRun,
   type WriteTarget,
 } from "./shell.js";
+import { containedReadonlyPaths, ensureDirIn, RootWriteError, writeFileIn } from "./root_fs.js";
 
 // ---------------------------------------------------------------------------
 // Outcome codes
@@ -1799,6 +1801,20 @@ export function sandboxCommand(
   // bash_deny, bash_allow and the approval prompt have all read the ORIGINAL
   // text, where it was a harmless grep pattern.
   const inner = shq(command);
+  // The image is a word of the host's shell line and a docker argument: a
+  // value starting with `-` was a docker FLAG (`--privileged`), and one with
+  // a space or `;` was more of the line (fifth review, finding 5). Checked
+  // against the reference grammar, refused otherwise, and quoted regardless.
+  if (!isValidImageRef(ex.image)) throw new RootWriteError(`[sandbox] image ${JSON.stringify(ex.image)} is not a container image reference`);
+  // gnomon's own state and git's control files, read-only inside (root_fs.ts
+  // containedReadonlyPaths). Throws when one is a symlink.
+  const readonly = containedReadonlyPaths(ctx.root);
+  let realRoot = ctx.root;
+  try {
+    realRoot = realpathSync(ctx.root);
+  } catch {
+    /* not there: its spelling */
+  }
   const uid = typeof process.getuid === "function" ? process.getuid() : 0;
   const gid = typeof process.getgid === "function" ? process.getgid() : 0;
   return [
@@ -1815,12 +1831,17 @@ export function sandboxCommand(
     // which is the more common shape of a quoting bug -- one call site noticed,
     // its neighbours not.
     `-v ${shq(ctx.root)}:${shq(ctx.root)}`,
+    ...readonly.map((p) => `-v ${shq(p)}:${shq(p)}:ro`),
     `-w ${shq(ctx.root)}`,
+    // Which project the container can write, for any gnomon process to ask
+    // (git_safe liveContainer): the dashboard, `gnomon check`, `gnomon
+    // guard` and a second session do not share this process's registry.
+    `--label ${shq(`${CONTAINER_ROOT_LABEL}=${realRoot}`)}`,
     // The agent-session marker, into the container too: a `gnomon skill
     // accept` installed in the image is the agent's as much as one on the
     // host. `-e NAME=value`, the value quoted for the host shell.
     `-e ${AGENT_SESSION_ENV}=${shq(ctx.agentSession || `pid-${process.pid}`)}`,
-    ex.image,
+    shq(ex.image),
     `sh -c ${inner}`,
   ]
     .filter(Boolean)
@@ -3412,7 +3433,17 @@ async function bashTool(
   // container. Killing the process group stops `docker run`, not the container
   // it started -- the work would keep going with nobody watching it.
   const sandboxName = `gnomon-${process.pid}-${startedAt.toString(36)}`;
-  const spawned = sandboxCommand(command, ctx, sandboxName);
+  let spawned: string;
+  try {
+    spawned = sandboxCommand(command, ctx, sandboxName);
+  } catch (e) {
+    if (!(e instanceof RootWriteError)) throw e;
+    return {
+      code: TOOL_FAILED,
+      content: `Refused: ${e.message}`,
+      summary: "bash — refused (sandbox could not be set up safely)",
+    };
+  }
   const sandboxed = spawned !== command;
 
   // Refused, not silently run under a different language. See posixShell().
@@ -5962,11 +5993,9 @@ export function createSpillSink(
     if (unusable) return null;
     if (!dir) {
       try {
-        const base = join(root, OVERFLOW_DIR);
-        mkdirSync(base, { recursive: true });
+        const base = ensureDirIn(root, join(root, OVERFLOW_DIR));
         pruneSpillDirs(base, keep);
-        dir = join(base, safeSession);
-        mkdirSync(dir, { recursive: true });
+        dir = ensureDirIn(root, join(base, safeSession));
       } catch {
         // Read-only checkout, no permission, full disk. Truncation still works.
         unusable = true;
@@ -5976,7 +6005,7 @@ export function createSpillSink(
     const safe = label.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
     const name = `${String(++n).padStart(3, "0")}-${safe || "output"}.txt`;
     try {
-      writeFileSync(join(dir, name), text, "utf-8");
+      writeFileIn(root, join(dir, name), text);
     } catch {
       return null;
     }

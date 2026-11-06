@@ -36,7 +36,7 @@ import { verifyTrail } from "./audit.js";
 import { stubDeclaredKeys } from "./test_support.js";
 
 // The real surface, copied per test. loadConfig is fine on the repo itself, but
-// the loop APPENDS to `<root>/.gnomon-sessions/history` and saves a session
+// the loop saves a session
 // snapshot after every turn -- pointed at the checkout that would be writing
 // into the repo under test. Same idiom as prompt_loop.test.ts's /allow test.
 const REPO_SURFACE = resolve(process.cwd(), "..", "..", ".gnomon");

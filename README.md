@@ -1927,16 +1927,46 @@ shown at all. Second: nothing checks for a docker daemon before a turn starts; a
 missing one surfaces as a failing command mid-turn. The reasoning is in
 [docs/SANDBOX-DESIGN.md](docs/SANDBOX-DESIGN.md).
 
-**The container can write the surface, so the surface cannot loosen it.**
-`.gnomon/` and `.git/` are inside the mounted repository. A session pins each
+**Security note.** In v0.4.3 and earlier, `exec = "docker"` contained what
+the model's commands did to the host directly, but not what gnomon itself then
+did on the host with files those commands had written: a hostile model could
+plant a symlink, a git config entry or a surface edit in the mounted project
+and have gnomon's own host-side writes, git calls or next session act on it,
+up to running code on the host. This release fixes that. If you relied on
+`exec = "docker"` to contain an untrusted model, upgrade.
+
+**What the container cannot write.** gnomon's own state and git's control
+files are mounted read-only inside the container: `.gnomon/` (the surface),
+`.gnomon-audit/`, `.gnomon-sessions/`, and `.git/config`, `.git/hooks/`,
+`.git/info/` (and `.git/commondir`, or a `.git` file, where present). The model
+still edits code and can `git add` and `git commit`; it can no longer edit
+`.gnomon/*.toml` from bash under docker, so configuration changes are yours to
+make. gnomon creates `.gnomon-audit/`, `.gnomon-sessions/`, `.git/hooks/` and
+`.git/info/` if they are missing so there is something to mount, and refuses
+to start a container when one of these paths is a symlink. Every write gnomon
+makes into the project refuses to follow a symlink or a hard link; prompt
+history and gnomon's per-repository state (`gnomon guard` and `gnomon check`
+bases, rule caches, restore journals) live in gnomon's data directory, not in
+the project or `.git/`. Each container carries a `gnomon.root` label, so any
+gnomon process (the dashboard, `gnomon check`, `gnomon guard`, a second
+session) runs no git in a project while a container for it is running, and
+refuses when docker cannot be asked. `image` must be a plain image reference.
+
+**The surface cannot loosen the container across sessions either.**
+`.gnomon/` is inside the mounted repository, read-only to bash but still
+yours to edit. A session pins each
 role's `exec`, `image`, `network`, `level` and `extra_roots` when it starts; a
 reload of the surface mid-session may tighten them and never loosens them (it
 says `sandbox NOT loosened … restart gnomon to apply`). Across sessions, this
-machine records where each role's bash ran in the project (beside the trust
-store): a role that ran in docker and now resolves to `exec = "off"` is a
-trust grant, asked about on a terminal and clamped back into the container
-when nobody is there (`--trust`, `GNOMON_TRUST` or `gnomon trust grant`
-accept it). gnomon's own git on the host — the per-turn tree measurement,
+machine records where each role's bash ran in the project
+(`exec-floors.json`, beside the trust store): a role that ran in docker and now
+resolves to `exec = "off"`, or any role whose image changed, is a trust grant,
+asked about on a terminal and clamped back into the container when nobody is
+there (`gnomon trust grant`, or `--trust-exec-downgrade` for one run, accept
+it). A `.gnomon/` that appears below a recorded project is held to that
+project's record. If the trust store or that record cannot be read, gnomon
+does not treat it as empty: it warns, sets the file aside, and runs every
+project's bash contained until `gnomon trust grant` is run in it. gnomon's own git on the host — the per-turn tree measurement,
 the anchor delivery — runs with every hook, fsmonitor and filter/diff driver
 the repository's config names switched off.
 

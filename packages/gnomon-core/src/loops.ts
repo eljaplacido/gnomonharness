@@ -38,6 +38,7 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
+import { writeFileIn } from "./root_fs.js";
 import { join, resolve } from "node:path";
 import { parseToml } from "./config.js";
 import { tmpdir } from "node:os";
@@ -191,9 +192,9 @@ export function readState(root: string, name: string): LoopState {
 }
 
 export function writeState(root: string, name: string, s: LoopState): void {
-  const dir = join(root, LOOP_STATE_DIR);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-  writeFileSync(stateFile(root, name), JSON.stringify(s, null, 2));
+  // root_fs.ts: the state dir is in the project root, where a contained
+  // command may have put a symlink where the state file goes.
+  writeFileIn(root, stateFile(root, name), JSON.stringify(s, null, 2));
 }
 
 // ---------------------------------------------------------------------------

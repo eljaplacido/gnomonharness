@@ -123,7 +123,12 @@ export function tightenExec(pinned: ResolvedExec, fresh: ResolvedExec): { exec: 
     loosened.push(`exec = "${fresh.mode}" (pinned: "${pinned.mode}")`);
     mode = pinned.mode;
     image = pinned.image;
-  } else if (pinned.mode === "docker" && fresh.image !== pinned.image) {
+  } else if (fresh.mode === "docker" && fresh.image !== pinned.image) {
+    // Another image is another program set the commands run with -- one the
+    // surface (that is, the container) chose. Not applied mid-session, from
+    // whatever mode: off -> docker with an image of the surface's choosing
+    // was taken as a tightening (fifth review, finding 5). The container
+    // goes on, in the image the session started with.
     loosened.push(`image = "${fresh.image}" (pinned: "${pinned.image}")`);
     image = pinned.image;
   }

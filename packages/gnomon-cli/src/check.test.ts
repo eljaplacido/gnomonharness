@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CHECK_IDS, CHECK_STATUSES, CHECK_SCHEMA, type CheckVerdict, type ResolvedUi } from "gnomon-core";
+import { CHECK_IDS, CHECK_STATUSES, CHECK_SCHEMA, checkSessionFile, type CheckVerdict, type ResolvedUi } from "gnomon-core";
 import { cmdCheck, renderVerdict } from "./check.js";
 import { parseArgs } from "./index.js";
 
@@ -204,7 +204,8 @@ describe("gnomon check — the Claude Code hook", () => {
     // The operator's own uncommitted edit, before the session.
     writeFileSync(join(repo, "notes.md"), "operator\n");
     expect(await hook("session-start", { session_id: "s-1", source: "startup" })).toBe(0);
-    const state = join(git("rev-parse", "--absolute-git-dir"), "gnomon-check/sessions/s-1.json");
+    // In gnomon's data dir, not .git/ (a contained command can write .git/).
+    const state = checkSessionFile(git("rev-parse", "--absolute-git-dir"), "s-1");
     expect(existsSync(state)).toBe(true);
     const first = readFileSync(state, "utf-8");
     // A resume fires SessionStart again; the start it recorded stands.
@@ -263,7 +264,7 @@ describe("gnomon check — the Claude Code hook", () => {
     expect(await cmdCheck({ flags: { hook: "stop" } }, () => {}, () => JSON.stringify({ cwd: plainRepo, session_id: "x" }))).toBe(0);
     rmSync(plainRepo, { recursive: true, force: true });
     expect(await hook("session-start", { session_id: "../../etc" })).toBe(0);
-    expect(existsSync(join(git("rev-parse", "--absolute-git-dir"), "gnomon-check/sessions/../../etc.json"))).toBe(false);
+    expect(existsSync(checkSessionFile(git("rev-parse", "--absolute-git-dir"), "../../etc"))).toBe(false);
   });
 
   it("--install-hook prints a settings fragment and writes nothing", async () => {

@@ -48,6 +48,7 @@ import { harnessBuild } from "./build.js";
 import { PROPOSED_DIR, SKILLS_DIR, skillContentHash } from "./skills.js";
 import type { TaskRecord } from "./prompt_loop.js";
 import type { TrustOutcome } from "./trust.js";
+import { appendFileIn, writeFileIn } from "./root_fs.js";
 
 // ---------------------------------------------------------------------------
 // The spec: .gnomon/trials/<name>.toml
@@ -938,10 +939,9 @@ export function recordTrial(
   const stamp = `${now.toISOString().replace(/[:.]/g, "-")}-${randomBytes(3).toString("hex")}`;
   const rel = `${TRIAL_RUNS_DIR}/${report.skill}/${stamp}`;
   const dir = join(root, TRIAL_RUNS_DIR, report.skill, stamp);
-  mkdirSync(dir, { recursive: true });
   const body = `${JSON.stringify(report, null, 2)}\n`;
-  writeFileSync(join(dir, "report.json"), body, "utf-8");
-  for (const c of cells) appendFileSync(join(dir, "cells.jsonl"), `${JSON.stringify(c)}\n`, "utf-8");
+  writeFileIn(root, join(dir, "report.json"), body);
+  if (cells.length > 0) appendFileIn(root, join(dir, "cells.jsonl"), cells.map((c) => `${JSON.stringify(c)}\n`).join(""));
   const report_sha256 = createHash("sha256").update(body).digest("hex");
 
   const settings = resolveAudit(config);

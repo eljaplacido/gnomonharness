@@ -16,6 +16,7 @@ import { loadConfig } from "./config.js";
 import * as promptLoop from "./prompt_loop.js";
 import { verifyTrail, type AuditRecord } from "./audit.js";
 import { replay } from "./replay.js";
+import { checkSessionFile, repoStateDir } from "./root_fs.js";
 import {
   GUARD_DECISIONS,
   fromClaudeCode,
@@ -194,8 +195,8 @@ describe("gnomon guard — the rules are committed ones", () => {
   it("reads the base Claude Code's SessionStart hook recorded, when there is one", async () => {
     const start = surface("never");
     const gitDir = sh(["rev-parse", "--absolute-git-dir"]);
-    mkdirSync(join(gitDir, "gnomon-check", "sessions"), { recursive: true });
-    writeFileSync(join(gitDir, "gnomon-check", "sessions", "cc-1.json"), JSON.stringify({ head: start, untracked: {} }));
+    mkdirSync(dirname(checkSessionFile(gitDir, "cc-1")), { recursive: true });
+    writeFileSync(checkSessionFile(gitDir, "cc-1"), JSON.stringify({ head: start, untracked: {} }));
     put(".gnomon/roles.toml", `[roles.implement]\nmodel = "m"\ntools = ["bash"]\n`);
     commit("loosen");
     const v = await guardToolCall({ cwd: repo, call: forcePush, role: "implement", session: "cc-1" });
@@ -415,7 +416,7 @@ describe("gnomon guard — latency", () => {
     await guardToolCall({ cwd: repo, call, role: "implement" });
     const gitDir = sh(["rev-parse", "--absolute-git-dir"]);
     const head = sh(["rev-parse", "HEAD"]);
-    expect(readdirSync(join(gitDir, "gnomon-guard", "commits"))).toHaveLength(1);
+    expect(readdirSync(join(repoStateDir(gitDir), "guard", "commits"))).toHaveLength(1);
     // Break git for this process: a warm call must still decide.
     const path = process.env.PATH;
     process.env.PATH = "/nonexistent";

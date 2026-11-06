@@ -39,6 +39,7 @@ import {
   type RecordChange,
   type TamperFinding,
 } from "./record_guard.js";
+import { writeFileIn } from "./root_fs.js";
 
 function sealed(
   config: GnomonConfig,
@@ -297,10 +298,9 @@ export function writeCheckpoint(config: GnomonConfig): { trail: string; map: str
   // In a subdirectory of their own, so a session's trail stays the only
   // .jsonl at the top of the audit directory for anything that lists it.
   const dir = place.dir;
-  mkdirSync(dir, { recursive: true });
   const mapFile = join(dir, `${id}.files.json`);
   const body = `${JSON.stringify(map)}\n`;
-  writeFileSync(mapFile, body, "utf-8");
+  writeFileIn(root, mapFile, body);
   noteOwnWrite(mapFile);
   const trail = new AuditTrail({ ...settings, dir }, id);
   trail.write("session_start", {
