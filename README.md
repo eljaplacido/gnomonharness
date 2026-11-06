@@ -1878,6 +1878,11 @@ misspelt `reads` value refuses too, rather than falling back to `"all"`.
   readable; their environments and memory are not.
 - **Toolchain defaults are trusted** to hold no credentials; a token written into
   `~/.npm` or `~/.cargo/registry` would be readable.
+- **git's own config files are readable** (`~/.gitconfig`,
+  `~/.config/git/config`), so `git` keeps your identity and settings. A token
+  written there — a `url.<base>.insteadOf` with credentials in it, an
+  `http.extraHeader` — is readable too; keep tokens in a credential helper
+  (`~/.git-credentials` and `~/.config/git/credentials` stay unreadable).
 - **Tool configuration in `$HOME` is unreadable** — `~/.npmrc`, `~/.pypirc`,
   `~/.config/pip` — so tools run unconfigured, registry logins included. That is
   the point; name a config file in `read_roots` if a tool needs it.

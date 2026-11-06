@@ -366,6 +366,7 @@ pub const SCOPED_NOT_ENFORCED: &[&str] = &[
     "already-open descriptors: anything inherited is used as inherited",
     "command lines of your other processes (/proc/<pid>/cmdline) are readable; their environments and memory are not (Landlock denies ptrace-mode access to processes outside the sandbox)",
     "toolchain defaults (HOME_TOOLCHAIN_READ) are trusted to hold no credentials; a token someone wrote into ~/.cargo/registry or ~/.npm is readable",
+    "git's own config files (~/.gitconfig, ~/.config/git/config) are readable, so git keeps your identity and settings: a token written there (a url.<base>.insteadOf with credentials in it, an http.extraHeader) is readable; keep tokens in a credential helper (~/.git-credentials and ~/.config/git/credentials stay unreadable)",
     "Linux only: on macOS and elsewhere reads = scoped refuses rather than runs",
 ];
 
@@ -2614,6 +2615,20 @@ mod scope_tests {
         }
         for s in SYSTEM_READ {
             assert_eq!(exposes(Path::new(s), &protected), None, "{s}");
+        }
+    }
+
+    /// Third review, finding 11: git's config files are granted, and they
+    /// often hold tokens. Granting them is published as a limit, not hidden.
+    #[test]
+    fn the_git_config_grant_is_published_as_a_limit() {
+        for f in [".gitconfig", ".config/git/config"] {
+            assert!(HOME_TOOLCHAIN_READ.contains(&f), "{f} is granted");
+            let named = format!("~/{f}");
+            assert!(
+                SCOPED_NOT_ENFORCED.iter().any(|l| l.contains(&named) && l.contains("token")),
+                "{named} is granted, and a token in it readable, but SCOPED_NOT_ENFORCED does not say so"
+            );
         }
     }
 

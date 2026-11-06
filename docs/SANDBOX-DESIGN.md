@@ -547,5 +547,8 @@ outside the root is not blocked; a hard link to a credential placed in
 the root beforehand is readable; already-open descriptors; `/proc/<pid>/cmdline`
 of other processes (their environments and memory are not — Landlock denies
 ptrace-mode access to processes outside the sandbox, which also holds under
-`reads = "all"`); a token written into a toolchain default; Linux only.
+`reads = "all"`); a token written into a toolchain default, or into git's
+own `~/.gitconfig` / `~/.config/git/config` (granted so git keeps the
+user's identity; a `url.<base>.insteadOf` or `http.extraHeader` holding a
+token is readable); Linux only.
 
