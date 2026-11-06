@@ -174,3 +174,16 @@ All three arms run per task at the same time, on P2G relay slots 0–2, with the
   as before; the operator watches the 1-min load (target < ~40). Load is already recorded per cell.
 - **Unchanged:** validity rule, scoring, comparisons, decision rule, seed, budget ($20). The time gap (waves 1–20 on
   11-05, waves 21–29 on 11-06, including Go's 06–10 UTC peak-price window) hits all three arms of a wave equally.
+
+## Addendum 2 — one cell lost to a full disk, 2026-11-06 (written before re-running; no change to the analysis)
+
+- **What happened:** the host's root volume reached 0 bytes free at about 08:15Z. Cell `h3-k1-R0-lake-temp-glm`
+  (started 08:01:41Z) never wrote its END line; its `cell.json`, `harbor.log` and Harbor `result.json` are empty. R1 and
+  R2 of the same wave ended normally at 08:17:04Z. The cause was outside the cell (a transient ~140 GB write elsewhere on
+  the host); the cell is an apparatus failure and is never scored as it stands.
+- **Fix, don't fail:** the cell is re-run alone, once, with the same pinned build, slot 0, relay, model, cap and Harbor
+  apparatus (`apparatus/rerun_h3_cell.py`, which calls `run_h3.run_cell` unchanged). The empty attempt is kept under
+  `runs-aborted/` and `jobs-aborted/` with the suffix `-diskfull`.
+- **Deviation:** that R0 cell is time-separated from its R1/R2 partners by about 4 hours. The pair is kept (the
+  pre-registered unit is the task); a sensitivity line in the summary reports R1 − R0 with that task dropped.
+- **Unchanged:** validity rule, scoring, comparisons, decision rule, seed, budget.
