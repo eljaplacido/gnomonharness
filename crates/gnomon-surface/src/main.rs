@@ -257,9 +257,84 @@ const GIT_ENV_DROP: &[&str] = &[
     "GIT_CONFIG",
 ];
 
-fn hardened_git_command(dir: &Path) -> std::process::Command {
+/// The repository git would use for `dir`, found without running git: the
+/// nearest `.git` at or above it (a directory, or a `gitdir:` file), its
+/// `commondir` followed. Every path is a real path.
+///
+/// Fourth review, finding 2: git's own discovery skips a `.git` whose HEAD is
+/// invalid and takes the directory holding it as a git dir when it has a
+/// HEAD, objects and refs -- with the config beside them. Everything it
+/// weighs is inside the project root a sandboxed command can write. So git
+/// discovers nothing here: the repository is named on every call (GIT_DIR,
+/// GIT_WORK_TREE, GIT_COMMON_DIR, a ceiling, safe.bareRepository=explicit),
+/// and anything ambiguous is an Err -- "could not answer".
+#[derive(Debug, Clone, PartialEq)]
+struct GitRepo {
+    work_tree: PathBuf,
+    git_dir: PathBuf,
+    common_dir: PathBuf,
+}
+
+fn looks_like_git_dir(d: &Path) -> bool {
+    fs::symlink_metadata(d.join("HEAD")).map(|m| m.is_file()).unwrap_or(false)
+        && d.join("objects").is_dir()
+        && d.join("refs").is_dir()
+}
+
+fn find_repository(dir: &Path) -> Result<Option<GitRepo>, String> {
+    let mut d = fs::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    loop {
+        let dot = d.join(".git");
+        if let Ok(meta) = fs::symlink_metadata(&dot) {
+            if looks_like_git_dir(&d) {
+                return Err(format!("{} holds .git and is a git directory itself", d.display()));
+            }
+            let git_dir = if meta.is_dir() {
+                dot.clone()
+            } else if meta.file_type().is_symlink() {
+                fs::canonicalize(&dot).map_err(|e| format!("{}: {e}", dot.display()))?
+            } else if meta.is_file() {
+                let text = fs::read_to_string(&dot).map_err(|e| format!("{}: {e}", dot.display()))?;
+                let target = text
+                    .lines()
+                    .find_map(|l| l.strip_prefix("gitdir:"))
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .ok_or_else(|| format!("{} names no git dir", dot.display()))?;
+                fs::canonicalize(d.join(target)).map_err(|e| format!("{}: {e}", dot.display()))?
+            } else {
+                return Err(format!("{} is neither a directory nor a gitdir file", dot.display()));
+            };
+            if !git_dir.is_dir() {
+                return Err(format!("{} points at no directory", dot.display()));
+            }
+            let common_dir = match fs::read_to_string(git_dir.join("commondir")) {
+                Ok(t) => {
+                    let t = t.trim();
+                    if t.is_empty() {
+                        return Err("an empty commondir".into());
+                    }
+                    fs::canonicalize(git_dir.join(t)).map_err(|e| format!("commondir: {e}"))?
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => git_dir.clone(),
+                Err(e) => return Err(format!("commondir: {e}")),
+            };
+            return Ok(Some(GitRepo { work_tree: d, git_dir, common_dir }));
+        }
+        if looks_like_git_dir(&d) {
+            return Err(format!("{} is a git directory with no .git above it", d.display()));
+        }
+        match d.parent() {
+            Some(up) => d = up.to_path_buf(),
+            None => return Ok(None),
+        }
+    }
+}
+
+fn hardened_git_command(dir: &Path, repo: Option<&GitRepo>) -> std::process::Command {
     let mut cmd = std::process::Command::new("git");
     cmd.current_dir(dir)
+        .args(["-c", "safe.bareRepository=explicit"])
         .args(GIT_HARDENING)
         .env("GIT_TERMINAL_PROMPT", "0");
     for k in GIT_ENV_DROP {
@@ -275,19 +350,29 @@ fn hardened_git_command(dir: &Path) -> std::process::Command {
     if !cfg!(windows) {
         cmd.env("GIT_CONFIG_NOSYSTEM", "1");
     }
+    if let Some(r) = repo {
+        cmd.env("GIT_DIR", &r.git_dir)
+            .env("GIT_WORK_TREE", &r.work_tree)
+            .env("GIT_COMMON_DIR", &r.common_dir);
+        if let Some(up) = r.work_tree.parent() {
+            cmd.env("GIT_CEILING_DIRECTORIES", up);
+        }
+    }
     cmd
 }
 
-/// Every filter, diff and merge driver the configuration in `dir` names, to
-/// blank through GIT_CONFIG_COUNT (a driver's name is the repository's choice,
-/// so no one `-c` key switches them all off). `git config --list` runs nothing.
-fn driver_keys(dir: &Path) -> Vec<String> {
-    let out = match hardened_git_command(dir)
+/// Every filter, diff and merge driver the configuration names, to blank
+/// through GIT_CONFIG_COUNT (a driver's name is the repository's choice, so
+/// no one `-c` key switches them all off). `git config --list` runs nothing.
+/// None when the listing failed: then no git runs at all (fourth review,
+/// finding 3) -- an unlisted driver is an unblanked one.
+fn driver_keys(dir: &Path, repo: Option<&GitRepo>) -> Option<Vec<String>> {
+    let out = match hardened_git_command(dir, repo)
         .args(["config", "-z", "--list"])
         .output()
     {
         Ok(o) if o.status.success() => o,
-        _ => return Vec::new(),
+        _ => return None,
     };
     let text = String::from_utf8_lossy(&out.stdout);
     let mut keys: Vec<String> = Vec::new();
@@ -319,18 +404,28 @@ fn driver_keys(dir: &Path) -> Vec<String> {
             add(format!("merge.{n}.driver"));
         }
     }
-    keys
+    Some(keys)
 }
 
-/// git in `dir` with gnomon's hardening: no fsmonitor, hooks, pager, external
-/// diff, system config, or any filter/diff/merge driver the repository names.
-/// `.gnomon/` sits inside a project root that a sandboxed bash (exec =
-/// "docker") may write, `.git/config` included, and this runs on the host:
-/// `gnomon session` and `gnomon surface manifest` call it (third review,
-/// finding 7).
+/// git in `dir` with gnomon's hardening: the repository named explicitly, no
+/// fsmonitor, hooks, pager, external diff, system config, or any
+/// filter/diff/merge driver the repository names. `.gnomon/` sits inside a
+/// project root that a sandboxed bash (exec = "docker") may write,
+/// `.git/config` included, and this runs on the host: `gnomon session` and
+/// `gnomon surface manifest` call it (third review, finding 7). None -- "could
+/// not answer" -- when the repository is ambiguous or its configuration
+/// cannot be listed.
 fn safe_git(dir: &Path, args: &[&str]) -> Option<String> {
-    let mut cmd = hardened_git_command(dir);
-    let keys = driver_keys(dir);
+    // The operator's own GIT_DIR / GIT_WORK_TREE (a git hook started this):
+    // git discovers nothing then either.
+    let explicit = std::env::var_os("GIT_DIR").is_some() || std::env::var_os("GIT_WORK_TREE").is_some();
+    let repo = if explicit {
+        None
+    } else {
+        Some(find_repository(dir).ok()??)
+    };
+    let mut cmd = hardened_git_command(dir, repo.as_ref());
+    let keys = driver_keys(dir, repo.as_ref())?;
     let mut n = 0usize;
     for k in &keys {
         cmd.env(format!("GIT_CONFIG_KEY_{n}"), k)
@@ -741,6 +836,72 @@ mod tests {
         );
     }
 
+
+    /// Fourth review, finding 2: a container corrupts .git/HEAD in place and
+    /// makes the project root a git dir of its own. git's discovery then
+    /// takes the root; gnomon must not -- it names the repository it found
+    /// (`<root>/.git`), and a repository that cannot answer is "local".
+    #[cfg(unix)]
+    #[test]
+    fn a_root_made_a_git_dir_is_not_the_repository_asked() {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("repo");
+        let out = tmp.path().join("out");
+        fs::create_dir_all(&repo).unwrap();
+        fs::create_dir_all(&out).unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        fs::create_dir_all(repo.join(".gnomon")).unwrap();
+        fs::write(repo.join("a.txt"), "one\n").unwrap();
+        fs::write(repo.join(".gnomon/config.toml"), "").unwrap();
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "init"]);
+        let good = git_revision(&repo.join(".gnomon"));
+        assert_ne!(good, "local");
+        // The root becomes a git dir: its own HEAD, refs, objects, index, config.
+        let cp = std::process::Command::new("cp")
+            .args(["-a", ".git/objects", ".git/refs", ".git/index", ".git/HEAD", "."])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(cp.success());
+        let marker = out.join("filter-ran");
+        fs::write(
+            repo.join("config"),
+            format!(
+                "[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = {}\n[filter \"x\"]\n\tclean = \"touch '{}'; cat\"\n",
+                repo.display(),
+                marker.display()
+            ),
+        )
+        .unwrap();
+        let head = repo.join(".git/HEAD");
+        let len = fs::metadata(&head).unwrap().len() as usize;
+        fs::write(&head, "z".repeat(len)).unwrap();
+        fs::write(repo.join(".gitattributes"), "*.txt filter=x\n").unwrap();
+        fs::write(repo.join("a.txt"), "two\n").unwrap();
+        let rev = git_revision(&repo.join(".gnomon"));
+        assert_eq!(rev, "local", "answered from a git dir the root was turned into: {rev}");
+        assert!(!marker.exists(), "a filter of the root git dir ran");
+        // CONTROL: plain git takes the root.
+        std::process::Command::new("git")
+            .arg("status")
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(marker.exists(), "control: the planted root git dir is not live");
+    }
 
     fn setup_test_dir() -> TempDir {
         let tmp = TempDir::new().unwrap();

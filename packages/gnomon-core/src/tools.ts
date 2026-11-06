@@ -14,7 +14,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { safeGit, setGitSandbox } from "./git_safe.js";
+import { safeGit, setGitSandbox, containerStarted, containerGone, dockerContainerGone } from "./git_safe.js";
 import { recordDegradation, type DegradationSink } from "./degradation.js";
 import {
   readFileSync,
@@ -1614,7 +1614,7 @@ function killTree(
   // A container is not in the process group. Killing `docker run` returns the
   // shell to us and leaves the container running, so a timed-out command would
   // keep working -- writing into the repository -- after the turn had given up
-  // on it. Remove it explicitly, best-effort and without waiting.
+  // on it. The caller removes it, and waits for that (removeContainer).
   if (containerName) {
     try {
       spawn("docker", ["rm", "-f", containerName], {
@@ -1658,6 +1658,68 @@ function killTree(
   }
   return Promise.resolve();
 }
+
+/** How long a killed command's container may take to be removed before the turn stops waiting. */
+const CONTAINER_REMOVE_MS = 20_000;
+
+/**
+ * Remove a killed command's container and wait until docker says it is gone,
+ * bounded by CONTAINER_REMOVE_MS. Returns whether it is confirmed gone.
+ *
+ * WHY (fourth review, finding 4). killTree used to start `docker rm -f` and
+ * return. The turn went on to its host-side git -- worktreeMoved, the
+ * turn-end measurement, a config reload -- while the container still ran and
+ * could rewrite .git/config between gnomon's driver listing and the git that
+ * trusted it. Now the tool returns only once the container is gone. One that
+ * cannot be confirmed gone stays registered with git_safe, and no gnomon git
+ * runs on this machine until docker says it is.
+ */
+async function removeContainer(name: string): Promise<boolean> {
+  const until = Date.now() + CONTAINER_REMOVE_MS;
+  const run = (args: string[], ms: number) =>
+    new Promise<{ code: number | null; err: string }>((done) => {
+      let err = "";
+      let child;
+      try {
+        child = spawn("docker", args, { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+      } catch {
+        done({ code: null, err: "" });
+        return;
+      }
+      const timer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* gone */
+        }
+        done({ code: null, err });
+      }, Math.max(1, ms));
+      child.stderr?.on("data", (d: Buffer) => (err += d.toString()));
+      child.once("error", () => {
+        clearTimeout(timer);
+        done({ code: null, err });
+      });
+      child.once("exit", (code) => {
+        clearTimeout(timer);
+        done({ code, err });
+      });
+    });
+  while (Date.now() < until) {
+    await run(["rm", "-f", name], until - Date.now());
+    const seen = await run(["inspect", "--format", "{{.State.Status}}", name], Math.min(5000, Math.max(1, until - Date.now())));
+    if (seen.code !== null && seen.code !== 0 && /no such (object|container)/i.test(seen.err)) {
+      containerGone(name);
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return false;
+}
+
+/** What the model is told when its killed command's container could not be confirmed removed. */
+const CONTAINER_NOT_GONE =
+  "\n\n(The sandbox container could not be confirmed removed. gnomon runs no git on this machine " +
+  "until docker reports it gone, so changes made meanwhile are not measured.)";
 
 /**
  * On Windows, a timed-out or cancelled command is reported only once its tree
@@ -3378,6 +3440,10 @@ async function bashTool(
   if (osPlan && "refusal" in osPlan) return osPlan.refusal;
   let supervisor: number | null = null;
 
+  // From here until docker run has returned -- or the container is confirmed
+  // removed -- gnomon runs no git on the host (git_safe liveContainer).
+  if (sandboxed) containerStarted(sandboxName, () => dockerContainerGone(sandboxName));
+
   const running = new Promise<ToolOutcome>((done) => {
     const proc = spawn(osPlan ? osPlan.file : shellBin, osPlan ? osPlan.args : ["-c", spawned], {
       cwd: ctx.root,
@@ -3425,6 +3491,7 @@ async function bashTool(
       // first, while the supervisor is alive to hold them beneath it.
       if (supervisor !== null) killSupervisedTree(supervisor);
       await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
+      const containerLeft = sandboxed && !(await removeContainer(sandboxName));
       // What the command printed before it was killed is evidence the harness
       // already holds: the failing test, the last line of a build, the prompt it
       // was blocked on. Discarding it left the model with nothing to act on but
@@ -3453,7 +3520,8 @@ async function bashTool(
           `\n\nIt did not finish, so this output is partial. Re-running it unchanged will time out again: ` +
           `narrow it, or start it in the background and poll:\n      ${backgroundRecipe(command)}\n` +
           `    then read ${JOB_LOG_DIR}/job.log on a later step.` +
-          (drift ? `\n\n${drift.notice}` : ""),
+          (drift ? `\n\n${drift.notice}` : "") +
+          (containerLeft ? CONTAINER_NOT_GONE : ""),
         summary: `bash — timeout${drift ? " · surface changed" : ""}`,
         surface_drift: drift ?? undefined,
       });
@@ -3467,6 +3535,7 @@ async function bashTool(
       clearTimeout(timer);
       if (supervisor !== null) killSupervisedTree(supervisor);
       await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
+      const containerLeft = sandboxed && !(await removeContainer(sandboxName));
       releasePipes(proc);
       done({
         code: TOOL_FAILED,
@@ -3478,7 +3547,8 @@ async function bashTool(
               .join("\n"),
             ctx,
             `bash-cancelled`
-          ),
+          ) +
+          (containerLeft ? CONTAINER_NOT_GONE : ""),
         summary: `bash — cancelled`,
       });
     };
@@ -3490,6 +3560,8 @@ async function bashTool(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // The shell never started, so neither did a container.
+      if (sandboxed) containerGone(sandboxName);
       done({
         code: TOOL_FAILED,
         content: `Could not run command: ${err.message}`,
@@ -3527,6 +3599,22 @@ async function bashTool(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // `docker run --rm` returned with the container's status: it has exited,
+      // and with it every process in it. A docker run that died on a signal,
+      // or failed itself (125: it may have lost the daemon with the container
+      // running), says nothing of the kind; the container stays registered
+      // until docker reports it gone.
+      if (sandboxed) {
+        if (exit !== null && exit !== 125) {
+          containerGone(sandboxName);
+        } else {
+          try {
+            spawn("docker", ["rm", "-f", sandboxName], { stdio: "ignore", detached: true }).unref();
+          } catch {
+            /* the lazy check in git_safe still asks */
+          }
+        }
+      }
       // stderr BEFORE stdout when the command failed, and both ends kept.
       //
       // The old order put stderr last and clamped head-only, so a chatty build

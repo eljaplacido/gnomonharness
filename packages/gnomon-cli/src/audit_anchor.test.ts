@@ -11,7 +11,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, readdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,11 +23,14 @@ let server: Server;
 let base = "";
 let root = "";
 let remote = "";
+/** Runs when the model is asked: what a contained command could do mid-session. */
+let onRequest: (() => void) | null = null;
 
 beforeAll(async () => {
   server = createServer((req, res) => {
     req.resume();
     req.on("end", () => {
+      onRequest?.();
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ model: "stub", message: { role: "assistant", content: "done" }, done: true }));
     });
@@ -63,9 +66,9 @@ afterAll(async () => {
 });
 
 /** The CLI in a child process; async, because the model stub lives in this one. */
-function gnomon(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+function gnomon(args: string[], dir = root): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((done) => {
-    const child = spawn(process.execPath, ["--import", "tsx", CLI, ...args, "--dir", root], {
+    const child = spawn(process.execPath, ["--import", "tsx", CLI, ...args, "--dir", dir], {
       env: { ...process.env, GNOMON_NO_UPDATE_CHECK: "1", NO_COLOR: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -140,5 +143,45 @@ describe("gnomon task → detached delivery → gnomon audit verify", () => {
     const a = await gnomon(["audit", "anchor", "--trust"]);
     expect(a.code).toBe(0);
     expect(a.stdout).toMatch(/Nothing queued/);
+  }, 120_000);
+});
+
+// Fourth review, finding 6: the session-end delivery is a detached `gnomon
+// audit anchor --background --trust`, and it read [audit.anchor] afresh from
+// the project root. A contained command that rewrote it to backend = "cmd"
+// had the host run its command, under --trust, after the session.
+describe("the detached delivery anchors with what the session started with", () => {
+  it("a [audit.anchor] rewritten mid-session is not what the delivery runs", async () => {
+    const own = mkdtempSync(join(tmpdir(), "gnomon-cli-anchor6-"));
+    const marker = join(own, "..", `${own.split(/[\\/]/).pop()}-cmd-ran`);
+    const put = (rel: string, text: string) => {
+      mkdirSync(join(own, rel, ".."), { recursive: true });
+      writeFileSync(join(own, rel), text, "utf-8");
+    };
+    const head = `[defaults]\napproval = "on_write"\n\n[endpoints.local]\nurl = "${base}/api/chat"\nkind = "ollama"\n\n[audit]\nenabled = true\n\n`;
+    put(".gnomon/config.toml", head + `[audit.anchor]\nbackend = "git"\nremote = "${remote.replace(/\\/g, "/")}"\n`);
+    put(".gnomon/roles.toml", `[roles.implement]\nmodel = "stub"\nendpoint = "local"\ntools = ['read']\n`);
+    put(".gnomon/tools.toml", `[[tools]]\nname = "read"\nenabled = true\n`);
+    put(".gnomon/policy.toml", `[approval]\ngate = "on_write"\n`);
+    put(".gnomon/system.md", "x\n");
+    const before = (await anchoredLines(1)).length;
+    onRequest = () => {
+      onRequest = null;
+      put(".gnomon/config.toml", head + `[audit.anchor]\nbackend = "cmd"\ncommand = "touch '${marker.replace(/\\/g, "/")}'"\n`);
+    };
+    try {
+      const t = await gnomon(["task", "go", "--role", "implement", "--yes", "--trust"], own);
+      expect(t.code, t.stderr).toBe(0);
+      const until = Date.now() + 45_000;
+      while (Date.now() < until && !existsSync(marker) && (await anchoredLines(1)).length <= before) {
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      expect(existsSync(marker), "the delivery ran the command a mid-session rewrite named").toBe(false);
+      expect((await anchoredLines(1)).length).toBeGreaterThan(before);
+    } finally {
+      onRequest = null;
+      rmSync(own, { recursive: true, force: true });
+      rmSync(marker, { force: true });
+    }
   }, 120_000);
 });

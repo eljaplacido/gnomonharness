@@ -13,11 +13,11 @@
  * marker -- so the planted config is live and the test could have failed.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync, existsSync, appendFileSync, utimesSync, readFileSync, statSync, cpSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, existsSync, appendFileSync, utimesSync, readFileSync, statSync, cpSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { safeGit, hardenGitArgs, _resetGitSafety, gitHardenedEnv } from "./git_safe.js";
+import { safeGit, hardenGitArgs, _resetGitSafety, gitHardenedEnv, pinRepository, containerStarted, containerGone, planGit, setGitSandbox } from "./git_safe.js";
 import { measureTreeDelta, treeSnapshot } from "./prompt_loop.js";
 
 const onWindows = process.platform === "win32";
@@ -225,5 +225,116 @@ describe.skipIf(onWindows)("finding A — gnomon's own git runs nothing the repo
     const d = measureTreeDelta(repo);
     expect(d.files).toBe(2);
     expect(d.insertions).toBe(2);
+  });
+});
+
+// Fourth review. Each case was reproduced against 2a4e76d2 first.
+describe.skipIf(onWindows)("fourth review — the repository git uses is pinned, and every doubt is a refusal", () => {
+  /**
+   * Finding 2: the container corrupts .git/HEAD in place (nothing in the
+   * listing's cache key moves) and makes the ROOT a git dir of its own, with
+   * a filter in its config. git's discovery rejects .git, takes the root, and
+   * the cached listing -- of .git/config -- blanked nothing there.
+   */
+  function rootAsGitDir(marker: string): void {
+    for (const p of ["objects", "refs", "index"]) cpSync(join(repo, ".git", p), join(repo, p), { recursive: true });
+    writeFileSync(join(repo, "HEAD"), readFileSync(join(repo, ".git", "HEAD"), "utf8"));
+    writeFileSync(
+      join(repo, "config"),
+      `[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = ${repo}\n[filter "x"]\n\tclean = "touch '${marker}'; cat"\n`
+    );
+    const head = join(repo, ".git", "HEAD");
+    const st = statSync(head);
+    writeFileSync(head, "z".repeat(st.size));
+    utimesSync(head, st.atime, st.mtime);
+    writeFileSync(join(repo, ".gitattributes"), "*.txt filter=x\n");
+    // Same size as the committed "one": git must read the content, which is when a clean filter runs.
+    writeFileSync(join(repo, "a.txt"), "two\n");
+    const t = new Date(Date.now() + 5000);
+    utimesSync(join(repo, "a.txt"), t, t);
+  }
+
+  it("finding 2: a root turned into a git dir behind a corrupted .git/HEAD runs nothing on the hot path", () => {
+    // The listing is cached from an earlier, ordinary state.
+    expect(safeGit(["--no-optional-locks", "status", "--porcelain=v2"], { cwd: repo, hot: true }).status).toBe(0);
+    const marker = join(outside, "rootgitdir-ran");
+    rootAsGitDir(marker);
+    safeGit(["--no-optional-locks", "status", "--porcelain=v2"], { cwd: repo, hot: true });
+    safeGit(["diff", "--numstat"], { cwd: repo });
+    measureTreeDelta(repo, treeSnapshot(repo));
+    expect(existsSync(marker), "a filter from a root-as-git-dir ran from gnomon's git").toBe(false);
+    // CONTROL: plain git in the same directory takes the root as its git dir.
+    spawnSync("git", ["status"], { cwd: repo, stdio: "ignore" });
+    expect(existsSync(marker), "control: the planted root git dir is not live").toBe(true);
+  });
+
+  it("finding 2: a repository pinned at session start is the one every later call uses", () => {
+    expect(pinRepository(repo)).not.toBeNull();
+    const marker = join(outside, "pinned-ran");
+    rootAsGitDir(marker);
+    const r = safeGit(["status", "--porcelain=v2"], { cwd: repo, hot: true });
+    // .git/HEAD is corrupt: the pinned repository cannot answer, and nothing else is asked.
+    expect(r.status).not.toBe(0);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("finding 2: a .git replaced after the pin is a refusal, not a new repository", () => {
+    expect(pinRepository(repo)).not.toBeNull();
+    const marker = join(outside, "swapped-ran");
+    cpSync(join(repo, ".git"), join(outside, "moved.git"), { recursive: true });
+    rmSync(join(repo, ".git"), { recursive: true, force: true });
+    cpSync(join(outside, "moved.git"), join(repo, ".git"), { recursive: true });
+    appendFileSync(join(repo, ".git", "config"), `[core]\n\tfsmonitor = "touch '${marker}'; false"\n`);
+    const r = safeGit(["status", "--porcelain=v2"], { cwd: repo });
+    expect(r.status).not.toBe(0);
+    expect(String(r.stderr)).toMatch(/could not answer/);
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("finding 3: a config listing that fails (past its output cap) runs no git at all", () => {
+    const marker = join(outside, "biglist-ran");
+    writeFileSync(join(repo, ".gitattributes"), "*.txt filter=big\n");
+    appendFileSync(
+      join(repo, ".git", "config"),
+      `[filter "big"]\n\tclean = "touch '${marker}'; cat"\n[pad]\n\tv = ${"a".repeat(17 * 1024 * 1024)}\n`
+    );
+    writeFileSync(join(repo, "a.txt"), "ten\n");
+    const t = new Date(Date.now() + 5000);
+    utimesSync(join(repo, "a.txt"), t, t);
+    const r = safeGit(["status", "--porcelain=v2"], { cwd: repo });
+    safeGit(["diff", "--numstat"], { cwd: repo });
+    expect(existsSync(marker), "git ran unblanked after a failed driver listing").toBe(false);
+    expect(r.status).not.toBe(0);
+    spawnSync("git", ["status"], { cwd: repo, stdio: "ignore" });
+    expect(existsSync(marker), "control").toBe(true);
+  });
+
+  it("finding 4: while a sandbox container may still be running, gnomon runs no host git", () => {
+    containerStarted("gnomon-test-live", () => false);
+    const r = safeGit(["status", "--porcelain=v2"], { cwd: repo });
+    expect(r.status).not.toBe(0);
+    expect(String(r.stderr)).toMatch(/could not answer/);
+    containerGone("gnomon-test-live");
+    expect(safeGit(["status", "--porcelain=v2"], { cwd: repo }).status).toBe(0);
+  });
+
+  it("every gnomon git names its repository: GIT_DIR, GIT_WORK_TREE, a ceiling, and no implicit bare repository", () => {
+    const p = planGit(["status"], { cwd: repo });
+    expect(p).not.toBeNull();
+    const real = realpathSync(repo);
+    expect(p!.env.GIT_DIR).toBe(join(real, ".git"));
+    expect(p!.env.GIT_WORK_TREE).toBe(real);
+    expect(p!.env.GIT_COMMON_DIR).toBe(join(real, ".git"));
+    expect(p!.env.GIT_CEILING_DIRECTORIES).toBeTruthy();
+    expect(p!.args.join(" ")).toContain("safe.bareRepository=explicit");
+  });
+
+  it("under exec = \"os\" the sandboxed git is handed the same named repository", () => {
+    setGitSandbox((argv, env) => ({ file: "gnomon-exec", args: ["sandbox", "--", ...argv], env }));
+    const p = planGit(["status"], { cwd: repo });
+    expect(p!.file).toBe("gnomon-exec");
+    expect(p!.args.slice(0, 5)).toEqual(["sandbox", "--", "git", "-c", "safe.bareRepository=explicit"]);
+    expect(p!.env.GIT_DIR).toBe(join(realpathSync(repo), ".git"));
+    expect(p!.env.GIT_WORK_TREE).toBe(realpathSync(repo));
   });
 });
