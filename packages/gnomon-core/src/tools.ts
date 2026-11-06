@@ -1936,15 +1936,20 @@ function procStat(pid: number): { ppid: number; start: string } | null {
   }
 }
 
-/** Record the supervisor gnomon-exec `parent` reported on its --report-fd. */
-function registerSupervisor(parent: number | undefined, reported: string): number | null {
-  const pid = Number(reported.trim().split("\n")[0]);
-  if (!Number.isInteger(pid) || pid <= 1 || parent === undefined) return null;
-  const st = procStat(pid);
-  // Only the reporting gnomon-exec's own child is believed.
-  if (!st || st.ppid !== parent) return null;
-  for (const [p, start] of sessionSupervisors) if (procStat(p)?.start !== start) sessionSupervisors.delete(p);
-  sessionSupervisors.set(pid, st.start);
+/**
+ * Record the supervisor gnomon-exec reported on its --report-fd: "<pid>
+ * <start>", read by gnomon-exec while the supervisor was its unreaped child
+ * (so the pid was not yet reusable). Only gnomon-exec can write that fd: it is
+ * closed in the supervisor before the command exists. Believed only while
+ * /proc still shows the same start time.
+ */
+function registerSupervisor(reported: string): number | null {
+  const [p, start] = reported.trim().split("\n")[0]!.split(/\s+/);
+  const pid = Number(p);
+  if (!Number.isInteger(pid) || pid <= 1 || !start || start === "0") return null;
+  if (procStat(pid)?.start !== start) return null;
+  for (const [q, st] of sessionSupervisors) if (procStat(q)?.start !== st) sessionSupervisors.delete(q);
+  sessionSupervisors.set(pid, start);
   return pid;
 }
 
@@ -3355,7 +3360,7 @@ async function bashTool(
       const fd3 = proc.stdio[3] as NodeJS.ReadableStream | null | undefined;
       fd3?.on("data", (d: Buffer) => {
         report += d.toString();
-        if (supervisor === null && report.includes("\n")) supervisor = registerSupervisor(proc.pid, report);
+        if (supervisor === null && report.includes("\n")) supervisor = registerSupervisor(report);
       });
       fd3?.on("error", () => {});
     }

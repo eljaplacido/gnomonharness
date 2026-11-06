@@ -1792,7 +1792,12 @@ pub mod linux {
                     libc::close(chan[1]);
                 }
                 if let Some(r) = policy.report_fd {
-                    write_all(r, format!("{s_pid}\n").as_bytes());
+                    // The pid and its start time, read while S is this
+                    // process's unreaped child -- so the pid cannot have been
+                    // reused yet -- and checked against /proc again by
+                    // whoever uses it later.
+                    let start = super::proc_parent_and_start(s_pid).map(|(_, st)| st).unwrap_or(0);
+                    write_all(r, format!("{s_pid} {start}\n").as_bytes());
                     // SAFETY: closed once.
                     unsafe { libc::close(r) };
                 }

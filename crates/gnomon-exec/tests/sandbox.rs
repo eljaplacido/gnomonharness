@@ -1249,7 +1249,8 @@ fn report_fd_names_the_supervisor_and_the_command_cannot_write_it() {
     assert!(!t.contains("WROTE"), "the command wrote the report fd: {t}");
     let ppid = t.lines().find_map(|l| l.strip_prefix("PPID=")).unwrap_or("").trim().to_string();
     assert!(ppid.parse::<u32>().is_ok(), "the command did not run: {t}");
-    assert_eq!(buf.trim(), ppid, "the reported pid is the command's parent, the supervisor: {buf:?} vs {t}");
+    assert_eq!(buf.split_whitespace().next().unwrap_or(""), ppid, "the reported pid is the command's parent, the supervisor: {buf:?} vs {t}");
+    assert!(buf.split_whitespace().nth(1).and_then(|v| v.parse::<u64>().ok()).unwrap_or(0) > 0, "and its start time: {buf:?}");
 }
 
 #[test]
