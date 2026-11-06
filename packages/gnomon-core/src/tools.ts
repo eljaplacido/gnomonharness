@@ -14,6 +14,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { safeGit, markGitContained } from "./git_safe.js";
 import { recordDegradation, type DegradationSink } from "./degradation.js";
 import {
   readFileSync,
@@ -1704,6 +1705,9 @@ export function sandboxCommand(
 ): string {
   const ex = ctx.exec;
   if (!ex || ex.mode === "off") return command;
+  // The container can write the repository's .git/config and .gitattributes:
+  // gnomon's own git lists and blanks their drivers from now on (git_safe.ts).
+  markGitContained();
   // Single-quoted for `sh -c`, so only the quote character needs escaping --
   // and it was escaped WRONG. The POSIX idiom is `'\''`: close the quote,
   // emit a backslash-escaped quote, reopen. That is four characters. Written as
@@ -2449,11 +2453,11 @@ function cleanReaches(ctx: ToolContext, at: string, clean: GitClean): { kind: "r
     // a symlinked temp dir (/var vs /private/var on macOS) reads as outside the
     // repository, and that would refuse a clean that reaches nothing.
     const spec = relative(at, p.dir).split(sep).join("/") || ".";
-    const r = spawnSync("git", ["-C", at, "status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all", "--", spec], {
-      encoding: "utf-8",
+    const r = safeGit(["-C", at, "status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all", "--", spec], {
+      cwd: at,
       timeout: 5000,
-      windowsHide: true,
       maxBuffer: 16 * 1024 * 1024,
+      hot: true,
     });
     if (r.status !== 0 || typeof r.stdout !== "string") {
       // Not a repository: git clean fails too. Anything else: assume reached.
@@ -3231,13 +3235,12 @@ const GIT_STAMP_MAX_BUFFER = 32 * 1024 * 1024;
 
 /** stdout of one git call in `cwd`, or null if it did not start or did not exit 0. */
 function stampGit(cwd: string, args: string[]): string | null {
-  const r = spawnSync("git", args, {
+  const r = safeGit(args, {
     cwd,
-    encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: GIT_STAMP_TIMEOUT_MS,
     maxBuffer: GIT_STAMP_MAX_BUFFER,
-    windowsHide: true,
+    hot: true,
   });
   return r.error || r.status !== 0 ? null : r.stdout;
 }

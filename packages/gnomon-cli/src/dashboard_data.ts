@@ -21,7 +21,6 @@
  */
 
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -44,6 +43,7 @@ import {
   GUARD_RULES,
   type GnomonConfig,
   type AuditRecord,
+  safeGit,
 } from "gnomon-core";
 
 // ---------------------------------------------------------------------------
@@ -461,10 +461,9 @@ export function projectOverview(p: DashboardProject, opts: { trustPath?: string 
 
 /** `.gnomon/` against the last commit, by git, which reads. Null when there is no git to ask. */
 export function surfaceGitStatus(root: string): Array<{ path: string; status: string }> | null {
-  const r = spawnSync("git", ["-C", root, "status", "--porcelain=v1", "--untracked-files=all", "--", ".gnomon"], {
-    encoding: "utf-8",
+  const r = safeGit(["-C", root, "status", "--porcelain=v1", "--untracked-files=all", "--", ".gnomon"], {
+    cwd: root,
     timeout: 5000,
-    windowsHide: true,
   });
   if (r.status !== 0 || typeof r.stdout !== "string") return null;
   return r.stdout

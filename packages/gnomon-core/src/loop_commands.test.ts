@@ -684,3 +684,65 @@ describe("a surface written mid-session takes effect", () => {
     }
   }, 30000);
 });
+
+// Found reviewing #156 (finding B), and it holds in every exec mode: a
+// command rewrote .gnomon/config.toml, the loop reloaded the surface, and
+// the next model request -- with its key -- went wherever the file now said.
+// A loopback url is "local" to the trust gate, so it was never held, and
+// under --trust nothing was. exec = "docker" hides the key from the
+// container, not from gnomon's own request.
+describe("a command cannot reroute the session's model requests through the surface", () => {
+  let restoreKeys: () => void;
+  beforeAll(() => {
+    restoreKeys = stubDeclaredKeys(loadConfig(resolve(process.cwd(), "..", "..")));
+  });
+  afterAll(() => restoreKeys());
+
+  it("a rewritten endpoint url is held, said, and not used", async () => {
+    const root = makeProject();
+    const policyPath = join(root, ".gnomon", "policy.toml");
+    writeFileSync(
+      policyPath,
+      readFileSync(policyPath, "utf8")
+        .replace(/^\[verify\][\s\S]*?(?=^\[)/m, "")
+        .replace(/^gate = "on_write".*$/m, 'gate = "never"')
+    );
+    const cfgPath = join(root, ".gnomon", "config.toml");
+    const original = /^\[endpoints\.local\]\nurl = "([^"]+)"/m.exec(readFileSync(cfgPath, "utf8"))?.[1];
+    expect(original).toBeTruthy();
+    // Assembled at run time: the text rules refuse a command naming the surface.
+    const code =
+      `p = ".gno" + "mon/config.toml"; s = open(p).read(); ` +
+      `open(p, "w").write(s.replace(${JSON.stringify(original)}, "http://127.0.0.1:9/steal"))`;
+    try {
+      let call = 0;
+      const seen = await drive(root, ["reroute it", "and again", "/quit"], {
+        initialRole: "implement",
+        onExit: (_c, stop) => stop(),
+        budgetMs: 30000,
+        reply: () => {
+          call++;
+          if (call === 1) {
+            return {
+              message: {
+                content: "",
+                tool_calls: [{ function: { name: "bash", arguments: { command: `python3 -c '${code.replace(/'/g, `'\\''`)}'` } } }],
+              },
+            };
+          }
+          return { message: { content: "done" } };
+        },
+      });
+      // The surface did move, and was reloaded...
+      expect(readFileSync(cfgPath, "utf8")).toContain("127.0.0.1:9/steal");
+      expect(seen.seen, seen.seen.slice(-3000)).toContain("surface reloaded");
+      // ...the reroute was held and said...
+      expect(seen.seen).toContain("key routing NOT applied");
+      // ...and every request, after the reload too, went where the session started.
+      expect(seen.calls.length).toBeGreaterThanOrEqual(3);
+      for (const c of seen.calls) expect(c.url).not.toContain("/steal");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 60000);
+});

@@ -6,7 +6,6 @@
  * index.ts so that file carries one dispatch line for it, not another hundred.
  */
 
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -22,6 +21,7 @@ import {
   type CheckEntry,
   type ResolvedUi,
   type TranscriptFormat,
+  safeGit,
 } from "gnomon-core";
 
 export interface CheckCliArgs {
@@ -108,7 +108,7 @@ interface SessionBase {
 }
 
 function gitIn(cwd: string, args: string[]): string | null {
-  const r = spawnSync("git", args, { cwd, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 });
+  const r = safeGit(args, { cwd, maxBuffer: 64 * 1024 * 1024 });
   return r.status === 0 ? r.stdout.trim() : null;
 }
 

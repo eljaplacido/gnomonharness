@@ -9,7 +9,8 @@
  */
 
 import * as readline from "node:readline";
-import { execFileSync, spawnSync } from "node:child_process";
+import { safeGit } from "./git_safe.js";
+import { pinCredentials, holdCredentials, heldNotice, type CredentialPin } from "./credential_pin.js";
 import { checkCitations } from "./citations.js";
 import { mustFailFirst, readVerifyExit } from "./must_fail_first.js";
 import { resolve, dirname, join, basename, sep } from "node:path";
@@ -288,6 +289,11 @@ export interface PromptState {
    */
   network?: boolean;
   sandbox?: SandboxLevel;
+  /**
+   * Where the session's keys go, as it started (credential_pin.ts): a reload
+   * that moves an endpoint's url or api_key_env, or an MCP server, is held.
+   */
+  credentialPin?: CredentialPin;
   /** Connected MCP servers, if the surface declares any. Set once at startup. */
   mcp?: McpRegistry;
   /**
@@ -3603,9 +3609,10 @@ export function measureTreeDelta(
   const run = (args: string[]): string | null => {
     __treeGitCalls.n++;
     try {
-      return execFileSync("git", args, {
-        cwd: root, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"],
-      });
+      // git_safe: a repository's own config (core.fsmonitor, a filter
+      // driver) cannot make this bookkeeping run a program on the host.
+      const r = safeGit(args, { cwd: root, timeout: 5000, stdio: ["ignore", "pipe", "ignore"], hot: true });
+      return r.status === 0 && typeof r.stdout === "string" ? r.stdout : null;
     } catch {
       return null;
     }
@@ -3787,8 +3794,8 @@ function gitStatusGate(root: string):
   const key = (() => { try { return realpathSync(root); } catch { return root; } })();
   const first = !__indexRefreshed.has(key);
   __indexRefreshed.add(key);
-  const r = spawnSync("git", [...(first ? [] : ["--no-optional-locks"]), "status", "--porcelain=v2", "-z",
-    "--branch", "--untracked-files=all"], { cwd: root, encoding: "utf8", timeout: 5000 });
+  const r = safeGit([...(first ? [] : ["--no-optional-locks"]), "status", "--porcelain=v2", "-z",
+    "--branch", "--untracked-files=all"], { cwd: root, timeout: 5000, hot: true });
   if (r.status !== 0 || typeof r.stdout !== "string") {
     return /not a git repository/i.test(String(r.stderr ?? "")) ? "not-a-repo" : null;
   }
@@ -9931,8 +9938,13 @@ export async function runSessionTurn(
     try {
       // Under the same --profile the session started with (see reloadConfig),
       // and through the front end's trust decision.
-      const reloaded = (deps.reconfigure ?? ((fresh: GnomonConfig) => fresh))(reloadConfig(state.config));
+      const pin = (state.credentialPin ??= pinCredentials(state.config));
+      const settled = (deps.reconfigure ?? ((fresh: GnomonConfig) => fresh))(reloadConfig(state.config));
+      // Key routing is held to the session's start (credential_pin.ts).
+      const { config: reloaded, held } = holdCredentials(pin, settled);
       state.config = reloaded;
+      const heldLine = heldNotice(held);
+      if (heldLine) print(paint(ui, "yellow", `  ${heldLine}`));
       const short = recomputeManifest(reloaded.gnomonDir).surface_hash.slice(0, 16);
       print(
         paint(ui, "green", `  ✓ surface reloaded — now ${short}… · this session runs under it from the next turn`)
@@ -10210,6 +10222,9 @@ export async function runPromptLoop(
     audit.write("trust", { ...clamp.outcome, root: resolve(config.gnomonDir, "..") });
     console.log(paint(uiOf(state), "yellow", `  ${clamp.notice}`));
   }
+  // Where the keys go, as this session starts (credential_pin.ts): a reload
+  // may not move an endpoint's url or api_key_env, or an MCP server.
+  state.credentialPin ??= pinCredentials(state.config);
 
   // Rotating and switching need the loop's id and its persist(), so they are
   // supplied here rather than reached for from a command.
@@ -11328,8 +11343,11 @@ export async function runPromptLoop(
           // moved, because a surface that changes without saying so is the
           // thing this harness exists to prevent. Under the same --profile
           // (see reloadConfig), and through the session's trust decision.
-          const fresh = reconfigure(reloadConfig(config));
+          const pin = (state.credentialPin ??= pinCredentials(state.config));
+          const { config: fresh, held } = holdCredentials(pin, reconfigure(reloadConfig(config)));
           state.config = fresh;
+          const heldLine = heldNotice(held);
+          if (heldLine) console.log(paint(ui0, "yellow", `  ${heldLine}`));
           console.log(
             `\n  ${paint(ui0, "green", "✓")} ${paint(ui0, "bold", pickedRole)} → ` +
               `${modelTag} @${pickedEndpoint}`

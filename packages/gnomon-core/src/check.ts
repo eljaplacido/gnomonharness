@@ -26,7 +26,7 @@
  *     never 0 — the rule .gnomon/ci.sh already set for its own gates.
  */
 
-import { spawnSync } from "node:child_process";
+import { safeGitBuffer } from "./git_safe.js";
 import {
   existsSync,
   mkdirSync,
@@ -177,7 +177,7 @@ export interface CheckOptions {
 class CheckCannotRun extends Error {}
 
 function git(cwd: string, args: string[]): Buffer {
-  const r = spawnSync("git", args, { cwd, maxBuffer: 256 * 1024 * 1024 });
+  const r = safeGitBuffer(args, { cwd, maxBuffer: 256 * 1024 * 1024 });
   if (r.error) throw new CheckCannotRun(`git ${args[0]} could not start: ${r.error.message}`);
   if (r.status !== 0) {
     const err = r.stderr.toString("utf-8").trim().split("\n")[0] ?? "";
@@ -423,7 +423,7 @@ async function judge(
       rmSync(treeRoot, { recursive: true, force: true });
       git(toplevel, ["worktree", "add", "--detach", "--quiet", treeRoot, headSha]);
       cleanups.push(() => {
-        spawnSync("git", ["worktree", "remove", "--force", treeRoot], { cwd: toplevel });
+        safeGitBuffer(["worktree", "remove", "--force", treeRoot], { cwd: toplevel });
       });
       inPlace = false;
     }
