@@ -50,12 +50,6 @@ const route = {
   target: { model: "m", temperature: 0, top_p: 1, url: "http://x" },
 } as any;
 
-/** The surface with `[turn] nudge_after_idle = 12`, the pre-v0.4.3 default, in memory. */
-function withIdleNudge(config: any): any {
-  config.config = { ...config.config, turn: { ...(config.config?.turn ?? {}), nudge_after_idle: 12 } };
-  return config;
-}
-
 /**
  * One turn in which the model asks for `n` DIFFERENT bash commands, one per
  * response, then answers. Distinct on purpose: identical calls trip the stall
@@ -68,9 +62,7 @@ async function turn(
 ) {
   stub.changed = changed;
   stub.commands = [];
-  // The idle nudge these tests measure, declared: it is off by default since
-  // v0.4.3, and these are about what feeds its streak, not about the default.
-  const config: any = opts.config ?? withIdleNudge(loadConfig("../.."));
+  const config: any = opts.config ?? loadConfig("../..");
   const ui = { ...resolveUi(config), cot: opts.cot ?? "full", think: "hide", color: false };
   const state: any = { config, exchanges: [], currentRole: "implement", ui };
   const bodies: any[] = [];

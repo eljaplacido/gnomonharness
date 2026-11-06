@@ -130,10 +130,7 @@ all_refused_notice = 3       # every call to one tool refused this many times ->
 max_steps = 12               # tool calls per leg when a role declares no max_steps of its own
 legs = 8                     # max_steps_total defaults to max_steps * legs (1 = stop at the first checkpoint)
 stall_repeats = 3            # identical calls in a row that count as going in circles
-# The idle nudge is off (0): N1 (2026-11, pre-registered) stopped for futility,
-# 35 solved with it vs 37 without, of 61 paired tasks. A number turns it on:
-# that many calls without changing a file before the model is nudged to decide.
-nudge_after_idle = 0
+nudge_after_idle = 12        # calls without changing a file before the model is nudged to decide (0 = never)
 converge_refire = 6          # calls between convergence re-pushes once converge_after is reached
 
 # Known limit, stated rather than implied: this block declares TEN of the

@@ -698,9 +698,14 @@ said on stderr, and replay stays off for it for the session
 (`counters.replay_reasoning_refused`). `replay_reasoning = false` in an
 `[endpoints.<name>]` block turns it off; `true` turns it on from the first
 request. The turn record's `wire` says `replay_reasoning: true` with
-`replay_reasoning_source: "declared"` or `"default"`. Before v0.4.3 it was off
-unless declared; the default ships only once the pre-registered H3 benchmark
-confirms it.
+`replay_reasoning_source: "declared"` or `"default"`. Before v0.4.4 it was off
+unless declared. The default is H3's (2026-11-06, pre-registered, hosted
+DeepSeek V4.1 Flash under 30-minute caps): replay alone raised the hidden-test
+fraction by +0.160 [95% +0.042, +0.293] and cut capped runs from 19 to 14
+([summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)). On a local server that returns
+reasoning (llama.cpp with a thinking model, vLLM with a reasoning parser,
+Ollama's `/v1`) it turns on too and the prompt grows by the replayed
+reasoning; declare `replay_reasoning = false` there to keep the old bytes.
 
 **Steering role.** gnomon steers a turn with messages of its own: the idle
 nudge, the convergence push, a failed verification, the tool-less wrap-up,

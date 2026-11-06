@@ -1,7 +1,11 @@
 /**
- * v0.4.3: long hosted-model tasks (P2G41, 2026-11-05).
+ * v0.4.4: long hosted-model tasks (P2G41, 2026-11-05).
  *
- * - `[turn] nudge_after_idle` is off (0) by default; a number turns it on.
+ * - Reasoning replay is on by default (H3, 2026-11-06, adopted by its
+ *   pre-registered rule) and acts only once an endpoint returns reasoning.
+ * - `[turn] nudge_after_idle` stays 12 by default, as in v0.4.3: switching it
+ *   off cost the local lane 1.43x tokens at equal solves (LG1, 2026-11-06).
+ *   0 now turns it off.
  * - `gnomon task --deadline`: remaining-time notes, bash timeouts clamped to
  *   the time left, and a self-stop as `deadline` with a final record and a
  *   sealed trail (TB1).
@@ -26,6 +30,7 @@ import {
   TASK_TRANSPORT_GRACE_MS,
   loadConfig,
   parseDeadline,
+  replayFieldsOf,
   resolveDeadline,
   resolveGnomonDir,
   resolveLoop,
@@ -53,6 +58,32 @@ describe("conformance/long_tasks.json", () => {
     expect(workdirStateDir(dir)).toBe(
       join(process.env.XDG_STATE_HOME!, "gnomon", "workdirs", createHash("sha256").update(resolve(dir)).digest("hex").slice(0, 16))
     );
+  });
+});
+
+describe("v0.4.4 release defaults (H3 adopt, LG1 keep)", () => {
+  it("replay: undeclared on an OpenAI-shaped endpoint it waits for reasoning; Ollama's /api/chat never; false stays off", () => {
+    // H3 adopted replay as a default: it turns on once the endpoint returns reasoning.
+    expect(replayFieldsOf({ url: "https://openrouter.ai/api/v1/chat/completions" })).toEqual({
+      replayReasoning: false,
+      replayReasoningAuto: true,
+    });
+    expect(replayFieldsOf({ url: "http://127.0.0.1:8080/v1/chat/completions" })).toEqual({
+      replayReasoning: false,
+      replayReasoningAuto: true,
+    });
+    // The built-in `local` endpoint (Ollama's /api/chat) is never sent it.
+    expect(replayFieldsOf({ url: "http://127.0.0.1:11434/api/chat", kind: "ollama" })).toEqual({ replayReasoning: false });
+    expect(replayFieldsOf({ url: "http://127.0.0.1:8080/v1/chat/completions", replay_reasoning: false })).toEqual({
+      replayReasoning: false,
+    });
+  });
+
+  it("the idle nudge is v0.4.3's: 12 with nothing declared", () => {
+    // LG1: switching it off cost the local lane 1.43x tokens at 18 vs 18 solved.
+    expect(LOOP_DEFAULTS.nudge_after_idle).toBe(12);
+    expect(resolveLoop({ config: {} } as never).nudge_after_idle).toBe(12);
+    expect(FIXTURE.defaults["turn.nudge_after_idle"]).toBe(12);
   });
 });
 
@@ -149,30 +180,30 @@ function trail(root: string): { records: Array<Record<string, any>>; files: stri
 
 const sent = (raw: string): Array<Record<string, any>> => JSON.parse(raw).messages;
 
-describe("[turn] nudge_after_idle: off by default (N1)", () => {
-  it("defaults to 0, reads 0 as off, and a number still turns it on", () => {
-    expect(LOOP_DEFAULTS.nudge_after_idle).toBe(0);
+describe("[turn] nudge_after_idle: 12 by default, as in v0.4.3 (LG1)", () => {
+  it("defaults to 12, reads 0 as off, and any other number is the interval", () => {
+    expect(LOOP_DEFAULTS.nudge_after_idle).toBe(12);
     const at = (turn: Record<string, unknown>) => resolveLoop({ config: { turn } } as never).nudge_after_idle;
-    expect(at({})).toBe(0);
+    expect(at({})).toBe(12);
     expect(at({ nudge_after_idle: 0 })).toBe(0);
     expect(at({ nudge_after_idle: 12 })).toBe(12);
     // A fraction is floored, and never to 0: that would read as off.
     expect(at({ nudge_after_idle: 0.5 })).toBe(1);
   });
 
-  it("an undeclared surface is never nudged; a declared number is", async () => {
+  it("an undeclared surface is nudged after 12 idle calls; a declared 0 never is", async () => {
     const idle = (n: number) => (n <= 14 ? toolCall(n, "read", { path: `f${(n % 6) + 1}.txt` }) : answer("done"));
-    const off = await serve(idle);
-    const recOff = await runTask(loadConfig(surface(off.url, { tools: ["read"] })), "look", { role: "smol" });
-    expect(recOff.counters.nudges).toBe(0);
-    expect(off.raws.join("")).not.toContain("without changing a file");
-
     const on = await serve(idle);
-    const recOn = await runTask(loadConfig(surface(on.url, { tools: ["read"], turn: "nudge_after_idle = 12" })), "look", {
-      role: "smol",
-    });
+    const recOn = await runTask(loadConfig(surface(on.url, { tools: ["read"] })), "look", { role: "smol" });
     expect(recOn.counters.nudges).toBe(1);
     expect(on.raws.join("")).toContain("without changing a file");
+
+    const off = await serve(idle);
+    const recOff = await runTask(loadConfig(surface(off.url, { tools: ["read"], turn: "nudge_after_idle = 0" })), "look", {
+      role: "smol",
+    });
+    expect(recOff.counters.nudges).toBe(0);
+    expect(off.raws.join("")).not.toContain("without changing a file");
   });
 });
 
@@ -473,8 +504,8 @@ async function scripted(
   return { hashes, rec };
 }
 
-/** The two default changes, turned off: master's behaviour, declared. */
-const DISABLED = { endpoint: "replay_reasoning = false\n", turn: "nudge_after_idle = 12\n" };
+/** The one default change (replay), turned off: master's behaviour, declared. */
+const DISABLED = { endpoint: "replay_reasoning = false\n" };
 
 describe("byte-identity with master (b0f1d34e)", () => {
   it("with replay and the nudge disabled explicitly, every request is master's: reasoning, truncation, a far deadline", async () => {
@@ -486,18 +517,22 @@ describe("byte-identity with master (b0f1d34e)", () => {
     expect((await scripted("trunc", { ...DISABLED, deadlineS: 3600 })).hashes).toEqual(MASTER_B0F1D34E.trunc);
   });
 
-  it("replay by default is inert for an endpoint that sends no reasoning: only the nudge needs declaring", async () => {
-    expect((await scripted("plain", { turn: "nudge_after_idle = 12\n" })).hashes).toEqual(MASTER_B0F1D34E.reasoning);
+  it("the release defaults are master's bytes for an endpoint that sends no reasoning: nothing declared", async () => {
+    // The local-lane case LG1 measured: no reasoning field, so replay never
+    // fires, and the nudge is master's. Every request is byte-identical.
+    const plain = await scripted("plain");
+    expect(plain.hashes).toEqual(MASTER_B0F1D34E.reasoning);
+    expect(plain.rec.counters.nudges).toBe(1);
   });
 
   it("where behaviour does change, it changes only from the point it should", async () => {
     // Replay on: request 2 is the first to carry reasoning back.
-    const replay = await scripted("reasoning", { turn: "nudge_after_idle = 12\n" });
+    const replay = await scripted("reasoning");
     expect(replay.hashes[0]).toBe(MASTER_B0F1D34E.reasoning[0]);
     expect(replay.hashes[1]).not.toBe(MASTER_B0F1D34E.reasoning[1]);
-    // Nudge off: identical until the request master nudged in (the 13th,
-    // after 12 calls without a write).
-    const quiet = await scripted("plain", { endpoint: "replay_reasoning = false\n" });
+    // Nudge declared off (0): identical until the request master nudged in
+    // (the 13th, after 12 calls without a write).
+    const quiet = await scripted("plain", { turn: "nudge_after_idle = 0\n" });
     expect(quiet.hashes.slice(0, 12)).toEqual(MASTER_B0F1D34E.reasoning.slice(0, 12));
     expect(quiet.hashes[12]).not.toBe(MASTER_B0F1D34E.reasoning[12]);
     expect(quiet.rec.counters.nudges).toBe(0);

@@ -7160,7 +7160,7 @@ export async function runAgenticTurn(
     // ignore, and the overnight sweep showed weak models grinding 7–9 tasks to
     // the timeout wall), and let the turn continue: a genuine long solve keeps
     // working, a flailer gets repeated reason to conclude.
-    // Off (0) by default since v0.4.3: see ResolvedLoop.nudge_after_idle.
+    // 0 turns it off (12 by default): see ResolvedLoop.nudge_after_idle.
     if (loop.nudge_after_idle > 0 && callsSinceWrite - callsAtLastNudge >= loop.nudge_after_idle) {
       counters.nudges++;
       // A fresh nudge is a fresh chance to answer: clear the blank streak so a

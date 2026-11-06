@@ -26,31 +26,47 @@
 
 ## [Unreleased]
 
-v0.4.3 candidate: long hosted-model tasks, from the P2G41 root causes
-(2026-11-05). **The two default changes (reasoning replay on, idle nudge off)
-ship only once the pre-registered H3 benchmark confirms them.** Everything
-else is opt-in, record-only or robustness, and request bodies are
-byte-identical to master with the two defaults disabled explicitly
-(`replay_reasoning = false`, `nudge_after_idle = 12`).
+v0.4.4 candidate: long hosted-model tasks, from the P2G41 root causes
+(2026-11-05). **One default changes: reasoning replay is on for an endpoint
+that returns reasoning**, adopted by H3's pre-registered decision rule. The
+idle nudge stays at 12, as in 0.4.3: LG1 measured switching it off on the
+local lane and it cost tokens. Everything else is opt-in, record-only or
+robustness. With `replay_reasoning = false` declared, request bodies are
+byte-identical to master; on an endpoint that returns no reasoning field
+(LG1's local lane, Ollama's /api/chat) they are byte-identical with nothing
+declared (`long_tasks.test.ts` pins both).
 
-### Changed (defaults; gated on H3)
+### Changed (default)
 
 - **Reasoning replay is on by default for an endpoint that reasons.** An
   OpenAI-shaped endpoint that declares no `replay_reasoning` and answers a
   tool call with reasoning content (`reasoning_content` or `reasoning`) gets
   that reasoning back on every assistant message from the next request on,
-  for the session. P2G41: A41 (no replay) spent 153k reasoning tokens a cell
-  and capped on slow steps 19 times; B41 (replay) spent 77k. An endpoint that
-  sends no reasoning is sent none. A 400 naming `reasoning_content` is resent
-  once without it and replay stays off for that endpoint
+  for the session. An endpoint that sends no reasoning is sent none, and
+  Ollama's /api/chat is never sent it. A 400 naming `reasoning_content` is
+  resent once without it and replay stays off for that endpoint
   (`counters.replay_reasoning_refused`). `replay_reasoning = false` still turns
   it off. The turn record's `wire` adds `replay_reasoning_source`:
   `declared` or `default`.
-- **The idle nudge is off by default.** `[turn] nudge_after_idle` defaults to
-  `0`, off; a number turns it on as before. N1 (pre-registered) stopped for
-  futility at its interim look: 35 solved with the nudge against 37 without,
-  of 61 pairs (McNemar p = 0.73). `gnomon init` writes `nudge_after_idle = 0`
-  with the reason.
+  Evidence: H3 (pre-registered, hosted DeepSeek V4.1 Flash, 30-minute caps,
+  2026-11-06): replay alone (R1) against the 0.4.2 defaults (R0) raised the
+  hidden-test fraction by +0.160 [95% bootstrap +0.042, +0.293] and cut
+  capped runs from 19 to 14; both arms of the decision rule met, verdict
+  ADOPT ([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+  The rest of H3's hosted recipe (a 1M window, nudge off) added +0.017
+  [−0.095, +0.138] on top of replay: not shown, so not a default.
+
+### Unchanged: the idle nudge
+
+- **`[turn] nudge_after_idle` stays 12.** This candidate first switched it
+  off by default; LG1 (pre-registered, local RTX lane, 2026-11-06) ran that
+  build against 0.4.2 and solved 18 vs 18 while spending 1.43× the local
+  tokens [95% 1.04, 2.15], past its 1.20 guard: verdict "regresses". The
+  mechanism was the nudge (0.4.2 sent 547 nudged requests, the candidate 0);
+  replay never fired, because that lane returns no reasoning field
+  ([summary-lg1.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/lg1-2026-11/summary-lg1.txt)).
+  New: a declared `nudge_after_idle = 0` turns the nudge off (it used to be
+  floored to 1, a nudge on every idle call).
 
 ### Added
 
@@ -72,6 +88,21 @@ byte-identical to master with the two defaults disabled explicitly
   `gnomon task` waits out a provider outage longer than a session (60 s).
   A declared `transport_grace_ms` with no task value is honoured in a task.
   P2G41 lost music-harmony to 503s that outlasted 60 s.
+
+### Fixed
+
+- **A read-only working directory (TB7).** `gnomon init` in a directory it
+  cannot write keeps the surface and gnomon's records in
+  `$XDG_STATE_HOME/gnomon/workdirs/<key>`, keyed by the directory's path, and
+  says why; `gnomon task` there finds it, with the directory as the tools'
+  root. "No .gnomon/ surface found" now names the cause when the directory is
+  read-only. P2G41's risk-scorer-replay could not start in a read-only `/app`.
+- **The re-ask after an output-limit truncation is once per streak.** A
+  reply the limit did not cut (a blank one, markup) now ends a streak, so cut,
+  blank, cut re-asks the second cut instead of letting it stand as
+  `truncated`. Two cuts in a row still end the turn (P2G41's two `truncated`
+  cells were that case).
+
 ## [0.4.3] — 2026-11-06
 
 Two record fixes from the P2G41 acid test (#151) and two sets of opt-in features (#152, #154). Upgrading from 0.4.2: nothing to do. Every addition is off by default, and with none declared the request bodies a model receives are byte-identical to 0.4.2 (pinned by `completion_gate_loop.test.ts`, `sweep_knobs.test.ts` and `endpoint_error_record.test.ts`). The fixes change records only: a turn whose endpoint failed now reads `stop_reason: "endpoint_error"` instead of `answered`, and partial and killed records carry `volatile.model_calls`.
@@ -133,18 +164,6 @@ The README and GETTING_STARTED no longer cite the RTX 5090 hybrid result (87% vs
   byte-identical to master's (`completion_gate_loop.test.ts` pins them).
 
 ### Fixed
-
-- **A read-only working directory (TB7).** `gnomon init` in a directory it
-  cannot write keeps the surface and gnomon's records in
-  `$XDG_STATE_HOME/gnomon/workdirs/<key>`, keyed by the directory's path, and
-  says why; `gnomon task` there finds it, with the directory as the tools'
-  root. "No .gnomon/ surface found" now names the cause when the directory is
-  read-only. P2G41's risk-scorer-replay could not start in a read-only `/app`.
-- **The re-ask after an output-limit truncation is once per streak.** A
-  reply the limit did not cut (a blank one, markup) now ends a streak, so cut,
-  blank, cut re-asks the second cut instead of letting it stand as
-  `truncated`. Two cuts in a row still end the turn (P2G41's two `truncated`
-  cells were that case).
 
 - **A turn that ended because its endpoint failed no longer says it was
   answered.** A `gnomon task` turn whose last model request failed (no key,

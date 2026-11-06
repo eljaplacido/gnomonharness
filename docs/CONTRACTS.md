@@ -2437,23 +2437,34 @@ not shown the transcript, that rounds are bounded, that the gate is skipped
 when the step budget or the deadline is nearly spent, and that every record
 carries only the fixture's keys.
 
-## 31. Long tasks — `--deadline`, tool timing, reasoning replay and the idle nudge by default, `v: 1`
+## 31. Long tasks — `--deadline`, tool timing, reasoning replay by default, `v: 1`
 
 **Why.** P2G41 (2026-11-05, hosted DeepSeek V4.1 Flash under Harbor, 30-minute
 caps) ranked the causes of gnomon's long-task losses: no reasoning replay in
 the release defaults (19 caps on slow model steps), long commands blind to the
 deadline, capped runs leaving only a partial record (TB1, 29 of 29), no tool
 timing (TB4), a read-only `/app` failing as "No .gnomon/ surface found" (TB7),
-a 60 s provider grace outlasted by 503s, and the idle nudge, which N1 then
-stopped for futility (35 vs 37 solved of 61 pairs).
+and a 60 s provider grace outlasted by 503s.
 
-**Defaults that change (shipped only once the pre-registered H3 benchmark
-confirms them).**
+**The default that changes (v0.4.4), and the one that does not.**
 
 | key | before | now | to restore |
 |---|---|---|---|
 | `[endpoints.<name>] replay_reasoning` | off unless declared (or `api.deepseek.com`) | undeclared: on from the request after the endpoint first answers a tool call with reasoning content (`reasoning_content` or `reasoning`), for the session | `replay_reasoning = false` |
-| `[turn] nudge_after_idle` | `12` | `0`, off | `nudge_after_idle = 12` |
+| `[turn] nudge_after_idle` | `12` | `12`, unchanged; a declared `0` is now off (it was floored to 1) | — |
+
+Replay is H3's verdict (pre-registered; hosted DeepSeek V4.1 Flash, 30-minute
+caps): replay alone against the 0.4.2 defaults raised the hidden-test fraction
+by +0.160 [95% bootstrap +0.042, +0.293] and cut capped runs from 19 to 14, so
+both arms of its decision rule were met
+([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+The nudge stays because LG1 (pre-registered, local RTX lane) measured the
+build that switched it off against 0.4.2: 18 vs 18 solved at 1.43× the local
+tokens [1.04, 2.15], past its 1.20 guard, verdict "regresses"; the old build
+sent 547 nudged requests and the new 0, and replay never fired there because
+the lane returns no reasoning field
+([summary-lg1.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/lg1-2026-11/summary-lg1.txt)).
+H3's nudge-off recipe arm added +0.017 [−0.095, +0.138] on top of replay.
 
 An endpoint that never sends reasoning is never sent any, so its requests are
 the bytes they were. A 400 that names `reasoning_content` on a default replay
@@ -2504,11 +2515,10 @@ finds that surface; the directory stays the root the tools work in. "No
 streak: any reply the limit did not cut ends a streak, including one re-asked
 for being blank or markup. Two cuts in a row still end the turn (§1).
 
-**What must not change.** With `replay_reasoning = false` and
-`nudge_after_idle = 12` declared, every request body of a scripted turn is
-byte-identical to master's (0.4.2 + #151), with and without a far
-`--deadline`; an undeclared endpoint that sends no reasoning gets master's
-bytes with only `nudge_after_idle = 12` declared. The tool timing, the task
+**What must not change.** With `replay_reasoning = false` declared, every
+request body of a scripted turn is byte-identical to master's (0.4.2 + #151),
+with and without a far `--deadline`; an undeclared endpoint that sends no
+reasoning gets master's bytes with nothing declared. The tool timing, the task
 grace and the read-only fallback change no request.
 
 **Fixture**: `conformance/long_tasks.json`; `packages/gnomon-core/src/long_tasks.test.ts`

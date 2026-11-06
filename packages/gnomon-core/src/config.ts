@@ -4562,14 +4562,19 @@ export interface ResolvedLoop {
   stall_repeats: number;
   /**
    * Calls without a write before the anti-flailing nudge fires, and re-fires.
-   * 0 is off, the default since v0.4.3.
+   * 12 by default, as in every release before; 0 turns it off (since v0.4.4).
    *
-   * Off because the measurements say so: N1 (2026-11, pre-registered, gx10
-   * lane) stopped for futility at its interim look, nudge on 35 vs off 37
-   * solved of 61 paired tasks (McNemar p = 0.73, conditional power 0.013); S1
-   * (2026-11-03) found the user-role nudge no help (15 vs 19) at +35% tokens;
-   * and opencode, the peer it was measured against, has no idle nudge at all.
-   * A declared number still turns it on.
+   * It stays on because the measurement that would switch it off says not
+   * to: LG1 (2026-11-06, pre-registered, local RTX lane) ran the nudge-off
+   * build against v0.4.2 and solved 18 vs 18 while spending 1.43x the local
+   * tokens [95% 1.04, 2.15], breaching its 1.20 guard -- verdict "regresses";
+   * the nudge-off arm sent 0 nudged requests to the old build's 547
+   * (https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/lg1-2026-11/summary-lg1.txt).
+   * On hosted models H3's nudge-off recipe arm (R2 vs R1) showed nothing
+   * either way (+0.017 hidden-test fraction [-0.095, +0.138]). N1's futility
+   * stop (35 vs 37 of 61) and S1 (15 vs 19) say the nudge does not raise
+   * solves; LG1 says removing it costs tokens. Not shown either way, so the
+   * default does not move.
    *
    * `stall_repeats` catches a model repeating one call verbatim; it does not
    * catch the other measured failure -- many *different* diagnostic calls, none
@@ -4607,7 +4612,7 @@ export const LOOP_DEFAULTS: ResolvedLoop = {
   max_steps: 12,
   legs: 8,
   stall_repeats: 3,
-  nudge_after_idle: 0,
+  nudge_after_idle: 12,
   converge_refire: 6,
 };
 
@@ -4664,7 +4669,7 @@ export function resolveLoop(config: GnomonConfig): ResolvedLoop {
     // `[].every(...)`, which is `true`. Zero would declare a stall on the first
     // tool call of every turn.
     stall_repeats: Math.max(1, Math.floor(num(l?.stall_repeats, d.stall_repeats))),
-    // 0 is off, the default, as 0 is "never" for read_only_converge_after.
+    // 0 is off, as 0 is "never" for read_only_converge_after.
     // Any other number is "calls since the last one", floored at 1.
     nudge_after_idle: ((n) => (n === 0 ? 0 : Math.max(1, Math.floor(n))))(
       num(l?.nudge_after_idle, d.nudge_after_idle)
