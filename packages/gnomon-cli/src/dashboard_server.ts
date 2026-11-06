@@ -24,7 +24,8 @@
  * neither set the Authorization header nor read a response.
  */
 
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
+import { createRequire } from "node:module";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -68,6 +69,12 @@ import {
   type DashboardAction,
   type Pending,
 } from "./dashboard_actions.js";
+
+// `node:http` is loaded when a server is made, not at import: in a bundle every
+// static import is hoisted to startup, and on Node 22 `node:http` alone pulls
+// in tls, http2, zlib and undici -- ~10 ms on every `gnomon --version` for a
+// command most sessions never run (audit 2026-11-06, startup).
+const loadHttp = (): typeof import("node:http") => createRequire(import.meta.url)("node:http") as typeof import("node:http");
 
 export { DASHBOARD_ACTIONS, ACTION_STATES, ACTION_CONFIRMS };
 
@@ -509,7 +516,7 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
     return fail(res, 404, "not found");
   }
 
-  const server = createServer((req, res) => {
+  const server = loadHttp().createServer((req, res) => {
     void (async () => {
       const host = req.headers.host ?? "";
       if (!allowedHosts().includes(host)) return fail(res, 403, "Host is not this dashboard");

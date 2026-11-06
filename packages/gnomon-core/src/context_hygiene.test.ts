@@ -731,15 +731,21 @@ describe("the GUIDE's reference bootstrap", () => {
     for (const p of BOOTSTRAP_PLATFORMS) expect(Array.isArray(env[p]) && env[p].length).toBeTruthy();
     const probes = env[bootstrapPlatform()] as string[];
     const command = composeBootstrapCommand(probes, env.max_lines);
+    // The GUIDE's timeout_ms is what a user's machine gets. A hosted Windows
+    // runner is several times slower at starting the probes' processes and
+    // hit it (20 s, audit 2026-11-06), which says nothing about the bootstrap.
+    // This test is about every probe running to the end, so on Windows it
+    // allows four times the declared budget.
+    const timeoutMs = process.platform === "win32" ? env.timeout_ms * 4 : env.timeout_ms;
     const out = await executeTool(
       "bash",
       { command },
-      { root: REPO, sandbox: "off", gate: "never", approve: async () => true, timeoutMs: env.timeout_ms, maxOutputBytes: 32_000, allow: "strict" } as any,
+      { root: REPO, sandbox: "off", gate: "never", approve: async () => true, timeoutMs, maxOutputBytes: 32_000, allow: "strict" } as any,
       new Set(["bash"])
     );
     expect(out.code, out.content.slice(0, 400)).toBe(0);
     for (const p of probes) expect(out.content).toContain(`$ ${p}\n`);
     const snap = bootstrapSnapshot(out.content, env.max_bytes, command);
     expect(snap.text).not.toContain("this exit status is");
-  }, 30_000);
+  }, process.platform === "win32" ? 120_000 : 30_000);
 });

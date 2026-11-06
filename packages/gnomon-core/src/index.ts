@@ -33,6 +33,9 @@ export * from "./mediators.js";
 // The completion gate (`[verify] completion_gate`): checklist, required check
 // and read-only reviewer at the end of a turn (docs/CONTRACTS.md §30).
 export * from "./completion_gate.js";
+// The finish gate (`[verify] finish_gate = "v2"`): task verbatim, caveat
+// audit, claims against evidence, targeted checks. CONTRACTS.md §33.
+export * from "./finish_gate.js";
 // The sweep knobs: reasoning effort, sampling passthrough, the environment
 // snapshot, the todo gate, the edit variant and the package-index allowlist,
 // each opt-in (docs/CONTRACTS.md §32).

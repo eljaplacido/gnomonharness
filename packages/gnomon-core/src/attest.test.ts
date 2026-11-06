@@ -49,8 +49,37 @@ let root: string;
 let signerPath: string;
 let verifierPath: string;
 
+/**
+ * How the fixture scripts read stdin. `readFileSync(0)` on a Windows pipe can
+ * throw EOF or EAGAIN when the writer has not finished yet; the verifier then
+ * exited 1 and a correctly signed trail read as "broken" (windows-latest, 2x,
+ * audit 2026-11-06). The fixtures read with a loop that rides those out, so a
+ * failure here is the code under test, not the pipe.
+ */
+const STDIN_READER = `
+import { readSync as __readSync } from "node:fs";
+function __stdin() {
+  const chunks = [];
+  const buf = Buffer.alloc(65536);
+  for (;;) {
+    let n;
+    try {
+      n = __readSync(0, buf, 0, buf.length, null);
+    } catch (e) {
+      if (e.code === "EAGAIN") continue;
+      if (e.code === "EOF") break;
+      throw e;
+    }
+    if (n === 0) break;
+    chunks.push(Buffer.from(buf.subarray(0, n)));
+  }
+  return Buffer.concat(chunks);
+}
+`;
+
 /** A signer script: reads the digest from stdin, writes base64 to stdout. */
 function writeSigner(file: string, body: string): string {
+  if (body.includes("readFileSync(0)")) body = STDIN_READER + body.split("readFileSync(0)").join("__stdin()");
   writeFileSync(file, body, "utf-8");
   chmodSync(file, 0o755);
   return `"${process.execPath}" "${file}"`;

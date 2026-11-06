@@ -122,6 +122,20 @@ import {
   type CompletionGateState,
 } from "./completion_gate.js";
 import {
+  resolveFinishGate,
+  nextFinishStep,
+  scanCaveats,
+  caveatIds,
+  auditFinish,
+  renderFinishGate,
+  renderFinishNoTool,
+  FINISH_GATE_ROUNDS,
+  FINISH_GATE_MIN_REMAINING,
+  type FinishGateCounters,
+  type FinishGateState,
+  type EvidenceCall,
+} from "./finish_gate.js";
+import {
   CallLedger,
   legBudget,
   overflowBudget,
@@ -2730,6 +2744,16 @@ export const STEER_PREFIX = "[gnomon] ";
  */
 export const STEER_CLOSE = "[/gnomon]";
 
+/**
+ * What an end-of-turn stage hands back instead of accepting the answer: one
+ * message, sent after the rejected answer, in the role the stage chose.
+ */
+interface EndOfTurnHandBack {
+  stage: "verify" | "todo_gate" | "completion_gate" | "finish_gate";
+  role: "system" | "user";
+  content: string;
+}
+
 /** Whether any message after the first is a system message. */
 export function hasLateSystem(messages: ChatMessage[]): boolean {
   return messages.some((m, i) => i > 0 && m.role === "system");
@@ -4044,6 +4068,12 @@ export interface TurnCounters {
    */
   todo_gate?: TodoGateCounters;
   /**
+   * The finish gate (`[verify] finish_gate = "v2"`, finish_gate.ts):
+   * hand-backs, tool calls after them, caveat hits, outcome. Present only
+   * when declared. docs/CONTRACTS.md §33.
+   */
+  finish_gate?: FinishGateCounters;
+  /**
    * Successful edits by the tier that matched, under tools.toml `edit`
    * `variant = "compat"`; zeros included on every turn of such a surface.
    * Absent otherwise. docs/CONTRACTS.md §32.
@@ -4959,7 +4989,26 @@ async function agenticTurn(
   // for the turn a person asked for: a delegated sub-turn -- the reviewer
   // included -- is part of its parent's work and is not gated on its own.
   const completion = resolveCompletionGate(config);
-  const gateOn = completion.mode !== "off" && depth === 0;
+  // The finish gate (finish_gate.ts) replaces the completion gate when both
+  // are declared (the surface audit says so): one end-of-turn gate per arm.
+  const finishOn = depth === 0 && resolveFinishGate(config) === "v2";
+  const gateOn = completion.mode !== "off" && depth === 0 && !finishOn;
+  const finishState: FinishGateState = { rounds: 0, toolsSince: 0 };
+  // The calls this turn made that ran, for the finish gate's claim/evidence
+  // check. Kept only when the gate is on.
+  const finishCalls: EvidenceCall[] = [];
+  if (finishOn) {
+    counters.finish_gate = {
+      v: 1,
+      mode: "v2",
+      max_rounds: FINISH_GATE_ROUNDS,
+      min_remaining: FINISH_GATE_MIN_REMAINING,
+      rounds: 0,
+      tool_calls: 0,
+      caveats: 0,
+      outcome: "not_reached",
+    };
+  }
   const gateState: CompletionGateState = { rounds: 0, checkRequired: false, checksSince: 0, reviewed: false };
   if (gateOn) {
     counters.completion_gate = {
@@ -4979,7 +5028,9 @@ async function agenticTurn(
   // declared, and like the completion gate only for the turn a person asked
   // for. It judges a checklist this turn wrote, so a list left over from an
   // earlier turn of a session cannot hold a new one back.
-  const todoGateOn = depth === 0 && resolveTodoGate(config);
+  // The finish gate lists the turn's open todos itself, so it supersedes the
+  // todo gate when both are declared (the surface audit says so).
+  const todoGateOn = depth === 0 && resolveTodoGate(config) && !finishOn;
   let todoRounds = 0;
   let todoWrittenThisTurn = false;
   if (todoGateOn) {
@@ -6082,437 +6133,545 @@ async function agenticTurn(
       // The check runs through the ordinary bash tool, so bash_deny, the
       // sandbox level and the tool timeout all apply to it unchanged. It is
       // not a privileged escape hatch.
-      const gateApplies =
-        verify !== null &&
-        !sub?.readOnly &&
-        result.code === 0 &&
-        steps > 0 &&
-        verifyRounds < verify.max_rounds &&
-        (verify.after === "always" ||
-          touchedFiles ||
-          // "change": the same question asked of the tree rather than of the
-          // tool name, so heredoc and sed -i work is checked too, while a
-          // question-only turn that moved nothing is not charged a full suite.
-          // A shell call the stamp could not see counts: "moved nothing" has
-          // to be known to skip a check, not assumed.
-          (verify.after === "change" && (shellTouchedWorktree || shellMayHaveTouched)));
+      // The end-of-turn pipeline. The model answered; before the answer
+      // stands, each end-of-turn check is asked in one fixed order, and the
+      // first that hands the turn back wins: the declared [verify] check (and
+      // test_must_fail_first), the todo gate, the completion gate, the finish
+      // gate. A hand-back is the rejected answer followed by one message; the
+      // stage says which role that message goes out in. One place, so a new
+      // check is a new stage rather than another early `continue` somewhere
+      // in the answer path. (A cut-off reply's re-ask and the idle nudge are
+      // not here: they act before a turn has answered.)
+      const endVerify = async (): Promise<EndOfTurnHandBack | null> => {
+        const gateApplies =
+          verify !== null &&
+          !sub?.readOnly &&
+          result.code === 0 &&
+          steps > 0 &&
+          verifyRounds < verify.max_rounds &&
+          (verify.after === "always" ||
+            touchedFiles ||
+            // "change": the same question asked of the tree rather than of the
+            // tool name, so heredoc and sed -i work is checked too, while a
+            // question-only turn that moved nothing is not charged a full suite.
+            // A shell call the stamp could not see counts: "moved nothing" has
+            // to be known to skip a check, not assumed.
+            (verify.after === "change" && (shellTouchedWorktree || shellMayHaveTouched)));
 
-      // The gate did not apply, and the reason is one the operator would want
-      // to know: the surface declared a check, the turn changed the worktree,
-      // and the check did not run because the change came through the shell.
-      // Found 2026-09-05 by benchmarks/greenfield-spec, whose whole arm was
-      // measuring a mechanism that was not running.
-      if (
-        verify !== null &&
-        !gateApplies &&
-        verify.after === "write" &&
-        !touchedFiles &&
-        shellTouchedWorktree &&
-        result.code === 0 &&
-        steps > 0 &&
-        verifyRounds < verify.max_rounds
-      ) {
-        deps.progress.stop();
-        warn(
-          paint(
-            deps.ui,
-            "yellow",
-            `  ⚙ verify — NOT RUN. This turn changed files only through the shell, ` +
-              `and [verify] after = "write" counts write/edit. Set after = "change" ` +
-              `to check every turn that changed a file by any route.`
-          )
-        );
-        recordDegradation(deps.audit, {
-          id: "verify_skipped_shell_only",
-          declared: `[verify] ${verify.command} after = "write"`,
-          actual: "not run; the turn's changes came through the shell, not write/edit",
-          detail: { command: verify.command },
-        });
-        verifyOutcome = "skipped";
-      }
-
-      if (gateApplies && verify) {
-        verifyRounds++;
-        deps.progress.stop();
-        say(paint(deps.ui, "cyan", `  ⚙ verify`) +
-          paint(deps.ui, "gray", ` ${verify.command}`));
-        // The check is the SURFACE's declaration, not a tool the model chose,
-        // so it runs for any role and is not gated like a model action -- a
-        // coordinator that changed files still gets its declared check.
-        //
-        // But `never` was hardcoded, so an operator running approval = "always"
-        // -- who has asked to see every command before it runs -- silently did
-        // not see this one. Under `always` it asks, once; under the other gates
-        // it stays ungated, because a declared check is not the model reaching
-        // for the shell.
-        const verifyGate: ApprovalGate = gate === "always" ? "always" : "never";
-        const check = await executeTool(
-          "bash",
-          { command: verify.command },
-          { ...ctx, gate: verifyGate, allow: "strict" as SurfaceConsent },
-          new Set(["bash"])
-        );
-        if (check.code === TOOL_DENIED_CODE) {
-          // Declined by the operator. Not a failure of the check, and not a
-          // reason to hand the turn back -- they saw it and said no.
-          say(paint(deps.ui, "gray", `  ⚙ verify — declined; not run`));
-          toolLog.push("verify — declined by the operator");
-          verifyOutcome = "declined";
-        }
-        // bashTool reports TOOL_OK for any command that *ran*; the shell's own
-        // exit status is in the summary, not the tool code. Reading the tool
-        // code here would make every check pass, including the failing ones —
-        // which is precisely the class of silent-success bug this gate exists
-        // to catch.
-        // Fail CLOSED when the exit status cannot be read.
-        //
-        // The old default was `check.code === 0 ? 0 : 1`, and bashTool reports
-        // TOOL_OK for anything that ran -- so a check killed by a signal came
-        // back as "bash — exit null", failed this regex, defaulted to 0, and the
-        // gate reported PASSED. A segfaulted or OOM-killed test suite was
-        // indistinguishable from a green one, in the one mechanism whose whole
-        // job is to contradict a model that claims success. bashTool now names
-        // the signal, and an unreadable status is treated as failure.
-        //
-        // The reading lives in readVerifyExit (must_fail_first.ts) because
-        // `gnomon check` reads the same command's exit and must not read it
-        // differently. An unreadable status is null there; 1 here, as before.
-        const verifyExit = readVerifyExit(check);
-        const shellExit = verifyExit.exit ?? 1;
-        const passed = verifyExit.passed;
-
-        // "The check could not run" is not "your work is wrong", and telling
-        // the model the second when the first is true is a category error with
-        // teeth. Measured: a [verify] command of `pytest -q hidden_test.py`
-        // against plain assert scripts errored during COLLECTION every round,
-        // so the gate reported failure unconditionally -- and the model
-        // rewrote already-correct code trying to satisfy a check that could
-        // never pass. One task went from correct without the gate to broken
-        // with it. A misconfigured check is worse than no check.
-        //
-        // 126 and 127 are POSIX and tool-independent: not executable, and not
-        // found. Anything more specific would need per-tool knowledge the
-        // harness does not have and should not guess at.
-        // 126 and 127 are POSIX and tool-independent: not executable, and not
-        // found. Anything more specific would need per-tool knowledge the
-        // harness does not have and should not guess at -- a pytest collection
-        // error still reads as an ordinary failure, which is an honest limit.
-        const unrunnable = shellExit === 126 || shellExit === 127;
-        if (!passed && unrunnable) {
-          say(
+        // The gate did not apply, and the reason is one the operator would want
+        // to know: the surface declared a check, the turn changed the worktree,
+        // and the check did not run because the change came through the shell.
+        // Found 2026-09-05 by benchmarks/greenfield-spec, whose whole arm was
+        // measuring a mechanism that was not running.
+        if (
+          verify !== null &&
+          !gateApplies &&
+          verify.after === "write" &&
+          !touchedFiles &&
+          shellTouchedWorktree &&
+          result.code === 0 &&
+          steps > 0 &&
+          verifyRounds < verify.max_rounds
+        ) {
+          deps.progress.stop();
+          warn(
             paint(
               deps.ui,
               "yellow",
-              `  ⚙ verify — the check could not run (exit ${shellExit}). ` +
-                `Not counted against the work; fix [verify] command.`
+              `  ⚙ verify — NOT RUN. This turn changed files only through the shell, ` +
+                `and [verify] after = "write" counts write/edit. Set after = "change" ` +
+                `to check every turn that changed a file by any route.`
             )
           );
-          toolLog.push(`verify — could not run (exit ${shellExit})`);
-          verifyOutcome = "unrunnable";
-          deps.audit?.write("verify", {
-            command: verify.command,
-            ok: false,
-            unrunnable: true,
-            exit: shellExit,
-            round: verifyRounds,
+          recordDegradation(deps.audit, {
+            id: "verify_skipped_shell_only",
+            declared: `[verify] ${verify.command} after = "write"`,
+            actual: "not run; the turn's changes came through the shell, not write/edit",
+            detail: { command: verify.command },
           });
-          // Handing this back would spend the remaining rounds on a defect in
-          // the surface rather than in the work, so stop checking.
-          verifyRounds = verify.max_rounds;
+          verifyOutcome = "skipped";
         }
-        // A test that would have passed BEFORE this turn pins nothing.
-        //
-        // Only meaningful when the check passed and the turn actually wrote a
-        // test: restore the non-test files to their pre-images, run the same
-        // command again, and if it still passes then the new test does not
-        // depend on the change it claims to cover. T8 measured this model
-        // clearing that bar 1 time in 9, with three tests asserting the bug
-        // itself, so the cheapest honest guard is to re-run rather than to ask.
-        let pinsNothing = false;
-        if (passed && verify.test_must_fail_first && ctx.preImages && ctx.preImages.size > 0) {
-          // Extracted so `gnomon check` re-runs exactly this against a change
-          // another harness made; see must_fail_first.ts. The re-run goes
-          // through this turn's own ctx, as the first run did.
-          const mff = await mustFailFirst(ctx.root, verify, ctx.preImages, (command) =>
-            executeTool(
-              "bash",
-              { command },
-              { ...ctx, gate: "never" as ApprovalGate, allow: "strict" as SurfaceConsent },
-              new Set(["bash"])
-            )
+
+        if (gateApplies && verify) {
+          verifyRounds++;
+          deps.progress.stop();
+          say(paint(deps.ui, "cyan", `  ⚙ verify`) +
+            paint(deps.ui, "gray", ` ${verify.command}`));
+          // The check is the SURFACE's declaration, not a tool the model chose,
+          // so it runs for any role and is not gated like a model action -- a
+          // coordinator that changed files still gets its declared check.
+          //
+          // But `never` was hardcoded, so an operator running approval = "always"
+          // -- who has asked to see every command before it runs -- silently did
+          // not see this one. Under `always` it asks, once; under the other gates
+          // it stays ungated, because a declared check is not the model reaching
+          // for the shell.
+          const verifyGate: ApprovalGate = gate === "always" ? "always" : "never";
+          const check = await executeTool(
+            "bash",
+            { command: verify.command },
+            { ...ctx, gate: verifyGate, allow: "strict" as SurfaceConsent },
+            new Set(["bash"])
           );
-          for (const w of mff.warnings ?? []) say(paint(deps.ui, "yellow", `  ⚠ test_must_fail_first: ${w}`));
-          if (!mff.ran && mff.reason?.startsWith("not re-run:")) {
-            say(paint(deps.ui, "yellow", `  ⚠ test_must_fail_first ${mff.reason}`));
+          if (check.code === TOOL_DENIED_CODE) {
+            // Declined by the operator. Not a failure of the check, and not a
+            // reason to hand the turn back -- they saw it and said no.
+            say(paint(deps.ui, "gray", `  ⚙ verify — declined; not run`));
+            toolLog.push("verify — declined by the operator");
+            verifyOutcome = "declined";
           }
-          if (mff.pinsNothing) {
-            pinsNothing = true;
+          // bashTool reports TOOL_OK for any command that *ran*; the shell's own
+          // exit status is in the summary, not the tool code. Reading the tool
+          // code here would make every check pass, including the failing ones —
+          // which is precisely the class of silent-success bug this gate exists
+          // to catch.
+          // Fail CLOSED when the exit status cannot be read.
+          //
+          // The old default was `check.code === 0 ? 0 : 1`, and bashTool reports
+          // TOOL_OK for anything that ran -- so a check killed by a signal came
+          // back as "bash — exit null", failed this regex, defaulted to 0, and the
+          // gate reported PASSED. A segfaulted or OOM-killed test suite was
+          // indistinguishable from a green one, in the one mechanism whose whole
+          // job is to contradict a model that claims success. bashTool now names
+          // the signal, and an unreadable status is treated as failure.
+          //
+          // The reading lives in readVerifyExit (must_fail_first.ts) because
+          // `gnomon check` reads the same command's exit and must not read it
+          // differently. An unreadable status is null there; 1 here, as before.
+          const verifyExit = readVerifyExit(check);
+          const shellExit = verifyExit.exit ?? 1;
+          const passed = verifyExit.passed;
+
+          // "The check could not run" is not "your work is wrong", and telling
+          // the model the second when the first is true is a category error with
+          // teeth. Measured: a [verify] command of `pytest -q hidden_test.py`
+          // against plain assert scripts errored during COLLECTION every round,
+          // so the gate reported failure unconditionally -- and the model
+          // rewrote already-correct code trying to satisfy a check that could
+          // never pass. One task went from correct without the gate to broken
+          // with it. A misconfigured check is worse than no check.
+          //
+          // 126 and 127 are POSIX and tool-independent: not executable, and not
+          // found. Anything more specific would need per-tool knowledge the
+          // harness does not have and should not guess at.
+          // 126 and 127 are POSIX and tool-independent: not executable, and not
+          // found. Anything more specific would need per-tool knowledge the
+          // harness does not have and should not guess at -- a pytest collection
+          // error still reads as an ordinary failure, which is an honest limit.
+          const unrunnable = shellExit === 126 || shellExit === 127;
+          if (!passed && unrunnable) {
             say(
               paint(
                 deps.ui,
                 "yellow",
-                `  ⚠ the new test passes against the code as it was — it pins nothing`
+                `  ⚙ verify — the check could not run (exit ${shellExit}). ` +
+                  `Not counted against the work; fix [verify] command.`
               )
             );
-          }
-        }
-
-        toolLog.push(`verify — ${check.summary}${pinsNothing ? " · test pins nothing" : ""}`);
-        deps.audit?.write("verify", {
-          role,
-          command: verify.command,
-          exit: shellExit,
-          passed,
-        });
-
-        // An unrunnable check is a defect in the surface, not in the work, and
-        // handing it back tells the model its correct code is wrong. Measured:
-        // against an uncollectable check the model rewrote working code every
-        // round, and one task went from passing without the gate to failing
-        // with it.
-        if (unrunnable && !pinsNothing) {
-          // Already reported above, with the audit record saying why.
-        } else if (!passed || pinsNothing) {
-          verifyOutcome = "failed";
-          // `warn`: a declared check failing is not chatter, and on
-          // `gnomon task --json` it was the one line saying so (gnomon chaos,
-          // late_system_dropped: a check that failed every round it was given
-          // ended exit 0, stop_reason answered, stderr empty).
-          warn(paint(deps.ui, "yellow",
-            `    ⚠ verify failed — handing the turn back`));
-          working.push({
-          role: "assistant",
-          content: result.content,
-          ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
-        });
-          working.push({
-            role: "system",
-            content:
-              `The declared verification for this repository failed after your ` +
-              `changes. This is the repository's own check, not an opinion:\n\n` +
-              `$ ${verify.command}\n${check.content}\n\n` +
-              `Your answer is not accepted while this fails. Fix what it shows, ` +
-              `or say plainly that you cannot and why.`,
-          });
-          continue;
-        }
-        // Only say it passed when it actually ran and passed. A check that
-        // could not run has already reported itself, and calling that "passed"
-        // would be the same silent success this gate exists to contradict --
-        // just from the other side.
-        if (!unrunnable) {
-          verifyOutcome = "passed";
-          say(paint(deps.ui, "gray", `    ✓ verify passed`));
-        }
-      }
-
-      // The todo gate (`[turn] todo_gate = true`, sweep_knobs.ts, §32). After
-      // the declared check and before the completion gate: an answer given
-      // with the turn's own checklist still open is handed back once, naming
-      // the open items. Only for an answer (not a failed request, a blank or a
-      // cut-off reply), only to a role that can update the list, only for a
-      // list this turn wrote, and skipped, as the completion gate is, when
-      // less than `[verify] completion_min_remaining` of the step budget or
-      // the run deadline is left.
-      if (
-        todoGateOn &&
-        result.code === 0 &&
-        !emptyTerminus &&
-        lastFinishReason !== "length" &&
-        offered.has("todo") &&
-        todoWrittenThisTurn
-      ) {
-        const tg = counters.todo_gate!;
-        const open = openTodos(state.todos ?? []);
-        const left = budgetLeft({ steps, maxTotal, deadline: deps.deadline, now: Date.now() });
-        tg.open = open.length;
-        const verdict =
-          open.length === 0
-            ? ("passed" as const)
-            : todoRounds >= TODO_GATE_ROUNDS
-              ? ("exhausted" as const)
-              : left.fraction < completion.min_remaining
-                ? ("skipped_budget" as const)
-                : null;
-        const judged = {
-          role,
-          round: todoRounds,
-          open: open.length,
-          step: steps,
-          budget_left: Math.round(left.fraction * 1000) / 1000,
-          budget_by: left.by,
-        };
-        if (verdict === null) {
-          todoRounds++;
-          tg.rounds = todoRounds;
-          tg.outcome = "not_reached";
-          deps.audit?.write("todo_gate", { ...judged, round: todoRounds, action: "hand_back" });
-          deps.progress.stop();
-          warn(
-            paint(deps.ui, "yellow", `  ⚙ todo gate — ${open.length} open item(s); handing the turn back (round ${todoRounds} of ${TODO_GATE_ROUNDS})`)
-          );
-          toolLog.push(`todo gate — round ${todoRounds}: ${open.length} open`);
-          working.push({
-            role: "assistant",
-            content: result.content,
-            ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
-          });
-          working.push({ role: "system", content: renderTodoHandBack(open, { round: todoRounds, maxRounds: TODO_GATE_ROUNDS }) });
-          continue;
-        }
-        tg.outcome = verdict;
-        deps.audit?.write("todo_gate", { ...judged, action: "accept", outcome: verdict });
-        if (verdict !== "passed") {
-          say(paint(deps.ui, "gray", `  ⚙ todo gate — ${open.length} open item(s); ${verdict === "exhausted" ? "round spent" : `skipped: ${Math.round(left.fraction * 100)}% of the ${left.by === "deadline" ? "deadline" : "step budget"} left`}; answer accepted`));
-        }
-      }
-
-      // The completion gate (`[verify] completion_gate`, completion_gate.ts).
-      // After the declared check, so a failing suite is handed back first and
-      // the gate judges an answer the repository's own check already let by.
-      // Only for an answer: not a reply the endpoint failed, a blank, or one
-      // cut off at the output limit. And only when the turn changed the
-      // worktree, by any route -- a question answered from reading has no
-      // result to check.
-      if (gateOn) {
-        const cg = counters.completion_gate!;
-        const changedSomething = touchedFiles || shellTouchedWorktree || shellMayHaveTouched;
-        if (
-          result.code !== 0 ||
-          emptyTerminus ||
-          lastFinishReason === "length" ||
-          steps === 0 ||
-          !changedSomething
-        ) {
-          if (gateState.rounds === 0) cg.outcome = "not_applicable";
-        } else {
-          const gateT0 = Date.now();
-          const root = resolve(state.config.gnomonDir, "..");
-          const canCheck = offered.has("bash");
-          const left = budgetLeft({ steps, maxTotal, deadline: deps.deadline, now: gateT0 });
-          let step = nextGateStep(completion, gateState, { budgetLeft: left.fraction, canCheck });
-          let handBack: string | null = null;
-          let findingsN: number | undefined;
-          let reviewFailedWhy: string | undefined;
-          if (step.act === "review") {
-            // A fresh context: the task and the workspace, never this
-            // transcript. Read-only by construction (runAgenticTurn `sub`).
-            gateState.reviewed = true;
-            const task = taskTextOf(messages);
-            const before = treeSnapshot(root);
-            const instruction = reviewerInstruction(task, root, changedPaths(treeBaseline, before));
-            deps.progress.stop();
-            say(paint(deps.ui, "cyan", `  ⚙ completion gate`) + paint(deps.ui, "gray", ` review by ${completion.reviewer}`));
-            let findings: string[] = [];
-            let reviewFailed: string | undefined;
-            if (!config.roles[completion.reviewer]) {
-              reviewFailed = `reviewer role "${completion.reviewer}" is not declared`;
-            } else {
-              const system = buildSystemPrompt(state, completion.reviewer, instruction, { delegated: true });
-              const rev = await runAgenticTurn(
-                state,
-                completion.reviewer,
-                routeRole(config, completion.reviewer),
-                [
-                  ...(system ? [{ role: "system" as const, content: system }] : []),
-                  { role: "user" as const, content: instruction },
-                ],
-                deps,
-                depth + 1,
-                ledger,
-                { readOnly: true }
-              );
-              cg.reviews++;
-              cg.review_steps += rev.toolSteps;
-              const after = treeSnapshot(root);
-              const moved = changedPaths(before, after);
-              if (mapBucket(rev.code) === "apparatus_failure") {
-                reviewFailed = `the reviewer's turn failed (code ${rev.code})`;
-              } else if (moved && moved.length > 0) {
-                // Cannot happen through the offered tools; if it did, the
-                // findings came from a reviewer that changed what it judged.
-                reviewFailed = `the worktree changed during the review (${moved.slice(0, 5).join(", ")})`;
-              } else {
-                findings = parseFindings(rev.content);
-              }
-            }
-            if (reviewFailed) {
-              // Announced on the unsilenceable channel and recorded on the
-              // completion_gate record below (`review_failed`) and the
-              // counters (`review_failures`); the answer is accepted as
-              // `exhausted`, never as a clean pass.
-              cg.review_failures = (cg.review_failures ?? 0) + 1;
-              warn(paint(deps.ui, "yellow", `  ⚠ completion gate — review not used: ${reviewFailed}`));
-            }
-            reviewFailedWhy = reviewFailed;
-            findingsN = findings.length;
-            cg.findings += findings.length;
-            if (findings.length > 0) {
-              handBack = renderFindings(findings, { round: gateState.rounds + 1, maxRounds: completion.max_rounds });
-              gateState.checkRequired = false;
-            } else {
-              step = { act: "accept", outcome: reviewFailed ? "exhausted" : "passed" };
-            }
-          } else if (step.act === "checklist") {
-            const cl = buildChecklist(taskTextOf(messages));
-            handBack = renderChecklist(cl, {
-              round: gateState.rounds + 1,
-              maxRounds: completion.max_rounds,
-              canCheck,
-              changed: changedPaths(treeBaseline, treeSnapshot(root)),
+            toolLog.push(`verify — could not run (exit ${shellExit})`);
+            verifyOutcome = "unrunnable";
+            deps.audit?.write("verify", {
+              command: verify.command,
+              ok: false,
+              unrunnable: true,
+              exit: shellExit,
+              round: verifyRounds,
             });
-            gateState.checkRequired = canCheck;
-          } else if (step.act === "no_check") {
-            handBack = renderNoCheck({ round: gateState.rounds + 1, maxRounds: completion.max_rounds });
-            gateState.checkRequired = true;
+            // Handing this back would spend the remaining rounds on a defect in
+            // the surface rather than in the work, so stop checking.
+            verifyRounds = verify.max_rounds;
           }
-          const ms = Date.now() - gateT0;
-          cg.ms = (cg.ms ?? 0) + ms;
-          if (handBack !== null) {
-            gateState.rounds++;
-            gateState.checksSince = 0;
-            cg.rounds = gateState.rounds;
+          // A test that would have passed BEFORE this turn pins nothing.
+          //
+          // Only meaningful when the check passed and the turn actually wrote a
+          // test: restore the non-test files to their pre-images, run the same
+          // command again, and if it still passes then the new test does not
+          // depend on the change it claims to cover. T8 measured this model
+          // clearing that bar 1 time in 9, with three tests asserting the bug
+          // itself, so the cheapest honest guard is to re-run rather than to ask.
+          let pinsNothing = false;
+          if (passed && verify.test_must_fail_first && ctx.preImages && ctx.preImages.size > 0) {
+            // Extracted so `gnomon check` re-runs exactly this against a change
+            // another harness made; see must_fail_first.ts. The re-run goes
+            // through this turn's own ctx, as the first run did.
+            const mff = await mustFailFirst(ctx.root, verify, ctx.preImages, (command) =>
+              executeTool(
+                "bash",
+                { command },
+                { ...ctx, gate: "never" as ApprovalGate, allow: "strict" as SurfaceConsent },
+                new Set(["bash"])
+              )
+            );
+            for (const w of mff.warnings ?? []) say(paint(deps.ui, "yellow", `  ⚠ test_must_fail_first: ${w}`));
+            if (!mff.ran && mff.reason?.startsWith("not re-run:")) {
+              say(paint(deps.ui, "yellow", `  ⚠ test_must_fail_first ${mff.reason}`));
+            }
+            if (mff.pinsNothing) {
+              pinsNothing = true;
+              say(
+                paint(
+                  deps.ui,
+                  "yellow",
+                  `  ⚠ the new test passes against the code as it was — it pins nothing`
+                )
+              );
+            }
+          }
+
+          toolLog.push(`verify — ${check.summary}${pinsNothing ? " · test pins nothing" : ""}`);
+          deps.audit?.write("verify", {
+            role,
+            command: verify.command,
+            exit: shellExit,
+            passed,
+          });
+
+          // An unrunnable check is a defect in the surface, not in the work, and
+          // handing it back tells the model its correct code is wrong. Measured:
+          // against an uncollectable check the model rewrote working code every
+          // round, and one task went from passing without the gate to failing
+          // with it.
+          if (unrunnable && !pinsNothing) {
+            // Already reported above, with the audit record saying why.
+          } else if (!passed || pinsNothing) {
+            verifyOutcome = "failed";
+            // `warn`: a declared check failing is not chatter, and on
+            // `gnomon task --json` it was the one line saying so (gnomon chaos,
+            // late_system_dropped: a check that failed every round it was given
+            // ended exit 0, stop_reason answered, stderr empty).
+            warn(paint(deps.ui, "yellow",
+              `    ⚠ verify failed — handing the turn back`));
+            return {
+              stage: "verify",
+              role: "system",
+              content:
+                `The declared verification for this repository failed after your ` +
+                `changes. This is the repository's own check, not an opinion:\n\n` +
+                `$ ${verify.command}\n${check.content}\n\n` +
+                `Your answer is not accepted while this fails. Fix what it shows, ` +
+                `or say plainly that you cannot and why.`,
+            };
+          }
+          // Only say it passed when it actually ran and passed. A check that
+          // could not run has already reported itself, and calling that "passed"
+          // would be the same silent success this gate exists to contradict --
+          // just from the other side.
+          if (!unrunnable) {
+            verifyOutcome = "passed";
+            say(paint(deps.ui, "gray", `    ✓ verify passed`));
+          }
+        }
+        return null;
+      };
+      const endTodoGate = async (): Promise<EndOfTurnHandBack | null> => {
+        // The todo gate (`[turn] todo_gate = true`, sweep_knobs.ts, §32). After
+        // the declared check and before the completion gate: an answer given
+        // with the turn's own checklist still open is handed back once, naming
+        // the open items. Only for an answer (not a failed request, a blank or a
+        // cut-off reply), only to a role that can update the list, only for a
+        // list this turn wrote, and skipped, as the completion gate is, when
+        // less than `[verify] completion_min_remaining` of the step budget or
+        // the run deadline is left.
+        if (
+          todoGateOn &&
+          result.code === 0 &&
+          !emptyTerminus &&
+          lastFinishReason !== "length" &&
+          offered.has("todo") &&
+          todoWrittenThisTurn
+        ) {
+          const tg = counters.todo_gate!;
+          const open = openTodos(state.todos ?? []);
+          const left = budgetLeft({ steps, maxTotal, deadline: deps.deadline, now: Date.now() });
+          tg.open = open.length;
+          const verdict =
+            open.length === 0
+              ? ("passed" as const)
+              : todoRounds >= TODO_GATE_ROUNDS
+                ? ("exhausted" as const)
+                : left.fraction < completion.min_remaining
+                  ? ("skipped_budget" as const)
+                  : null;
+          const judged = {
+            role,
+            round: todoRounds,
+            open: open.length,
+            step: steps,
+            budget_left: Math.round(left.fraction * 1000) / 1000,
+            budget_by: left.by,
+          };
+          if (verdict === null) {
+            todoRounds++;
+            tg.rounds = todoRounds;
+            tg.outcome = "not_reached";
+            deps.audit?.write("todo_gate", { ...judged, round: todoRounds, action: "hand_back" });
+            deps.progress.stop();
+            warn(
+              paint(deps.ui, "yellow", `  ⚙ todo gate — ${open.length} open item(s); handing the turn back (round ${todoRounds} of ${TODO_GATE_ROUNDS})`)
+            );
+            toolLog.push(`todo gate — round ${todoRounds}: ${open.length} open`);
+            return { stage: "todo_gate", role: "system", content: renderTodoHandBack(open, { round: todoRounds, maxRounds: TODO_GATE_ROUNDS }) };
+          }
+          tg.outcome = verdict;
+          deps.audit?.write("todo_gate", { ...judged, action: "accept", outcome: verdict });
+          if (verdict !== "passed") {
+            say(paint(deps.ui, "gray", `  ⚙ todo gate — ${open.length} open item(s); ${verdict === "exhausted" ? "round spent" : `skipped: ${Math.round(left.fraction * 100)}% of the ${left.by === "deadline" ? "deadline" : "step budget"} left`}; answer accepted`));
+          }
+        }
+        return null;
+      };
+      const endCompletionGate = async (): Promise<EndOfTurnHandBack | null> => {
+        // The completion gate (`[verify] completion_gate`, completion_gate.ts).
+        // After the declared check, so a failing suite is handed back first and
+        // the gate judges an answer the repository's own check already let by.
+        // Only for an answer: not a reply the endpoint failed, a blank, or one
+        // cut off at the output limit. And only when the turn changed the
+        // worktree, by any route -- a question answered from reading has no
+        // result to check.
+        if (gateOn) {
+          const cg = counters.completion_gate!;
+          const changedSomething = touchedFiles || shellTouchedWorktree || shellMayHaveTouched;
+          if (
+            result.code !== 0 ||
+            emptyTerminus ||
+            lastFinishReason === "length" ||
+            steps === 0 ||
+            !changedSomething
+          ) {
+            if (gateState.rounds === 0) cg.outcome = "not_applicable";
+          } else {
+            const gateT0 = Date.now();
+            const root = resolve(state.config.gnomonDir, "..");
+            const canCheck = offered.has("bash");
+            const left = budgetLeft({ steps, maxTotal, deadline: deps.deadline, now: gateT0 });
+            let step = nextGateStep(completion, gateState, { budgetLeft: left.fraction, canCheck });
+            let handBack: string | null = null;
+            let findingsN: number | undefined;
+            let reviewFailedWhy: string | undefined;
+            if (step.act === "review") {
+              // A fresh context: the task and the workspace, never this
+              // transcript. Read-only by construction (runAgenticTurn `sub`).
+              gateState.reviewed = true;
+              const task = taskTextOf(messages);
+              const before = treeSnapshot(root);
+              const instruction = reviewerInstruction(task, root, changedPaths(treeBaseline, before));
+              deps.progress.stop();
+              say(paint(deps.ui, "cyan", `  ⚙ completion gate`) + paint(deps.ui, "gray", ` review by ${completion.reviewer}`));
+              let findings: string[] = [];
+              let reviewFailed: string | undefined;
+              if (!config.roles[completion.reviewer]) {
+                reviewFailed = `reviewer role "${completion.reviewer}" is not declared`;
+              } else {
+                const system = buildSystemPrompt(state, completion.reviewer, instruction, { delegated: true });
+                const rev = await runAgenticTurn(
+                  state,
+                  completion.reviewer,
+                  routeRole(config, completion.reviewer),
+                  [
+                    ...(system ? [{ role: "system" as const, content: system }] : []),
+                    { role: "user" as const, content: instruction },
+                  ],
+                  deps,
+                  depth + 1,
+                  ledger,
+                  { readOnly: true }
+                );
+                cg.reviews++;
+                cg.review_steps += rev.toolSteps;
+                const after = treeSnapshot(root);
+                const moved = changedPaths(before, after);
+                if (mapBucket(rev.code) === "apparatus_failure") {
+                  reviewFailed = `the reviewer's turn failed (code ${rev.code})`;
+                } else if (moved && moved.length > 0) {
+                  // Cannot happen through the offered tools; if it did, the
+                  // findings came from a reviewer that changed what it judged.
+                  reviewFailed = `the worktree changed during the review (${moved.slice(0, 5).join(", ")})`;
+                } else {
+                  findings = parseFindings(rev.content);
+                }
+              }
+              if (reviewFailed) {
+                // Announced on the unsilenceable channel and recorded on the
+                // completion_gate record below (`review_failed`) and the
+                // counters (`review_failures`); the answer is accepted as
+                // `exhausted`, never as a clean pass.
+                cg.review_failures = (cg.review_failures ?? 0) + 1;
+                warn(paint(deps.ui, "yellow", `  ⚠ completion gate — review not used: ${reviewFailed}`));
+              }
+              reviewFailedWhy = reviewFailed;
+              findingsN = findings.length;
+              cg.findings += findings.length;
+              if (findings.length > 0) {
+                handBack = renderFindings(findings, { round: gateState.rounds + 1, maxRounds: completion.max_rounds });
+                gateState.checkRequired = false;
+              } else {
+                step = { act: "accept", outcome: reviewFailed ? "exhausted" : "passed" };
+              }
+            } else if (step.act === "checklist") {
+              const cl = buildChecklist(taskTextOf(messages));
+              handBack = renderChecklist(cl, {
+                round: gateState.rounds + 1,
+                maxRounds: completion.max_rounds,
+                canCheck,
+                changed: changedPaths(treeBaseline, treeSnapshot(root)),
+              });
+              gateState.checkRequired = canCheck;
+            } else if (step.act === "no_check") {
+              handBack = renderNoCheck({ round: gateState.rounds + 1, maxRounds: completion.max_rounds });
+              gateState.checkRequired = true;
+            }
+            const ms = Date.now() - gateT0;
+            cg.ms = (cg.ms ?? 0) + ms;
+            if (handBack !== null) {
+              gateState.rounds++;
+              gateState.checksSince = 0;
+              cg.rounds = gateState.rounds;
+              deps.audit?.write("completion_gate", {
+                role,
+                round: gateState.rounds,
+                action: step.act,
+                step: steps,
+                budget_left: Math.round(left.fraction * 1000) / 1000,
+                budget_by: left.by,
+                ...(findingsN !== undefined ? { findings: findingsN } : {}),
+                ms,
+              });
+              deps.progress.stop();
+              warn(
+                paint(deps.ui, "yellow", `  ⚙ completion gate — ${step.act === "review" ? `${findingsN} finding(s)` : step.act === "no_check" ? "no check run" : "checklist"}; handing the turn back (round ${gateState.rounds} of ${completion.max_rounds})`)
+              );
+              toolLog.push(`completion gate — round ${gateState.rounds}: ${step.act}`);
+              return { stage: "completion_gate", role: "system", content: handBack };
+            }
+            const outcome = step.act === "accept" ? step.outcome : "passed";
+            cg.outcome = outcome;
             deps.audit?.write("completion_gate", {
               role,
               round: gateState.rounds,
-              action: step.act,
+              action: "accept",
+              outcome,
               step: steps,
               budget_left: Math.round(left.fraction * 1000) / 1000,
               budget_by: left.by,
               ...(findingsN !== undefined ? { findings: findingsN } : {}),
+              ...(reviewFailedWhy ? { review_failed: reviewFailedWhy } : {}),
               ms,
             });
-            deps.progress.stop();
-            warn(
-              paint(deps.ui, "yellow", `  ⚙ completion gate — ${step.act === "review" ? `${findingsN} finding(s)` : step.act === "no_check" ? "no check run" : "checklist"}; handing the turn back (round ${gateState.rounds} of ${completion.max_rounds})`)
-            );
-            toolLog.push(`completion gate — round ${gateState.rounds}: ${step.act}`);
-            working.push({
-              role: "assistant",
-              content: result.content,
-              ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
-            });
-            working.push({ role: "system", content: handBack });
-            continue;
-          }
-          const outcome = step.act === "accept" ? step.outcome : "passed";
-          cg.outcome = outcome;
-          deps.audit?.write("completion_gate", {
-            role,
-            round: gateState.rounds,
-            action: "accept",
-            outcome,
-            step: steps,
-            budget_left: Math.round(left.fraction * 1000) / 1000,
-            budget_by: left.by,
-            ...(findingsN !== undefined ? { findings: findingsN } : {}),
-            ...(reviewFailedWhy ? { review_failed: reviewFailedWhy } : {}),
-            ms,
-          });
-          if (outcome !== "passed") {
-            say(paint(deps.ui, "gray", `  ⚙ completion gate — ${outcome === "skipped_budget" ? `skipped: ${Math.round(left.fraction * 100)}% of the ${left.by === "deadline" ? "deadline" : "step budget"} left` : "rounds spent; answer accepted"}`));
+            if (outcome !== "passed") {
+              say(paint(deps.ui, "gray", `  ⚙ completion gate — ${outcome === "skipped_budget" ? `skipped: ${Math.round(left.fraction * 100)}% of the ${left.by === "deadline" ? "deadline" : "step budget"} left` : "rounds spent; answer accepted"}`));
+            }
           }
         }
+        return null;
+      };
+      const endFinishGate = async (): Promise<EndOfTurnHandBack | null> => {
+        // The finish gate (`[verify] finish_gate = "v2"`, finish_gate.ts, §33).
+        // Where the completion gate would run, and under the same conditions:
+        // an answer (not a failed request, a blank or a cut-off reply) of a turn
+        // that changed the worktree. Fires once with the task verbatim, the open
+        // todos, a caveat audit of this answer, its claims without evidence and
+        // targeted checks, as a user-role note; accepts the
+        // next answer once a tool call has run since; never fires with less
+        // than FINISH_GATE_MIN_REMAINING of the steps or the deadline left.
+        if (finishOn) {
+          const fg = counters.finish_gate!;
+          const changedSomething = touchedFiles || shellTouchedWorktree || shellMayHaveTouched;
+          if (
+            result.code !== 0 ||
+            emptyTerminus ||
+            lastFinishReason === "length" ||
+            steps === 0 ||
+            !changedSomething
+          ) {
+            if (finishState.rounds === 0) fg.outcome = "not_applicable";
+          } else {
+            const left = budgetLeft({ steps, maxTotal, deadline: deps.deadline, now: Date.now() });
+            const hits = scanCaveats(result.content);
+            const step = nextFinishStep(finishState, left.fraction);
+            const judged = {
+              role,
+              round: finishState.rounds,
+              step: steps,
+              budget_left: Math.round(left.fraction * 1000) / 1000,
+              budget_by: left.by,
+              caveats: hits.length,
+              caveat_ids: caveatIds(hits),
+            };
+            if (step.act !== "accept") {
+              const round = finishState.rounds + 1;
+              let handBack: string;
+              let openN: number | undefined;
+              let gaps: string[] | undefined;
+              if (step.act === "fire") {
+                const found = auditFinish({
+                  answer: result.content,
+                  calls: finishCalls,
+                  todos: todoWrittenThisTurn ? openTodos(state.todos ?? []) : [],
+                });
+                openN = found.todos.length;
+                gaps = found.gaps;
+                fg.caveats = found.caveats.length;
+                if (gaps.length > 0) fg.evidence_gaps = gaps.length;
+                if (openN > 0) fg.open_todos = openN;
+                handBack = renderFinishGate({
+                  ...found,
+                  task: taskTextOf(messages),
+                  changed: changedPaths(treeBaseline, treeSnapshot(resolve(state.config.gnomonDir, ".."))),
+                  round,
+                });
+              } else {
+                handBack = renderFinishNoTool({ round, caveats: hits });
+              }
+              finishState.rounds = round;
+              finishState.toolsSince = 0;
+              fg.rounds = round;
+              deps.audit?.write("finish_gate", {
+                ...judged,
+                round,
+                action: step.act,
+                ...(openN !== undefined ? { open_todos: openN } : {}),
+                ...(gaps !== undefined ? { evidence_gaps: gaps } : {}),
+              });
+              deps.progress.stop();
+              warn(
+                paint(deps.ui, "yellow", `  ⚙ finish gate — ${step.act === "fire" ? `${hits.length} caveat(s)` : "no tool call"}; handing the turn back (round ${round} of ${FINISH_GATE_ROUNDS})`)
+              );
+              toolLog.push(`finish gate — round ${round}: ${step.act}`);
+              // A user-role note, never a late system message: local chat
+              // templates drop a system message after the first (every such
+              // request on the M2 lanes lost it), and a gate the model never
+              // sees is a gate that costs a round for nothing. Marked as
+              // gnomon's, as steer_role = "user" marks its notes.
+              return { stage: "finish_gate", role: "user", content: STEER_PREFIX + handBack };
+            }
+            fg.outcome = step.outcome;
+            if (finishState.rounds > 0) fg.caveats_final = hits.length;
+            deps.audit?.write("finish_gate", {
+              ...judged,
+              action: "accept",
+              outcome: step.outcome,
+              tools_since: finishState.toolsSince,
+            });
+            if (step.outcome !== "passed") {
+              say(paint(deps.ui, "gray", `  ⚙ finish gate — ${step.outcome === "skipped_budget" ? `skipped: ${Math.round(left.fraction * 100)}% of the ${left.by === "deadline" ? "deadline" : "step budget"} left` : "rounds spent; answer accepted"}`));
+            }
+          }
+        }
+        return null;
+      };
+      let endHandBack: EndOfTurnHandBack | null = null;
+      for (const stage of [endVerify, endTodoGate, endCompletionGate, endFinishGate]) {
+        endHandBack = await stage();
+        if (endHandBack) break;
+      }
+      if (endHandBack) {
+        working.push({
+          role: "assistant",
+          content: result.content,
+          ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
+        });
+        working.push({ role: endHandBack.role, content: endHandBack.content });
+        continue;
       }
 
       // Measured at the end of the turn, from git — never the model's account.
@@ -7055,6 +7214,15 @@ async function agenticTurn(
       if (gateOn && gateState.rounds > 0 && call.name === "bash" && outcome.code === 0) {
         gateState.checksSince++;
         counters.completion_gate!.checks++;
+      }
+      // For the finish gate: the calls that ran (its claim/evidence check), and
+      // any tool call that ran after it handed back.
+      if (finishOn && outcome.code === 0) {
+        finishCalls.push({ name: call.name, ...(call.name === "bash" ? { command: String(call.args?.command ?? "") } : {}) });
+        if (finishState.rounds > 0) {
+          finishState.toolsSince++;
+          counters.finish_gate!.tool_calls++;
+        }
       }
 
       if ((call.name === "write" || call.name === "edit") && outcome.code === 0) {

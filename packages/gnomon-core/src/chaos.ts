@@ -25,9 +25,16 @@
  * suite's own declared `[resilience]` with wide margins.
  */
 
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
+
+// `node:http` is loaded when a server is made, not at import: in a bundle every
+// static import is hoisted to startup, and on Node 22 `node:http` alone pulls
+// in tls, http2, zlib and undici -- ~10 ms on every `gnomon --version` for a
+// command most sessions never run (audit 2026-11-06, startup).
+const loadHttp = (): typeof import("node:http") => createRequire(import.meta.url)("node:http") as typeof import("node:http");
 
 /** The scorecard schema `gnomon chaos --json` prints (docs/CONTRACTS.md §20). */
 export const CHAOS_SCHEMA = "gnomon.chaos/1";
@@ -637,7 +644,7 @@ export class ChaosEndpoint {
 
   private constructor(onRequest?: (log: ChaosRequestLog, caseId: string) => void) {
     this.onRequest = onRequest;
-    this.server = createServer((req, res) => {
+    this.server = loadHttp().createServer((req, res) => {
       this.handle(req, res).catch(() => {
         if (!res.headersSent) res.writeHead(500);
         res.end();

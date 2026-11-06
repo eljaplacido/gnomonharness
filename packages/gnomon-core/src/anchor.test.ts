@@ -273,13 +273,21 @@ describe("at seal: queued, and nothing else", () => {
 
   it("the seal and the checkpoint never wait on the witness (latency)", async () => {
     // A witness that takes 1.5 s to fail. The seal path and writeCheckpoint
-    // must return in a few ms regardless; delivery runs on its own clock.
+    // must return without waiting on it; delivery runs on its own clock.
+    //
+    // Asserted structurally, not by wall clock: this used `< 400 ms`, which
+    // Windows runners missed at 424 and 440 ms (audit 2026-11-06). What the
+    // test is about is that the seal does not WAIT on the witness, and that
+    // holds exactly when the witness has not settled by the time the seal
+    // returns -- a synchronous call cannot have waited on a 1.5 s timer.
     const c = cfg({ backend: "rfc3161", url: "http://tsa.invalid/" });
     mkdirSync(join(root, ".gnomon"), { recursive: true });
     writeFileSync(join(root, ".gnomon", "config.toml"), "[audit]\nenabled = true\n");
     let flush: Promise<unknown> | null = null;
+    let witnessSettled = false;
     const slow = (async () => {
       await new Promise((r) => setTimeout(r, 1500));
+      witnessSettled = true;
       throw new Error("unreachable");
     }) as unknown as typeof fetch;
     setAnchorScheduler((s) => {
@@ -287,18 +295,16 @@ describe("at seal: queued, and nothing else", () => {
     });
 
     const base = cfg();
-    const t0 = performance.now();
-    sealTrail(base, "off");
-    const offMs = performance.now() - t0;
+    const off = sealTrail(base, "off") as unknown;
+    expect(off).not.toBeInstanceOf(Promise);
 
-    const t1 = performance.now();
-    sealTrail(c, "on");
-    writeCheckpoint(c);
-    const onMs = performance.now() - t1;
+    const on = sealTrail(c, "on") as unknown;
+    const checkpoint = writeCheckpoint(c) as unknown;
+    expect(on).not.toBeInstanceOf(Promise);
+    expect(checkpoint).not.toBeInstanceOf(Promise);
 
     expect(flush).not.toBeNull();
-    expect(onMs).toBeLessThan(400);
-    expect(offMs).toBeLessThan(400);
+    expect(witnessSettled, "the seal returned only after the witness answered").toBe(false);
     // Still queued while the witness is slow; queued, not lost, when it fails.
     expect(pendingAnchors(anchorOf(c)).length).toBe(2);
     const r = (await flush) as { delivered: number; pending: number; error?: string };

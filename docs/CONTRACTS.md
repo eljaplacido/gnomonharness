@@ -566,6 +566,15 @@ extra produces none of the records below.
 **Task record** — `gnomon task --json` carries the same object, without `root`,
 as `trust`. Absent when the surface grants nothing extra.
 
+Optional keys, in both: `tools_changed` (on a clamp for MCP tools that changed,
+below) and `floor_held` — present only on `decision: "trusted"` when the run
+was held to this machine's exec floor (`--trust`, `GNOMON_TRUST` or the store
+trusted a surface that moves a role out of the container it ran in, or to
+another image). It lists the sorted grant keys held back (`exec:<role>:off`,
+`exec:<role>:image`), so the record says that bash ran somewhere other than
+`surface_hash` declares ([THREAT-MODEL-EXEC.md](THREAT-MODEL-EXEC.md), row 9).
+`--trust-exec-downgrade` runs as declared and writes no `floor_held`.
+
 | `decision` | Meaning |
 |---|---|
 | `trusted` | Already trusted; `by` says how |
@@ -699,7 +708,8 @@ more. Some writes are invisible to it: a path built at run time (`$D/a.jsonl`,
 `os.path.join(...)`, string concatenation), a command run through `xargs`,
 `eval` or `sh -c` on computed text, and anything a script file does. MCP tool
 calls are not checked by these rules at all. **This is not containment.**
-Containment is the kernel-enforced sandbox (`exec os`, #74). The precheck
+Containment is a sandbox: `exec = "docker"` today (docs/THREAT-MODEL-EXEC.md);
+a kernel-enforced sandbox (`exec os`, #74/#156) is proposed and **not merged**. The precheck
 exists so that the routes a person can name are refused with a reason, before
 anything runs.
 
@@ -743,7 +753,8 @@ does: an `ask` for such a call names it in `reason` (and the loop's approval
 prompt lists the package.json scripts that would run, as the file spells
 them), and `[approval] repo_code = true` makes every such call `ask`, whatever
 `gate` says. Off by default. **Only a sandbox contains what that code does**
-(`exec = "docker"`; `exec os`, #74). Running a repository file by name
+(`exec = "docker"`; a kernel sandbox, `exec os` #74/#156, is proposed, not
+merged). Running a repository file by name
 (`python x.py`, `./x.sh`) and test runners (`pytest`, `go test`) also run the
 repository's code and are not listed: the call names the code it runs.
 
@@ -874,15 +885,17 @@ A signer proves provenance only against whoever cannot make it sign:
 - **A signer that needs a person for each signature** does: ssh-agent with
   `ssh-add -c`, a FIDO or hardware key that needs a touch, or a passphrase
   prompt.
-- **The kernel sandbox** (`exec os`, #74) also does, because it keeps the agent
-  away from the key.
+- **A kernel sandbox** (`exec os`, #74/#156) would also do, because it keeps
+  the agent away from the key. It is proposed and **not merged**; master
+  accepts only `exec = "off"` or `"docker"`.
 
 `recordTrial` signs only a report that `runTrial` produced in the same
 process, frozen, with its own cells. **That does not stop forgery.** A script
 can run `runTrial` with a stubbed runner, and a key-file signer will sign the
 result, which gets a skill accepted. Against an agent with a shell, the
 guarantee comes **only** from a signer that needs a person to confirm each
-signature (made at the end of the trial), or from the kernel sandbox.
+signature (made at the end of the trial). (A kernel sandbox, `exec os`, would
+also give it; it is proposed in #74/#156 and not merged.)
 `require_trial` is off by default, and opt-in.
 
 `[skills] require_trial = true` in `policy.toml` makes accept refuse in three
@@ -1143,13 +1156,16 @@ The record `record_tamper_resolved` has keys `tamper` (`{trail, seq, hash}`),
 `person_present_signer`), `user` and `host`. A resolution counts only when its
 trail verifies and it was authorised the way it says.
 
-**Threat model, stated once.**
+**Threat model, stated once** (for the record guard; the threat model for
+`[sandbox] exec`, its invariant and which layer enforces what, is
+[THREAT-MODEL-EXEC.md](THREAT-MODEL-EXEC.md)).
 - **Against a careless or accidental agent**, these protections both guard and
   make tampering visible: the `record` rule's patterns, this guard, the
   checkpoints, and the records it writes.
 - **Against a hostile one** that sets out to get round them, the guarantee is a
-  person-present signer (§11) or the kernel sandbox (`exec os`, #74), which
-  keeps the agent away from the records and the key. After the fact, an
+  person-present signer (§11). A kernel sandbox (`exec os`, #74/#156), which
+  would keep the agent away from the records and the key, is proposed and
+  **not merged**. For `exec = "docker"` see docs/THREAT-MODEL-EXEC.md. After the fact, an
   external anchor (§21) on an append-only witness makes a re-chained, deleted
   or rolled-back trail detectable even when the agent could write the records.
 
@@ -1818,7 +1834,9 @@ The self-modification paths gnomon offers, and what each must do:
 | `bash` | refuse, or be detected: `surface_drift` for `.gnomon/`, the record guard (§14) for the records |
 
 `bash` may be detected rather than refused because its rules are a pattern
-check over text (§10). The kernel sandbox (`exec os`) is what contains it.
+check over text (§10). Only a sandbox contains it: `exec = "docker"` today
+(docs/THREAT-MODEL-EXEC.md); a kernel sandbox (`exec os`, #74/#156) is
+proposed, not merged.
 Detection includes a surface that can no longer be hashed after the call, such
 as a dangling link. That is reported as drift with `after: "unhashable"`.
 
@@ -2383,6 +2401,9 @@ a finish hook, a structured checklist, a read-only auditor sub-agent.
   findings are not used; that is announced, counted as `review_failures`, and
   recorded as `review_failed`.
 
+**Superseded** by the finish gate (§33): with `finish_gate = "v2"` declared,
+this gate does not run and `counters.completion_gate` is absent.
+
 **When it applies.** Only to the turn a person asked for (not a delegated
 sub-turn), only to an answer (not a failed request, a blank or a cut-off
 reply), after the declared `[verify]` check, and only when the turn changed
@@ -2608,7 +2629,8 @@ and audit kind `bootstrap`, with `id: "env_snapshot"`. A declared
 `[context] bootstrap` wins over it, and the audit says `env_snapshot` does
 nothing there.
 
-**Todo gate.** With `todo_gate = true`, an answer given while the checklist
+**Todo gate.** Superseded by the finish gate (§33): with `finish_gate = "v2"`
+it does not run. With `todo_gate = true`, an answer given while the checklist
 this turn wrote has open items (any not `completed`) is not accepted: the
 harness hands the turn back once, as a system message after the answer,
 naming each open item. It applies, like the completion gate (§30), only to the
@@ -2669,6 +2691,140 @@ lists hosts, and an admitted call's `tool_call` record carries
 code's lists and defaults to it, this section to its keys and values, the
 byte-identity above, and, against a scripted model per knob, what goes out on
 the wire and into the records.
+
+## 33. Finish gate — `[verify] finish_gate`, `counters.finish_gate`, audit kind `finish_gate`, `v: 1`
+
+Harness control at the end of a turn, opt-in, built for long tasks. It reads
+the answer, which the completion gate (§30) does not, and it respects the
+clock.
+
+Why it exists. The 2026-11-06 near-miss analysis (P2G41 and H3, 35 cells with
+at least 60% of the hidden tests passing and reward 0) found 6 cells whose
+final answer named the defect the hidden test checks ("one judgement call
+worth flagging … I kept it in the catalogue", "the plan reports
+`route_feasible: false`", "the plan necessarily carries lateness") and ended
+anyway, and 5 whose own checks never exercised the hidden property. The
+completion gate's checklist does not read the answer, and on hosted
+time-capped runs it hurt because it is blind to the deadline (H4-lite).
+
+**Surface** (`.gnomon/policy.toml`, under `[verify]`, content-hashed with it):
+
+| key | default | meaning |
+|---|---|---|
+| `finish_gate` | `off` | `off` or `v2`. Anything else is reported by the surface audit and runs as `off` |
+
+One key on purpose: the rounds (2) and the budget floor (0.15) are fixed, so a
+benchmark arm is one line.
+
+**Supersedes.** With `finish_gate = "v2"`, the completion gate (§30, any mode)
+and the todo gate (§32) do not run, and their counters are absent: v2's
+hand-back carries the task (the checklist's source), the targeted checks and
+the open todos. The surface audit names each superseded key (not fatal). The
+old knobs keep their behaviour when v2 is off.
+
+**The end-of-turn pipeline.** Every check that can refuse an answer is a stage
+of one ordered pipeline in the loop: the declared `[verify]` check (with
+`test_must_fail_first`), the todo gate, the completion gate, the finish gate.
+The first stage that hands back wins; a hand-back is the rejected answer
+followed by one message whose role the stage chooses. With v2 off, every stage
+sends what it sent before (pinned by the byte-identity tests of §30 and §32).
+The output-limit re-ask and the idle nudge are not stages: they act before a
+turn has answered.
+
+**Modes.**
+- `off`: nothing below runs. The request bodies a turn sends are
+  byte-identical to a build without the gate (`finish_gate_loop.test.ts`
+  hashes a scripted turn's bodies against the same master hash as §30).
+- `v2`: the first answer of a turn that changed the worktree is not accepted.
+  The harness hands the turn back once with:
+  1. the task, verbatim (its last user message, up to 16,000 characters);
+  2. the open items of a checklist this turn wrote with `todo`, if any;
+  3. a **caveat audit**: a deterministic scan of the answer's prose (not its
+     fenced code or reasoning) for admitted deviations, each sentence quoted
+     back with "The task requires the strict reading; fix it or show
+     concretely why the task text allows it." At most 8 sentences; a negated
+     phrase ("no TODOs", "nothing skipped") is not a hit. Caveat ids:
+     `judgement_call`, `flagged`, `infeasible`, `not_possible`, `could_not`,
+     `skipped`, `approximate`, `only_the`, `carries`, `over_limit`, `late`,
+     `false_literal`, `todo`, `workaround`, `assumed`, `not_implemented`,
+     `partial`, `interpretation`, `unverified`;
+  4. **claims against evidence** (after clnkr's completion gate): a claim the
+     answer makes that no tool call after the turn's last `write` or `edit`
+     supports. Evidence ids: `artifact_unchecked` (created or wrote an output;
+     needs a `read`/`glob`, or `ls`, `cat`, `head`, `test -f`, …),
+     `service_unchecked` (a server is running; needs `curl`, `nc`, `ss`, …),
+     `behavior_unchecked` (it works, fixed, passes; needs a command that runs
+     something). clnkr checks claims against checks the model reports; this
+     checks them against the calls the turn made;
+  5. targeted checks: every output path and format exists as the task says;
+     each requirement mapped to evidence; tests are evidence only after
+     confirming they cover the requirement, so add one for any stated property
+     not exercised (ordering, concurrency, edge inputs, changed values); no
+     narrower or easier-to-test substitute; scratch files this turn made
+     removed, never an input or a file the task names.
+
+  The next answer is accepted once at least one tool call has run since the
+  hand-back. An answer with none is handed back again (`no_tool`), at most 2
+  rounds a turn.
+
+**Delivery.** Each hand-back is a **user-role** message after the rejected
+answer, starting with the `[gnomon] ` marker, whatever the endpoint's
+`steer_role`: local chat templates drop a system message after the first, and
+a gate the model never sees costs a round for nothing. Every step after it
+counts against `max_steps_total`.
+
+**When it applies.** As §30: only to the turn a person asked for, only to an
+answer (not a failed request, a blank or a cut-off reply), after the declared
+`[verify]` check, and only when the turn changed the
+worktree by any route.
+
+**Each end it applies to**, in order:
+1. a round was handed back and a tool call ran since: accept, `passed`;
+2. 2 rounds spent: accept, `exhausted`;
+3. less than 0.15 of the budget left (the smaller of the steps left of
+   `max_steps_total` and, under `--deadline`, the time left): accept,
+   `skipped_budget`;
+4. no round yet: `fire`; otherwise `no_tool`.
+
+**Actions**: `fire`, `no_tool`, `accept`. **Outcomes:** `passed`,
+`exhausted`, `skipped_budget`, `not_applicable` (the turn answered without
+changing the worktree), `not_reached` (the turn ended some other way).
+
+**`counters.finish_gate`**, on the `turn` record, the `TaskRecord` and the
+session's exchange, present only when declared: `v`, `mode`, `max_rounds`,
+`min_remaining`, `rounds`, `tool_calls` (tool calls that ran after a
+hand-back), `caveats` (caveat sentences in the answer it fired on),
+`outcome`; and when they apply `caveats_final` (caveat sentences in the
+answer accepted after a hand-back: whether the admission survived),
+`evidence_gaps` (claims without evidence when it fired) and `open_todos`.
+Nothing in it is a clock, so all of it reproduces.
+
+**`finish_gate`** (audit kind), when `[audit]` is on: one record per end the
+gate judged. Keys `role`, `round`, `action`, `step`, `budget_left` (three
+decimals), `budget_by` (`steps` or `deadline`), `caveats` (a count),
+`caveat_ids` (sorted), and when they apply `outcome` and `tools_since` (on
+`accept`), `open_todos` and `evidence_gaps` (the ids, on `fire`).
+
+**Limits.**
+- The caveat audit is phrase matching: it misses an admission worded
+  otherwise and quotes some sentences that admit nothing. The hand-back asks
+  for the strict reading or the task text that allows the other, so a false
+  hit costs words, not a wrong change forced on the model.
+- "A tool call ran" is any call that ran. Which one, and whether it checked
+  anything, is the model's choice.
+- The audit is one implementation of a seam (`FinishAudit`): a later variant
+  may fill it from a bounded judge call instead; none exists yet.
+
+**Fixture**: `conformance/finish_gate.json`. `finish_gate.test.ts` checks the
+module's modes, actions, outcomes, bounds, caveat and evidence ids against it,
+a true and a false positive per caveat pattern, the near-miss answers it was
+built from, and that this section names the kind and every value and key.
+`finish_gate_loop.test.ts` checks, against a scripted model on an Ollama
+`/api/chat` lane, byte identity when off, the hand-back's content and role,
+acceptance after a tool call, the `no_tool` round and the bound, the skip on
+the step budget and on the deadline, precedence over the completion and todo
+gates, and
+that every record carries only the fixture's keys.
 
 ## 34. Soft-timeout shell — bash `soft_timeout`, the `job` tool, audit kind `job`, `v: 1`
 

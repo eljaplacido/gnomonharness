@@ -727,6 +727,8 @@ describe("accept --evidence and require_trial", () => {
     expect(String(err)).toMatch(/ONLY from a signer that needs a person/);
     expect(String(err)).toMatch(/ssh-add -c/);
     expect(String(err)).toMatch(/kernel sandbox/);
+    // exec os (#74/#156) is not merged: the message must not present it as shipped.
+    expect(String(err)).toMatch(/not yet merged/);
     expect(String(err)).toMatch(/require_trial is off by default/);
     stillProposed();
   });

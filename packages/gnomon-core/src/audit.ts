@@ -265,6 +265,10 @@ export type AuditKind =
   // sent to it, how it exited, or why it was killed. Its own kind because a
   // job outlives the tool_call that started it.
   | "job"
+  // One per end of a turn the finish gate (`[verify] finish_gate = "v2"`,
+  // finish_gate.ts) judged: fire, no_tool or accept, the budget left, the
+  // caveat ids its audit found, claims without evidence, the open todos.
+  | "finish_gate"
   // One per model request a turn made, when [audit] is on: what it carried
   // (gnomon's estimate, replayed reasoning, steering and its role, the trim
   // before it) and what came back (provider tokens, reasoning, code, clock).

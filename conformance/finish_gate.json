@@ -1,0 +1,57 @@
+{
+  "v": 1,
+  "_comment": [
+    "The finish gate (docs/CONTRACTS.md section 33): opt-in harness control at the end of a",
+    "turn, declared as `[verify] finish_gate = \"v2\"` in policy.toml. Recorded as",
+    "`counters.finish_gate` on the turn record and TaskRecord, and as one `finish_gate` audit",
+    "record per end of a turn the gate judged. A readout parses these without reading the code,",
+    "so renaming a key, a mode, an action, an outcome, a caveat id or an evidence id is a",
+    "contract change. packages/gnomon-core/src/finish_gate.test.ts asserts the module against",
+    "this file and that CONTRACTS.md names the section, the kind and every value below.",
+    "finish_gate_loop.test.ts holds the off-by-default claim: with no gate declared, or",
+    "finish_gate = \"off\", a scripted turn sends request bodies whose sha256 matches master's."
+  ],
+  "policy": {
+    "block": "verify",
+    "file": "policy.toml",
+    "defaults": { "finish_gate": "off" }
+  },
+  "modes": ["off", "v2"],
+  "max_rounds": 2,
+  "min_remaining": 0.15,
+  "actions": ["fire", "no_tool", "accept"],
+  "outcomes": ["passed", "exhausted", "skipped_budget", "not_applicable", "not_reached"],
+  "caveat_ids": [
+    "judgement_call",
+    "flagged",
+    "infeasible",
+    "not_possible",
+    "could_not",
+    "skipped",
+    "approximate",
+    "only_the",
+    "carries",
+    "over_limit",
+    "late",
+    "false_literal",
+    "todo",
+    "workaround",
+    "assumed",
+    "not_implemented",
+    "partial",
+    "interpretation",
+    "unverified"
+  ],
+  "evidence_ids": ["artifact_unchecked", "service_unchecked", "behavior_unchecked"],
+  "counters": {
+    "at": "counters.finish_gate",
+    "required": ["v", "mode", "max_rounds", "min_remaining", "rounds", "tool_calls", "caveats", "outcome"],
+    "optional": ["caveats_final", "evidence_gaps", "open_todos"]
+  },
+  "audit": {
+    "kind": "finish_gate",
+    "required": ["role", "round", "action", "step", "budget_left", "budget_by", "caveats", "caveat_ids"],
+    "optional": ["outcome", "tools_since", "open_todos", "evidence_gaps"]
+  },
+  "budget_by": ["steps", "deadline"]
+}
