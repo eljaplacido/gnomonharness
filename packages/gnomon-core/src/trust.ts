@@ -1451,7 +1451,10 @@ export function uncontainableRoot(config: GnomonConfig, code?: string[]): string
 }
 
 /** uncontainableRoot's path checks, for a root known to run something contained. */
-export function uncontainableRootAt(root: string, code?: string[]): string | null {
+export function uncontainableRootAt(rootGiven: string, code?: string[]): string | null {
+  // Real paths on both sides: on macOS /var is /private/var, and a root
+  // spelled through the link contained a home spelled through it unnoticed.
+  const root = realOrResolved(rootGiven);
   const named: Array<[string, string]> = [
     [gnomonDataDir(), "gnomon's data directory (trust store, exec floors, keys)"],
     [homedir(), "your home directory"],
