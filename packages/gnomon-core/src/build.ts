@@ -81,8 +81,11 @@ export function resolveHarnessBuild(here: string, env: NodeJS.ProcessEnv = proce
   try {
     // git_safe: gnomon's own checkout may sit inside a root a sandboxed
     // command can write (dogfooding), and its config must not run anything.
-    const git = (args: string[]) => {
-      const r = safeGit(args, { cwd: here, stdio: ["ignore", "pipe", "ignore"], env, timeout: 5000 });
+    // `hot` (no driver listing) for the rev-parse calls, which read no file
+    // content and so run no filter; the status below lists and blanks them.
+    // On Windows every git spawn is tens of ms on the first record's path.
+    const git = (args: string[], hot = args[0] === "rev-parse") => {
+      const r = safeGit(args, { cwd: here, stdio: ["ignore", "pipe", "ignore"], env, timeout: 5000, hot });
       if (r.status !== 0 || typeof r.stdout !== "string") throw new Error(`git ${args[0]} failed`);
       return r.stdout.trim();
     };
