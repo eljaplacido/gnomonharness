@@ -36,6 +36,16 @@
   `floor_held` lists the `exec:<role>:off` / `exec:<role>:image` grants that
   `--trust`, `GNOMON_TRUST` or the store did not cover (CONTRACTS §8).
 
+### Changed (performance)
+
+- **Faster start.** `gnomon --version` 58 → 44 ms and a one-request `gnomon
+  task` 100 → 94 ms (NVIDIA GB10, paired, median of 30–40 rounds): `node:http`
+  is loaded only when the dashboard or `gnomon chaos` makes a server (on Node 22
+  importing it loads tls, http2, zlib and undici), the TUI's grapheme segmenter
+  is made on first use, and `tui`, `setup`, `doctor` and `check` load their
+  modules when run. `startup_budget.test.ts` pins what `--version` may load
+  (no network stack) instead of a wall time.
+
 ### Docs
 
 - **Truth pass (audit 2026-11-06).** `exec = "os"` (the kernel sandbox, #74/#156)

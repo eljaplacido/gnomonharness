@@ -30,12 +30,18 @@ export function plain(text: string): string {
  * missing the fallback is code points, which measures a family emoji too wide —
  * a worse table, not a broken one.
  */
-const segmenter =
-  typeof Intl !== "undefined" && "Segmenter" in Intl
-    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-    : null;
+// Made on first use, not at import: constructing it loads ICU's segmentation
+// data, ~5 ms that every `gnomon --version` and headless task paid for a
+// table only the TUI draws (audit 2026-11-06, startup).
+let segmenter: Intl.Segmenter | null | undefined;
 
 export function graphemes(text: string): string[] {
+  if (segmenter === undefined) {
+    segmenter =
+      typeof Intl !== "undefined" && "Segmenter" in Intl
+        ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+        : null;
+  }
   if (!segmenter) return Array.from(text);
   return Array.from(segmenter.segment(text), (s) => s.segment);
 }

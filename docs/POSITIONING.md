@@ -107,10 +107,16 @@ deployment.
 
 **Startup.** A release install runs one bundled, compiled launcher (the `tsx`
 era's ~197 ms of transpiling is gone). Measured on an NVIDIA GB10 (aarch64),
-40 paired rounds against a local stub model (audit 2026-11-06): `gnomon
---version` 43 ms on v0.4.0 and 61 ms on master before lazy loading; a one-request
-`gnomon task` 87 ms and 106 ms. An interactive session pays it once; a script
-calling `gnomon task` in a loop pays it every time.
+paired rounds against a local stub model: `gnomon --version` took 43 ms on
+v0.4.0 and 61 ms on master at the 2026-11-06 audit; a one-request `gnomon
+task` 87 ms and 106 ms. Lazy-loading the cold paths (the dashboard's and
+chaos's `node:http`, which on Node 22 pulls in tls, http2, zlib and undici; the
+TUI's Intl.Segmenter; setup, doctor and check) then measured, paired against
+the tree before it on the same host: `--version` 58 → 44 ms, a one-request
+task 100 → 94 ms, time to first request 81 → 75 ms. What remains over v0.4.0
+on the task path is a larger bundle to parse and one more git process
+(git_safe's config listing, a security check). An interactive session pays it
+once; a script calling `gnomon task` in a loop pays it every time.
 
 **Model support is narrower than the field.** Ollama and any OpenAI-compatible
 endpoint. That covers local inference and most routers, and it does not cover
