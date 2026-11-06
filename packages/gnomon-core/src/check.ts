@@ -766,7 +766,7 @@ async function judge(
       // Eighth review: the base is a commit the model can make, and its tree
       // can name `.git/config` or a surface other than the live one. Neither
       // is put back for the re-run, nor journalled; the verdict says so.
-      const why = unwritablePreImage(c.path);
+      const why = unwritablePreImage(c.path, own);
       if (why) {
         refused.push(`${c.path} (${why})`);
         continue;

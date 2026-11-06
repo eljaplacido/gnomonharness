@@ -43,11 +43,31 @@ export function unsafeTreePath(path: string): string | null {
   for (const part of path.split("/")) {
     if (part === "" || part === "." || part === "..") return `a "${part}" component`;
     // `.git` as any spelling a case-insensitive filesystem, or Windows (which
-    // drops trailing dots and spaces, and knows `git~1`), reads as `.git`.
-    const folded = part.toLowerCase().replace(/[. ]+$/, "");
-    if (folded === ".git" || folded === "git~1") return "a .git component";
+    // drops trailing dots and spaces), or HFS+ (which ignores zero-width code
+    // points), reads as `.git`.
+    const folded = foldTreeName(part);
+    if (folded === ".git") return "a .git component";
+    // A Windows 8.3 short name (`GIT~1`, `GNOMON~1`, ...) can name any long
+    // directory -- `.git` or one of gnomon's own -- so none is written
+    // (ninth review).
+    if (/~\d+$/.test(folded)) return "a Windows short name (~N) component";
   }
   return null;
+}
+
+/**
+ * Code points HFS+ ignores in a name, as git's is_hfs_dotgit does: `.g\u200cit`
+ * is `.git` there.
+ */
+const HFS_IGNORABLE = /[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]/gu;
+
+/**
+ * One path component as a case-insensitive, HFS+ or Windows filesystem may
+ * read it: lower-cased, HFS-ignorable code points dropped, trailing dots and
+ * spaces dropped (ninth review).
+ */
+export function foldTreeName(part: string): string {
+  return part.replace(HFS_IGNORABLE, "").toLowerCase().replace(/[. ]+$/, "");
 }
 
 /**
