@@ -375,6 +375,18 @@ interface QueueEntry {
 const queueDir = (s: ResolvedAnchor) => join(s.dir, "queue");
 const receiptsFile = (s: ResolvedAnchor) => join(s.dir, "receipts.jsonl");
 const stateFile = (s: ResolvedAnchor) => join(s.dir, "state.json");
+/**
+ * The root writeFileIn checks a write against: the project's, or -- for an
+ * absolute [audit] dir outside it -- that dir itself. writeFileIn refuses a
+ * target outside the root it is given (eighth review).
+ */
+const writeRoot = (s: ResolvedAnchor): string => {
+  const rel = relative(resolve(s.root), resolve(s.dir));
+  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) return s.root;
+  // Outside the project, where a contained command cannot reach: made as before.
+  mkdirSync(s.dir, { recursive: true });
+  return s.dir;
+};
 
 /**
  * Queue a sealed head. The only anchoring work on the seal path: one small
@@ -388,7 +400,7 @@ export function enqueueAnchor(settings: ResolvedAnchor, trailPath: string, seali
   // Written beside, then renamed (root_fs.ts): a flusher reading the
   // directory never sees half a file, and nothing a contained command put at
   // the path is written through.
-  writeFileIn(settings.root, join(dir, `${digest}.json`), `${JSON.stringify(entry)}\n`);
+  writeFileIn(writeRoot(settings), join(dir, `${digest}.json`), `${JSON.stringify(entry)}\n`);
   return digest;
 }
 
@@ -440,7 +452,7 @@ function readState(s: ResolvedAnchor): AnchorState {
 
 function writeState(s: ResolvedAnchor, patch: AnchorState): void {
   const next = { ...readState(s), ...patch };
-  writeFileIn(s.root, stateFile(s), `${JSON.stringify(next, null, 2)}\n`);
+  writeFileIn(writeRoot(s), stateFile(s), `${JSON.stringify(next, null, 2)}\n`);
 }
 
 // ---------------------------------------------------------------------------

@@ -197,11 +197,10 @@ export function appendFileIn(root: string, file: string, data: string | Uint8Arr
  */
 export function writeFileIn(root: string, file: string, data: string | Uint8Array, mode = 0o644): void {
   const p = placed(root, file);
-  if (!p) {
-    mkdirSync(dirname(resolve(file)), { recursive: true });
-    writeFileSync(file, data, { mode });
-    return;
-  }
+  // Eighth review: a target outside the root was written unchecked -- the
+  // one fallback a path built from a model-made tree could reach. A caller
+  // whose file may legitimately live elsewhere names that place as the root.
+  if (!p) throw new RootWriteError(`${file} is not under ${root}; not writing it`);
   const existing = lstatOrNull(p.target);
   if (existing && existing.isDirectory()) throw new RootWriteError(`${p.target} is a directory; not replacing it`);
   const tmp = join(p.dir, `.${basename(p.target)}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`);

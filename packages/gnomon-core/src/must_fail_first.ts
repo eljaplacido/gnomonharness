@@ -15,7 +15,17 @@
  */
 
 import { relative, sep } from "node:path";
-import { identityOf, readExactIn, removeIn, sameIdentity, writeFileIn, RootWriteError, type FileIdentity } from "./root_fs.js";
+import {
+  CONTAINED_READONLY_DIRS,
+  identityOf,
+  readExactIn,
+  removeIn,
+  sameIdentity,
+  writeFileIn,
+  RootWriteError,
+  type FileIdentity,
+} from "./root_fs.js";
+import { unsafeTreePath } from "./surface_tree.js";
 import type { ResolvedVerify } from "./config.js";
 import { globToRegExp, type ToolOutcome } from "./tools.js";
 
@@ -77,6 +87,32 @@ export function isTestPath(testPaths: string[], rel: string): boolean {
   });
 }
 
+/** gnomon's own directories, by name: the surface and every state dir. */
+const OWN_DIRS = new Set<string>([...CONTAINED_READONLY_DIRS, ".gnomon-jobs", ".gnomon-out"]);
+
+/**
+ * Why host gnomon must not put a pre-image at `rel` (repo- or root-relative,
+ * `/`-separated), or null when it may (eighth review).
+ *
+ * The pre-images come from `git diff <base>`, and the base is a commit the
+ * model can make: its tree can hold `.git/config` (an fsmonitor the user's own
+ * git then runs) or a `.gnomon/` other than the live one. Either, written for
+ * the re-run, is in the tree for its length -- and for good after a SIGKILL
+ * in that window. So: nothing with a `.git` component at any depth, nothing
+ * `..` or absolute (surface_tree.ts), and nothing under the surface or a
+ * gnomon state dir. A change to those is judged by the other checks; it is
+ * never something the re-run needs to undo.
+ */
+export function unwritablePreImage(rel: string): string | null {
+  const bad = unsafeTreePath(rel);
+  if (bad) return bad;
+  for (const part of rel.split("/")) {
+    const folded = part.toLowerCase().replace(/[. ]+$/, "");
+    if (OWN_DIRS.has(folded)) return `a path under gnomon's own ${part}/`;
+  }
+  return null;
+}
+
 export interface MustFailFirstResult {
   /** Whether the check was actually re-run against the pre-images. */
   ran: boolean;
@@ -125,6 +161,15 @@ export async function mustFailFirst(
   const tests = [...preImages.keys()].filter(isTest).map(rel);
   const sources = [...preImages.entries()].filter(([abs]) => !isTest(abs));
   const restored = sources.map(([abs]) => rel(abs));
+
+  // Refused before anything is read or written: the loop's caller and
+  // `check` both filter these, so one arriving here is a defect upstream.
+  for (const abs of preImages.keys()) {
+    const why = unwritablePreImage(rel(abs));
+    if (why) {
+      return { ran: false, pinsNothing: false, tests, restored: [], reason: `not re-run: ${rel(abs)} is ${why}; gnomon does not write it` };
+    }
+  }
 
   if (tests.length === 0) {
     return { ran: false, pinsNothing: false, tests, restored: [], reason: "the change touched no test" };
