@@ -6,7 +6,6 @@
  * index.ts so that file carries one dispatch line for it, not another hundred.
  */
 
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -22,6 +21,8 @@ import {
   type CheckEntry,
   type ResolvedUi,
   type TranscriptFormat,
+  safeGit,
+  checkSessionFile,
 } from "gnomon-core";
 
 export interface CheckCliArgs {
@@ -108,7 +109,7 @@ interface SessionBase {
 }
 
 function gitIn(cwd: string, args: string[]): string | null {
-  const r = spawnSync("git", args, { cwd, encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 });
+  const r = safeGit(args, { cwd, maxBuffer: 64 * 1024 * 1024 });
   return r.status === 0 ? r.stdout.trim() : null;
 }
 
@@ -139,7 +140,9 @@ async function runHook(kind: string, args: CheckCliArgs, raw: string): Promise<n
   const id = safeId(input.session_id);
   const where = governed(cwd);
   if (!where || !id) return 0;
-  const stateFile = join(where.gitDir, "gnomon-check", "sessions", `${id}.json`);
+  // Under the data dir, not the git dir: a contained command can write .git/
+  // and would choose the base the rules are read from (fifth review).
+  const stateFile = checkSessionFile(where.gitDir, id);
 
   if (kind === "session-start") {
     // Resume, /clear and compaction fire SessionStart again for the same
@@ -243,7 +246,7 @@ function installHook(target: string, out: (s: string) => void): number {
       "Merge the above into the \"hooks\" of .claude/settings.json (this project) or",
       "~/.claude/settings.json (every project; ungoverned ones are skipped). Nothing was written.",
       "",
-      "  SessionStart  records HEAD (and a snapshot of a dirty tree) in .git/gnomon-check/",
+      "  SessionStart  records HEAD (and a snapshot of a dirty tree) in gnomon's data dir",
       "  Stop          runs `gnomon check` on everything since, with the session transcript",
       "                for check 5. A failure blocks the stop once and hands Claude the findings.",
       "",
@@ -353,7 +356,13 @@ export function renderVerdict(v: CheckVerdict, ui: ResolvedUi): string[] {
     `${paint(ui, "bold", "gnomon check")}  ${short(v.base)} → ${short(v.head)}` +
       (v.role ? `  ·  role ${paint(ui, "bold", v.role)}` : "")
   );
-  if (v.surface_hash) out.push(paint(ui, "gray", `  rules: surface ${v.surface_hash.slice(0, 16)}… as of base`));
+  if (v.surface_hash) {
+    // The commit, not the name: a ref is movable, the sha is what decided (sixth review).
+    const from = v.rules_rev ? `from commit ${v.rules_rev}` : "as of base";
+    out.push(paint(ui, "gray", `  rules: surface ${v.surface_hash.slice(0, 16)}… ${from}`));
+  }
+  if (v.exec) out.push(paint(ui, "gray", `  [verify] runs: ${v.exec.mode === "off" ? "on this machine" : `${v.exec.mode} (${v.exec.image})`}`));
+  for (const w of v.warnings ?? []) out.push(paint(ui, "yellow", `  ⚠ ${w}`));
   for (const r of v.recovered ?? []) {
     out.push(paint(ui, "yellow", `  ⚠ restored ${r} — an earlier check was interrupted mid re-run`));
   }

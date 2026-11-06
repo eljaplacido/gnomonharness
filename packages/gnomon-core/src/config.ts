@@ -365,6 +365,16 @@ export interface Policy {
      * shell.ts bashNetworkEgress, docs/CONTRACTS.md §32.
      */
     allow_package_index?: string[];
+    /**
+     * How far bash's reads reach under `exec = "os"`: "all" (the default) or
+     * "scoped" (Linux; Landlock read rights). See resolveExec, READS_VALUES.
+     */
+    reads?: string;
+    /**
+     * Further paths a scoped bash may read: tool caches and toolchains outside
+     * the defaults. `~/` is the user's home; relative paths are from the root.
+     */
+    read_roots?: string[];
     // `env_whitelist` was declared here and read by nothing -- no code path, no
     // test, no doc. A surface author who wrote it got a key the harness ignores,
     // which is the published-option-that-does-nothing defect this project
@@ -2436,13 +2446,18 @@ const KNOWN_BLOCKS = new Set([
  * `[sandbox] level = "confined"` and `exec = "dokcer"`: auditSurface returned
  * 0 problems before this change and 1 after.
  */
-const EXEC_VALUES = ["off", "docker"] as const;
+export const EXEC_VALUES = ["off", "docker", "os"] as const;
 
 interface EnumSpec {
   block: string;
   key: string;
   values: readonly string[];
   falls_back_to: string;
+  /**
+   * What an unknown value does instead of falling back, when it does not:
+   * said in the audit in place of "silently falls back to ...".
+   */
+  refuses?: string;
 }
 
 const ENUM_KEYS: EnumSpec[] = [
@@ -2452,8 +2467,15 @@ const ENUM_KEYS: EnumSpec[] = [
   // tools.ts; after_refusal.test.ts holds the two lists equal.
   { block: "approval", key: "after_refusal", values: ["off", "ask"], falls_back_to: "off" },
   { block: "sandbox", key: "level", values: ["off", "confined", "strict"], falls_back_to: "confined" },
-  // resolveExec: anything that is not exactly "docker" resolves to "off".
-  { block: "sandbox", key: "exec", values: EXEC_VALUES, falls_back_to: "off" },
+  // resolveExec: an unknown value does NOT fall back to "off" -- bash refuses
+  // every command until it is fixed (ResolvedExec.invalid). An absent key is "off".
+  {
+    block: "sandbox",
+    key: "exec",
+    values: EXEC_VALUES,
+    falls_back_to: "off",
+    refuses: "bash refuses every command until it is fixed (it does not fall back to running unsandboxed)",
+  },
   { block: "verify", key: "after", values: ["write", "change", "always"], falls_back_to: "write" },
   // resolveCompletionGate (completion_gate.ts): anything else is "off", so a
   // misspelt "reveiw" would silently turn the gate off.
@@ -2801,8 +2823,8 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
         problems.push({
           where: `.gnomon/${file} [${block}]`,
           problem:
-            `${spec.key} = "${value}" is not one of ${spec.values.join(" | ")}, so this ` +
-            `silently falls back to "${spec.falls_back_to}".`,
+            `${spec.key} = "${value}" is not one of ${spec.values.join(" | ")}, so ` +
+            (spec.refuses ? `${spec.refuses}.` : `this silently falls back to "${spec.falls_back_to}".`),
           fix: `Use one of: ${spec.values.join(", ")}. \`gnomon enumerations\` lists them.`,
           fatal: false,
         });
@@ -3011,7 +3033,7 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
 
     // A per-role `exec` override falls back exactly like the [sandbox] one:
     // resolveExec reads `roleDef?.exec ?? sandbox.exec` and resolves anything
-    // that is not the string "docker" to "off". ROLE_KEYS catches a misspelled
+    // that is not the string "docker" or "os" to "off". ROLE_KEYS catches a misspelled
     // KEY; nothing caught a misspelled VALUE, so `exec = "dokcer"` on a role
     // read as an isolation request and ran on the host.
     {
@@ -3020,9 +3042,9 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
         problems.push({
           where,
           problem:
-            `exec = "${value}" is not one of ${EXEC_VALUES.join(" | ")}, so this role ` +
-            `silently falls back to "off" — no sandbox, and no warning.`,
-          fix: `Use one of: ${EXEC_VALUES.join(", ")}. Only "docker" is wired in this build.`,
+            `exec = "${value}" is not one of ${EXEC_VALUES.join(" | ")}, so bash refuses every ` +
+            `command in this role until it is fixed (it does not fall back to "off").`,
+          fix: `Use one of: ${EXEC_VALUES.join(", ")}.`,
           fatal: false,
         });
       }
@@ -3490,6 +3512,74 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
   }
 }
 
+// [sandbox] reads / read_roots. Read only by exec = "os" (osSandboxPlan); an
+// unknown value refuses there rather than falling back, so say so here first.
+{
+  const sb = (config.policy?.sandbox ?? {}) as { reads?: unknown; read_roots?: unknown; exec?: unknown };
+  const where = ".gnomon/policy.toml [sandbox]";
+  const reads = sb.reads;
+  if (reads !== undefined && !(READS_VALUES as readonly unknown[]).includes(reads)) {
+    problems.push({
+      where,
+      problem:
+        `reads = ${JSON.stringify(reads)} is not one of ${READS_VALUES.join(" | ")}. It does not fall back: ` +
+        `under exec = "os" bash refuses every command until it is one of them.`,
+      fix: 'Use reads = "scoped" to confine reads, or remove the key for "all".',
+      fatal: false,
+    });
+  }
+  const anyOs = sb.exec === "os" || Object.values(config.roles ?? {}).some((r) => (r as RoleDef | undefined)?.exec === "os");
+  if (reads === "scoped" && !anyOs) {
+    problems.push({
+      where,
+      problem: 'reads = "scoped" narrows reads only under exec = "os", and no role here runs bash that way: it changes nothing.',
+      fix: 'Set exec = "os" as well, or remove reads.',
+      fatal: false,
+    });
+  }
+  const rr = sb.read_roots;
+  if (rr !== undefined && !Array.isArray(rr)) {
+    problems.push({
+      where,
+      problem: "read_roots is not an array, so it grants nothing.",
+      fix: 'Write it as a list, e.g. read_roots = ["~/.local/go"].',
+      fatal: false,
+    });
+  } else if (Array.isArray(rr)) {
+    if (reads !== "scoped") {
+      problems.push({
+        where,
+        problem: 'read_roots is read only under reads = "scoped"; with reads = "all" every path is readable already.',
+        fix: 'Set reads = "scoped", or remove read_roots.',
+        fatal: false,
+      });
+    }
+    const root = resolve(config.gnomonDir, "..");
+    const home = resolve(homedir());
+    for (const entry of rr) {
+      if (typeof entry !== "string") continue;
+      const abs = expandReadRoot(entry, root);
+      if (home === abs || home.startsWith(abs.endsWith(sep) ? abs : abs + sep)) {
+        problems.push({
+          where,
+          problem:
+            `read_roots names ${entry}, which contains your home directory and so its credential stores: ` +
+            `under reads = "scoped" gnomon-exec refuses every command rather than grant it.`,
+          fix: "Name the cache or toolchain directory itself, e.g. \"~/.cache/pip\".",
+          fatal: false,
+        });
+      } else if (!existsSync(abs)) {
+        problems.push({
+          where,
+          problem: `read_roots names ${entry}, which does not exist here — it grants nothing.`,
+          fix: "Remove it, or check the path.",
+          fatal: false,
+        });
+      }
+    }
+  }
+}
+
   for (const [name, raw] of Object.entries(declared)) {
     const where = `.gnomon/config.toml [endpoints.${name}]`;
     // Read as raw TOML: the point is to see the fields EndpointConfig has no
@@ -3930,7 +4020,7 @@ export function isLocalEndpoint(url: string): boolean {
   } catch {
     return false;
   }
-  if (["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(host)) return true;
+  if (["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"].includes(host)) return true;
   if (host.endsWith(".local")) return true;
   return (
     /^10\./.test(host) ||
@@ -3938,6 +4028,27 @@ export function isLocalEndpoint(url: string): boolean {
     /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
     /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)
   );
+}
+
+/**
+ * Whether an endpoint URL is THIS machine: localhost, 127.0.0.0/8, ::1.
+ *
+ * What a decision to send a key (or session text) without a grant may
+ * count as local (seventh review, L3). isLocalEndpoint's `.local`, RFC1918
+ * and CGNAT hosts are local for a listing, but anyone on the LAN or the
+ * tailnet can listen there -- and a surface below a contained root is a
+ * container's to have written, so `api_key_env` aimed at 10.0.0.5 sent the
+ * key there with no grant.
+ */
+export function isLoopbackEndpoint(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (host === "localhost" || host === "::1" || host === "[::1]") return true;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 }
 
 const KNOWN_PROVIDERS: Array<[RegExp, string]> = [
@@ -4316,12 +4427,67 @@ export function resolveSandboxLevel(config: GnomonConfig): "off" | "confined" | 
   return readSplit(config, SPLIT_SETTINGS[1]).used as "off" | "confined" | "strict";
 }
 
+/** The published `[sandbox] exec` values. See the enumerations contract. */
+export type ExecMode = (typeof EXEC_VALUES)[number];
+
+/**
+ * `[sandbox] reads`: how far bash's reads reach under exec = "os".
+ *
+ *   all     every file the user can read (the default; what exec = "os" did
+ *           before this key existed)
+ *   scoped  Linux only: the root, the per-call temp dir, extra_roots, system
+ *           directories, the gnomon install, toolchain caches in $HOME and
+ *           read_roots. Credential stores in $HOME stay unreadable. See
+ *           crates/gnomon-exec/src/sandbox.rs.
+ *
+ * Not one of the published enumerations (CONTRACTS.md §3): it is read by
+ * exec = "os" only. A value that is neither does NOT fall back: bash refuses
+ * under exec = "os" until it is fixed, because falling back to "all" would
+ * be a typo that silently unscopes reads.
+ */
+export const READS_VALUES = ["all", "scoped"] as const;
+export type ReadsMode = (typeof READS_VALUES)[number];
+
 /** Where `bash` actually runs. See resolveExec. */
 export interface ResolvedExec {
-  mode: "off" | "docker";
+  mode: ExecMode;
   image: string;
   /** Whether the sandbox gets a network. Follows [sandbox] network. */
   network: boolean;
+  /**
+   * `[sandbox] reads` as written ("all" when absent). Anything but "all" or
+   * "scoped" is kept as written, so exec = "os" can refuse it by name.
+   */
+  reads: string;
+  /** `[sandbox] read_roots`, absolute. Read only under reads = "scoped". */
+  readRoots: string[];
+  /**
+   * Set when `exec` is declared but is not one of EXEC_VALUES ("OS",
+   * "landlock", "os " ...): the value as written. `mode` is then "off", and
+   * bash REFUSES rather than run under it -- a typo in an isolation request
+   * must not run the command on the host in silence.
+   */
+  invalid?: string;
+}
+
+/**
+ * `[sandbox] read_roots`, resolved: `~` and `~/x` against the user's home,
+ * relative paths against the repository root, absolute ones as written.
+ * Non-strings are dropped. Existence is checked where the paths are used.
+ */
+export function resolveReadRoots(config: GnomonConfig): string[] {
+  const raw = (config.policy?.sandbox as { read_roots?: unknown } | undefined)?.read_roots;
+  if (!Array.isArray(raw)) return [];
+  const root = resolve(config.gnomonDir, "..");
+  return raw
+    .filter((r): r is string => typeof r === "string" && r.trim().length > 0)
+    .map((r) => expandReadRoot(r, root));
+}
+
+function expandReadRoot(r: string, root: string): string {
+  if (r === "~") return homedir();
+  if (r.startsWith("~/")) return resolve(homedir(), r.slice(2));
+  return isAbsolute(r) ? resolve(r) : resolve(root, r);
 }
 
 /**
@@ -4336,13 +4502,41 @@ export interface ResolvedExec {
  * opt-in per surface and per role, which is the point -- one role can run its
  * calculations in a container while the rest of the harness runs on the host.
  *
- * Only "docker" is wired. bwrap was tested first and cannot work on stock
- * Ubuntu without relaxing the AppArmor restriction on unprivileged user
- * namespaces: `bwrap: setting up uid map: Permission denied`, with
- * /proc/sys/kernel/unprivileged_userns_clone already 1. A backend that cannot
- * start must refuse rather than silently run unsandboxed, so it is not offered
- * rather than offered-and-broken.
+ * "docker" runs the command in a container (sandboxCommand). "os" runs it on
+ * the host under a kernel sandbox -- Landlock (+ seccomp for network = false)
+ * on Linux, sandbox-exec on macOS -- through `gnomon-exec sandbox`; a machine
+ * that cannot enforce it REFUSES the command rather than running it
+ * unsandboxed (see bashTool and crates/gnomon-exec/src/sandbox.rs).
+ *
+ * bwrap was tested first and cannot work on stock Ubuntu without relaxing the
+ * AppArmor restriction on unprivileged user namespaces: `bwrap: setting up uid
+ * map: Permission denied`, with /proc/sys/kernel/unprivileged_userns_clone
+ * already 1. Landlock and seccomp need no namespace, which is why "os" is
+ * built on them rather than on bwrap.
  */
+/**
+ * A container image reference: `[registry[:port]/]path[:tag][@algo:hex]`, the
+ * grammar of the distribution reference. Nothing else is accepted for
+ * `[sandbox] image` or a role's `image`.
+ *
+ * WHY (fifth review, finding 5). The image was interpolated unquoted into the
+ * host's `sh -c` line, and nothing checked it: `image = "x; touch ~/p"` ran
+ * the tail on the host, and `image = "--privileged"` was a docker flag. The
+ * surface is writable by whoever wrote it last, which under a container may
+ * have been the container.
+ */
+const IMAGE_DOMAIN = "(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)(?:\\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?))*(?::[0-9]+)?";
+const IMAGE_COMPONENT = "[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
+const IMAGE_REF = new RegExp(
+  `^(?:${IMAGE_DOMAIN}/)?${IMAGE_COMPONENT}(?:/${IMAGE_COMPONENT})*` +
+    "(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?" +
+    "(?:@[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9a-fA-F]{32,})?$"
+);
+
+export function isValidImageRef(image: unknown): image is string {
+  return typeof image === "string" && image.length > 0 && image.length <= 255 && !image.startsWith("-") && IMAGE_REF.test(image);
+}
+
 export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
   const sandbox = (config.policy?.sandbox ?? {}) as {
     exec?: unknown;
@@ -4351,12 +4545,28 @@ export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
   };
   const roleDef = role ? (config.roles?.[role] as RoleDef | undefined) : undefined;
   const raw = (roleDef?.exec ?? sandbox.exec) as unknown;
-  const mode = raw === "docker" ? "docker" : "off";
+  const mode: ExecMode = raw === "docker" ? "docker" : raw === "os" ? "os" : "off";
+  // Absent is "off" on purpose. Present and unknown is a refusal, not "off".
+  const invalid =
+    raw !== undefined && !(EXEC_VALUES as readonly unknown[]).includes(raw)
+      ? typeof raw === "string"
+        ? raw
+        : JSON.stringify(raw)
+      : undefined;
   const image =
     (typeof roleDef?.image === "string" && roleDef.image) ||
     (typeof sandbox.image === "string" && sandbox.image) ||
     "debian:stable-slim";
-  return { mode, image, network: sandbox.network === true };
+  const readsRaw = (config.policy?.sandbox as { reads?: unknown } | undefined)?.reads;
+  const reads = readsRaw === undefined ? "all" : typeof readsRaw === "string" ? readsRaw : JSON.stringify(readsRaw);
+  return {
+    mode,
+    image,
+    network: sandbox.network === true,
+    reads,
+    readRoots: resolveReadRoots(config),
+    ...(invalid !== undefined ? { invalid } : {}),
+  };
 }
 
 /**

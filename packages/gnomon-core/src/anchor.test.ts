@@ -10,7 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, chmodSync, cpSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, chmodSync, cpSync, symlinkSync } from "node:fs";
 import { tmpdir, hostname } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,7 +19,15 @@ import { createHash, generateKeyPairSync, sign, type KeyObject } from "node:cryp
 import { AuditTrail, recordHash, resolveAudit, verifyTrail, canonicalJson, type AuditRecord } from "./audit.js";
 import {
   announceAnchorBacklog,
+  assertAnchorRepoConfig,
   collectAnchors,
+  localAnchorRepo,
+  legacyAnchorRepo,
+  pinnedAnchorTarget,
+  usePinnedAnchorTarget,
+  _resetAnchorTargets,
+  writeAnchorHandoff,
+  readAnchorHandoff,
   enqueueAnchor,
   flushAnchors,
   pendingAnchors,
@@ -53,6 +61,8 @@ import type { GnomonConfig } from "./config.js";
 vi.setConfig({ testTimeout: 60_000 });
 
 let root: string;
+/** Where witnesses live: outside the project root, which a sandboxed command may write (fourth review, finding 1). */
+let remotes: string;
 const auditDir = () => join(root, ".gnomon-audit");
 
 function cfg(anchor?: Record<string, unknown>): GnomonConfig {
@@ -70,7 +80,7 @@ function git(args: string[], cwd?: string): string {
 
 /** A bare repository standing for the remote. Append-only the way a real one is made so. */
 function bareRemote(name = "remote.git", appendOnly = true): string {
-  const p = join(root, name);
+  const p = join(remotes, name);
   git(["init", "--bare", "-q", p]);
   if (appendOnly) {
     git(["--git-dir", p, "config", "receive.denyNonFastForwards", "true"]);
@@ -117,7 +127,9 @@ async function report(c: GnomonConfig, trails: string[], opts: { offline?: boole
 let captured: ResolvedAnchor[] = [];
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "gnomon-anchor-"));
+  remotes = mkdtempSync(join(tmpdir(), "gnomon-anchor-remotes-"));
   captured = [];
+  _resetAnchorTargets();
   // Deterministic: nothing is delivered behind a test's back. Tests that
   // deliver call flushAnchors and await it.
   setAnchorScheduler((s) => void captured.push(s));
@@ -125,6 +137,7 @@ beforeEach(() => {
 afterEach(() => {
   setAnchorScheduler(null);
   rmSync(root, { recursive: true, force: true });
+  rmSync(remotes, { recursive: true, force: true });
 });
 
 // ---------------------------------------------------------------------------
@@ -299,6 +312,195 @@ describe("at seal: queued, and nothing else", () => {
 // ---------------------------------------------------------------------------
 
 describe("git backend", () => {
+  // PR #156 second review, A: the local anchor repository is inside the
+  // project root, which a sandboxed bash may write. Its hooks dir was too
+  // (core.hooksPath pointed into it), and `update-ref` runs
+  // reference-transaction -- on the host, at session end.
+  it("runs no hook a command planted in the local anchor repository, and refuses a changed config", async () => {
+    const remote = bareRemote();
+    const c = cfg({ backend: "git", remote });
+    sealTrail(c, "s1");
+    await flushAnchors(anchorOf(c));
+    const repo = localAnchorRepo(anchorOf(c));
+    const marker = join(root, "hook-ran");
+    for (const d of ["no-hooks", "hooks"]) {
+      mkdirSync(join(repo, d), { recursive: true });
+      writeFileSync(join(repo, d, "reference-transaction"), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+    }
+    sealTrail(c, "s2");
+    const r = await flushAnchors(anchorOf(c));
+    expect(r).toMatchObject({ delivered: 1, pending: 0 });
+    expect(existsSync(marker), "a planted hook ran from gnomon's anchor git").toBe(false);
+    // CONTROL: the hooks dir the anchor git used before is live for a git that uses it.
+    git(["--git-dir", repo, "-c", `core.hooksPath=${join(repo, "no-hooks")}`, "update-ref", "refs/x", git(["--git-dir", repo, "rev-parse", "refs/heads/gnomon-anchors"])]);
+    expect(existsSync(marker), "control: the planted hook did not run").toBe(true);
+
+    // A key `git init --bare` never writes: nothing is run there, nothing anchored.
+    writeFileSync(join(repo, "config"), readFileSync(join(repo, "config"), "utf-8") + `[core]\n\tsshCommand = touch '${marker}2'\n`);
+    sealTrail(c, "s3");
+    const refused = await flushAnchors(anchorOf(c));
+    expect(refused.pending).toBeGreaterThan(0);
+    expect(JSON.stringify(refused)).toContain("config was changed");
+    expect(() => assertAnchorRepoConfig(repo)).toThrow(/core\.sshcommand/);
+  });
+
+  // Third review, finding 4: the allow-list read only <repo>/config, and a
+  // `commondir` file sends git to another directory's config -- here one
+  // that rewrites the remote to git:// and names a core.gitProxy program.
+  it.skipIf(process.platform === "win32")("a commondir planted in the anchor repository inside the root runs nothing on the host", async () => {
+    const remote = bareRemote();
+    const c = cfg({ backend: "git", remote });
+    sealTrail(c, "s1");
+    await flushAnchors(anchorOf(c));
+    const inRoot = join(anchorOf(c).dir, "git");
+    if (!existsSync(join(inRoot, "HEAD"))) git(["init", "--bare", "-q", inRoot]);
+    const marker = join(root, "proxy-ran");
+    const proxy = join(root, "proxy.sh");
+    writeFileSync(proxy, `#!/bin/sh\ntouch '${marker}'\nexit 1\n`, { mode: 0o755 });
+    const common = join(root, "common.git");
+    cpSync(inRoot, common, { recursive: true });
+    writeFileSync(join(common, "config"), readFileSync(join(common, "config"), "utf-8") + `[url "git://evil.invalid/x"]\n\tinsteadOf = ${remote}\n[core]\n\tgitProxy = ${proxy}\n`);
+    writeFileSync(join(inRoot, "commondir"), `${common}\n`);
+    sealTrail(c, "s2");
+    await flushAnchors(anchorOf(c));
+    expect(existsSync(marker), "a program the planted commondir named ran from gnomon's anchor git").toBe(false);
+    // CONTROL: plain git with that repository runs it.
+    spawnSync("git", ["--git-dir", inRoot, "ls-remote", remote], { stdio: "ignore" });
+    expect(existsSync(marker), "control: the planted redirect is not live").toBe(true);
+  });
+
+  it("keeps the local anchor repository outside the project root, and reads no copy left inside it", async () => {
+    const remote = bareRemote();
+    const c = cfg({ backend: "git", remote });
+    sealTrail(c, "s1");
+    expect((await flushAnchors(anchorOf(c))).delivered).toBe(1);
+    const repo = localAnchorRepo(anchorOf(c));
+    expect(existsSync(join(repo, "HEAD"))).toBe(true);
+    expect(repo.startsWith(root)).toBe(false);
+    expect(existsSync(legacyAnchorRepo(anchorOf(c)))).toBe(false);
+    // An old copy left in the root is not read, offline or not.
+    git(["init", "--bare", "-q", legacyAnchorRepo(anchorOf(c))]);
+    rmSync(repo, { recursive: true, force: true });
+    const off = await collectAnchors(anchorOf(c), { offline: true });
+    expect(off.anchors).toEqual([]);
+    expect(off.problems.join(" ")).toMatch(/not read/);
+  });
+
+  it("refuses a local anchor repository that redirects git, holds a symlink, or names a url rewrite", async () => {
+    const remote = bareRemote();
+    const c = cfg({ backend: "git", remote });
+    sealTrail(c, "s1");
+    await flushAnchors(anchorOf(c));
+    const repo = localAnchorRepo(anchorOf(c));
+    const clean = readFileSync(join(repo, "config"), "utf-8");
+    for (const f of ["commondir", "config.worktree", join("objects", "info", "alternates")]) {
+      writeFileSync(join(repo, f), `${root}\n`);
+      expect(() => assertAnchorRepoConfig(repo), f).toThrow(/points git at another repository/);
+      rmSync(join(repo, f));
+    }
+    writeFileSync(join(repo, "config"), clean + `[url "ssh://evil.invalid/"]\n\tinsteadOf = /\n`);
+    expect(() => assertAnchorRepoConfig(repo)).toThrow(/url\.<sub>\.insteadof/);
+    writeFileSync(join(repo, "config"), clean);
+    if (process.platform !== "win32") {
+      symlinkSync(root, join(repo, "refs", "escape"));
+      sealTrail(c, "s2");
+      const r = await flushAnchors(anchorOf(c));
+      expect(r.pending).toBeGreaterThan(0);
+      expect(String(r.error)).toMatch(/symlink/);
+    }
+  });
+
+  it("a detached delivery uses the target its session pinned", async () => {
+    const good = bareRemote("good2.git");
+    git(["init", "-q", root]);
+    git(["-C", root, "remote", "add", "witness", join(remotes, "nowhere.git")]);
+    const c = cfg({ backend: "git", remote: "witness" });
+    sealTrail(c, "s1");
+    const a = anchorOf(c);
+    expect(pinnedAnchorTarget(a)).toBe(join(remotes, "nowhere.git"));
+    usePinnedAnchorTarget(a, good);
+    expect((await flushAnchors(a)).delivered).toBe(1);
+    expect(git(["--git-dir", good, "rev-parse", "refs/heads/gnomon-anchors"])).toMatch(/^[0-9a-f]{40}/);
+  });
+
+  // Third review, finding 5: a remote NAMED through the workspace's own
+  // repository was read from its .git/config at delivery, which a sandboxed
+  // command can rewrite during the session.
+  it("a workspace remote rewritten after the session started does not move where anchors go", async () => {
+    const good = bareRemote("good.git");
+    const evil = bareRemote("evil.git");
+    git(["init", "-q", root]);
+    git(["-C", root, "remote", "add", "witness", good]);
+    const c = cfg({ backend: "git", remote: "witness" });
+    sealTrail(c, "s1");
+    anchorOf(c); // the session's start resolves its audit settings
+    git(["-C", root, "remote", "set-url", "witness", evil]);
+    const r = await flushAnchors(anchorOf(c));
+    expect(r).toMatchObject({ delivered: 1, pending: 0 });
+    expect(spawnSync("git", ["--git-dir", evil, "rev-parse", "--verify", "-q", "refs/heads/gnomon-anchors"]).status, "anchors went to the rewritten remote").not.toBe(0);
+    expect(git(["--git-dir", good, "rev-parse", "refs/heads/gnomon-anchors"])).toMatch(/^[0-9a-f]{40}/);
+  });
+
+  // Fourth review, finding 1: a bare word counted as a remote's NAME only
+  // while <root>/<word> did not exist. A container created <root>/origin as
+  // a bare repository with a pre-receive hook, and the session-end push went
+  // to that local path -- where git clears GIT_CONFIG_PARAMETERS for the
+  // receive-pack it starts, so `-c core.hooksPath` did not reach it and the
+  // hook ran on the host.
+  it.skipIf(process.platform === "win32")("finding 1: a directory created under the root after the session started does not turn a remote's name into a path", async () => {
+    const good = bareRemote("good.git");
+    git(["init", "-q", root]);
+    git(["-C", root, "remote", "add", "origin", good]);
+    const c = cfg({ backend: "git", remote: "origin" });
+    sealTrail(c, "s1");
+    anchorOf(c); // the session's start
+    const marker = join(remotes, "pre-receive-ran");
+    git(["init", "--bare", "-q", join(root, "origin")]);
+    writeFileSync(join(root, "origin", "hooks", "pre-receive"), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+    await flushAnchors(anchorOf(c));
+    expect(existsSync(marker), "a hook in a repository the container made under the root ran on the host").toBe(false);
+    expect(git(["--git-dir", good, "rev-parse", "refs/heads/gnomon-anchors"])).toMatch(/^[0-9a-f]{40}/);
+  });
+
+  it.skipIf(process.platform === "win32")("finding 1: a local witness inside the project root is refused, whatever names it", async () => {
+    const marker = join(remotes, "inside-ran");
+    const inside = join(root, "w.git");
+    git(["init", "--bare", "-q", inside]);
+    writeFileSync(join(inside, "hooks", "pre-receive"), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+    for (const remote of [inside, "w.git", `file://${inside}`]) {
+      _resetAnchorTargets();
+      const c = cfg({ backend: "git", remote });
+      sealTrail(c, `s-${remote.length}`);
+      const r = await flushAnchors(anchorOf(c));
+      expect(r.pending, remote).toBeGreaterThan(0);
+      expect(String(r.error), remote).toMatch(/inside the project root/);
+    }
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it.skipIf(process.platform === "win32")("finding 1: a push to a local witness runs none of its hooks", async () => {
+    const remote = bareRemote();
+    const marker = join(root, "remote-hook-ran");
+    for (const h of ["pre-receive", "update", "post-receive", "reference-transaction"]) {
+      writeFileSync(join(remote, "hooks", h), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+    }
+    const c = cfg({ backend: "git", remote });
+    sealTrail(c, "s1");
+    expect((await flushAnchors(anchorOf(c))).delivered).toBe(1);
+    expect(existsSync(marker), "a hook of the local witness ran from gnomon's push").toBe(false);
+  });
+
+  it("finding 6: a delivery's sealed settings are read only from gnomon's data directory, and only once", () => {
+    const a = anchorOf(cfg({ backend: "git", remote: bareRemote() }));
+    const f = writeAnchorHandoff(a);
+    expect(f.startsWith(root)).toBe(false);
+    expect(readAnchorHandoff(f)).toMatchObject({ backend: "git", root: a.root, remote: a.remote });
+    expect(existsSync(f), "a handoff is read once").toBe(false);
+    const forged = join(root, "handoff.json");
+    writeFileSync(forged, JSON.stringify({ v: 1, settings: { ...a, backend: "cmd", command: "touch x" }, target: null }));
+    expect(() => readAnchorHandoff(forged)).toThrow(/not a sealed anchor handoff/);
+  });
+
   it("delivers queued heads as one fast-forward commit, and reads them back from the remote", async () => {
     const remote = bareRemote();
     const c = cfg({ backend: "git", remote });
@@ -405,7 +607,7 @@ describe("git backend", () => {
   });
 
   it("offline: stays queued, is announced and recorded, and is delivered once the remote is there", async () => {
-    const remote = join(root, "later.git");
+    const remote = join(remotes, "later.git");
     const c = cfg({ backend: "git", remote });
     const p = sealTrail(c, "s1");
     const r = await flushAnchors(anchorOf(c));
@@ -428,7 +630,7 @@ describe("git backend", () => {
   });
 
   it("a queue a delivery is still working through is not announced as a degradation", () => {
-    const c = cfg({ backend: "git", remote: join(root, "none.git") });
+    const c = cfg({ backend: "git", remote: join(remotes, "none.git") });
     sealTrail(c, "s1");
     const said: string[] = [];
     expect(announceAnchorBacklog(anchorOf(c), { say: (l) => said.push(l) })).toBeNull();
@@ -811,7 +1013,7 @@ describe("through runTask", () => {
   }
 
   it("a task's trail and its checkpoint are queued at seal; a backlog is announced and recorded by the next task; delivery anchors them all", async () => {
-    const remote = join(root, "witness.git");
+    const remote = join(remotes, "witness.git");
     surface(`backend = "git"\nremote = "${remote.replace(/\\/g, "/")}"`);
     const { loadConfig } = await import("./config.js");
     const a = () => anchorOf(loadConfig(root));

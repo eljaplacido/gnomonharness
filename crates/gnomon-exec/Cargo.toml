@@ -4,13 +4,21 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
-description = "Spawn a command, bound it with a timeout, map its exit code to an outcome bucket."
+description = "Spawn a command, bound it with a timeout, map its exit code to an outcome bucket; run bash under the OS sandbox."
 
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+
+# The OS sandbox (`gnomon-exec sandbox`, `[sandbox] exec = "os"`) makes raw
+# Landlock / seccomp / pidfd syscalls. Deliberately NOT the `landlock` or
+# `seccompiler` crates: the whole policy is one ruleset and one ~40-instruction
+# BPF program, both small enough to read in src/sandbox.rs, and either crate
+# would add more code to audit than it removes.
+[target.'cfg(unix)'.dependencies]
+libc = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

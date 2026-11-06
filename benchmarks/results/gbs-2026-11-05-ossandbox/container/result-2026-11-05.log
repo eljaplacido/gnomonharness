@@ -1,0 +1,95 @@
+# exec = "os" inside Docker's default seccomp profile, 2026-11-05T18:25:35Z
+# docker 29.2.1, security options [name=apparmor name=seccomp,profile=builtin name=cgroupns]
+# image gbs05-base:2026-11-05 sha256:20a68218b0c32c9995d6d82e59d7afba602b0155bad335650b3f2c2cf4fc7925 (node:22-slim, Debian 12)
+# gnomon-exec: static build (crt-static) of crates/gnomon-exec at 96b70dc5 (unchanged since 16092bdf), sha256 5e2714c1dd77cc9fb394653983493540619321986176b1eb99fe9bae077a9232
+# every container: --network none, created for this check, removed by name
+
+######## osb-check-node-default  (--user node)
+== id: 1000:1000  kernel: 6.17.0-1014-nvidia
+== seccomp mode: NoNewPrivs:	0 Seccomp:	2 Seccomp_filters:	1 
+== probe
+  "supported": true,
+  "network_supported": false,
+  "mechanism": "landlock",
+  "landlock_abi": 7,
+  "reason": "pidfd_getfd is refused here (errno 1), so the supervisor could verify no connect, loopback included. Inside a container this is its seccomp profile: Docker's default allows pidfd_getfd only with CAP_SYS_PTRACE (`docker run --cap-add SYS_PTRACE`)",
+  "reads_scoped_supported": true,
+== fs: write outside root, network on
+/bin/sh: 1: cannot create /tmp/o/esc: Permission denied
+rm: cannot remove '/tmp/o/keep': Permission denied
+exit=1
+   outside esc exists: no; keep intact: yes; in-root write: in
+== network off: loopback server and external connect
+gnomon-exec: sandbox refused: pidfd_getfd is refused here (errno 1), so the supervisor could verify no connect, loopback included. Inside a container this is its seccomp profile: Docker's default allows pidfd_getfd only with CAP_SYS_PTRACE (`docker run --cap-add SYS_PTRACE`). Set [sandbox] network = true to run with the filesystem sandbox only
+exit=125
+== reads scoped: fake key
+gnomon-exec: sandbox refused: pidfd_getfd is refused here (errno 1), so the supervisor could verify no connect, loopback included. Inside a container this is its seccomp profile: Docker's default allows pidfd_getfd only with CAP_SYS_PTRACE (`docker run --cap-add SYS_PTRACE`). Set [sandbox] network = true to run with the filesystem sandbox only
+exit=125
+== reads scoped, network on (no supervisor needed): fake key, then ordinary tools
+cat: /tmp/h/.ssh/id_x: Permission denied
+py ok
+node ok
+git version 2.39.5
+exit=0
+== landlock syscalls: the probe's ABI query and a real ruleset (write confinement above) both ran
+
+######## osb-check-root-default  (--user root)
+== id: 0:0  kernel: 6.17.0-1014-nvidia
+== seccomp mode: NoNewPrivs:	0 Seccomp:	2 Seccomp_filters:	1 
+== probe
+  "supported": true,
+  "network_supported": false,
+  "mechanism": "landlock",
+  "landlock_abi": 7,
+  "reason": "pidfd_getfd is refused here (errno 1), so the supervisor could verify no connect, loopback included. Inside a container this is its seccomp profile: Docker's default allows pidfd_getfd only with CAP_SYS_PTRACE (`docker run --cap-add SYS_PTRACE`)",
+  "reads_scoped_supported": true,
+== fs: write outside root, network on
+/bin/sh: 1: cannot create /tmp/o/esc: Permission denied
+rm: cannot remove '/tmp/o/keep': Permission denied
+exit=1
+   outside esc exists: no; keep intact: yes; in-root write: in
+== network off: loopback server and external connect
+gnomon-exec: sandbox refused: pidfd_getfd is refused here (errno 1), so the supervisor could verify no connect, loopback included. Inside a container this is its seccomp profile: Docker's default allows pidfd_getfd only with CAP_SYS_PTRACE (`docker run --cap-add SYS_PTRACE`). Set [sandbox] network = true to run with the filesystem sandbox only
+exit=125
+== reads scoped: fake key
+gnomon-exec: sandbox refused: pidfd_getfd is refused here (errno 1), so the supervisor could verify no connect, loopback included. Inside a container this is its seccomp profile: Docker's default allows pidfd_getfd only with CAP_SYS_PTRACE (`docker run --cap-add SYS_PTRACE`). Set [sandbox] network = true to run with the filesystem sandbox only
+exit=125
+== reads scoped, network on (no supervisor needed): fake key, then ordinary tools
+cat: /tmp/h/.ssh/id_x: Permission denied
+py ok
+node ok
+git version 2.39.5
+exit=0
+== landlock syscalls: the probe's ABI query and a real ruleset (write confinement above) both ran
+
+######## osb-check-root-ptrace  (--user root --cap-add SYS_PTRACE)
+== id: 0:0  kernel: 6.17.0-1014-nvidia
+== seccomp mode: NoNewPrivs:	0 Seccomp:	2 Seccomp_filters:	1 
+== probe
+  "supported": true,
+  "network_supported": true,
+  "mechanism": "landlock+seccomp",
+  "landlock_abi": 7,
+  "reads_scoped_supported": true,
+== fs: write outside root, network on
+/bin/sh: 1: cannot create /tmp/o/esc: Permission denied
+rm: cannot remove '/tmp/o/keep': Permission denied
+exit=1
+   outside esc exists: no; keep intact: yes; in-root write: in
+== network off: loopback server and external connect
+local=200
+gnomon-exec: network = false: blocked connect to 192.0.2.1:80 (only loopback is allowed)
+curl: (7) Failed to connect to 192.0.2.1 port 80 after 0 ms: Couldn't connect to server
+exit=0
+== reads scoped: fake key
+cat: /tmp/h/.ssh/id_x: Permission denied
+py ok
+node ok
+exit=0
+== reads scoped, network on (no supervisor needed): fake key, then ordinary tools
+cat: /tmp/h/.ssh/id_x: Permission denied
+py ok
+node ok
+git version 2.39.5
+exit=0
+== landlock syscalls: the probe's ABI query and a real ruleset (write confinement above) both ran

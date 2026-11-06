@@ -715,8 +715,9 @@ level = "confined"                 # off | confined | strict
 # asked for in another common spelling is still refused. Code is not:
 # python -c 'import shutil; shutil.rmtree("keep")' deletes a directory with no
 # rm in it to match, and no list of commands names every program that can
-# delete or copy a file. Containment is running bash in a container that sees
-# only this repository (needs a docker daemon; not on native Windows):
+# delete or copy a file. Containment outside the root is a kernel sandbox
+# (exec = "os", below), or running bash in a container that sees only this
+# repository (needs a docker daemon; not on native Windows):
 #   exec  = "docker"
 #   image = "debian:stable-slim"
 #
@@ -734,9 +735,26 @@ level = "confined"                 # off | confined | strict
 # connection, git pushing to or fetching from a URL, and a package manager
 # handed a registry URL. It is NOT process isolation: a script, a build tool or
 # a package manager run through bash still reaches the network, and the prompt
-# loop says so at startup. With exec = "docker" the container gets no network
-# at all, which is isolation.
+# loop says so at startup. With exec = "os" the kernel blocks egress (loopback
+# stays reachable), and with exec = "docker" the container gets no network at
+# all: both are isolation.
 network = false
+#
+# Where bash runs:
+#   exec = "off"     the host (the default)
+#   exec = "os"      the host under a kernel sandbox (Landlock on Linux,
+#                    sandbox-exec on macOS): writes only inside this
+#                    repository and a per-call temp dir; with network = false
+#                    no egress, loopback still reachable. On a machine that
+#                    cannot enforce it, bash refuses rather than run unsandboxed.
+#   exec = "docker"  a container (image = "...")
+#
+# With exec = "os" on Linux, reads can be confined too:
+#   reads = "scoped"   bash may read only this repository, the temp dir, system
+#                      directories, toolchains and package caches in your home,
+#                      and read_roots; ~/.ssh, ~/.aws, ~/.config/gh and the other
+#                      credential stores stay unreadable. The default is "all".
+#   read_roots = ["~/.local/go"]   anything else a command needs to read
 
 # Keys that changed nothing used to sit here — auto_merge,
 # reject_on_disagreement, env_isolation, min_line_context, preserve_formatting.

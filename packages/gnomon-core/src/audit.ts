@@ -35,11 +35,12 @@
  * exactly the guarantee.
  */
 
-import { appendFileSync, mkdirSync, existsSync, readFileSync, openSync, readSync, closeSync, fstatSync, statSync } from "node:fs";
+import { writeFileSync, existsSync, readFileSync, openSync, readSync, closeSync, fstatSync, statSync } from "node:fs";
 import { join, resolve, isAbsolute } from "node:path";
 import { createHash } from "node:crypto";
 import { GnomonConfig } from "./config.js";
 import { beforeOwnWrite, noteOwnWrite } from "./record_guard.js";
+import { ensureDirIn, openAppendIn } from "./root_fs.js";
 import { Attestor, resolveAttest, verifyAttestation, type AttestVerifyResult, type ResolvedAttest } from "./attest.js";
 import { enqueueAnchor, resolveAnchor, type ResolvedAnchor } from "./anchor.js";
 
@@ -88,6 +89,11 @@ export type AuditDetail = "metadata" | "full";
 export interface ResolvedAudit {
   enabled: boolean;
   dir: string;
+  /**
+   * The project root the trail lives under, when it does: every write below
+   * it goes through root_fs.ts. Absent: the trail's own parent directory.
+   */
+  root?: string;
   record: AuditDetail;
   redact: string[];
   chain: boolean;
@@ -140,6 +146,7 @@ export function resolveAudit(config: GnomonConfig): ResolvedAudit {
   return {
     enabled: a.enabled === true,
     dir: resolvedDir,
+    root,
     record: a.record === "full" ? "full" : "metadata",
     redact: valid,
     chain: a.chain !== false,
@@ -361,6 +368,13 @@ export class AuditTrail {
   private seq = 0;
   private prev: string | null = null;
   private file: string | null = null;
+  /**
+   * The trail's descriptor, opened once (O_APPEND | O_NOFOLLOW, root_fs.ts)
+   * and kept: a path re-opened per record follows whatever a contained
+   * command put there in between -- a symlink to ~/.bashrc took every
+   * recorded command line (fifth review, finding 2).
+   */
+  private fd: number | null = null;
   /** Null unless the surface declared a signer. */
   private attestor: Attestor | null = null;
   /** Null unless the surface declared a usable [audit.anchor]. */
@@ -381,7 +395,7 @@ export class AuditTrail {
     opts: { append?: boolean } = {}
   ) {
     if (!settings.enabled) return;
-    mkdirSync(settings.dir, { recursive: true });
+    ensureDirIn(this.rootDir(), settings.dir);
     this.file = join(settings.dir, `${sessionId}.jsonl`);
     if (opts.append) {
       const last = lastRecord(this.file);
@@ -413,6 +427,22 @@ export class AuditTrail {
       } else {
         this.anchor = settings.anchor;
       }
+    }
+  }
+
+  private rootDir(): string {
+    return this.settings.root ?? resolve(this.settings.dir, "..");
+  }
+
+  /** Close the trail's descriptor. Later records open it again. */
+  close(): void {
+    if (this.fd !== null) {
+      try {
+        closeSync(this.fd);
+      } catch {
+        /* already closed */
+      }
+      this.fd = null;
     }
   }
 
@@ -507,7 +537,8 @@ export class AuditTrail {
     // The record guard (record_guard.ts) tells gnomon's own writes from anyone
     // else's: check the file is as gnomon left it, append, note the new state.
     beforeOwnWrite(this.file);
-    appendFileSync(this.file, `${JSON.stringify(record)}\n`, "utf-8");
+    if (this.fd === null) this.fd = openAppendIn(this.rootDir(), this.file, 0o600);
+    writeFileSync(this.fd, `${JSON.stringify(record)}\n`, "utf-8");
     noteOwnWrite(this.file);
 
     // Signing happens AFTER the record is on disk, and its failure is recorded

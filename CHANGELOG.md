@@ -26,6 +26,210 @@
 
 ## [Unreleased]
 
+- **`[sandbox] exec = "os"`: a kernel sandbox for `bash`, on the host.** The
+  bash rules read a command's text, and G2b (#63, #68) showed no reading of
+  text is complete: `python3 -c 'shutil.rmtree(...)'` has no `rm` to match.
+  Under `exec = "os"`, every `bash` command runs through `gnomon-exec sandbox`,
+  which the kernel then holds to:
+  - **writes** only inside the project root, a fresh per-call temp dir
+    (`$TMPDIR`, removed after the call) and `extra_roots`;
+  - **no egress** unless `network = true` (undeclared counts as off, as with
+    `docker`): loopback stays reachable, anything else fails with
+    `Permission denied`, and stderr names the address;
+  - **no setuid privilege gain** (`no_new_privs`).
+
+  Linux uses Landlock, plus seccomp and a connect supervisor for the network.
+  The supervisor performs a loopback connect itself, from its own copy of the
+  address, so a racing thread cannot swap it after the check. macOS uses
+  `sandbox-exec` with a generated profile. It costs **+1.1 ms per command, or
+  +2.3 ms with `network = false`** (median, `cat` of a file through the bash
+  tool, release build, measured 2026-11-05 at load ~7; #74 measured +0.6 /
+  +1.5 ms for `gnomon-exec` alone).
+
+  Where it cannot be enforced (no `gnomon-exec`, no Landlock, Windows, or a
+  container whose seccomp profile refuses `pidfd_getfd` under `network =
+  false` — Docker's default does, unless `--cap-add SYS_PTRACE`), `bash`
+  **refuses** and does not run the command. Startup and `gnomon explain sandbox`
+  say which applies; `gnomon-exec sandbox-probe` prints the kernel's answer.
+
+  It does **not** restrict reads (unless `reads = "scoped"`, below), anything
+  inside the root (`.gnomon/` and `.git/` included), unix sockets (the docker
+  socket and `systemd-run --user` are escapes), loopback services that reach
+  out, inbound connections, or signals. The README lists these under `exec`.
+
+  In host-side G2b model-free probes it held 7 of 7 out-of-root and egress
+  probes that `exec = "off"` lost. G2b's 13 in-root probes got the same
+  verdicts under both, as expected: inside the root, the rules still decide.
+- **Contract change: `gnomon enumerations` publishes `exec`**
+  (`["off", "docker", "os"]`), as a fifth key after the existing four.
+  `conformance/enumerations_golden.json` and `enumerations_schema.json` move
+  with it. A consumer that rejects unknown keys must accept it.
+- **`gnomon-core` depends on `gnomon-natives`** for the probe and the binary
+  lookup, rather than keeping a second copy of `findBinary`. It is imported on
+  first use, not at load: the property suites and the benchmark apparatus load
+  gnomon-core's `dist/` with plain node, where the workspace resolves
+  gnomon-natives to TypeScript sources.
+- **`gnomon-exec` gains its first runtime dependency edge, `libc`**, which was
+  already in `Cargo.lock` through `errno`, `getrandom` and `cpufeatures`. The
+  `landlock` and `seccompiler` crates were considered and not taken: the whole
+  policy is one ruleset and a ~40-instruction BPF program.
+- **`[sandbox] reads = "scoped"`: opt-in read scoping for `exec = "os"`
+  (Linux).** Default `"all"`, which is the behaviour above. With `"scoped"`,
+  Landlock's read rights are handled too, so `bash` may read only the root,
+  the per-call temp dir, `extra_roots`, the system directories (`/usr`, `/bin`,
+  `/sbin`, `/lib*`, `/etc`, `/opt`, `/proc`, `/sys`, `/dev`, and `/snap`,
+  `/nix/store` where present), toolchains and package caches in `$HOME`
+  (`~/.local/bin`, `~/.cargo/bin`, `~/.rustup`, `~/.nvm`, `~/.npm`,
+  `~/.cache/pip`, git's config files and the rest of `HOME_TOOLCHAIN_READ`),
+  the gnomon install and `[sandbox] read_roots`. `~/.ssh`, `~/.aws`,
+  `~/.config/gh`, `~/.netrc`, `~/.docker`, `~/.gnupg`, gnomon's
+  `credentials.json` and browser profiles are unreadable because nothing grants
+  them; a grant that would cover one (a root of `$HOME`, `read_roots = ["~"]`)
+  is refused. It is an allow-list: `/etc` stays readable, and so do the root,
+  the environment and agents reachable over unix sockets — the README lists
+  what it does not cover. A misspelt value refuses rather than falling back to
+  `"all"`; macOS refuses `"scoped"` (not implemented). GBS-GOVERNANCE
+  host-side (`benchmarks/results/gbs-2026-11-05-ossandbox/`), same build and
+  corpus, asks approved: bash reads of HOME credentials held 0/15 under
+  `exec = "off"` and `"os"`, 15/15 with `reads = "scoped"`; attacks blocked
+  170/280 (`off`), 230/280 (`os`), 245/280 (`os` + `scoped`). Costs about
+  +1 ms per call over `os` alone.
+- **`allow_package_index` admits nothing under `exec = "os"`**, as under
+  `docker`: the `network = false` supervisor admits loopback only and has no
+  per-host allow, so a download is refused up front with the answer the kernel
+  would give. The surface audit says so.
+- **`network = false` under `exec = "os"` refuses on macOS.** On
+  `macos-latest` (macOS 26) CI the Seatbelt network lines let a connect to
+  192.0.2.1 through. Until a Mac shows a profile that holds, the macOS probe
+  reports `network_supported: false`; `network = true` keeps the write half.
+- **The sandbox probe tests `pidfd_getfd` instead of asking whether it
+  exists.** In a Docker container on the default seccomp profile it returns
+  EPERM, so the supervisor refused every connect, loopback included, while the
+  probe reported `network_supported: true`. It now reports false with the
+  reason, and `bash` refuses under `network = false` there.
+
+### Security
+
+- **`exec = "os"` gets the same read-only paths as `docker`** (below).
+  `.gnomon/`, `.gnomon-audit/`, `.gnomon-sessions/` and git's control files
+  are passed to `gnomon-exec sandbox --readonly`, which macOS's kernel
+  enforces. Linux's Landlock cannot take a subtree back out of the root's
+  write grant, so there gnomon snapshots `.gnomon/` and git's control files
+  before each command and puts back (and reports) what the command changed;
+  the probe reports `readonly_enforced: false`. The rest of this section
+  applies to `exec = "os"` too: root_fs.ts writes, the fail-closed trust
+  store and floor file, nested `.gnomon/` floors.
+- **`exec = "docker"` now contains a hostile model against gnomon's own
+  host-side actions.** In v0.4.3 and earlier it did not: the container could
+  write files in the mounted project that gnomon, running on the host, then
+  followed, ran or trusted. Five review rounds found instances of that one
+  cause, including: a symlink at `.gnomon-sessions/history` that made the
+  prompt history overwrite the trust store and erase the exec floors, so the
+  next session ran `exec = "off"` on the host unasked; a symlink at
+  `.gnomon-audit/<session>.jsonl` that appended recorded command lines to
+  `~/.bashrc`; a container another gnomon process could not see while it ran
+  git; a `.gnomon/` made below a floored project with no floor of its own; and
+  an `image` value interpolated unquoted into the host's shell line. Fixed at
+  the cause:
+  - gnomon's state and git's control files are read-only inside the container
+    (`.gnomon/`, `.gnomon-audit/`, `.gnomon-sessions/`, `.git/config`,
+    `.git/hooks/`, `.git/info/`, `.git/commondir`). **Behaviour change:** the
+    model can no longer edit `.gnomon/*.toml` from bash under docker; the
+    surface is the operator's to change. `git add` and `git commit` still work.
+  - every host write into the project goes through one helper (`root_fs.ts`)
+    that opens with `O_NOFOLLOW`, refuses symlinked directories and hard-linked
+    files, writes whole files by rename and keeps the audit trail's descriptor
+    open. Prompt history, the `gnomon guard`/`gnomon check` session bases and
+    rule cache, and the `gnomon check` restore journal moved to gnomon's data
+    directory (out of the project and `.git/`); the journal restores only
+    paths inside the worktree.
+  - exec floors live in their own file (`exec-floors.json`); a trust store or
+    floor file that cannot be read is set aside and every project runs
+    contained until `gnomon trust grant`, with a warning. Floors kept in
+    `trust.json` by older versions are moved over on first read.
+  - containers carry a `gnomon.root` label; any gnomon process refuses host
+    git in a project a running container can write, and refuses when docker
+    cannot be asked for a project recorded as contained.
+  - a `.gnomon/` below a floored project is held to that project's floor.
+  - `image` must be an image reference; it is quoted, and any image change is
+    a grant whatever the recorded mode, mid-session and across sessions.
+  - per-URL and per-remote programs (`credential.<url>.helper`,
+    `gpg.<format>.program`, `remote.<name>.uploadpack`/`receivepack`/`vcs`/
+    `proxy`) are blanked for gnomon's own git.
+  - (sixth review) the `test_must_fail_first` re-run reads and restores
+    source files without following anything (a symlink there wrote the
+    pre-image into `~/.bashrc`, or copied a credentials file into `src/`),
+    and skips with a warning any file the re-run replaced; `read`, `write`,
+    `edit` and `grep` take only regular files under the root (never a FIFO,
+    a device, or a hard link out) and write by rename.
+  - (sixth review) `gnomon check` holds `[verify]` to this machine's exec
+    floor: a `--base` ref moved to a commit with `exec = "off"` no longer runs
+    the verify command on the host. The verdict carries `rules_rev`, `exec`
+    and `warnings`; the banner prints the commit the rules came from.
+  - (sixth review) `.git` is mounted on itself so it cannot be renamed away
+    from its read-only children; `.git/commondir` (`.`) and
+    `.git/config.worktree` (empty) are created when absent and mounted
+    read-only; `.gnomon-loops/` is read-only; containers run with
+    `--cap-drop ALL --security-opt no-new-privileges`.
+  - (sixth review) a contained role refuses to start in a root that contains
+    the home directory, gnomon's data dir, or gnomon's own code
+    (`GNOMON_ALLOW_SELF_IN_ROOT=1` for working on gnomon itself); MCP servers
+    start outside the project while a role is contained.
+  - (seventh review) `gnomon check --base <rev>` takes only the policy under
+    judgement from the revision (roles, write_allow, bash_allow/deny,
+    `[verify]`). Everything that acts on the host -- `[audit]` (dir, redact,
+    attest sign/verify/public_key, anchor), where `[verify]` runs, its
+    network, `extra_roots`, the tool timeout -- comes from the live surface
+    (read-only to a container) and the exec floor. A base's
+    `[audit.attest] sign` ran on the host; a base's absolute `[audit] dir`
+    was written; a role named only in the base fell to `*` = off and ran
+    `[verify]` on the host (the floor is now read as its strictest entry); a
+    base's `network = true` reached `[verify]`. `gnomon guard` takes its
+    `[audit]` from the live surface too. The exec floor now records
+    `network`; a loosening needs `gnomon trust grant`.
+  - (seventh review) a committed surface is copied out of git entry by entry,
+    each checked (a plain blob, no `..`/`.`/`.git` component, inside the
+    copy) and written without following anything: a model-built tree with
+    `..` entries made `gnomon check` (and the dashboard's check) and `gnomon
+    guard` overwrite files outside the copy, such as `~/.bashrc`.
+  - (seventh review) each linked worktree's admin dir (`.git/worktrees/<wt>/`)
+    and each submodule's git dir (`.git/modules/**`: config, hooks, info,
+    commondir, config.worktree, recursively) is read-only to a container,
+    with the directories that hold them (and a submodule's `.git` file and the
+    directories down to it) mounted on themselves so they cannot be renamed
+    away. `git commit`, `git checkout` and `git worktree add` inside the
+    container still work. Under `exec = "os"` the same git dirs are passed to
+    gnomon-exec as read-only (macOS), and on Linux the snapshot put back after
+    each command covers them: a linked worktree's redirects (`commondir`,
+    `config.worktree`, `gitdir`; not its index or HEAD, which the user's own
+    git may change meanwhile) and each submodule's config, hooks and info. A
+    worktree or submodule the command made itself is left alone.
+  - (seventh review) the turn's tree count reads untracked files only as
+    regular files in the root, at most 16 MiB (a symlink to `/dev/zero` hung
+    it; one to a host file put its line count in the record); a key or
+    shadow excerpts sent to a LAN, `.local` or tailnet host without a grant
+    is now a grant (only loopback counts as local for that); the write
+    precheck lists an archive's members only for a regular file in the root
+    of at most 256 MiB, with the archiver killed at its deadline.
+  - (eighth review) must-fail-first no longer puts back a path with a `.git`
+    component, a `..` or absolute path, or one under `.gnomon/` or a gnomon
+    state dir. `gnomon check --base <rev>` read its pre-images from
+    `git diff <base>`, and a base commit the model made could hold
+    `.git/config` (an fsmonitor) and its own `.gnomon/policy.toml`: host
+    gnomon wrote both into the real tree for the re-run, and a SIGKILL in that
+    window left them there. `check` skips such paths and names them in the
+    verdict's warnings; the re-run itself refuses them; `writeFileIn` refuses
+    a target outside the root it is given instead of writing it unchecked.
+  - Known limit (seventh review, L1): a container can still corrupt
+    `.git/HEAD` and plant a bare repository in the root, so the user's own
+    git, run there, discovers the planted repository and its config. Mounting
+    `HEAD` read-only breaks `git checkout`/`git switch` in the container
+    (measured), so it is not done. Set `git config --global
+    safe.bareRepository explicit` on any machine that runs contained
+    sessions. The same holds for any `.git` directory the model creates in a
+    subdirectory: do not run git in a directory the model made without
+    looking.
+
 ## [0.4.4] — 2026-11-06
 
 Long hosted-model tasks, from the P2G41 root causes (2026-11-05). **One default

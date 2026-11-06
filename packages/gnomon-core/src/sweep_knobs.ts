@@ -229,6 +229,8 @@ export function envSnapshotCommand(platform: BootstrapPlatform): string {
 export function envSnapshotNetworkLine(opts: {
   network: boolean | undefined;
   docker: boolean;
+  /** exec = "os": the kernel blocks egress, and no host list opens it. */
+  os?: boolean;
   packageIndex: readonly string[];
 }): string {
   if (opts.network !== false) return "network (policy): allowed";
@@ -236,6 +238,12 @@ export function envSnapshotNetworkLine(opts: {
     return (
       "network (policy): off — [sandbox] network = false, and commands run in a container with no network" +
       (opts.packageIndex.length > 0 ? " (allow_package_index does not reach inside it)" : "")
+    );
+  }
+  if (opts.os) {
+    return (
+      "network (policy): off — [sandbox] network = false, and commands run under a kernel sandbox that blocks egress (loopback stays reachable)" +
+      (opts.packageIndex.length > 0 ? " (allow_package_index does not open it)" : "")
     );
   }
   return (
@@ -671,6 +679,12 @@ export function auditSweepKnobs(
           where,
           'allow_package_index does not reach inside exec = "docker": the container runs with --network none, which no host list can open, so downloads there still fail.',
           'Run on the host (exec = "off") for the allowlist to apply, or pre-fetch the packages into the repository.'
+        );
+      } else if (hosts.length > 0 && sandbox?.exec === "os") {
+        warn(
+          where,
+          'allow_package_index does not open exec = "os": with network = false its supervisor admits loopback only and has no per-host allow, so downloads there still fail (and bash refuses them up front).',
+          'Pre-fetch the packages (or point the tool at a local mirror on loopback), or run that role with exec = "off" for the allowlist to apply.'
         );
       }
     }

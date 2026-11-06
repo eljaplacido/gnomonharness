@@ -14,11 +14,12 @@
  * learn what a deterministic harness does.
  */
 
-import { GnomonConfig, resolveContext, resolveRouting, resolveEndpoint, listEndpoints, endpointClass, listRoles, recomputeManifest, resolveVerify, resolveExtraRoots, resolveApprovalGate, resolveSandboxLevel, endpointKind } from "./config.js";
+import { GnomonConfig, resolveContext, resolveRouting, resolveEndpoint, listEndpoints, endpointClass, listRoles, recomputeManifest, resolveVerify, resolveExtraRoots, resolveApprovalGate, resolveSandboxLevel, endpointKind, resolveExec } from "./config.js";
+import { resolve as resolvePath } from "node:path";
 import { resolveAudit } from "./audit.js";
 import { resolveSessionStore } from "./session_store.js";
 import { loadSkills, loadProposedSkills } from "./skills.js";
-import { buildToolSet, MUTATING } from "./tools.js";
+import { buildToolSet, MUTATING, osSandboxSummary, osSandboxForbid } from "./tools.js";
 import { resolveAfterRefusal } from "./after_refusal.js";
 
 export interface Explanation {
@@ -154,6 +155,15 @@ const TOPICS: Record<ExplainTopic, Builder> = {
     const extra = resolveExtraRoots(config);
     const allow = config.roles[role]?.bash_allow ?? [];
     const deny = config.roles[role]?.bash_deny ?? [];
+    const ex = resolveExec(config, role);
+    const execLine =
+      ex.mode === "os"
+        ? `os — ${osSandboxSummary(policy.sandbox?.network === true, undefined, ex.reads, osSandboxForbid(resolvePath(config.gnomonDir, ".."), extra)).line.replace(/^sandbox: exec = "os" /, "")}`
+        : ex.invalid !== undefined
+          ? `${JSON.stringify(ex.invalid)} — not a value this build knows: bash REFUSES every command until it is "off", "docker" or "os"`
+        : ex.mode === "docker"
+          ? `docker (${ex.image}), network ${ex.network ? "on" : "none"}`
+          : "off — bash runs on the host, bounded by the rules above only";
     return {
       topic: "sandbox",
       summary: SUMMARIES.sandbox,
@@ -178,9 +188,16 @@ const TOPICS: Record<ExplainTopic, Builder> = {
         "network = false refuses webfetch, and refuses curl, wget, nc, ssh,",
         "connecting one-liners, git to a URL and a registry URL in bash — the",
         "same kind of filter. A script or a package manager still reaches the",
-        "network. Containment of both is",
-        "exec = \"docker\": bash runs in a container that sees only the repository,",
-        "with no network unless network = true.",
+        "network.",
+        "",
+        "[sandbox] exec decides where bash runs, and is the containment. 'off' is",
+        "the host. 'docker' is a container that sees only the repository, with no",
+        "network unless network = true. 'os' is the host under a kernel sandbox",
+        "(Landlock on Linux, sandbox-exec on macOS): writes only inside the root",
+        "and a per-call temp dir, and with network = false no egress (loopback",
+        "stays reachable). With reads = 'scoped' (Linux) reads are confined too:",
+        "credential stores in $HOME are unreadable. 'os' refuses to run a command",
+        "on a machine that cannot enforce it.",
       ],
       here: [
         `level           ${level}`,
@@ -190,6 +207,9 @@ const TOPICS: Record<ExplainTopic, Builder> = {
         `bash_allow      ${allow.length === 0 ? `none declared — role "${role}" may run anything not denied` : `${allow.length} pattern(s)`}`,
         ...allow.slice(0, 6).map((x) => bullet(x)),
         `bash_deny       ${deny.length} pattern(s)`,
+        `exec            ${execLine}`,
+        `reads           ${ex.reads === "scoped" ? `scoped${ex.readRoots.length > 0 ? `, ${ex.readRoots.length} read_roots declared` : ""}` : ex.reads}` +
+          (ex.mode === "os" ? "" : ' (read only under exec = "os")'),
       ],
       next: [
         "To let the agent reach one other checkout, name it rather than turning",

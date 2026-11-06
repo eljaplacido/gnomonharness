@@ -209,8 +209,18 @@ so both format drift and non-determinism fail the build.
   "edit_format": ["ast", "hashline", "str_replace"],
   "sandbox": ["off", "confined", "strict"],
   "approval": ["never", "on_write", "always"],
-  "role_profile": ["local_first", "frontier_plan", "all_remote"]
+  "role_profile": ["local_first", "frontier_plan", "all_remote"],
+  "exec": ["off", "docker", "os"]
 ```
+
+**`exec` was added 2026-11-01** with the `os` value, as the fifth key and the
+last, so the four published before it keep their positions. It was the one
+enumerated surface key missing from the contract: `[sandbox] exec` had a closed
+set of values in `config.ts` (`EXEC_VALUES`) and an audit for misspellings, but
+`gnomon enumerations` did not publish it. All three values are implemented.
+`os_sandbox.test.ts` fails if `EXEC_VALUES` and the golden disagree. An
+`exec` value outside the set (`"OS"`, `"landlock"`, `"os "`) does not fall
+back to `"off"`: `bash` refuses every command until it is fixed (2026-11-06).
 
 **`role_profile` is implemented.** This paragraph said it was "declared and not
 implemented" and stayed there after `495fa40` made it route: `applyProfile`
@@ -472,7 +482,10 @@ pass alone is not a verdict: it records the work, it does not inspect it.
 Top-level keys: `schema`, `base` (merge-base, full sha), `head` (full sha or
 `"worktree"`), `role`, `surface_hash` (the **base** surface — the rules the
 change was judged by), `checks`, `exit`; optionally `audit` (`trail`, `seq`,
-`hash`, `surface_audit_enabled`), `error`, `recovered`. Each check: `id`,
+`hash`, `surface_audit_enabled`), `error`, `recovered`, `rules_rev` (the
+commit `--base` resolved to, whose `.gnomon/` the rules were read from), `exec`
+(`mode`, `image`, `network`: where `[verify]` ran, after this machine's exec
+floor), `warnings` (strings). Each check: `id`,
 `status`; optionally `findings`, `reason`, `inspected`.
 
 **Fixture**: `conformance/check_verdict.json`. `packages/gnomon-cli/src/check.test.ts`
@@ -1661,6 +1674,14 @@ statement becomes a line of `receipts.jsonl` (`digest`, `backend`,
   `refs/heads/gnomon-anchors`, and a ref elsewhere is reported as a problem.
   Verification fetches the ref, reads every commit, and remembers the tip, so
   a history rewritten since the last read is a finding.
+  Commits are built in a local bare repository under gnomon's data directory
+  (`<data dir>/anchors/<scope>/git`), outside the project root a sandboxed
+  bash may write; one left at `anchors/git` by an earlier version is not
+  read. gnomon refuses that repository when its config holds a key `git init
+  --bare` does not write, when it holds `commondir`, `config.worktree` or
+  object alternates, or a symlink. A `remote` that names a remote of this
+  repository is resolved once, when the session starts, and the detached
+  delivery pushes to that target, not to whatever `.git/config` says by then.
 - **rfc3161:** a TimeStampReq for the digest (nonce, `certReq`). The token
   is checked at delivery and again, offline, at verification against
   `tsa_cert`: the imprint, the signed attributes, and the signature under a
@@ -2648,7 +2669,10 @@ never admitted. Entries must be bare host names; an unknown host is accepted
 and reported, since a private mirror is legitimate. It is an exception to an
 intent filter, not containment: under `exec = "docker"` the container still
 runs with `--network none`, which no host list opens, so there the allowlist
-admits nothing (the refusal is the one without it) and the audit says so; with the network allowed it does nothing
+admits nothing (the refusal is the one without it) and the audit says so. The
+same holds under `exec = "os"`: its `network = false` supervisor admits loopback
+only and has no per-host allow, so the allowlist admits nothing there either,
+and the audit says so too; with the network allowed it does nothing
 either. `gnomon guard` reads it as the loop does. `counters.package_index`
 (`admitted`, `hosts`) is on every turn of a `network = false` surface that
 lists hosts, and an admitted call's `tool_call` record carries

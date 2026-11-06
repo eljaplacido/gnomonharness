@@ -69,6 +69,7 @@ import {
   appendFileSync,
   closeSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -79,7 +80,8 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createHash, randomBytes } from "node:crypto";
 import { hostname } from "node:os";
 import { canonicalJson, recordHash, type AuditRecord } from "./audit.js";
@@ -87,6 +89,9 @@ import type { GnomonConfig } from "./config.js";
 import { recordDegradation, type DegradationSink } from "./degradation.js";
 import { parseTimeStampResponse, timeStampRequest, verifyTimeStampToken } from "./rfc3161.js";
 import { posixShell, NO_POSIX_SHELL } from "./tools.js";
+import { gnomonDataDir } from "./credentials.js";
+import { safeGit } from "./git_safe.js";
+import { appendFileIn, createExclusiveIn, ensureDirIn, writeFileIn, writeRootFor } from "./root_fs.js";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -285,7 +290,7 @@ export function resolveAnchor(config: GnomonConfig, auditDir: string): ResolvedA
   }
 
   const declaredDir = str(a.dir);
-  return {
+  const resolved: ResolvedAnchor = {
     enabled: backend !== null,
     declared,
     backend,
@@ -301,6 +306,11 @@ export function resolveAnchor(config: GnomonConfig, auditDir: string): ResolvedA
     timeout_sec,
     problems,
   };
+  // A remote named through the workspace's repository is read once, now --
+  // the first resolve in a process is the session's start -- and that is
+  // where the session's anchors go (pinAnchorTarget).
+  if (resolved.enabled) pinAnchorTarget(resolved);
+  return resolved;
 }
 
 // ---------------------------------------------------------------------------
@@ -365,6 +375,12 @@ interface QueueEntry {
 const queueDir = (s: ResolvedAnchor) => join(s.dir, "queue");
 const receiptsFile = (s: ResolvedAnchor) => join(s.dir, "receipts.jsonl");
 const stateFile = (s: ResolvedAnchor) => join(s.dir, "state.json");
+/**
+ * The root writeFileIn checks a write against: the project's, or -- for an
+ * absolute [audit] dir outside it -- that dir itself. writeFileIn refuses a
+ * target outside the root it is given (eighth review).
+ */
+const writeRoot = (s: ResolvedAnchor): string => writeRootFor(s.root, s.dir);
 
 /**
  * Queue a sealed head. The only anchoring work on the seal path: one small
@@ -374,13 +390,11 @@ export function enqueueAnchor(settings: ResolvedAnchor, trailPath: string, seali
   const statement = statementFor(settings, trailPath, sealing, records);
   const digest = statementDigest(statement);
   const dir = queueDir(settings);
-  mkdirSync(dir, { recursive: true });
   const entry: QueueEntry = { statement, digest, queued_at: new Date().toISOString() };
-  // Written beside, then renamed: a flusher reading the directory never sees
-  // half a file.
-  const tmp = join(dir, `.${digest}.${process.pid}.tmp`);
-  writeFileSync(tmp, `${JSON.stringify(entry)}\n`, "utf-8");
-  renameSync(tmp, join(dir, `${digest}.json`));
+  // Written beside, then renamed (root_fs.ts): a flusher reading the
+  // directory never sees half a file, and nothing a contained command put at
+  // the path is written through.
+  writeFileIn(writeRoot(settings), join(dir, `${digest}.json`), `${JSON.stringify(entry)}\n`);
   return digest;
 }
 
@@ -431,11 +445,8 @@ function readState(s: ResolvedAnchor): AnchorState {
 }
 
 function writeState(s: ResolvedAnchor, patch: AnchorState): void {
-  mkdirSync(s.dir, { recursive: true });
   const next = { ...readState(s), ...patch };
-  const tmp = `${stateFile(s)}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(next, null, 2)}\n`, "utf-8");
-  renameSync(tmp, stateFile(s));
+  writeFileIn(writeRoot(s), stateFile(s), `${JSON.stringify(next, null, 2)}\n`);
 }
 
 // ---------------------------------------------------------------------------
@@ -532,15 +543,168 @@ function gitEnv(now: Date): NodeJS.ProcessEnv {
   };
 }
 
+/**
+ * Where the local anchor repository lives: gnomon's data directory, per
+ * checkout (the anchor scope), OUTSIDE the project root.
+ *
+ * It used to be `<audit dir>/anchors/git`, inside the root a sandboxed bash
+ * may write, and the host-side git that pushes from it at session end reads
+ * its config, its hooks, its `commondir` and its object alternates (third
+ * review, finding 4). It holds nothing that is not on the remote -- a scratch
+ * copy to build the next commit on -- so it moves rather than migrates: a copy
+ * still under the audit dir is never read again (the next delivery fetches
+ * the remote's history into the new one), and is left for its owner to
+ * delete. The queue, the receipts and the state stay in the audit dir.
+ */
+export function localAnchorRepo(s: ResolvedAnchor): string {
+  return join(gnomonDataDir(), "anchors", s.scope || scopeOf(s.root), "git");
+}
+
+/** The repository the anchor git used to keep inside the project root. Read by nothing. */
+export function legacyAnchorRepo(s: ResolvedAnchor): string {
+  return join(s.dir, "git");
+}
+
+/**
+ * `-c` overrides on every anchor git. Command-line config outranks the
+ * repository's own for single-valued keys. core.gitProxy is first-match-wins,
+ * which a `-c` cannot override, and `url.<x>.insteadOf` is longest-match --
+ * so the repository's own config is held to what `git init --bare` writes
+ * (assertAnchorRepoConfig) rather than out-voted.
+ *
+ * NOT blanked: credential.helper, core.askPass, and the system config. Those
+ * come from the user's global and system files, which no sandboxed command
+ * can write (the repository's own config may hold no such key), and an https
+ * remote needs them to push: Apple's git keeps osxkeychain in the system
+ * file, `gh auth setup-git` writes a global helper.
+ */
+const ANCHOR_GIT_HARDENING = [
+  "-c", "core.hooksPath=/dev/null",
+  "-c", "core.fsmonitor=false",
+  "-c", "protocol.ext.allow=never",
+  "-c", "core.sshCommand=",
+  "-c", "core.gitProxy=",
+  "-c", "core.alternateRefsCommand=",
+  "-c", "gc.auto=0",
+  "-c", "maintenance.auto=false",
+];
+
 async function git(repo: string, args: string[], s: ResolvedAnchor, now: Date, input?: string): Promise<Ran> {
+  // The repository's config must still be the one `git init --bare` wrote,
+  // and nothing in it may redirect git elsewhere, or a program planted there
+  // runs from this host-side git at session end (PR #156 second review, A;
+  // third review, finding 4).
+  assertAnchorRepoConfig(repo);
   return runProcess(
     "git",
     // No hooks: a pre-push hook from a global core.hooksPath would run, and
     // could wait on a terminal nobody is at. No `ext::` transport: a remote
-    // must not be a way to run a command.
-    ["-c", `core.hooksPath=${join(repo, "no-hooks")}`, "-c", "protocol.ext.allow=never", "--git-dir", repo, ...args],
+    // must not be a way to run a command. No fsmonitor, no ssh command, proxy or
+    // alternate-refs command from any config file -- the user's own
+    // GIT_SSH_COMMAND (gitEnv) still reaches ssh, since the environment
+    // outranks core.sshCommand.
+    [...ANCHOR_GIT_HARDENING, "--git-dir", repo, ...args],
     { input, env: gitEnv(now), timeoutSec: s.timeout_sec }
   );
+}
+
+/** The keys `git init --bare` writes. Anything else in the anchor repo's config was put there by someone else. */
+const ANCHOR_REPO_KEYS = new Set([
+  "core.repositoryformatversion",
+  "core.filemode",
+  "core.bare",
+  "core.logallrefupdates",
+  "core.ignorecase",
+  "core.precomposeunicode",
+  "core.symlinks",
+  "extensions.objectformat",
+  "extensions.refstorage",
+]);
+
+/**
+ * Files that point git at another repository's config, objects or worktree
+ * config. `git init --bare` writes none of them.
+ */
+const ANCHOR_REDIRECTS = ["commondir", "config.worktree", "gitdir", join("objects", "info", "alternates"), join("objects", "info", "http-alternates")];
+
+/**
+ * Throws when the anchor repository is not as `git init --bare` (and gnomon's
+ * own fetches and commits) left it: a key init does not write, a file that
+ * redirects git elsewhere, or a symlink anywhere in it.
+ */
+export function assertAnchorRepoConfig(repo: string): void {
+  for (const f of ANCHOR_REDIRECTS) {
+    let there = false;
+    try {
+      lstatSync(join(repo, f));
+      there = true;
+    } catch {
+      /* absent: as init left it */
+    }
+    if (there) {
+      throw new Error(
+        `the local anchor repository holds ${f}, which points git at another repository: ${repo}. ` +
+          `Nothing is anchored until it is removed; delete ${repo} to have gnomon recreate it.`
+      );
+    }
+  }
+  const path = join(repo, "config");
+  if (!existsSync(path)) return;
+  if (!lstatSync(path).isFile()) throw new Error(`the local anchor repository's config is not a plain file (${path}); refusing to run git there`);
+  const text = readFileSync(path, "utf8");
+  let section = "";
+  const bad: string[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/^\s+/, "");
+    if (!line || line.startsWith("#") || line.startsWith(";")) continue;
+    const sec = /^\[\s*([^\]\s"]+)(?:\s+"[^"]*")?\s*\]/.exec(line);
+    if (sec) {
+      // A subsection ([remote "x"], [url "x"], [include], [includeIf ...]) is never written by init.
+      section = /"/.test(line) ? `${sec[1]!.toLowerCase()}.<sub>` : sec[1]!.toLowerCase();
+      const rest = line.slice(sec[0].length).trim();
+      if (!rest || rest.startsWith("#") || rest.startsWith(";")) continue;
+      bad.push(`${section}.${rest.split(/[\s=]/)[0]!.toLowerCase()}`);
+      continue;
+    }
+    const key = `${section}.${line.split(/[\s=]/)[0]!.toLowerCase()}`;
+    if (!ANCHOR_REPO_KEYS.has(key)) bad.push(key);
+  }
+  if (bad.length > 0) {
+    throw new Error(
+      `the local anchor repository's config was changed (${[...new Set(bad)].join(", ")}): ${path}. ` +
+        `Nothing is anchored until it is restored; delete ${repo} to have gnomon recreate it.`
+    );
+  }
+}
+
+/** Throws when anything in the anchor repository is a symlink: git would follow it out. Once per delivery. */
+export function assertAnchorRepoTree(repo: string): void {
+  const walk = (dir: string): void => {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const n of names) {
+      const p = join(dir, n);
+      const st = lstatSync(p);
+      if (st.isSymbolicLink()) {
+        throw new Error(
+          `the local anchor repository holds a symlink (${p}), which git would follow out of it. ` +
+            `Nothing is anchored until it is removed; delete ${repo} to have gnomon recreate it.`
+        );
+      }
+      if (st.isDirectory()) walk(p);
+    }
+  };
+  try {
+    if (lstatSync(repo).isSymbolicLink()) throw new Error(`the local anchor repository is a symlink: ${repo}`);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return;
+    throw e;
+  }
+  walk(repo);
 }
 
 /** A remote URL or path with any credentials stripped, for receipts and messages. */
@@ -549,22 +713,212 @@ export function redactRemote(remote: string): string {
 }
 
 /**
- * What `remote` names. A bare word is the name of a remote of the workspace's
- * own repository, read from it; a relative path is relative to the root;
- * anything else (a URL, `host:path`, an absolute path) is used as it is.
+ * Where a session's anchors go, decided ONCE per process by (root, remote) and
+ * pinned: the first resolve in a process is the session's start (audit
+ * settings are resolved before the first turn), and a detached delivery is
+ * handed the pinned target (`--remote-target`, or the sealed settings file)
+ * rather than deciding again.
+ *
+ * Everything the decision reads is inside the root a sandboxed bash may
+ * write: the workspace's .git/config (`remote.<name>.url`, `insteadOf`), and
+ * whether `<root>/<word>` exists -- a bare word is a remote's NAME only while
+ * no such path does. Deciding again at session end let a container turn the
+ * name `origin` into the path `<root>/origin`, a bare repository it had made
+ * with a pre-receive hook (fourth review, finding 1).
  */
-async function remoteTarget(s: ResolvedAnchor, now: Date): Promise<string> {
-  const r = s.remote!;
-  if (/^[A-Za-z0-9._-]+$/.test(r) && !existsSync(join(s.root, r))) {
-    const got = await runProcess("git", ["-C", s.root, "remote", "get-url", r], { env: gitEnv(now), timeoutSec: s.timeout_sec });
-    if (got.code !== 0) throw new Error(`"${r}" is not a remote of the repository at ${s.root}`);
-    return got.out.trim();
+const pinnedTargets = new Map<string, string>();
+
+const targetKey = (root: string, remote: string) => `${resolve(root)}\0${remote}`;
+
+function namesWorkspaceRemote(s: Pick<ResolvedAnchor, "root" | "remote">): boolean {
+  const r = s.remote;
+  return r !== null && /^[A-Za-z0-9._-]+$/.test(r) && !existsSync(join(s.root, r));
+}
+
+function resolveWorkspaceRemote(root: string, name: string, timeoutSec: number): string | null {
+  // git_safe: hardened, every driver blanked, no system config, the repository named.
+  const got = safeGit(["-C", root, "remote", "get-url", name], { cwd: root, timeout: timeoutSec * 1000 });
+  if (got.status !== 0 || typeof got.stdout !== "string") return null;
+  const url = got.stdout.trim();
+  return url && !url.startsWith("-") ? url : null;
+}
+
+/**
+ * The filesystem path a git remote names, or null when git would reach it
+ * over a network: git's own rule (connect.c url_is_local_not_ssh) -- a
+ * `scheme://` that is not file://, or a colon before the first slash
+ * (`host:path`), is remote; anything else, a Windows drive path included, is
+ * a path.
+ */
+export function localRemotePath(target: string): string | null {
+  if (/^file:\/\//i.test(target)) {
+    try {
+      return fileURLToPath(target);
+    } catch {
+      return target.slice("file://".length);
+    }
   }
-  if (isAbsolute(r) || /^[a-z][a-z0-9+.-]*:\/\//i.test(r) || /^[^/\\]+:/.test(r)) return r;
-  return join(s.root, r);
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(target)) return null;
+  if (/^[A-Za-z]:[\\/]/.test(target)) return target;
+  const colon = target.indexOf(":");
+  const slash = target.search(/[\\/]/);
+  if (colon >= 0 && (slash < 0 || colon < slash)) return null;
+  return target;
+}
+
+/** `p` with every existing ancestor resolved through symlinks. */
+function realish(p: string): string {
+  let cur = resolve(p);
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return join(realpathSync(cur), ...rest.reverse());
+    } catch {
+      const up = dirname(cur);
+      if (up === cur) return resolve(p);
+      rest.push(basename(cur));
+      cur = up;
+    }
+  }
+}
+
+function within(p: string, root: string): boolean {
+  const a = realish(p);
+  const r = realish(root);
+  return a === r || a.startsWith(r.endsWith(sep) ? r : r + sep);
+}
+
+/** What `s`'s remote names now: the decision pinAnchorTarget makes once. */
+function decideTarget(s: ResolvedAnchor): string | null {
+  const r = s.remote!;
+  let target: string;
+  if (namesWorkspaceRemote(s)) {
+    const url = resolveWorkspaceRemote(s.root, r, s.timeout_sec);
+    if (url === null) return null;
+    target = url;
+  } else if (isAbsolute(r) || /^[a-z][a-z0-9+.-]*:\/\//i.test(r) || localRemotePath(r) === null) {
+    target = r;
+  } else {
+    target = join(s.root, r);
+  }
+  // A relative path, from the workspace's config or the block itself, is the
+  // root's: the anchor git runs in no particular directory.
+  const local = localRemotePath(target);
+  if (local !== null && !isAbsolute(local) && !/^file:/i.test(target)) target = resolve(s.root, local);
+  return target;
+}
+
+/** Resolve and pin `s`'s remote now. The session's start calls it (resolveAnchor). */
+export function pinAnchorTarget(s: ResolvedAnchor): string | null {
+  if (s.backend !== "git" || !s.remote) return null;
+  const key = targetKey(s.root, s.remote);
+  const had = pinnedTargets.get(key);
+  if (had !== undefined) return had;
+  const target = decideTarget(s);
+  if (target !== null) pinnedTargets.set(key, target);
+  return target;
+}
+
+/** What the parent pinned, handed to a detached delivery. */
+export function usePinnedAnchorTarget(s: ResolvedAnchor, target: string): void {
+  if (s.remote && !target.startsWith("-")) pinnedTargets.set(targetKey(s.root, s.remote), target);
+}
+
+/** The target pinned for `s` in this process, if any. */
+export function pinnedAnchorTarget(s: ResolvedAnchor): string | undefined {
+  return s.remote ? pinnedTargets.get(targetKey(s.root, s.remote)) : undefined;
+}
+
+/** Tests only. */
+export function _resetAnchorTargets(): void {
+  pinnedTargets.clear();
+}
+
+/**
+ * The settings a session hands its detached delivery, sealed where no
+ * sandboxed command reaches: a file of its own in gnomon's data directory.
+ *
+ * WHY (fourth review, finding 6). The delivery is `gnomon audit anchor
+ * --background`, a child started at session end, and it read [audit.anchor]
+ * afresh from the project root -- after a session whose contained commands
+ * could write it. backend = "cmd" with a command of the container's choosing
+ * then ran on the host, under the --trust the session was started with. Now
+ * the child is handed the settings the session started with, the target
+ * pinned with them, and reads nothing from the root.
+ */
+function handoffDir(): string {
+  return join(gnomonDataDir(), "anchors", "handoff");
+}
+
+export function writeAnchorHandoff(s: ResolvedAnchor): string {
+  const dir = handoffDir();
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (within(dir, s.root)) throw new Error(`gnomon's data directory is inside the project root (${s.root}); refusing to hand anchor settings through it`);
+  const file = join(dir, `${randomBytes(12).toString("hex")}.json`);
+  writeFileSync(file, JSON.stringify({ v: 1, settings: s, target: pinnedAnchorTarget(s) ?? null }), { mode: 0o600, flag: "wx" });
+  return file;
+}
+
+/** The settings a session sealed for this delivery. Read once: the file is removed. Throws on anything else. */
+export function readAnchorHandoff(file: string): ResolvedAnchor {
+  const dir = realpathSync(handoffDir());
+  const real = realpathSync(file);
+  if (dirname(real) !== dir || !lstatSync(file).isFile()) throw new Error(`not a sealed anchor handoff: ${file}`);
+  let data: { v?: number; settings?: ResolvedAnchor; target?: string | null };
+  try {
+    data = JSON.parse(readFileSync(real, "utf-8")) as typeof data;
+  } finally {
+    try {
+      unlinkSync(real);
+    } catch {
+      /* already gone */
+    }
+  }
+  const s = data.settings;
+  if (data.v !== 1 || !s || typeof s.root !== "string" || !Array.isArray(s.problems)) throw new Error(`a malformed anchor handoff: ${file}`);
+  if (within(dir, s.root)) throw new Error(`gnomon's data directory is inside the project root (${s.root})`);
+  if (typeof data.target === "string") usePinnedAnchorTarget(s, data.target);
+  return s;
+}
+
+/**
+ * Where `s`'s anchors go: the pinned target, refused when it is a path inside
+ * the project root. Everything there is the container's to write -- a
+ * witness the forger can rewrite witnesses nothing, and its hooks run in the
+ * receive-pack this host starts.
+ */
+async function remoteTarget(s: ResolvedAnchor, _now: Date): Promise<string> {
+  const target = pinAnchorTarget(s);
+  if (target === null) throw new Error(`"${s.remote}" is not a remote of the repository at ${s.root}`);
+  if (target.startsWith("-")) throw new Error(`refusing a remote that reads as an option: ${redactRemote(target)}`);
+  const local = localRemotePath(target);
+  if (local !== null && within(local, s.root)) {
+    throw new Error(
+      `the anchor remote ${redactRemote(target)} is inside the project root (${s.root}), which a sandboxed command can write — nothing is anchored there. ` +
+        `Use a repository outside the root, or a URL.`
+    );
+  }
+  return target;
+}
+
+/**
+ * The program a LOCAL remote runs on this host: receive-pack for a push,
+ * upload-pack for a fetch or ls-remote, in the remote repository. git clears
+ * GIT_CONFIG_PARAMETERS (every `-c`) for it, so the hardening has to be on
+ * its own command line, or the remote's hooks -- pre-receive, update,
+ * post-receive, reference-transaction -- run with nothing switched off.
+ */
+const PACK_HARDENING =
+  "-c core.hooksPath=/dev/null -c core.fsmonitor=false -c receive.autogc=false -c gc.auto=0 " +
+  "-c maintenance.auto=false -c core.alternateRefsCommand= -c protocol.ext.allow=never";
+
+function packProgram(target: string, which: "receive-pack" | "upload-pack"): string[] {
+  if (localRemotePath(target) === null) return [];
+  return [`--${which}=git ${PACK_HARDENING} ${which}`];
 }
 
 async function ensureRepo(repo: string, s: ResolvedAnchor, now: Date): Promise<void> {
+  assertAnchorRepoTree(repo);
   if (existsSync(join(repo, "HEAD"))) return;
   mkdirSync(repo, { recursive: true });
   const r = await runProcess("git", ["init", "--bare", "-q", repo], { env: gitEnv(now), timeoutSec: s.timeout_sec });
@@ -573,7 +927,7 @@ async function ensureRepo(repo: string, s: ResolvedAnchor, now: Date): Promise<v
 
 /** The remote's tip of the anchor ref: a sha, null when the ref does not exist yet. Throws when unreachable. */
 async function remoteTip(repo: string, target: string, s: ResolvedAnchor, now: Date): Promise<string | null> {
-  const r = await git(repo, ["ls-remote", target, s.ref], s, now);
+  const r = await git(repo, ["ls-remote", ...packProgram(target, "upload-pack"), target, s.ref], s, now);
   if (r.code !== 0) throw new Error(`remote ${redactRemote(target)} unreachable: ${firstLine(r.err) || `git exit ${r.code}`}`);
   for (const line of r.out.split("\n")) {
     const [sha, name] = line.trim().split(/\s+/);
@@ -597,7 +951,7 @@ export interface AnchorDeps {
 type Delivered = Map<string, Record<string, unknown>>;
 
 async function deliverGit(s: ResolvedAnchor, entries: QueueEntry[], now: Date): Promise<Delivered> {
-  const repo = join(s.dir, "git");
+  const repo = localAnchorRepo(s);
   await ensureRepo(repo, s, now);
   const target = await remoteTarget(s, now);
   // One line per statement, canonical, so anyone holding the remote can
@@ -606,7 +960,7 @@ async function deliverGit(s: ResolvedAnchor, entries: QueueEntry[], now: Date): 
   for (let attempt = 0; attempt < 2; attempt++) {
     const tip = await remoteTip(repo, target, s, now);
     if (tip) {
-      const f = await git(repo, ["fetch", "-q", "--no-tags", target, `+${s.ref}:${s.ref}`], s, now);
+      const f = await git(repo, ["fetch", "-q", "--no-tags", ...packProgram(target, "upload-pack"), target, `+${s.ref}:${s.ref}`], s, now);
       if (f.code !== 0) throw new Error(`fetch from ${redactRemote(target)} failed: ${firstLine(f.err)}`);
     }
     const blob = await git(repo, ["hash-object", "-w", "--stdin"], s, now, body);
@@ -620,7 +974,7 @@ async function deliverGit(s: ResolvedAnchor, entries: QueueEntry[], now: Date): 
     await git(repo, ["update-ref", s.ref, sha], s, now);
     // Never forced. A remote that moved since the tip was read rejects this,
     // and the loop rebuilds on top of what it holds now.
-    const push = await git(repo, ["push", "-q", "--no-verify", target, `${sha}:${s.ref}`], s, now);
+    const push = await git(repo, ["push", "-q", "--no-verify", ...packProgram(target, "receive-pack"), target, `${sha}:${s.ref}`], s, now);
     if (push.code === 0) {
       const out: Delivered = new Map();
       for (const e of entries) out.set(e.digest, { remote: redactRemote(target), ref: s.ref, commit: sha });
@@ -740,12 +1094,7 @@ function takeLock(s: ResolvedAnchor): boolean {
   const staleAfterMs = Math.max(120, s.timeout_sec * 12) * 1000;
   for (let i = 0; i < 2; i++) {
     try {
-      const fd = openSync(file, "wx");
-      try {
-        writeFileSync(fd, `${JSON.stringify({ pid: process.pid, host: hostname(), at: new Date().toISOString() })}\n`, "utf-8");
-      } finally {
-        closeSync(fd);
-      }
+      createExclusiveIn(s.root, file, `${JSON.stringify({ pid: process.pid, host: hostname(), at: new Date().toISOString() })}\n`);
       return true;
     } catch {
       try {
@@ -794,7 +1143,7 @@ function releaseLock(s: ResolvedAnchor): void {
 export async function flushAnchors(settings: ResolvedAnchor, deps: AnchorDeps = {}): Promise<FlushResult> {
   const backend = settings.backend;
   if (!settings.enabled || !backend) return { backend, delivered: 0, pending: pendingAnchors(settings).length };
-  mkdirSync(settings.dir, { recursive: true });
+  ensureDirIn(settings.root, settings.dir);
   if (!takeLock(settings)) return { backend, delivered: 0, pending: readQueue(settings).length, busy: true };
   const onExit = (): void => releaseLock(settings);
   process.once("exit", onExit);
@@ -832,10 +1181,10 @@ async function flushRound(settings: ResolvedAnchor, backend: AnchorBackend, deps
     for (const q of queued) {
       const receipt = delivered.get(q.entry.digest);
       if (!receipt) continue;
-      appendFileSync(
+      appendFileIn(
+        writeRoot(settings),
         receiptsFile(settings),
-        `${JSON.stringify({ digest: q.entry.digest, backend, statement: q.entry.statement, queued_at: q.entry.queued_at, delivered_at: at, receipt })}\n`,
-        "utf-8"
+        `${JSON.stringify({ digest: q.entry.digest, backend, statement: q.entry.statement, queued_at: q.entry.queued_at, delivered_at: at, receipt })}\n`
       );
       try {
         unlinkSync(q.file);
@@ -1006,7 +1355,7 @@ function readReceipts(s: ResolvedAnchor): Array<Record<string, unknown>> {
 
 async function collectGit(s: ResolvedAnchor, offline: boolean, now: Date): Promise<AnchorLog> {
   const log: AnchorLog = { backend: "git", source: "remote", anchors: [], problems: [], findings: [] };
-  const repo = join(s.dir, "git");
+  const repo = localAnchorRepo(s);
   const verifyRef = "refs/gnomon/verify";
   let ref = verifyRef;
   try {
@@ -1030,7 +1379,7 @@ async function collectGit(s: ResolvedAnchor, offline: boolean, now: Date): Promi
         }
         return log;
       }
-      const f = await git(repo, ["fetch", "-q", "--no-tags", target, `+${s.ref}:${verifyRef}`], s, now);
+      const f = await git(repo, ["fetch", "-q", "--no-tags", ...packProgram(target, "upload-pack"), target, `+${s.ref}:${verifyRef}`], s, now);
       if (f.code !== 0) throw new Error(`fetch failed: ${firstLine(f.err)}`);
       const seen = readState(s).remote_tip;
       if (seen && seen !== tip) {
@@ -1055,7 +1404,13 @@ async function collectGit(s: ResolvedAnchor, offline: boolean, now: Date): Promi
 
   const list = await git(repo, ["log", "--reverse", "--format=%H %cI", ref], s, now);
   if (list.code !== 0) {
-    if (log.source === "local-copy") log.problems.push("there is no local copy of the anchors");
+    if (log.source === "local-copy") {
+      log.problems.push(
+        existsSync(join(legacyAnchorRepo(s), "HEAD"))
+          ? `there is no local copy of the anchors outside the project root yet; the old copy at ${legacyAnchorRepo(s)} sits where a sandboxed command could have rewritten it, so it is not read`
+          : "there is no local copy of the anchors"
+      );
+    }
     return log;
   }
   const commits = list.out.split("\n").filter(Boolean).map((l) => {

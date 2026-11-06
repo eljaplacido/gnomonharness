@@ -29,6 +29,7 @@ import {
 import { join, isAbsolute, resolve } from "node:path";
 import { GnomonConfig } from "./config.js";
 import type { Todo, PromptExchange } from "./prompt_loop.js";
+import { writeFileIn } from "./root_fs.js";
 
 export const SESSION_FORMAT = 1;
 
@@ -103,9 +104,10 @@ export function saveSession(
   snapshot: SessionSnapshot
 ): string | null {
   if (!store.persist) return null;
-  mkdirSync(store.dir, { recursive: true });
   const path = join(store.dir, `${snapshot.id}.json`);
-  writeFileSync(path, `${JSON.stringify(snapshot, null, 2)}\n`, "utf-8");
+  // root_fs.ts: the records dir sits in the project root, where a contained
+  // command may have left a symlink in its place.
+  writeFileIn(resolve(store.dir, ".."), path, `${JSON.stringify(snapshot, null, 2)}\n`);
   prune(store);
   return path;
 }

@@ -38,11 +38,12 @@
  */
 
 import { writeFileSync, renameSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { beforeOwnWrite, noteOwnWrite } from "./record_guard.js";
 import type { TaskRecord, ToolTiming, TurnCounters, TokenUsage, WireRecord } from "./prompt_loop.js";
 import type { ModelCallsMeasured } from "./mediators.js";
 import type { TrustOutcome } from "./trust.js";
+import { RootWriteError, writeFileIn } from "./root_fs.js";
 
 /** `<session>` + this, in the audit directory. */
 export const LIVE_RECORD_SUFFIX = ".record.json";
@@ -314,10 +315,14 @@ export class LiveRecord implements TurnLive {
       // gnomon last wrote this file is noted as someone else's before this
       // write can make it look like gnomon's.
       beforeOwnWrite(this.path);
-      writeFileSync(tmp, body, "utf-8");
       try {
-        renameSync(tmp, this.path);
-      } catch {
+        // root_fs.ts: a fresh temp file renamed over the record. The fixed
+        // temp name (`tmp`) was a path a contained command could pre-plant
+        // as a symlink, and writeFileSync followed it.
+        void tmp;
+        writeFileIn(dirname(this.path), this.path, body);
+      } catch (e) {
+        if (process.platform !== "win32" || e instanceof RootWriteError) throw e;
         // Windows refuses a rename over a file another process holds open
         // (a copy loop, a scanner). Written in place instead: a reader may
         // then see a short file, which is better than no record.

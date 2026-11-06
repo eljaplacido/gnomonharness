@@ -26,9 +26,11 @@
  *     never 0 — the rule .gnomon/ci.sh already set for its own gates.
  */
 
-import { spawnSync } from "node:child_process";
+import { safeGitBuffer } from "./git_safe.js";
+import { readExactIn, removeIn, repoStateDir, writeFileIn } from "./root_fs.js";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -48,10 +50,16 @@ import {
   resolveSandboxLevel,
   resolveVerify,
   type GnomonConfig,
+  type ResolvedExec,
 } from "./config.js";
+import { floorLossNotice, governingExecFloor, uncontainableRootAt } from "./trust.js";
+import { strictestOf } from "./exec_floor.js";
+import { emptySurface, hostSurface } from "./host_surface.js";
+import { readsRank } from "./sandbox_pin.js";
+import { parseSurfaceTree, readSurfaceBlobs, SurfaceTreeError, writeSurfaceTree, type SurfaceEntry } from "./surface_tree.js";
 import { AuditTrail, redact, resolveAudit, verifyTrail } from "./audit.js";
 import { harnessBuild } from "./build.js";
-import { mustFailFirst, readVerifyExit, isTestPath, type PreImage } from "./must_fail_first.js";
+import { mustFailFirst, readVerifyExit, isTestPath, unwritablePreImage, type PreImage } from "./must_fail_first.js";
 import {
   bashPolicy,
   executeTool,
@@ -117,6 +125,16 @@ export interface CheckVerdict {
   error?: string;
   /** Present only when an interrupted earlier run's re-run had to be undone first. */
   recovered?: string[];
+  /**
+   * The commit the rules were read from: `--base` resolved to a full sha
+   * (sixth review). A branch name is the model's to move; the sha is what
+   * actually decided.
+   */
+  rules_rev?: string;
+  /** Where [verify] and the must-fail-first re-run ran, after this machine's floors. */
+  exec?: { mode: string; image: string; network: boolean };
+  /** Things a person should know about how this verdict was reached. */
+  warnings?: string[];
 }
 
 /** One shell command an agent ran, as a transcript adapter reports it. */
@@ -177,7 +195,10 @@ export interface CheckOptions {
 class CheckCannotRun extends Error {}
 
 function git(cwd: string, args: string[]): Buffer {
-  const r = spawnSync("git", args, { cwd, maxBuffer: 256 * 1024 * 1024 });
+  return gitIn(cwd, args);
+}
+function gitIn(cwd: string, args: string[], input?: string): Buffer {
+  const r = safeGitBuffer(args, { cwd, input, maxBuffer: 256 * 1024 * 1024 });
   if (r.error) throw new CheckCannotRun(`git ${args[0]} could not start: ${r.error.message}`);
   if (r.status !== 0) {
     const err = r.stderr.toString("utf-8").trim().split("\n")[0] ?? "";
@@ -222,33 +243,63 @@ interface Journal {
   files: Array<{ path: string; b64: string | null }>;
 }
 
+/**
+ * Under gnomon's data dir, keyed by the git dir -- not inside it. A journal in
+ * `.git/` was a contained command's to write, and the next `check` restored
+ * whatever it named: `{ path: "~/.bashrc", b64: … }` (fifth review).
+ */
 function journalPath(toplevel: string): string {
-  return join(gitText(toplevel, ["rev-parse", "--absolute-git-dir"]), "gnomon-check-restore.json");
+  return join(repoStateDir(gitText(toplevel, ["rev-parse", "--absolute-git-dir"])), "check-restore.json");
 }
 
-function restoreJournal(path: string): string[] {
+/**
+ * Put back what a journal saved. Only paths inside `toplevel`, and through
+ * root_fs.ts: a journal is gnomon's own, but what it names is still the
+ * worktree, which a contained command may have re-pointed.
+ */
+function restoreJournal(path: string, toplevel: string): string[] {
   if (!existsSync(path)) return [];
   const j = JSON.parse(readFileSync(path, "utf-8")) as Journal;
+  const root = resolve(toplevel);
+  const restored: string[] = [];
   for (const f of j.files) {
-    if (f.b64 === null) {
-      if (existsSync(f.path)) unlinkSync(f.path);
-    } else {
-      mkdirSync(dirname(f.path), { recursive: true });
-      writeFileSync(f.path, Buffer.from(f.b64, "base64"));
+    const rel = relative(root, resolve(f.path));
+    if (!f.path || rel === "" || rel.startsWith("..") || isAbsolute(rel)) continue;
+    try {
+      if (f.b64 === null) {
+        removeIn(root, f.path);
+      } else {
+        writeFileIn(root, f.path, Buffer.from(f.b64, "base64"));
+      }
+      restored.push(f.path);
+    } catch {
+      /* not restorable through a symlink or into a directory: left as found */
     }
   }
   unlinkSync(path);
-  return j.files.map((f) => f.path);
+  return restored;
 }
 
-async function withJournal<T>(path: string, files: string[], fn: () => Promise<T>): Promise<T> {
+async function withJournal<T>(path: string, toplevel: string, files: string[], fn: () => Promise<T>): Promise<T> {
   const j: Journal = {
-    files: files.map((p) => ({ path: p, b64: existsSync(p) ? readFileSync(p).toString("base64") : null })),
+    // Read without following anything (sixth review): a symlink at a source
+    // path read a credentials file into the journal, and a crash restored it
+    // into the tree. A path that is not a plain file is left out -- mustFailFirst
+    // refuses to touch it too.
+    files: files.flatMap((p) => {
+      try {
+        const got = readExactIn(toplevel, p);
+        return [{ path: p, b64: got ? got.data.toString("base64") : null }];
+      } catch {
+        return [];
+      }
+    }),
   };
-  writeFileSync(path, JSON.stringify(j));
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, JSON.stringify(j), { mode: 0o600 });
   const onSignal = (sig: NodeJS.Signals) => {
     try {
-      restoreJournal(path);
+      restoreJournal(path, toplevel);
     } finally {
       process.exit(sig === "SIGINT" ? 130 : 143);
     }
@@ -267,6 +318,123 @@ async function withJournal<T>(path: string, files: string[], fn: () => Promise<T
 // ---------------------------------------------------------------------------
 // The run
 // ---------------------------------------------------------------------------
+
+/**
+ * Where [verify] runs for `gnomon check`, and with what network: never the
+ * base's word alone (sixth and seventh reviews).
+ *
+ * The rules are read from `--base`, and a ref is the model's to move: a
+ * contained command can write `.git/refs` and point `main` at a commit whose
+ * policy.toml says `exec = "off"`, `network = true`, and whose [verify]
+ * command is its own. So the base may only TIGHTEN where it runs (a base
+ * that says docker is contained); the mode, image and network otherwise come
+ * from this machine's exec floor for the project and the live surface (the
+ * working tree's, read-only to a container):
+ *
+ *   - mode: contained when the floor, the live surface or the base says so.
+ *     The floor is read as its STRICTEST entry, whatever the role: a role
+ *     named only in the base has no entry of its own, and falling back to
+ *     `*` (= off) ran [verify] on the host (B3). Lost floors are contained.
+ *   - image: the floor's, else the live surface's -- never the base's.
+ *   - network: the live surface's, and off when the floor recorded it off
+ *     (a loosening is `gnomon trust grant`'s) or the base asks for it off.
+ *
+ * The resolved sha is on the verdict and in the banner, and a base ref that
+ * moved after a contained session began is warned about.
+ */
+function checkExec(
+  config: GnomonConfig,
+  host: { config: GnomonConfig; loaded: boolean },
+  role: string,
+  given: string,
+  rulesRev: string,
+  toplevel: string,
+  verdict: CheckVerdict
+): ResolvedExec {
+  const warnings = (verdict.warnings ??= []);
+  const fromBase = resolveExec(config, role);
+  const live: ResolvedExec = host.loaded ? resolveExec(host.config, role) : { ...resolveExec(host.config), network: false };
+  const { floor, lost } = governingExecFloor(host.config);
+  if (lost) warnings.push(floorLossNotice(lost));
+  const strict = floor ? strictestOf(floor) : undefined;
+
+  // An exec that refuses bash -- recorded so in the floor, or declared so by
+  // the live surface or the base -- refuses here too: nothing is tighter.
+  const invalid = strict?.mode === "invalid" ? "(as recorded for this project)" : (live.invalid ?? fromBase.invalid);
+  if (invalid !== undefined) {
+    const exec: ResolvedExec = { ...live, mode: "off", network: false, invalid };
+    verdict.exec = { mode: exec.mode, image: exec.image, network: exec.network };
+    if (warnings.length === 0) delete verdict.warnings;
+    return exec;
+  }
+
+  let mode: ResolvedExec["mode"] = "off";
+  let image = live.image;
+  if (strict) {
+    mode = strict.mode as ResolvedExec["mode"];
+    image = strict.image;
+  } else if (live.mode !== "off") {
+    mode = live.mode;
+  } else if (fromBase.mode !== "off") {
+    mode = fromBase.mode;
+  }
+  let network = live.network && fromBase.network;
+  if (live.network && floor?.network === false) {
+    network = false;
+    warnings.push(
+      `the live surface asks for network = true, but a contained session here ran with it off; ` +
+        `[verify] runs without network until \`gnomon trust grant\` accepts it`
+    );
+  }
+  // What an "os" sandbox may read: the live surface's, never looser than the
+  // floor recorded (a base's `reads = "all"` or `read_roots = ["~"]` would
+  // hand [verify] the host's files).
+  let reads = live.reads;
+  if (strict?.mode === "os" && strict.reads !== undefined && readsRank(reads) < readsRank(strict.reads)) {
+    warnings.push(`the live surface asks for reads = ${JSON.stringify(reads)}; this project ran with ${JSON.stringify(strict.reads)}, so the check does`);
+    reads = strict.reads;
+  }
+  const exec: ResolvedExec = { mode, image, network, reads, readRoots: live.readRoots };
+
+  const said: string[] = [];
+  if (fromBase.mode !== exec.mode) said.push(`exec = "${fromBase.mode}"`);
+  else if (fromBase.mode !== "off" && fromBase.image !== exec.image) said.push(`image = "${fromBase.image}"`);
+  if (fromBase.network && !exec.network) said.push("network = true");
+  if (said.length > 0) {
+    warnings.push(
+      `the rules at ${rulesRev.slice(0, 12)} ask for ${said.join(", ")}; where [verify] runs is this machine's ` +
+        `and the live surface's to say, so the check runs ${exec.mode}${exec.mode === "off" ? "" : ` (${exec.image})`}` +
+        `${exec.network ? " with network" : ""}`
+    );
+  }
+  if (strict) {
+    // A named ref (not a sha) that moved after the contained session began
+    // may have been moved by it. The reflog is in .git and so the
+    // container's too: this is a warning, the clamp above is the defence.
+    if (floor && !/^[0-9a-f]{40}$/i.test(given)) {
+      const at = Date.parse(floor.last ?? floor.at);
+      let moved = NaN;
+      try {
+        moved = Number(gitText(toplevel, ["log", "-g", "-n", "1", "--format=%ct", given])) * 1000;
+      } catch {
+        /* no reflog for it */
+      }
+      if (Number.isFinite(at) && Number.isFinite(moved) && moved > at) {
+        warnings.push(
+          `--base ${given} moved (${new Date(moved).toISOString()}) after a contained session started here (${floor.last ?? floor.at}); ` +
+            `the rules were read from ${rulesRev} -- make sure that is the commit you meant`
+        );
+      }
+    }
+  }
+  if (exec.mode !== "off") {
+    const why = uncontainableRootAt(dirname(host.config.gnomonDir));
+    if (why) throw new CheckCannotRun(why);
+  }
+  verdict.exec = { mode: exec.mode, image: exec.image, network: exec.network };
+  if (warnings.length === 0) delete verdict.warnings;
+  return exec;
+}
 
 const posix = (p: string) => p.split(sep).join("/");
 
@@ -334,7 +502,7 @@ async function judge(
   // An interrupted earlier run left someone's work rewritten. Undo that before
   // reading anything, or this run would judge the half-restored tree.
   const journal = journalPath(toplevel);
-  const recovered = restoreJournal(journal);
+  const recovered = restoreJournal(journal, toplevel);
   if (recovered.length) verdict.recovered = recovered;
 
   // Where the surface lives, relative to the toplevel. Usually `.gnomon`.
@@ -371,22 +539,30 @@ async function judge(
   // by that. Measured before this: a write outside a tightened write_allow,
   // after a reset to the commit before the tightening, came back HELD (exit 0).
   const rulesRev = baseGiven;
+  verdict.rules_rev = rulesRev;
   const baseTree = mkdtempSync(join(tmpdir(), "gnomon-check-base-"));
   cleanups.push(() => rmSync(baseTree, { recursive: true, force: true }));
-  const surfaceFiles = git(toplevel, ["ls-tree", "-r", "-z", "--name-only", rulesRev, "--", surfaceRel])
-    .toString("utf-8")
-    .split("\0")
-    .filter(Boolean);
-  if (surfaceFiles.length === 0) {
+  // Every entry checked before anything is written, blobs read by id
+  // (surface_tree.ts, seventh review B1): a tree the model built with a `..`
+  // entry made the host overwrite ~/.bashrc.
+  let surfaceEntries: SurfaceEntry[];
+  try {
+    surfaceEntries = parseSurfaceTree(git(toplevel, ["ls-tree", "-r", "-z", rulesRev, "--", surfaceRel]), surfaceRel);
+  } catch (err) {
+    if (err instanceof SurfaceTreeError) throw new CheckCannotRun(`the base revision ${rulesRev.slice(0, 12)}: ${err.message}`);
+    throw err;
+  }
+  if (surfaceEntries.length === 0) {
     throw new CheckCannotRun(
       `the base revision ${rulesRev.slice(0, 12)} has no ${surfaceRel}/ — there are no rules to judge this change by. ` +
         `Commit the surface first: the rules a change is judged by must predate it.`
     );
   }
-  for (const f of surfaceFiles) {
-    const dest = join(baseTree, f);
-    mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(dest, git(toplevel, ["show", `${rulesRev}:${f}`]));
+  try {
+    writeSurfaceTree(baseTree, surfaceEntries, readSurfaceBlobs((args, input) => gitIn(toplevel, args, input), surfaceEntries));
+  } catch (err) {
+    if (err instanceof SurfaceTreeError) throw new CheckCannotRun(`the base revision ${rulesRev.slice(0, 12)}: ${err.message}`);
+    throw err;
   }
   let config: GnomonConfig;
   try {
@@ -395,10 +571,15 @@ async function judge(
     throw new CheckCannotRun(`the base surface does not load: ${err instanceof Error ? err.message : String(err)}`);
   }
   verdict.surface_hash = recomputeManifest(config.gnomonDir).surface_hash;
-  // The real surface location, for everything resolved relative to the project
-  // (the audit dir, an attest key): those must land in the repository, not in
-  // the temporary copy of the rules.
-  const liveConfig: GnomonConfig = { ...config, gnomonDir: join(toplevel, surfaceRel) };
+  // What acts on the host -- [audit] (dir, redact, attest, anchor), where
+  // [verify] runs, its network, extra_roots, the timeout -- comes from the
+  // live surface (read-only to a container), never the base (seventh review,
+  // B2/B4: a base's `[audit.attest] sign` ran on the host). A surface that
+  // appeared below a floored root is a container's to have written: its
+  // host-side settings are not taken either.
+  const liveDir = join(toplevel, surfaceRel);
+  const host = hostSurface(liveDir, governingExecFloor(emptySurface(liveDir)).inherited === true);
+  const liveConfig = host.config;
 
   const agent = opts.agent ?? (typeof opts.transcript === "object" ? opts.transcript.agent : undefined);
   const resolved = resolveCheckRole(config, { role: opts.role, agent });
@@ -423,7 +604,7 @@ async function judge(
       rmSync(treeRoot, { recursive: true, force: true });
       git(toplevel, ["worktree", "add", "--detach", "--quiet", treeRoot, headSha]);
       cleanups.push(() => {
-        spawnSync("git", ["worktree", "remove", "--force", treeRoot], { cwd: toplevel });
+        safeGitBuffer(["worktree", "remove", "--force", treeRoot], { cwd: toplevel });
       });
       inPlace = false;
     }
@@ -460,21 +641,24 @@ async function judge(
       : [...parseNameStatus(git(toplevel, ["diff", "--name-status", "-z", "--no-renames", from])), ...untracked()]
   ).filter((c) => !isOwn(c.path) && !unchangedSinceStart(c));
 
+  const exec = checkExec(config, host, role, opts.base, rulesRev, toplevel, verdict);
   const ctx: ToolContext = {
-    config: { ...config, gnomonDir: join(treeRoot, surfaceRel) },
+    // The base's rules, with the live surface's [audit] (which paths are the
+    // trail's) -- the base names none of what the host does.
+    config: { ...config, config: liveConfig.config, gnomonDir: join(treeRoot, surfaceRel) },
     writeAllow: roleDef?.write_allow,
     root: projRoot,
     sandbox: resolveSandboxLevel(config),
-    // Relative extra_roots resolve against the tree being judged, not the
-    // temporary copy of the rules, which holds .gnomon/ and nothing else.
-    extraRoots: resolveExtraRoots({ ...config, gnomonDir: join(treeRoot, surfaceRel) }),
-    exec: resolveExec(config, role),
-    network: (config.policy.sandbox as { network?: boolean } | undefined)?.network,
+    // The live surface's extra_roots (a base's could name ~ for the
+    // container), resolved against the tree being judged.
+    extraRoots: host.loaded ? resolveExtraRoots({ ...liveConfig, gnomonDir: join(treeRoot, surfaceRel) }) : [],
+    exec,
+    network: exec.network,
     // Nothing here asks anyone: the declared check is the surface's, and a
     // non-interactive judge has nobody to ask.
     gate: "never",
     approve: async () => false,
-    timeoutMs: toolTimeoutMs(config),
+    timeoutMs: toolTimeoutMs(host.loaded ? liveConfig : config),
     maxOutputBytes: 32_000,
     allow: "strict",
   };
@@ -594,15 +778,29 @@ async function judge(
     // Same rule as the loop: only when the change added or edited a test. A
     // deleted test is not a test written, so it is left out of the map.
     const preImages = new Map<string, PreImage>();
+    const refused: string[] = [];
     for (const c of paths) {
+      // Eighth review: the base is a commit the model can make, and its tree
+      // can name `.git/config` or a surface other than the live one. Neither
+      // is put back for the re-run, nor journalled; the verdict says so.
+      const why = unwritablePreImage(c.path, own);
+      if (why) {
+        refused.push(`${c.path} (${why})`);
+        continue;
+      }
       const rel = posix(relative(projRoot, abs(c.path)));
       if (c.status === "D" && isTestPath(verify.test_paths, rel)) continue;
       preImages.set(abs(c.path), c.status === "A" ? null : git(toplevel, ["show", `${from}:${c.path}`]));
     }
+    if (refused.length) {
+      (verdict.warnings ??= []).push(
+        `must-fail-first did not put back ${refused.join(", ")}: gnomon never writes .git/, its surface or its own state for the re-run`
+      );
+    }
     const sources = [...preImages.keys()].filter((p) => !isTestPath(verify.test_paths, posix(relative(projRoot, p))));
     const reRun = () =>
       mustFailFirst(projRoot, verify, preImages, (command) => executeTool("bash", { command }, ctx, new Set(["bash"])));
-    const mff = inPlace ? await withJournal(journal, sources, reRun) : await reRun();
+    const mff = inPlace ? await withJournal(journal, toplevel, sources, reRun) : await reRun();
     if (!mff.ran) {
       verdict.checks.push({ id: "must_fail_first", status: "skipped", reason: mff.reason ?? "did not run" });
     } else if (mff.pinsNothing) {
@@ -614,6 +812,11 @@ async function judge(
       });
     } else {
       verdict.checks.push({ id: "must_fail_first", status: "pass", inspected: mff.tests.length });
+    }
+    // Files the re-run replaced and gnomon therefore did not put back.
+    if (mff.warnings?.length) {
+      const last = verdict.checks[verdict.checks.length - 1]!;
+      last.reason = [last.reason, ...mff.warnings].filter(Boolean).join("; ");
     }
   }
 

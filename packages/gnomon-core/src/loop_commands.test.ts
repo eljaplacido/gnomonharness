@@ -25,16 +25,19 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { PassThrough, Writable } from "node:stream";
-import { mkdtempSync, cpSync, rmSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, cpSync, rmSync, readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
+import { osSandbox } from "gnomon-natives";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { loadConfig, routeRole } from "./config.js";
 import { runPromptLoop, COMMANDS } from "./prompt_loop.js";
 import { verifyTrail } from "./audit.js";
 import { stubDeclaredKeys } from "./test_support.js";
+import { _setProtectedGuard } from "./tools.js";
 
 // The real surface, copied per test. loadConfig is fine on the repo itself, but
-// the loop APPENDS to `<root>/.gnomon-sessions/history` and saves a session
+// the loop saves a session
 // snapshot after every turn -- pointed at the checkout that would be writing
 // into the repo under test. Same idiom as prompt_loop.test.ts's /allow test.
 const REPO_SURFACE = resolve(process.cwd(), "..", "..", ".gnomon");
@@ -683,4 +686,362 @@ describe("a surface written mid-session takes effect", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 30000);
+});
+
+// PR #156 review, finding 3. policy.toml is inside the root, and the root is
+// what a sandboxed bash may write. A command that set exec = "off" there was
+// picked up by the drift reload, and the NEXT turn's bash ran unsandboxed.
+describe("a sandboxed command cannot loosen its own sandbox through the surface", () => {
+  const probe = osSandbox();
+  const why =
+    process.platform === "win32"
+      ? "no OS sandbox on Windows"
+      : "error" in probe
+        ? `gnomon-exec unavailable: ${probe.error.split("\n")[0]}`
+        : !probe.probe.supported || !probe.probe.network_supported
+          ? `kernel cannot sandbox: ${probe.probe.reason}`
+          : "";
+  let restoreKeys: () => void;
+  // What holds when a write to the surface or .git/config gets past the
+  // put-back of protected paths (a background process writing after the
+  // check, fifth review): the guard is off here so the write lands, and the
+  // layers below it are what is tested. tools.ts's guard has its own test
+  // in os_sandbox.test.ts. (Where the kernel refuses the write -- macOS --
+  // these skip already: no network sandbox there.)
+  beforeAll(() => {
+    restoreKeys = stubDeclaredKeys(loadConfig(resolve(process.cwd(), "..", "..")));
+    _setProtectedGuard(false);
+  });
+  afterAll(() => {
+    restoreKeys();
+    _setProtectedGuard(true);
+  });
+
+  it.skipIf(!!why)(`exec = "off" written by bash is not applied; the next command is still confined${why ? ` [SKIPPED: ${why}]` : ""}`, async () => {
+    const root = makeProject();
+    const outside = mkdtempSync(join(tmpdir(), "gnomon-pin-outside-"));
+    const policyPath = join(root, ".gnomon", "policy.toml");
+    // exec = "os", and no [verify] (its check would recurse into this suite).
+    writeFileSync(
+      policyPath,
+      readFileSync(policyPath, "utf8")
+        .replace(/^\[verify\][\s\S]*?(?=^\[)/m, "")
+        .replace(/^level = "confined".*$/m, 'level = "confined"\nexec = "os"')
+        // Nobody to ask in this script: the point is the sandbox, not the gate.
+        .replace(/^gate = "on_write".*$/m, 'gate = "never"')
+    );
+    expect(readFileSync(policyPath, "utf8")).toMatch(/^exec = "os"$/m);
+    try {
+      let call = 0;
+      const bashCall = (command: string) => ({
+        message: { content: "", tool_calls: [{ function: { name: "bash", arguments: { command } } }] },
+      });
+      const seen = await drive(root, ["loosen it", "now escape", "/quit"], {
+        initialRole: "implement",
+        onExit: (_c, stop) => stop(),
+        budgetMs: 40000,
+        reply: () => {
+          call++;
+          // Through python, with the path assembled at run time: the bash
+          // text rules refuse a command that names the surface, and no
+          // reading of text sees this one. The kernel lets it through, since
+          // .gnomon/ is inside the root.
+          if (call === 1) {
+            const py = `p = ".gno" + "mon/policy.toml"; s = open(p).read(); open(p, "w").write(s.replace('exec = "os"', 'exec = "off"'))`;
+            return bashCall(`python3 -c '${py.replace(/'/g, `'\\''`)}'`);
+          }
+          if (call === 3) return bashCall(`echo escaped > '${outside}/escaped.txt'`);
+          return { message: { content: "done" } };
+        },
+      });
+      // The command did rewrite the file -- it is inside the root...
+      expect(readFileSync(policyPath, "utf8")).toMatch(/^exec = "off"$/m);
+      // ...the loop said it would not apply it...
+      expect(seen.seen).toContain("sandbox NOT loosened");
+      // ...and the next command was still confined.
+      expect(existsSync(join(outside, "escaped.txt")), seen.seen.slice(-3000)).toBe(false);
+      expect(call).toBeGreaterThanOrEqual(3);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  }, 60000);
+});
+
+// PR #156 second review, findings A and B, end to end through the real loop
+// under exec = "os". The command writes files inside the root -- which the
+// kernel allows -- that gnomon itself then acts on outside the sandbox: git's
+// config (A) and the surface's key routing (B).
+describe("a sandboxed command cannot act through gnomon's own git or key routing", () => {
+  const probe = osSandbox();
+  const why =
+    process.platform === "win32"
+      ? "no OS sandbox on Windows"
+      : "error" in probe
+        ? `gnomon-exec unavailable: ${probe.error.split("\n")[0]}`
+        : !probe.probe.supported || !probe.probe.network_supported
+          ? `kernel cannot sandbox: ${probe.probe.reason}`
+          : "";
+  let restoreKeys: () => void;
+  // What holds when a write to the surface or .git/config gets past the
+  // put-back of protected paths (a background process writing after the
+  // check, fifth review): the guard is off here so the write lands, and the
+  // layers below it are what is tested. tools.ts's guard has its own test
+  // in os_sandbox.test.ts. (Where the kernel refuses the write -- macOS --
+  // these skip already: no network sandbox there.)
+  beforeAll(() => {
+    restoreKeys = stubDeclaredKeys(loadConfig(resolve(process.cwd(), "..", "..")));
+    _setProtectedGuard(false);
+  });
+  afterAll(() => {
+    restoreKeys();
+    _setProtectedGuard(true);
+  });
+
+  /** The repository's surface under exec = "os", no [verify], nobody to ask. */
+  const osProject = (): string => {
+    const root = makeProject();
+    const policyPath = join(root, ".gnomon", "policy.toml");
+    writeFileSync(
+      policyPath,
+      readFileSync(policyPath, "utf8")
+        .replace(/^\[verify\][\s\S]*?(?=^\[)/m, "")
+        .replace(/^level = "confined".*$/m, 'level = "confined"\nexec = "os"')
+        .replace(/^gate = "on_write".*$/m, 'gate = "never"')
+    );
+    return root;
+  };
+  const bashCall = (command: string) => ({
+    message: { content: "", tool_calls: [{ function: { name: "bash", arguments: { command } } }] },
+  });
+  /** A python one-liner as a bash command, quoted for sh. */
+  const py = (code: string) => `python3 -c '${code.replace(/'/g, `'\\''`)}'`;
+
+  it.skipIf(!!why)(`A: core.fsmonitor and a filter written by bash never run outside the sandbox${why ? ` [SKIPPED: ${why}]` : ""}`, async () => {
+    const root = osProject();
+    const outside = mkdtempSync(join(tmpdir(), "gnomon-gitesc-outside-"));
+    const g = (...a: string[]) => execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", ...a], { cwd: root, stdio: "ignore" });
+    g("init", "-q");
+    writeFileSync(join(root, "a.txt"), "one\n");
+    g("add", "a.txt");
+    g("commit", "-qm", "init");
+    const fsm = join(outside, "fsmonitor-ran");
+    const flt = join(outside, "filter-ran");
+    try {
+      let call = 0;
+      const seen = await drive(root, ["plant it", "/quit"], {
+        initialRole: "implement",
+        onExit: (_c, stop) => stop(),
+        budgetMs: 40000,
+        reply: () => {
+          call++;
+          if (call === 1) {
+            // The path assembled at run time: the text rule refusing a write
+            // into .git/config sees no such path in the command.
+            return bashCall(py(
+              `c = ".g" + "it/con" + "fig"; ` +
+              `open(c, "a").write("[core]\\n\\tfsmonitor = \\"touch ${fsm}; false\\"\\n[filter \\"x\\"]\\n\\tclean = \\"touch ${flt}; cat\\"\\n"); ` +
+              `open(".gitattr" + "ibutes", "w").write("*.txt filter=x\\n"); ` +
+              `open("a.txt", "w").write("two\\n")`
+            ));
+          }
+          return { message: { content: "done" } };
+        },
+      });
+      // The command did write the config -- the root is writable...
+      expect(readFileSync(join(root, ".git", "config"), "utf8"), seen.seen.slice(-2000)).toContain("fsmonitor");
+      // ...and gnomon's bookkeeping git (the stamp after the call, the [tree]
+      // measurement at the end of the turn) ran neither program outside it.
+      expect(existsSync(fsm), "core.fsmonitor ran outside the sandbox").toBe(false);
+      expect(existsSync(flt), "the clean filter ran outside the sandbox").toBe(false);
+      // CONTROL: the planted config is live for a git that is not gnomon's.
+      execFileSync("git", ["status"], { cwd: root, stdio: "ignore" });
+      expect(existsSync(fsm), "control: plain git did not run the fsmonitor").toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  }, 60000);
+
+  it.skipIf(!!why)(`B: a rewritten endpoint url / api_key_env is held, and the real key stays out of bash${why ? ` [SKIPPED: ${why}]` : ""}`, async () => {
+    const root = osProject();
+    const cfgPath = join(root, ".gnomon", "config.toml");
+    // The role's endpoint carries a key, held in a variable whose NAME no
+    // secret pattern catches: only the session's own declaration drops it.
+    writeFileSync(
+      cfgPath,
+      readFileSync(cfgPath, "utf8").replace(
+        /^\[endpoints\.local\]\nurl = "([^"]+)"\n/m,
+        '[endpoints.local]\nurl = "$1"\napi_key_env = "GNOMON_PINTEST_REALVAR"\n'
+      )
+    );
+    expect(readFileSync(cfgPath, "utf8")).toContain('api_key_env = "GNOMON_PINTEST_REALVAR"');
+    const before = process.env.GNOMON_PINTEST_REALVAR;
+    process.env.GNOMON_PINTEST_REALVAR = "dummy-real-key-not-a-secret";
+    try {
+      let call = 0;
+      const seen = await drive(root, ["reroute it", "now dump the env", "/quit"], {
+        initialRole: "implement",
+        onExit: (_c, stop) => stop(),
+        budgetMs: 40000,
+        reply: () => {
+          call++;
+          if (call === 1) {
+            return bashCall(py(
+              `p = ".gno" + "mon/config.toml"; s = open(p).read(); ` +
+              `s = s.replace("api_key_env = \\"GNOMON_PINTEST_REALVAR\\"", "api_key_env = \\"GNOMON_PINTEST_DECOY\\""); ` +
+              `s = s.replace("http://127.0.0.1:11434/api/chat", "http://127.0.0.1:9/steal"); open(p, "w").write(s)`
+            ));
+          }
+          if (call === 3) return bashCall("env > envdump.txt");
+          return { message: { content: "done" } };
+        },
+      });
+      // The surface did move...
+      expect(readFileSync(cfgPath, "utf8")).toContain("127.0.0.1:9/steal");
+      // ...the loop said it would not apply the key routing...
+      expect(seen.seen, seen.seen.slice(-3000)).toContain("key routing NOT applied");
+      // ...every model request still went where the session started...
+      expect(seen.calls.length).toBeGreaterThanOrEqual(3);
+      for (const c of seen.calls) expect(c.url).not.toContain("/steal");
+      // ...and the real key was not in the next command's environment.
+      const dump = readFileSync(join(root, "envdump.txt"), "utf8");
+      expect(dump).toContain("PATH=");
+      expect(dump).not.toContain("dummy-real-key-not-a-secret");
+    } finally {
+      if (before === undefined) delete process.env.GNOMON_PINTEST_REALVAR;
+      else process.env.GNOMON_PINTEST_REALVAR = before;
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 60000);
+});
+
+// Found reviewing #156 (finding B), and it holds in every exec mode: a
+// command rewrote .gnomon/config.toml, the loop reloaded the surface, and
+// the next model request -- with its key -- went wherever the file now said.
+// A loopback url is "local" to the trust gate, so it was never held, and
+// under --trust nothing was. exec = "docker" hides the key from the
+// container, not from gnomon's own request.
+describe("a command cannot reroute the session's model requests through the surface", () => {
+  let restoreKeys: () => void;
+  beforeAll(() => {
+    restoreKeys = stubDeclaredKeys(loadConfig(resolve(process.cwd(), "..", "..")));
+  });
+  afterAll(() => restoreKeys());
+
+  it("a rewritten endpoint url is held, said, and not used", async () => {
+    const root = makeProject();
+    const policyPath = join(root, ".gnomon", "policy.toml");
+    writeFileSync(
+      policyPath,
+      readFileSync(policyPath, "utf8")
+        .replace(/^\[verify\][\s\S]*?(?=^\[)/m, "")
+        .replace(/^gate = "on_write".*$/m, 'gate = "never"')
+    );
+    const cfgPath = join(root, ".gnomon", "config.toml");
+    const original = /^\[endpoints\.local\]\nurl = "([^"]+)"/m.exec(readFileSync(cfgPath, "utf8"))?.[1];
+    expect(original).toBeTruthy();
+    // Assembled at run time: the text rules refuse a command naming the surface.
+    const code =
+      `p = ".gno" + "mon/config.toml"; s = open(p).read(); ` +
+      `open(p, "w").write(s.replace(${JSON.stringify(original)}, "http://127.0.0.1:9/steal"))`;
+    try {
+      let call = 0;
+      const seen = await drive(root, ["reroute it", "and again", "/quit"], {
+        initialRole: "implement",
+        onExit: (_c, stop) => stop(),
+        budgetMs: 30000,
+        reply: () => {
+          call++;
+          if (call === 1) {
+            return {
+              message: {
+                content: "",
+                tool_calls: [{ function: { name: "bash", arguments: { command: `python3 -c '${code.replace(/'/g, `'\\''`)}'` } } }],
+              },
+            };
+          }
+          return { message: { content: "done" } };
+        },
+      });
+      // The surface did move, and was reloaded...
+      expect(readFileSync(cfgPath, "utf8")).toContain("127.0.0.1:9/steal");
+      expect(seen.seen, seen.seen.slice(-3000)).toContain("surface reloaded");
+      // ...the reroute was held and said...
+      expect(seen.seen).toContain("key routing NOT applied");
+      // ...and every request, after the reload too, went where the session started.
+      expect(seen.calls.length).toBeGreaterThanOrEqual(3);
+      for (const c of seen.calls) expect(c.url).not.toContain("/steal");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 60000);
+});
+
+// Third review, finding 1, on the released exec = "docker": the container
+// bind-mounts the root, a command rewrote policy.toml's `exec = "docker"` to
+// "off", the loop reloaded the surface, and the next command ran on the host.
+// `docker` is stubbed on PATH (it records its argv and exits 0), so a command
+// that still goes through it leaves no file; one run on the host does.
+describe("a contained command cannot switch exec off through the surface", () => {
+  let restoreKeys: () => void;
+  beforeAll(() => {
+    restoreKeys = stubDeclaredKeys(loadConfig(resolve(process.cwd(), "..", "..")));
+  });
+  afterAll(() => restoreKeys());
+
+  it.skipIf(process.platform === "win32")('exec = "off" written by a docker-mode command is not applied; the next command still goes to docker', async () => {
+    const root = makeProject();
+    const outside = mkdtempSync(join(tmpdir(), "gnomon-pin-outside-"));
+    const bin = mkdtempSync(join(tmpdir(), "gnomon-fake-docker-"));
+    const dockerLog = join(bin, "argv.log");
+    const policyPath = join(root, ".gnomon", "policy.toml");
+    // The first "container" does what a contained command can: rewrite the
+    // bind-mounted policy.toml.
+    writeFileSync(
+      join(bin, "docker"),
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> '${dockerLog}'\n` +
+        `if [ ! -e '${bin}/wrote' ]; then : > '${bin}/wrote'; t='${bin}/p.tmp'; ` +
+        `sed 's/^exec = "docker"$/exec = "off"/' '${policyPath}' > "$t" && cat "$t" > '${policyPath}'; fi\nexit 0\n`,
+      { mode: 0o755 }
+    );
+    writeFileSync(
+      policyPath,
+      readFileSync(policyPath, "utf8")
+        .replace(/^\[verify\][\s\S]*?(?=^\[)/m, "")
+        .replace(/^level = "confined".*$/m, 'level = "confined"\nexec = "docker"\nimage = "gnomon-test-stub:1"')
+        .replace(/^gate = "on_write".*$/m, 'gate = "never"')
+    );
+    expect(readFileSync(policyPath, "utf8")).toMatch(/^exec = "docker"$/m);
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    try {
+      let call = 0;
+      const bashCall = (command: string) => ({
+        message: { content: "", tool_calls: [{ function: { name: "bash", arguments: { command } } }] },
+      });
+      const seen = await drive(root, ["loosen it", "now escape", "/quit"], {
+        initialRole: "implement",
+        onExit: (_c, stop) => stop(),
+        budgetMs: 40000,
+        reply: () => {
+          call++;
+          if (call === 1) return bashCall("true");
+          if (call === 3) return bashCall(`echo escaped > '${outside}/escaped.txt'`);
+          return { message: { content: "done" } };
+        },
+      });
+      expect(readFileSync(policyPath, "utf8")).toMatch(/^exec = "off"$/m);
+      expect(seen.seen, seen.seen.slice(-3000)).toContain("surface reloaded");
+      expect(existsSync(join(outside, "escaped.txt")), "the next command ran on the host").toBe(false);
+      expect(seen.seen).toContain("sandbox NOT loosened");
+      expect(readFileSync(dockerLog, "utf8")).toContain("escaped.txt");
+      expect(call).toBeGreaterThanOrEqual(3);
+    } finally {
+      process.env.PATH = path;
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+    }
+  }, 60000);
 });

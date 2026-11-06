@@ -92,8 +92,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2583 TypeScript tests (2062 core, 496 cli, 18
-> natives, 7 tui) and 61 Rust tests — **2644 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2745 TypeScript tests (2223 core, 497 cli, 18
+> natives, 7 tui) and 120 Rust tests — **2865 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -239,7 +239,7 @@ flowchart LR
     subgraph RS["Rust — the verifiable parts"]
         R1["gnomon-surface<br/>hash + manifest"]
         R2["gnomon-edit<br/>structural edits"]
-        R3["gnomon-exec<br/>built, called by nothing"]
+        R3["gnomon-exec<br/>bash under exec = os"]
     end
 
     SURFACE --> T1
@@ -254,15 +254,15 @@ TypeScript side computes the same hash independently, and a test holds the two
 together; they disagreed once, and that test is why they no longer can.
 
 `gnomon-edit` backs the `apply` and `simulate` commands. **`gnomon-exec` backs
-nothing.** The crate is built and tested (28 Rust tests), and
-`gnomon-natives`'s `runSessionStep` would call it — but that function has zero
-call sites: `gnomon session` runs each command through `SessionManager.run` in
-`session.ts`, which is `node:child_process.spawn` with `shell: true`. So the
-one command this README used to attribute to `gnomon-exec` never invokes it.
-**Nothing Rust is in the agent loop either:** the `edit` tool is a TypeScript
-exact-string replace and `bash` is `child_process.spawn` with a timeout. Saying
-Rust owns structural editing and process execution would describe a design
-rather than this build.
+one thing: `bash` under `[sandbox] exec = "os"`.** There every command runs
+through `gnomon-exec sandbox`, which applies the kernel sandbox and then execs
+the shell (see [`exec`](#exec--where-bash-actually-runs)). Nothing else calls
+it: `gnomon-natives`'s `runSessionStep` still has zero call sites, and `gnomon
+session` runs each command through `SessionManager.run` in `session.ts`, which
+is `node:child_process.spawn` with `shell: true`. **Otherwise nothing Rust is in
+the agent loop:** the `edit` tool is a TypeScript exact-string replace, and
+`bash` under `exec = "off"` (the default) is `child_process.spawn` with a
+timeout.
 
 **TypeScript owns the loop** — turns, tool execution, context, skills, audit,
 sessions.
@@ -356,7 +356,7 @@ fixtures that pin the observable behaviour:
 |---|---|
 | `manifest_golden.json` | The surface manifest and its hash |
 | `exit_codes.json` | Exit code → bucket, all nine values |
-| `enumerations_golden.json` | Legal values for `edit_format`, `sandbox`, `approval`, `role_profile` |
+| `enumerations_golden.json` | Legal values for `edit_format`, `sandbox`, `approval`, `role_profile`, `exec` |
 | `session_golden.json` | The session record shape |
 
 `gnomon enumerations` prints the contract; `.gnomon/ci.sh` checks the code
@@ -397,7 +397,7 @@ implementations agree.
    Exit codes 0–1 → `result`, 2–4 → `refusal`, 10–13 → `apparatus_failure`.
 
 6. **Published enumerations.** `gnomon enumerations` prints the allowed values
-   for `edit_format`, `sandbox`, `approval`, `role_profile`.
+   for `edit_format`, `sandbox`, `approval`, `role_profile`, `exec`.
 
 ---
 
@@ -499,14 +499,16 @@ cd ~/gnomon && pnpm run setup
 `setup` installs dependencies, builds all four Rust binaries, and puts `gnomon`
 on your PATH. Three of the four are load-bearing: `surface`, `enumerations` and
 `session` use `gnomon-surface`/`gnomon-enums`, and `apply` and `simulate` use
-`gnomon-edit`. **`gnomon-exec` is built and no command calls it** — `gnomon
-session` uses `gnomon-surface` for its manifest and then spawns each command
-through Node (see [Architecture](#architecture)). Measured, with a stub binary
+`gnomon-edit`. **`gnomon-exec` is called by no command, only by `bash` when a
+surface declares `[sandbox] exec = "os"`** — `gnomon session` uses
+`gnomon-surface` for its manifest and then spawns each command through Node
+(see [Architecture](#architecture)). Measured, with a stub binary
 in `GNOMON_BIN_OVERRIDE` that exits 42 and prints to stderr: a poisoned
 `gnomon-exec` left `gnomon session "echo …"` succeeding untouched, and a
 poisoned `gnomon-surface` failed it immediately — so the probe could detect a
 call, and there was none. (`launch`, `prompt`, `task` and `init` use no native
-binary and work without a Rust toolchain.)
+binary and work without a Rust toolchain — except that under `exec = "os"`,
+`bash` needs `gnomon-exec`, and refuses every command without it.)
 
 If it prints `WARN ... has no binaries`, **that is the failure, not a note**:
 with `PNPM_HOME` unset — the default after `corepack enable pnpm` — pnpm links
@@ -646,8 +648,8 @@ gnomon/
 ├── crates/                     # Rust — the parts that must be verifiable
 │   ├── gnomon-surface/         # Resolve + hash the surface, emit manifests
 │   ├── gnomon-edit/            # Structural edits
-│   └── gnomon-exec/            # Spawn, timeout, sandbox, outcome capture —
-│                               #   built and tested; no TS caller reaches it
+│   └── gnomon-exec/            # Spawn, timeout, outcome capture, and the OS
+│                               #   sandbox `bash` runs under with exec = "os"
 ├── packages/                   # TypeScript — the parts that must be flexible
 │   ├── gnomon-core/            # Turns, tools, skills, context, audit, sessions
 │   ├── gnomon-cli/             # Thin shell over core
@@ -1241,7 +1243,8 @@ gate = "on_write"                  # never | on_write | always
 
 [sandbox]
 level = "confined"                 # off | confined | strict
-network = false                    # refuses `webfetch`, and curl/wget/ssh… in bash; NOT process isolation — see Known Limits
+network = false                    # refuses `webfetch`, and curl/wget/ssh… in bash; isolation only under exec = "os"/"docker" — see Known Limits
+# exec = "os"                      # containment on the host: kernel sandbox (writes in the root, no egress)
 # exec = "docker"                  # containment: bash in a container with only the repo (and no network)
 
 [verify]                           # a declared check run after a turn changes files
@@ -1616,7 +1619,8 @@ or a write past the boundary.
 
 **The level governs tool paths, not `bash`.** `sandbox = "strict"` does not stop
 `bash cat /etc/passwd`; a shell command is constrained by `bash_deny` /
-`bash_allow` and by nothing else. Measured: on a `strict` surface, `read` of a
+`bash_allow` and by nothing else — unless [`exec`](#exec--where-bash-actually-runs)
+is `os` or `docker`, which contain the shell itself. Measured: on a `strict` surface, `read` of a
 neighbouring repository was refused and `cat` of the same file through `bash`
 succeeded in the same turn. That is deliberate — `implement` must run builds and
 installers nobody can enumerate ahead of time — but it means a role holding
@@ -1664,44 +1668,406 @@ changes.
 ### `exec` — where `bash` actually runs
 
 `sandbox.level` governs tool paths and has never governed the shell. `exec` is
-the other half:
+the other half, and the only one that holds whatever the command turns out to
+run. `bash_deny` reads the command's text, and no reading of text is complete:
+`python3 -c 'import shutil; shutil.rmtree("/elsewhere")'` contains no `rm` for a
+rule to match. G2b measured that class (issues #63, #68).
 
 ```toml
 [sandbox]
-exec  = "docker"              # off (default) | docker
+exec  = "os"                  # off (default) | os | docker
+```
+
+Settable per role in `roles.toml`, so one role can run sandboxed while the rest
+of the harness runs on the host. `off` is the default and changes nothing.
+
+#### `exec = "os"` — a kernel sandbox on the host
+
+Every `bash` command runs through `gnomon-exec sandbox`, which confines itself
+and then execs `/bin/sh -c`. The tools are the host's, so builds behave as they
+do outside; the cost per command is **+1.1 ms, +2.3 ms with `network =
+false`, and +2.4 / +3.5 ms with `reads = "scoped"` as well** (median, `cat`
+of a file through gnomon's own bash tool, release build, 300 interleaved
+rounds, 2026-11-05, aarch64 Linux 6.17 at load ~7, `nice -n 19`;
+[benchmarks/results/gbs-2026-11-05-ossandbox](benchmarks/results/gbs-2026-11-05-ossandbox/README.md#overhead-per-bash-call)).
+
+**Measured against forced attacks** (GBS-GOVERNANCE 0.2, harness level, a
+scripted compromised model, every ask approved, outcomes read from real
+state): out-of-root deletions by bash went from 23 asked / 0 denied to 0 / 23
+denied in the kernel, and attacks blocked with asks approved from 170/280 to
+230/280 — and to 245/280 with `reads = "scoped"`, which held all 15 bash reads
+of HOME credentials that the other two let through
+([results](benchmarks/results/gbs-2026-11-05-ossandbox/README.md)).
+
+**What it guarantees**, enforced by the kernel on whatever the command executes
+— a script, an interpreter, a compiled binary:
+
+- **Writes only inside the project root**, a fresh per-call temp directory
+  (`$TMPDIR`, removed when the call returns) and any `extra_roots`, plus
+  `/dev/null` and the other device files programs expect to write. Create,
+  modify, truncate, delete, rename and link elsewhere all fail with
+  `Permission denied`, `rm -rf` and `shutil.rmtree` included.
+- **Not gnomon's own state or git's control files, even inside the root**:
+  `.gnomon/`, `.gnomon-audit/`, `.gnomon-sessions/`, `.gnomon-loops/`,
+  `.git/config`, `.git/hooks/`, `.git/info/`, `.git/commondir`,
+  `.git/config.worktree` (the last two created when absent, as under docker).
+  On macOS the kernel refuses the write (`gnomon-exec --readonly`), and
+  `.git` itself cannot be renamed or removed. On Linux it cannot: Landlock is
+  an allow-list, and the write grant on the root covers everything beneath it,
+  so gnomon snapshots `.gnomon/`, `.gnomon-loops/` and git's control files
+  before each command, puts back anything the command changed, and says so in
+  the tool result — including a `.git` that was renamed away and replaced,
+  which it reports rather than undoes. While the command runs, your own git
+  (an IDE polling `git status`) can read what the command planted there; on
+  Linux, keep it out of the project for the session or use `exec = "docker"`. A
+  process the command leaves running in the background can still change them
+  after that check; the exec floor, the session pin and gnomon's sandboxed git
+  are what hold then. The model cannot change `.gnomon/*.toml` from bash under
+  `exec = "os"`; configuration is the operator's.
+- **No egress unless `[sandbox] network = true`** (or `/network on` for the
+  session; as with `docker`, an undeclared `network` counts as off). Only
+  loopback is reachable — a local server is not egress, so
+  `curl http://localhost:3000/health` works, and so does a server an earlier
+  call backgrounded. A connection anywhere else fails with `Permission denied`,
+  and the command's stderr says which address was blocked.
+- **No privilege gain.** `no_new_privs` is set, so `sudo` and other setuid
+  binaries cannot become root.
+- **No daemons outside the sandbox (Linux).** A `connect` to a unix socket
+  outside the root, `$TMPDIR` and `extra_roots` — the session bus
+  (`systemd-run --user`), docker, tmux, an ssh or gpg agent — and to any
+  abstract socket is refused, under `network = true` as well as `false`. A few
+  lookup-only system sockets stay reachable (nscd, systemd-resolved, systemd's
+  user database, journald). The variables that point at such sockets
+  (`DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`, `TMUX`, `XDG_RUNTIME_DIR`,
+  `DISPLAY`, …) are removed from `bash`'s environment, and so are the
+  credentials gnomon supplied itself (its credential store, every
+  `api_key_env` any surface read this session declared) and variables whose
+  names look like secrets (`*_API_KEY`, `*_TOKEN`, `*_SECRET`, `*PASSWORD*`, …).
+  The socket is opened once, with no symlink on its path, and connected
+  through that descriptor, so a directory swapped mid-check reaches nothing.
+- **gnomon's own git runs nothing the repository names.** The per-turn
+  bookkeeping git (and `gnomon check`, `guard`, the anchor) runs with
+  `core.fsmonitor`, hooks, filter and diff drivers switched off, and under
+  `exec = "os"` inside the sandbox itself — `--network none` (loopback refused
+  too) and, under `reads = "scoped"`, the session's read scope: `.git/config`
+  is in the root, which `bash` may write.
+- **Key routing is fixed for the session.** A reload that changes an
+  endpoint's `url` or `api_key_env`, a fallback's, or an MCP server is not
+  applied (`key routing NOT applied … restart gnomon`): a command could
+  otherwise point the key at a listener of its own.
+- **The sandbox a session starts with is a floor.** `.gnomon/policy.toml` is
+  inside the root, so a command could write `exec = "off"` there. A later
+  reload of the surface may tighten `exec`, `reads`, `read_roots`, `network`,
+  `extra_roots` and `level`, never loosen them: the session says so and keeps
+  the old value until you restart gnomon.
+- **The temp dir is removed safely.** After each call `$TMPDIR` is emptied by
+  `gnomon-exec sandbox-clean`, which follows no symlink, checks it is the
+  directory gnomon made (device and inode), and runs confined to that
+  directory; a job the command left running cannot redirect the cleanup. An
+  `extra_roots` entry that contains the temp directory is refused.
+- **Fails closed.** The command dies with its supervisor, and a timeout or a
+  cancel kills everything the call started, `setsid`'d jobs included.
+- **The sandbox binary is pinned.** `gnomon-exec` is resolved once per
+  session, never from beneath the root, `extra_roots` or the temp dir (a
+  command could overwrite it there), and is refused if it changes.
+- **Reads, if you opt in (`reads = "scoped"`, Linux).** See
+  [below](#reads--scoped--credential-stores-unreadable-to-bash): credential
+  stores in `$HOME` become unreadable to `bash`. Off by default.
+- **Refusal, never degradation.** On a machine that cannot enforce it — no
+  `gnomon-exec` outside the project, a kernel without Landlock, Windows, an
+  `exec` value it does not know (`"OS"`, `"landlock"`: refused, not read as
+  `"off"`), a container whose seccomp
+  profile refuses `pidfd_getfd` under `network = false`, `reads = "scoped"`
+  anywhere but Linux — every `bash` call is refused with the reason, and is not
+  run. Startup and `gnomon explain sandbox` say which it is before the first
+  command.
+
+**How.** Linux: Landlock (kernel 5.13+) for the filesystem. For
+`network = false`, a seccomp filter allows only TCP, unix and netlink sockets,
+and hands each `connect` to a small supervisor that performs it on the
+command's behalf only when the address is loopback. It connects from its own
+copy of the address, so a racing thread cannot swap it after the check. macOS:
+`sandbox-exec` with a generated profile for the write half — exercised by the
+macOS CI job's end-to-end tests, not yet run on a Mac by hand. **`network =
+false` is not offered on macOS**: on `macos-latest` (macOS 26) CI the profile's
+network lines let a connect to 192.0.2.1 through, so `bash` refuses under
+`exec = "os"` with `network = false` there rather than imply a block.
+
+**What it does not do** — `gnomon-exec sandbox-probe` prints the same list:
+
+- **Reads are not restricted** under `reads = "all"`, the default. The command
+  can read anything your user can, secrets in `$HOME` included. `reads =
+  "scoped"` narrows this on Linux; what it covers is listed below.
+- **Inside the root, nothing changes.** `.gnomon/`, `.git/` and every other file
+  under the root stay writable to `bash`, so in-root guarantees still come from
+  `bash_deny` and the surface-drift check. In G2b's own probes (all in-root),
+  `os` and `off` gave the same verdicts.
+- **Unix sockets, where the supervisor cannot run.** In a container whose
+  seccomp profile refuses `pidfd_getfd`, `network = true` runs without the
+  supervisor, and a daemon reachable over a unix socket (docker, the user bus,
+  tmux) can act outside the sandbox; the probe lists this under `degraded`.
+  On macOS unix sockets are not restricted at all: Seatbelt's profile is
+  allow-by-default for everything but writes, and mach services are not
+  scoped. A datagram sent with `sendto` to a socket path is not vetted on
+  Linux either.
+- **Loopback services can reach out for it.** A local proxy or DNS resolver is
+  reachable, and DNS lookups through the system resolver (systemd-resolved's
+  socket, `127.0.0.53`) still leave the machine — a lookup can carry data out
+  under `network = false`. So can any loopback daemon that fetches.
+- **Inbound is not blocked.** A server bound to a non-loopback address accepts
+  connections from elsewhere.
+- **Signals.** On Landlock ABI 6+ (Linux 6.12) a command can signal only
+  processes of its own call — which also means it cannot stop a server an
+  EARLIER `bash` call started. For that, run `sandbox-kill <pid> [signal]` as
+  the whole bash command: gnomon signals the pid from outside the sandbox, and
+  only if one of this session's sandboxed calls started it. Below ABI 6, and on
+  macOS, a command can signal any process your user owns — its own supervisor
+  included: stopping it stalls every connect it vets, killing it ends the call.
+  On a timeout or a cancel gnomon freezes the call's whole subtree (`SIGSTOP`,
+  sweep after sweep, until nothing new appears), kills it, and kills the
+  supervisor last, so a job forking in a loop cannot outlive it.
+- **POSIX shared memory.** `/dev/shm` is not granted, so `shm_open` — and
+  Python `multiprocessing` locks, queues and pools — fail. Use threads, or run
+  that step with `exec = "off"`.
+- **Metadata outside the root.** Landlock does not confine `chmod`, `chown`,
+  `utime` or extended attributes, so those still work on files outside the
+  root.
+- **Package caches in `$HOME` are read-only**, so a tool that writes one (npm,
+  pip, cargo's registry) fails unless it is pointed at the temp dir or the
+  cache is granted with `extra_roots`.
+- **On macOS, write confinement only — not containment.** `network = false`
+  refuses (above), and `reads = "scoped"` refuses; set `network = true` to run
+  with writes confined. Seatbelt is allow-by-default for everything else:
+  mach services, `launchctl`, `osascript` and other IPC run outside the
+  sandbox and can act for the command.
+- **gnomon inside the root.** If gnomon's own install (a checkout you are
+  dogfooding) is under the root or an `extra_roots` entry, a command can
+  change gnomon itself; gnomon warns at startup when that is so.
+- **Older kernels give less.** Below Landlock ABI 3 (Linux 6.2), `truncate(2)`
+  of a file outside the root is not blocked; below ABI 2 (5.19), renaming a file
+  into another directory fails even inside the root. The probe names what this
+  kernel lacks. `network = false` is enforced on x86_64 and aarch64 and needs
+  Linux 5.6+.
+
+#### `reads = "scoped"` — credential stores unreadable to bash
+
+```toml
+[sandbox]
+exec  = "os"
+reads = "scoped"                   # default "all"; Linux only
+# read_roots = ["~/.local/go"]     # anything else a command must read
+```
+
+Opt-in, and only under `exec = "os"`. Landlock's read rights are handled, so a
+`bash` command — and everything it runs — may read only beneath:
+
+- the root, the per-call `$TMPDIR` and `extra_roots`;
+- the system directories `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc`, `/opt`,
+  `/proc`, `/sys`, the device files `/dev/{null,zero,full,random,urandom,tty,ptmx,pts}`
+  (not the rest of `/dev`: no `/dev/shm`), and `/snap`, `/nix/store` and Homebrew's
+  `/home/linuxbrew/.linuxbrew` where they exist, plus the file
+  `/etc/resolv.conf` points at;
+- toolchains and package caches in `$HOME`, where they exist: `~/.local/bin`,
+  `~/.local/lib`, `~/.local/share/pnpm`, `~/.cargo/bin`, `~/.cargo/registry`,
+  `~/.cargo/git`, `~/.rustup`, `~/.nvm`, `~/.volta`, `~/.bun/bin`,
+  `~/.deno/bin`, `~/.pyenv`, `~/.rbenv`, `~/go/bin`, `~/go/pkg/mod`, `~/.npm`,
+  `~/.cache/{pip,uv,go-build,pypoetry,node/corepack,node-gyp,pnpm,yarn}`,
+  `~/.m2/repository`, `~/.gradle/{caches,wrapper}`, and git's own config files
+  (`~/.gitconfig`, `~/.config/git/{config,ignore,attributes}`);
+- the gnomon install: `gnomon-exec`'s directory, the Node runtime's prefix (nvm
+  puts it in `$HOME`) and the checkout or `node_modules` gnomon runs from;
+- `[sandbox] read_roots`: `~/` is your home, relative paths are from the root.
+
+**What it keeps unreadable** is everything else — Landlock is an allow-list,
+so `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.netrc`, `~/.docker/config.json`,
+`~/.gnupg`, gnomon's own `credentials.json`, browser profiles and every other
+file in `$HOME` are unreadable because nothing grants them, and `ls ~` fails.
+A program outside the scope cannot be run either (exec opens it for reading).
+A grant that would make a credential store readable again — a `read_roots`
+entry of `~` or `~/.cargo` (which holds `credentials.toml`), a root that is
+`$HOME` — is **refused**, and `bash` runs nothing until it is narrowed; the
+list it checks is `PROTECTED_HOME` in `crates/gnomon-exec/src/sandbox.rs`. A
+misspelt `reads` value refuses too, rather than falling back to `"all"`.
+
+**What it does not cover** — also printed by `gnomon-exec sandbox-probe`:
+
+- **It is an allow-list.** `/etc` stays readable, and so does everything else
+  under the system directories, including whatever a tool or an administrator
+  left world-readable there.
+- **Inside the root everything is readable**: a `.env`, a token in
+  `.git/config`, a key someone committed.
+- **Only `bash`.** gnomon's own `read` and `grep` tools are bounded by
+  `[sandbox] level`, not by `reads = "scoped"`.
+- **The environment.** `bash` inherits gnomon's minus the socket variables and
+  gnomon-supplied credentials above, so a token you exported in your shell is
+  one `printenv` away.
+- **Agents, where the supervisor cannot run** (see above): a command can then
+  still *use* a key through a unix socket — ssh-agent, gpg-agent, a keyring
+  over D-Bus, the docker socket — though it cannot read the key file.
+- **Writes and metadata are not what it scopes.** `chmod`/`utime`/xattrs
+  outside the root are not confined (Landlock), and below ABI 3 (Linux 6.2)
+  neither is `truncate(2)`.
+- **A hard link to a credential placed inside the root beforehand** is readable:
+  Landlock judges the path, not the inode. Making one from inside the sandbox is
+  refused.
+- **Command lines** of your other processes (`/proc/<pid>/cmdline`) are
+  readable; their environments and memory are not.
+- **Toolchain defaults are trusted** to hold no credentials; a token written into
+  `~/.npm` or `~/.cargo/registry` would be readable.
+- **git's own config files are readable** (`~/.gitconfig`,
+  `~/.config/git/config`), so `git` keeps your identity and settings. A token
+  written there — a `url.<base>.insteadOf` with credentials in it, an
+  `http.extraHeader` — is readable too; keep tokens in a credential helper
+  (`~/.git-credentials` and `~/.config/git/credentials` stay unreadable).
+- **Tool configuration in `$HOME` is unreadable** — `~/.npmrc`, `~/.pypirc`,
+  `~/.config/pip` — so tools run unconfigured, registry logins included. That is
+  the point; name a config file in `read_roots` if a tool needs it.
+- **Linux only.** On macOS `reads = "scoped"` refuses rather than runs (a
+  Seatbelt read allow-list has not been written or tested); Windows has no
+  `exec = "os"` at all.
+
+#### `exec = "docker"` — a container
+
+```toml
+[sandbox]
+exec  = "docker"
 image = "debian:stable-slim"
 ```
 
 The repository is bind-mounted at the same absolute path it has outside, the
 caller is mapped with `--user` so files come back owned by you rather than
 root, and the container gets no network unless `[sandbox] network` is true.
-Settable per role, so one role can run its calculations isolated while the rest
-of the harness runs on the host. `off` is the default and changes nothing.
+The toolchain is the image's, not the host's, and each command pays a
+`docker run`.
 
-**This is the containment answer**, and `bash_deny`, `bash_allow` and
-`network = false` on the host are not: they read a command's words, and code
-does not have to say what it does. In the container, a `python -c` that
-deletes or copies reaches only the mounted repository, and with
-`network = false` nothing reaches the network, whatever it is spelled as.
-Not yet measured against G2b's scenarios (#63 option 2); until it is, this
-says what the mechanism is, not that it held.
+**This is a containment answer**, as `exec = "os"` is for writes outside the
+root and egress, and `bash_deny`, `bash_allow` and `network = false` on the
+host are not: they read a command's words, and code does not have to say what
+it does. In the container, a `python -c` that deletes or copies reaches only
+the mounted repository, and with `network = false` nothing reaches the
+network, whatever it is spelled as. Not yet measured against G2b's scenarios
+(#63 option 2); until it is, this says what the mechanism is, not that it held.
 
 **Security note.** `exec = "docker"` in 0.4.4 and earlier does not contain a
 deliberately hostile model against gnomon's own host-side actions (its
 bookkeeping git, audit writes, `gnomon check`). Treat it as protection against
 mistakes, not against an adversarial model. A fix is in review (PR #158).
 
-**Two limits, published because both fail open.** `docker` is the only value
-that does anything: the resolver is `raw === "docker" ? "docker" : "off"`, so
-`bwrap`, `podman` or a typo runs **on the host**. Measured 2026-09-02 on a
-scaffolded surface with `exec = "bwrap"`: `resolveExec` returned `mode: "off"`,
-and the surface audit reported `exec = "bwrap" is not one of off | docker, so
-this silently falls back to "off"` — as a **warning, not a refusal**, and
+**Two limits, published because both fail open.** A value that is not `off`,
+`os` or `docker` resolves to `off`, so `bwrap`, `podman` or a typo runs **on
+the host**. Measured 2026-09-02 on a scaffolded surface with `exec = "bwrap"`:
+`resolveExec` returned `mode: "off"`, and the surface audit reported it as a
+**warning, not a refusal**, and
 `gnomon task` prints only fatal problems, so on that path the warning is not
 shown at all. Second: nothing checks for a docker daemon before a turn starts; a
-missing one surfaces as a failing command mid-turn. The reasoning, and what it
-would take to make a rejected backend refuse, is in
+missing one surfaces as a failing command mid-turn. The reasoning is in
 [docs/SANDBOX-DESIGN.md](docs/SANDBOX-DESIGN.md).
+
+**Security note.** In v0.4.3 and earlier, `exec = "docker"` contained what
+the model's commands did to the host directly, but not what gnomon itself then
+did on the host with files those commands had written: a hostile model could
+plant a symlink, a git config entry or a surface edit in the mounted project
+and have gnomon's own host-side writes, git calls or next session act on it,
+up to running code on the host. This release fixes that. If you relied on
+`exec = "docker"` to contain an untrusted model, upgrade.
+
+**What the container cannot write.** gnomon's own state and git's control
+files are mounted read-only inside the container: `.gnomon/` (the surface),
+`.gnomon-audit/`, `.gnomon-sessions/`, `.gnomon-loops/`, and `.git/config`,
+`.git/hooks/`, `.git/info/`, `.git/commondir` and `.git/config.worktree` (or
+a `.git` file, where present). `.git` itself is mounted on itself, so it
+cannot be renamed away from those mounts (`mv .git .git-old` fails with
+"device or resource busy"). The container runs as your uid with
+`--cap-drop ALL --security-opt no-new-privileges`. The model
+still edits code and can `git add` and `git commit`; it can no longer edit
+`.gnomon/*.toml` from bash under docker, so configuration changes are yours to
+make. gnomon creates `.gnomon-audit/`, `.gnomon-sessions/`, `.git/hooks/` and
+`.git/info/` if they are missing so there is something to mount, and refuses
+to start a container when one of these paths is a symlink. Every write gnomon
+makes into the project refuses to follow a symlink or a hard link; prompt
+history and gnomon's per-repository state (`gnomon guard` and `gnomon check`
+bases, rule caches, restore journals) live in gnomon's data directory, not in
+the project or `.git/`. Each container carries a `gnomon.root` label, so any
+gnomon process (the dashboard, `gnomon check`, `gnomon guard`, a second
+session) runs no git in a project while a container for it is running, and
+refuses when docker cannot be asked. `image` must be a plain image reference.
+
+**Your own git, and what it is protected from.** When `.git/commondir` or
+`.git/config.worktree` is missing, gnomon creates it (`commondir` holding `.`,
+which git reads as "this directory"; `config.worktree` empty, read only when
+`extensions.worktreeConfig` is set in the read-only config) so that the
+container cannot create one pointing your git at a config it wrote. With
+that, the git you run yourself in the project root — a shell prompt, an IDE
+polling `git status` — reads only config, hooks and redirects the container
+could not write (unless your `.git/config` itself `[include]`s a file
+elsewhere in the project). The same holds for your linked worktrees (each
+`.git/worktrees/<name>/` is read-only, so the container cannot redirect a
+worktree you keep outside the project) and for the submodules that exist
+when a command starts (each `.git/modules/**` git dir has its config, hooks,
+info, commondir and config.worktree read-only, recursively, and the
+submodule's `.git` file too; the directories holding them are mounted on
+themselves so they cannot be renamed away). It is **not** protected from: a
+nested repository the container creates (a `.git` directory in a
+subdirectory, or a submodule added during the session), which your git
+enters when you `cd` into it or when `git status` recurses into it — treat
+any repository below the root that you did not create as hostile; a
+corrupted `.git/HEAD` beside a bare repository planted in the root, which
+your git, run in the root, would then discover instead (mounting `HEAD`
+read-only breaks `git checkout` in the container, so it is not done — set
+`git config --global safe.bareRepository explicit`); and a
+`.gitattributes` filter or diff driver, which names a program only through
+config the container cannot write but is itself repository content.
+
+**What else refuses to start.** A contained role in a project whose root
+contains your home directory or gnomon's data directory (`cd ~ && gnomon`)
+is refused: the container would write `~/.bashrc` and the exec floors. So is
+one whose root contains gnomon's own code (a checkout of gnomon, or gnomon
+installed in the project's `node_modules`), because the container could
+rewrite the gnomon that runs next; install gnomon outside the project. To
+work on gnomon itself with a contained role, `GNOMON_ALLOW_SELF_IN_ROOT=1`
+accepts that risk. Host reads and writes of files the model names (`read`,
+`write`, `edit`, `grep`, the must-fail-first re-run) take only regular files
+whose real path is in the root — never a FIFO, a device or a symlink out —
+and write by replacing the file, never through a symlink or a hard link.
+`gnomon check` takes only the rules under judgement from `--base` (roles,
+write_allow, bash_allow/deny, `[verify]`); `[audit]`, where `[verify]` runs,
+its network and `extra_roots` come from the surface in your working tree and
+this machine's exec floor for the project, read as its strictest entry (a
+base ref moved to a commit whose policy says `exec = "off"`, `network =
+true`, or names a role of its own does not move `[verify]` onto the host or
+the network, and a base's `[audit.attest] sign` is never run). It copies the
+base's `.gnomon/` out of git entry by entry, refusing a tree with `..` or
+`.git` in a name. It prints the commit the rules came from, and warns when
+that ref moved after a contained session started.
+
+**Code the host still runs from the project.** MCP servers start in an
+empty directory outside the project while any role runs contained (so `npx`
+does not resolve `node_modules/.bin` and Python does not import from the
+project); a server whose arguments name project files must name them by
+absolute path then, and a server command that itself lives in the project
+still runs what the container wrote. Loop guard and act commands
+(`.gnomon/loops.toml`) and declared anchor/attest signer commands run on
+the host as written; if they invoke scripts or packages from the project,
+those are the container's to change. Keep such commands pointing outside
+the project.
+
+**The surface cannot loosen the container across sessions either.**
+`.gnomon/` is inside the mounted repository, read-only to bash but still
+yours to edit. A session pins each
+role's `exec`, `image`, `network`, `level` and `extra_roots` when it starts; a
+reload of the surface mid-session may tighten them and never loosens them (it
+says `sandbox NOT loosened … restart gnomon to apply`). Across sessions, this
+machine records where each role's bash ran in the project
+(`exec-floors.json`, beside the trust store): a role that ran in docker and now
+resolves to `exec = "off"`, or any role whose image changed, is a trust grant,
+asked about on a terminal and clamped back into the container when nobody is
+there (`gnomon trust grant`, or `--trust-exec-downgrade` for one run, accept
+it). A `.gnomon/` that appears below a recorded project is held to that
+project's record. If the trust store or that record cannot be read, gnomon
+does not treat it as empty: it warns, sets the file aside, and runs every
+project's bash contained until `gnomon trust grant` is run in it. gnomon's own git on the host — the per-turn tree measurement,
+the anchor delivery — runs with every hook, fsmonitor and filter/diff driver
+the repository's config names switched off.
 
 ### `bash_allow` — why `tools` alone is not enough
 
@@ -2795,34 +3161,37 @@ results and their caveats are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and th
   spread (McNemar exact p = 0.375). No effect is demonstrated in either
   direction; what is demonstrated is that declaring one did not help.
 - **`network = false` is enforced for `webfetch`, filtered in `bash`, and is
-  not process isolation.** The one tool gnomon controls the network reach of
-  refuses outright when the surface sets it. In `bash` it refuses the commands
-  whose purpose is the network — `curl`, `wget`, `nc`, `ssh`, `scp`/`rsync` to a
-  remote, `/dev/tcp`, and `python -c` / `node -e` / `perl -e` / `ruby -e`
-  one-liners whose code opens a connection — followed through `sh -c`, `$( )`
-  and wrappers like the deny-list. `curl --version` and `--help` are allowed,
-  and only when those are all of its arguments: they connect to nothing, and
-  refusing a capability probe would teach the model that `which curl` gets past
-  a rule `curl --version` did not. `git` handed a remote by URL (`git push
-  http://…`, `ls-remote`, `clone`, `remote add`, `-c remote.x.url=…`) and a
-  package manager handed a registry or package URL (`--registry`, `-i`) are
-  refused too: the target is in the line (INJ-2026-11). That is an intent filter
-  over the command's words: a package manager's configured registry, `git fetch`
-  from a configured remote, a build tool or a script still reaches the network
-  through `bash`, and they are deliberately not refused by name —
-  that would make the default surface unusable while still not being
-  isolation. **This is a behaviour change for any surface that sets
-  `network = false`, the scaffold's default**: an agent that used `curl` there
-  is now refused, and `/network on` or `network = true` grants it.
-  `exec = "docker"` runs `bash` with `--network none`, which is isolation. The
-  loop says this at startup.
+  not process isolation** unless `exec` is `os` or `docker`. The one tool gnomon
+  controls the network reach of refuses outright when the surface sets it. In
+  `bash` it refuses the commands whose purpose is the network — `curl`, `wget`,
+  `nc`, `ssh`, `scp`/`rsync` to a remote, `/dev/tcp`, and `python -c` /
+  `node -e` / `perl -e` / `ruby -e` one-liners whose code opens a connection —
+  followed through `sh -c`, `$( )` and wrappers like the deny-list. `curl
+  --version` and `--help` are allowed, and only when those are all of its
+  arguments: they connect to nothing, and refusing a capability probe would
+  teach the model that `which curl` gets past a rule `curl --version` did not.
+  `git` handed a remote by URL (`git push http://…`, `ls-remote`, `clone`,
+  `remote add`, `-c remote.x.url=…`) and a package manager handed a registry or
+  package URL (`--registry`, `-i`) are refused too: the target is in the line
+  (INJ-2026-11). That is an intent filter over the command's words: a package
+  manager's configured registry, `git fetch` from a configured remote, a build
+  tool or a script still reaches the network through `bash` under
+  `exec = "off"`, and they are deliberately not refused by name — that would
+  make the default surface unusable while still not being isolation. **This is
+  a behaviour change for any surface that sets `network = false`, the
+  scaffold's default**: an agent that used `curl` there is now refused, and
+  `/network on` or `network = true` grants it. `exec = "os"` blocks egress in
+  the kernel and keeps loopback; `exec = "docker"` runs `bash` with
+  `--network none`. Both are isolation. The loop says which applies at startup.
 - **`bash_deny` / `bash_allow` are an intent filter, not containment.** They
   read each command the way the shell will — `rm -fr` is `rm -rf`, and what
   `find -exec`, `xargs` or `sh -c` runs is checked — but no list of commands can
   stop code: `python -c 'shutil.rmtree(…)'` deletes a directory with no `rm` to
   match. One call is judged at a time, so a rule against recursive deletion
   does not stop deleting the files and then the empty directory; a rule that
-  names the directory does. Containment is `exec = "docker"`. See
+  names the directory does. Containment of writes outside the root is
+  `exec = "os"` or `exec = "docker"`; inside the root it stays these rules'
+  job. See
   [Guardrails on what cannot be undone](#guardrails-on-what-cannot-be-undone--bash_deny).
 - **Code the repository defines runs past every per-call rule.** `npm test`
   runs package.json's `pretest`, `npm install` its lifecycle scripts, `make` the
@@ -2831,8 +3200,12 @@ results and their caveats are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and th
   (and gnomon's own `[verify]` runs the same command). gnomon names such a call
   and lists the scripts it would run whenever it asks, and `[approval]
   repo_code = true` asks before every one of them, whatever the gate says. It
-  does not read the scripts; only `exec = "docker"` bounds what they do (to the
-  mounted repository, with no network).
+  does not read the scripts. Only a sandbox bounds what a `bash` call that runs
+  them does: `exec = "docker"` to the mounted repository with no network;
+  `exec = "os"` to writes under the root and a per-call temp dir, no egress
+  under `network = false`, and — only with `reads = "scoped"` — reads away from
+  credential stores. `[verify]` runs through the `bash` tool, so the same
+  sandbox applies to it.
 - **Windows needs a POSIX shell, and gnomon will tell you if it cannot find one.**
   Supported and tested as of 2026-09-05: `windows-latest` runs the full
   TypeScript suite in CI — the same four packages Linux runs, minus 3 skips

@@ -79,6 +79,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { beforeOwnWrite, noteOwnWrite } from "./record_guard.js";
+import { appendFileIn, ensureDirIn } from "./root_fs.js";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { createHash, createPublicKey, verify as verifyBytes, KeyObject } from "node:crypto";
 import { canonicalJson, recordHash, type AuditRecord } from "./audit.js";
@@ -154,6 +155,8 @@ export interface ResolvedAttest {
   every: number;
   timeout_sec: number;
   dir: string;
+  /** The project root, when the heads live under it (root_fs.ts). */
+  root?: string;
   /**
    * Declared settings that will not work, surfaced rather than swallowed.
    *
@@ -279,6 +282,7 @@ export function resolveAttest(config: GnomonConfig, auditDir: string): ResolvedA
     every,
     timeout_sec,
     dir,
+    root,
     problems,
   };
 }
@@ -531,6 +535,7 @@ export function checkSignature(
  */
 export class Attestor {
   private readonly file: string | null;
+  private root = "";
   /**
    * Signing failures, for the caller to surface.
    *
@@ -550,7 +555,8 @@ export class Attestor {
       this.file = null;
       return;
     }
-    mkdirSync(settings.dir, { recursive: true });
+    this.root = settings.root ?? resolve(settings.dir, "..");
+    ensureDirIn(this.root, settings.dir);
     this.file = join(settings.dir, trailName);
   }
 
@@ -630,7 +636,7 @@ export class Attestor {
     }
 
     beforeOwnWrite(this.file);
-    appendFileSync(this.file, `${JSON.stringify(head)}\n`, "utf-8");
+    appendFileIn(this.root, this.file, `${JSON.stringify(head)}\n`);
     noteOwnWrite(this.file);
     return head;
   }

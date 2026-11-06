@@ -14,6 +14,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { safeGit, setGitSandbox, containerStarted, containerGone, dockerContainerGone, CONTAINER_ROOT_LABEL } from "./git_safe.js";
 import { recordDegradation, type DegradationSink } from "./degradation.js";
 import {
   readFileSync,
@@ -27,20 +28,29 @@ import {
   mkdirSync,
   rmSync,
   lstatSync,
-  readlinkSync
+  readlinkSync,
+  mkdtempSync,
+  rmdirSync
 } from "node:fs";
+import type { OsSandbox } from "gnomon-natives";
 import { resolve, relative, isAbsolute, dirname, basename, join, sep, win32 as win32Path } from "node:path";
 import { createHash } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { lookup as dnsLookupCb } from "node:dns";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { promisify } from "node:util";
 import {
   GnomonConfig,
+  type ExecMode,
   declaredTools,
+  declaredKeyVars,
   isToolEnabled,
   recomputeManifest,
   toolMaxLines,
+  isValidImageRef,
 } from "./config.js";
+import { suppliedByStore } from "./credentials.js";
+import { noteKeyVars, sessionKeyVars } from "./credential_pin.js";
 import { proposeSkill, ProposalRefused, renderSkill, SkillProposal } from "./skills.js";
 import { compute, ComputeError } from "./compute.js";
 import type { McpRegistry, McpToolInfo } from "./mcp.js";
@@ -66,6 +76,44 @@ import {
   type RepoCodeRun,
   type WriteTarget,
 } from "./shell.js";
+import {
+  containedMountPoints,
+  containedReadonlyPaths,
+  ensureDirIn,
+  readRegular,
+  restoreProtected,
+  RootWriteError,
+  snapshotProtected,
+  writeFileIn,
+  writeRegular,
+} from "./root_fs.js";
+
+/**
+ * The roots host reads and writes of model-named files must stay under (sixth
+ * review): none when sandbox = "off", which confines nothing.
+ */
+function fsRoots(ctx: Pick<ToolContext, "sandbox" | "root" | "extraRoots">): string[] {
+  return ctx.sandbox === "off" ? [] : [ctx.root, ...(ctx.extraRoots ?? [])];
+}
+
+/** A model-named file's text, read only if it is a regular file under the roots. */
+function readModelFile(ctx: Pick<ToolContext, "sandbox" | "root" | "extraRoots">, abs: string): string {
+  return readRegular(fsRoots(ctx), abs).toString("utf-8");
+}
+
+/** A write or edit refused because the file there is not one gnomon will read. */
+function unreadable(tool: "write" | "edit", path: string, err: unknown): ToolOutcome {
+  return {
+    code: TOOL_FAILED,
+    content: `Could not read ${path}: ${err instanceof Error ? err.message : String(err)}`,
+    summary: `${tool} ${path} — not a regular file`,
+  };
+}
+
+/** Write a model-named file: never through a symlink, a hard link, or into a non-regular file. */
+function writeModelFile(ctx: Pick<ToolContext, "sandbox" | "root" | "extraRoots">, abs: string, text: string): void {
+  writeRegular(fsRoots(ctx), abs, text);
+}
 
 // ---------------------------------------------------------------------------
 // Outcome codes
@@ -1024,7 +1072,11 @@ export interface ToolContext {
    * Where `bash` runs. Undefined or mode "off" means the host, which is the
    * default and the behaviour that shipped. See resolveExec.
    */
-  exec?: { mode: "off" | "docker"; image: string; network: boolean };
+  /**
+   * Where bash runs (resolveExec). `reads` / `readRoots` are read by exec =
+   * "os" only, and are optional so a context built by hand means reads = "all".
+   */
+  exec?: { mode: ExecMode; image: string; network: boolean; reads?: string; readRoots?: string[]; invalid?: string };
   gate: ApprovalGate;
   approve: Approver;
   /** bash timeout, ms */
@@ -1334,7 +1386,7 @@ async function readTool(
         summary: `read ${path.replace(/\/+$/, "")}/ — ${entries.length} entries`,
       };
     }
-    const raw = readFileSync(abs, "utf-8");
+    const raw = readModelFile(ctx, abs);
     // Split on CRLF too. A trailing \r on every line of a Windows checkout is
     // invisible in the transcript and poison in anything copied from it.
     // `edit` matches LF text against CRLF files, so what is shown here is what
@@ -1615,7 +1667,7 @@ function killTree(
   // A container is not in the process group. Killing `docker run` returns the
   // shell to us and leaves the container running, so a timed-out command would
   // keep working -- writing into the repository -- after the turn had given up
-  // on it. Remove it explicitly, best-effort and without waiting.
+  // on it. The caller removes it, and waits for that (removeContainer).
   if (containerName) {
     try {
       spawn("docker", ["rm", "-f", containerName], {
@@ -1659,6 +1711,68 @@ function killTree(
   }
   return Promise.resolve();
 }
+
+/** How long a killed command's container may take to be removed before the turn stops waiting. */
+const CONTAINER_REMOVE_MS = 20_000;
+
+/**
+ * Remove a killed command's container and wait until docker says it is gone,
+ * bounded by CONTAINER_REMOVE_MS. Returns whether it is confirmed gone.
+ *
+ * WHY (fourth review, finding 4). killTree used to start `docker rm -f` and
+ * return. The turn went on to its host-side git -- worktreeMoved, the
+ * turn-end measurement, a config reload -- while the container still ran and
+ * could rewrite .git/config between gnomon's driver listing and the git that
+ * trusted it. Now the tool returns only once the container is gone. One that
+ * cannot be confirmed gone stays registered with git_safe, and no gnomon git
+ * runs on this machine until docker says it is.
+ */
+async function removeContainer(name: string): Promise<boolean> {
+  const until = Date.now() + CONTAINER_REMOVE_MS;
+  const run = (args: string[], ms: number) =>
+    new Promise<{ code: number | null; err: string }>((done) => {
+      let err = "";
+      let child;
+      try {
+        child = spawn("docker", args, { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+      } catch {
+        done({ code: null, err: "" });
+        return;
+      }
+      const timer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* gone */
+        }
+        done({ code: null, err });
+      }, Math.max(1, ms));
+      child.stderr?.on("data", (d: Buffer) => (err += d.toString()));
+      child.once("error", () => {
+        clearTimeout(timer);
+        done({ code: null, err });
+      });
+      child.once("exit", (code) => {
+        clearTimeout(timer);
+        done({ code, err });
+      });
+    });
+  while (Date.now() < until) {
+    await run(["rm", "-f", name], until - Date.now());
+    const seen = await run(["inspect", "--format", "{{.State.Status}}", name], Math.min(5000, Math.max(1, until - Date.now())));
+    if (seen.code !== null && seen.code !== 0 && /no such (object|container)/i.test(seen.err)) {
+      containerGone(name);
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return false;
+}
+
+/** What the model is told when its killed command's container could not be confirmed removed. */
+const CONTAINER_NOT_GONE =
+  "\n\n(The sandbox container could not be confirmed removed. gnomon runs no git on this machine " +
+  "until docker reports it gone, so changes made meanwhile are not measured.)";
 
 /**
  * On Windows, a timed-out or cancelled command is reported only once its tree
@@ -1713,11 +1827,13 @@ export function shq(value: string): string {
 
 export function sandboxCommand(
   command: string,
-  ctx: { root: string; exec?: { mode: "off" | "docker"; image: string; network: boolean }; agentSession?: string },
+  ctx: { root: string; exec?: { mode: ExecMode; image: string; network: boolean }; agentSession?: string },
   name: string
 ): string {
   const ex = ctx.exec;
-  if (!ex || ex.mode === "off") return command;
+  // "os" is not a rewrite of the command line: bashTool spawns gnomon-exec
+  // directly with an argv (osSandboxPlan), so no second shell parses anything.
+  if (!ex || ex.mode !== "docker") return command;
   // Single-quoted for `sh -c`, so only the quote character needs escaping --
   // and it was escaped WRONG. The POSIX idiom is `'\''`: close the quote,
   // emit a backslash-escaped quote, reopen. That is four characters. Written as
@@ -1736,6 +1852,20 @@ export function sandboxCommand(
   // bash_deny, bash_allow and the approval prompt have all read the ORIGINAL
   // text, where it was a harmless grep pattern.
   const inner = shq(command);
+  // The image is a word of the host's shell line and a docker argument: a
+  // value starting with `-` was a docker FLAG (`--privileged`), and one with
+  // a space or `;` was more of the line (fifth review, finding 5). Checked
+  // against the reference grammar, refused otherwise, and quoted regardless.
+  if (!isValidImageRef(ex.image)) throw new RootWriteError(`[sandbox] image ${JSON.stringify(ex.image)} is not a container image reference`);
+  // gnomon's own state and git's control files, read-only inside (root_fs.ts
+  // containedReadonlyPaths). Throws when one is a symlink.
+  const readonly = containedReadonlyPaths(ctx.root);
+  let realRoot = ctx.root;
+  try {
+    realRoot = realpathSync(ctx.root);
+  } catch {
+    /* not there: its spelling */
+  }
   const uid = typeof process.getuid === "function" ? process.getuid() : 0;
   const gid = typeof process.getgid === "function" ? process.getgid() : 0;
   return [
@@ -1743,6 +1873,12 @@ export function sandboxCommand(
     `--name ${name}`,
     ex.network ? "" : "--network none",
     `--user ${uid}:${gid}`,
+    // No capabilities and no setuid way back to any (sixth review): a setuid
+    // binary in the image would make the container root, and root can mknod
+    // a device or leave a setuid-root file in the bind-mounted project.
+    // Commands run as the user's uid and need none.
+    "--cap-drop ALL",
+    "--security-opt no-new-privileges",
     // shq, NOT JSON.stringify. JSON.stringify produces a DOUBLE-quoted word,
     // and `$( )` inside double quotes is still command substitution -- so a
     // project directory named `/tmp/proj-$(cmd)` executed `cmd` on the host the
@@ -1752,16 +1888,644 @@ export function sandboxCommand(
     // which is the more common shape of a quoting bug -- one call site noticed,
     // its neighbours not.
     `-v ${shq(ctx.root)}:${shq(ctx.root)}`,
+    // `.git` a mount point of its own, so it cannot be renamed away from
+    // the read-only mounts inside it (root_fs.ts containedMountPoints).
+    ...containedMountPoints(ctx.root).map((p) => `-v ${shq(p)}:${shq(p)}`),
+    ...readonly.map((p) => `-v ${shq(p)}:${shq(p)}:ro`),
     `-w ${shq(ctx.root)}`,
+    // Which project the container can write, for any gnomon process to ask
+    // (git_safe liveContainer): the dashboard, `gnomon check`, `gnomon
+    // guard` and a second session do not share this process's registry.
+    `--label ${shq(`${CONTAINER_ROOT_LABEL}=${realRoot}`)}`,
     // The agent-session marker, into the container too: a `gnomon skill
     // accept` installed in the image is the agent's as much as one on the
     // host. `-e NAME=value`, the value quoted for the host shell.
     `-e ${AGENT_SESSION_ENV}=${shq(ctx.agentSession || `pid-${process.pid}`)}`,
-    ex.image,
+    shq(ex.image),
     `sh -c ${inner}`,
   ]
     .filter(Boolean)
     .join(" ");
+}
+
+/**
+ * gnomon-natives' probe, loaded on first use rather than imported at the top.
+ *
+ * gnomon-core's compiled modules are loaded by plain node in this workspace --
+ * the property suites and the benchmark apparatus import dist/ directly --
+ * and there `gnomon-natives` resolves to its TypeScript sources, which plain
+ * node cannot run. A static import broke every one of them for a feature they
+ * never use; a lazy one costs them nothing, and the installed package (where
+ * gnomon-natives resolves to its dist) loads it the same way.
+ */
+/**
+ * The probe. `forbid` names the trees a sandboxed command can write -- the
+ * root, extra_roots, the temp dir -- and no gnomon-exec beneath one of them is
+ * ever used: a command that could overwrite the binary would run unsandboxed
+ * on the next call (gnomon-natives osSandbox).
+ */
+export type OsSandboxProbe = (forbid?: readonly string[]) => OsSandbox;
+
+let nativeProbe: OsSandboxProbe | undefined;
+
+/** Load the gnomon-exec probe. Never throws: a failure becomes a probe that reports it. */
+export async function loadOsSandboxProbe(): Promise<OsSandboxProbe> {
+  if (nativeProbe) return nativeProbe;
+  try {
+    const natives = await import("gnomon-natives");
+    nativeProbe = natives.osSandbox;
+  } catch (e) {
+    const why = `gnomon-natives could not be loaded: ${(e as Error).message.split("\n")[0]}`;
+    return () => ({ error: why });
+  }
+  return nativeProbe;
+}
+
+/** The probe if it has been loaded, else an error a caller refuses on (never a pass). */
+function defaultOsProbe(forbid?: readonly string[]): OsSandbox {
+  return nativeProbe
+    ? nativeProbe(forbid)
+    : { error: "the gnomon-exec probe was not loaded (loadOsSandboxProbe was not awaited before this call)" };
+}
+
+/**
+ * The trees a sandboxed bash can write -- the root, extra_roots and the temp
+ * dir its per-call directory is made in -- which is where gnomon-exec must
+ * NOT be taken from (OsSandboxProbe). Every caller of the probe passes this.
+ */
+export function osSandboxForbid(root: string, extraRoots: readonly string[] = []): string[] {
+  return [root, ...extraRoots, tmpdir()];
+}
+
+/**
+ * Environment variables that name a channel to something outside the
+ * sandbox -- a session bus, a key agent, a multiplexer, a display, an editor's
+ * IPC socket -- removed from bash's environment under exec = "os". gnomon-exec
+ * removes the same list (sandbox.rs SCRUBBED_ENV); kept here too so the plan
+ * a test inspects is the environment the command gets.
+ */
+export const OS_SANDBOX_SCRUBBED_ENV: readonly string[] = [
+  "DBUS_SESSION_BUS_ADDRESS", "DBUS_SYSTEM_BUS_ADDRESS", "DBUS_STARTER_ADDRESS", "DBUS_STARTER_BUS_TYPE",
+  "SSH_AUTH_SOCK", "SSH_AGENT_PID", "GPG_AGENT_INFO", "GNOME_KEYRING_CONTROL", "GNOME_KEYRING_PID",
+  "XDG_RUNTIME_DIR", "TMUX", "TMUX_PANE", "STY", "ZELLIJ", "ZELLIJ_SESSION_NAME",
+  "DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "SWAYSOCK", "I3SOCK", "HYPRLAND_INSTANCE_SIGNATURE",
+  "KITTY_LISTEN_ON", "KITTY_WINDOW_ID", "WEZTERM_UNIX_SOCKET", "ALACRITTY_SOCKET",
+  "NVIM", "NVIM_LISTEN_ADDRESS", "VSCODE_IPC_HOOK", "VSCODE_IPC_HOOK_CLI", "VSCODE_GIT_IPC_HANDLE",
+  "DOCKER_HOST", "CONTAINER_HOST", "PODMAN_HOST", "PULSE_SERVER", "PIPEWIRE_REMOTE",
+  "SYSTEMD_EXEC_PID", "NOTIFY_SOCKET", "LISTEN_FDS", "LISTEN_PID", "INVOCATION_ID", "JOURNAL_STREAM",
+];
+
+/**
+ * Names that hold a secret by any common convention: `*_API_KEY`, `*_TOKEN`,
+ * `*_SECRET`, `*PASSWORD*`, `AWS_SECRET_ACCESS_KEY`, `*_CREDENTIALS`, ... A
+ * name, not a value, is matched; a variable the convention misses is still
+ * dropped when any surface this process read named it.
+ */
+export const SECRET_NAME = /(^|_)(API_?KEY|TOKEN|SECRETS?|PASSWORD|PASSWD|PASSPHRASE|CREDENTIALS?|PRIVATE_KEY|ACCESS_KEY|SESSION_KEY|AUTH|AUTH_?TOKEN)(_|$)|^(PGPASSWORD|MYSQL_PWD)$/i;
+
+/**
+ * bash's environment under exec = "os": gnomon's, minus the channels above
+ * and minus every secret it can name -- what applyCredentials loaded from the
+ * credential store; every variable ANY surface read in this process named as
+ * a credential holder (an endpoint's or fallback's api_key_env, an MCP
+ * server's env), not just the one in force now (credential_pin.ts: a command
+ * that rewrote api_key_env to point elsewhere no longer un-drops the real
+ * key); and every name SECRET_NAME matches. The model's own API key is
+ * gnomon's to use, not the command's to read.
+ */
+export function osSandboxEnv(
+  base: NodeJS.ProcessEnv,
+  config: GnomonConfig | undefined,
+  supplied: readonly string[] = suppliedByStore()
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  const drop = new Set<string>([...OS_SANDBOX_SCRUBBED_ENV, ...supplied]);
+  if (config) {
+    noteKeyVars(config);
+    try {
+      for (const k of declaredKeyVars(config)) drop.add(k);
+    } catch {
+      // a config without endpoints declares none
+    }
+  }
+  for (const k of sessionKeyVars()) drop.add(k);
+  for (const k of Object.keys(env)) if (SECRET_NAME.test(k)) drop.add(k);
+  for (const k of drop) delete env[k];
+  return env;
+}
+
+/**
+ * Empty and remove the per-call temp dir of an exec = "os" call.
+ *
+ * NOT `rmSync(tmp, { recursive: true })`. That ran here, unsandboxed, after
+ * every call, and it follows a directory that turns into a symlink between
+ * its check and its descent: a job the command backgrounded swapped one with
+ * renameat2(RENAME_EXCHANGE) and gnomon deleted 604 files outside the root.
+ * `gnomon-exec sandbox-clean` removes the contents relative to descriptors it
+ * opened with O_NOFOLLOW, following no link, inside a Landlock domain that can
+ * write only beneath `tmp`. The then-empty directory goes with rmdir, which
+ * follows nothing. If either step fails the directory is LEFT, never removed
+ * some other way: a stray temp dir is the cheap failure.
+ *
+ * Jobs the command backgrounded are not killed: starting a server in one call
+ * and using it in the next is a supported workflow (backgroundRecipe), and
+ * cleanup that cannot follow a link does not need the tree to be quiet.
+ */
+export function cleanOsSandboxTmp(bin: string, tmp: string, id?: OsTmpId): boolean {
+  // The device and inode recorded at mkdtemp: gnomon-exec empties only that
+  // directory, opened with no symlink on its path (second review, finding D).
+  const r = spawnSync(bin, ["sandbox-clean", tmp, ...(id ? ["--dev", id.dev, "--ino", id.ino] : [])], {
+    stdio: "ignore",
+    timeout: 30_000,
+  });
+  if (r.status !== 0) return false;
+  try {
+    if (id) {
+      const st = lstatSync(tmp, { bigint: true });
+      if (!st.isDirectory() || st.dev.toString() !== id.dev || st.ino.toString() !== id.ino) return false;
+    }
+    rmdirSync(tmp);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A per-call temp dir's identity, as recorded when gnomon made it. */
+export interface OsTmpId {
+  dev: string;
+  ino: string;
+}
+
+/**
+ * The supervisors of this session's sandboxed calls, by pid, with the start
+ * time /proc gave each when it was reported. `sandbox-kill` signals only
+ * processes beneath one of these (gnomon-exec checks the start time again, so
+ * a reused pid is not one).
+ */
+const sessionSupervisors = new Map<number, string>();
+
+/** /proc/<pid>/stat: parent and start time, or null. Linux only. */
+function procStat(pid: number): { ppid: number; start: string; state: string } | null {
+  try {
+    const st = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const f = st.slice(st.lastIndexOf(")") + 2).split(" ");
+    return { ppid: Number(f[1]), start: f[19] ?? "", state: f[0] ?? "" };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Record the supervisor gnomon-exec reported on its --report-fd: "<pid>
+ * <start>", read by gnomon-exec while the supervisor was its unreaped child
+ * (so the pid was not yet reusable). Only gnomon-exec can write that fd: it is
+ * closed in the supervisor before the command exists. Believed only while
+ * /proc still shows the same start time.
+ */
+function registerSupervisor(reported: string): number | null {
+  const [p, start] = reported.trim().split("\n")[0]!.split(/\s+/);
+  const pid = Number(p);
+  if (!Number.isInteger(pid) || pid <= 1 || !start || start === "0") return null;
+  if (procStat(pid)?.start !== start) return null;
+  for (const [q, st] of sessionSupervisors) if (procStat(q)?.start !== st) sessionSupervisors.delete(q);
+  sessionSupervisors.set(pid, start);
+  return pid;
+}
+
+/**
+ * SIGKILL `pid` and everything beneath it: on a timeout or a cancel, the job a
+ * call started under its supervisor goes with it even when it left the
+ * process group (setsid). The supervisor is a subreaper, so nothing the call
+ * started can have left its subtree.
+ */
+function killSupervisedTree(pid: number): void {
+  const start = sessionSupervisors.get(pid);
+  if (start === undefined || procStat(pid)?.start !== start) return;
+  // Every live descendant of the supervisor, by pid and start time (so a pid
+  // that exits and is reused mid-sweep is never signalled). Zombies are left
+  // out: they are dead, and their parent reaps them.
+  const descendants = (): Map<number, string> | null => {
+    const kids = new Map<number, Array<[number, string]>>();
+    try {
+      for (const e of readdirSync("/proc")) {
+        const p = Number(e);
+        if (!Number.isInteger(p)) continue;
+        const st = procStat(p);
+        if (!st || st.state === "Z" || st.state === "X") continue;
+        const l = kids.get(st.ppid) ?? [];
+        l.push([p, st.start]);
+        kids.set(st.ppid, l);
+      }
+    } catch {
+      return null;
+    }
+    const out = new Map<number, string>();
+    const walk = (p: number) => {
+      for (const [c, cs] of kids.get(p) ?? []) {
+        if (out.has(c) || c === pid) continue;
+        out.set(c, cs);
+        walk(c);
+      }
+    };
+    walk(pid);
+    return out;
+  };
+  const signal = (p: number, st: string, sig: NodeJS.Signals) => {
+    if (procStat(p)?.start !== st) return;
+    try {
+      process.kill(p, sig);
+    } catch {
+      // gone already
+    }
+  };
+  // One snapshot and the supervisor killed FIRST (as this did) let a job that
+  // forks in a loop escape: its children born after the snapshot outlived it,
+  // and with the supervisor -- the child subreaper they would reparent to --
+  // already dead they went to init, out of reach. With its listener fd closed,
+  // a survivor could even install its own seccomp listener and answer its own
+  // connects (third review, finding 10). So:
+  //   1. freeze: SIGSTOP every descendant, sweep after sweep, until a sweep
+  //      finds none it had not stopped. A stopped process forks nothing.
+  //   2. kill: SIGKILL every descendant, until the supervisor has none left.
+  //      It is alive throughout, so an orphan reparents to it, not to init.
+  //   3. the supervisor, last.
+  const stopped = new Set<number>();
+  for (let sweep = 0; sweep < 100; sweep++) {
+    const d = descendants();
+    if (d === null) break;
+    let fresh = 0;
+    for (const [p, st] of d) {
+      if (stopped.has(p)) continue;
+      stopped.add(p);
+      signal(p, st, "SIGSTOP");
+      fresh++;
+    }
+    if (fresh === 0) break;
+  }
+  for (let sweep = 0; sweep < 100; sweep++) {
+    const d = descendants();
+    if (d === null || d.size === 0) break;
+    for (const [p, st] of d) signal(p, st, "SIGKILL");
+  }
+  signal(pid, start, "SIGKILL");
+  sessionSupervisors.delete(pid);
+}
+
+/** `sandbox-kill <pid> [signal]`, the whole command (optionally `gnomon sandbox-kill`). */
+export const SANDBOX_KILL = /^\s*(?:gnomon\s+)?sandbox-kill\s+(\d+)(?:\s+(-?[A-Za-z0-9]+))?\s*;?\s*$/;
+
+/**
+ * Under exec = "os", a call cannot signal a process an EARLIER call started
+ * (Landlock ABI 6 scopes signals to the call). `sandbox-kill <pid> [signal]`,
+ * as a whole bash command, is gnomon doing it from outside the sandbox -- for
+ * a pid that descends from one of this session's supervisors, and no other.
+ */
+export function sandboxKill(bin: string, pid: string, sig: string | undefined): ToolOutcome {
+  const sups = [...sessionSupervisors].flatMap(([p, start]) => ["--supervisor", `${p}:${start}`]);
+  const r = spawnSync(bin, ["sandbox-kill", ...sups, "--", pid, ...(sig ? [sig] : [])], { encoding: "utf8", timeout: 10_000 });
+  const out = `${r.stdout ?? ""}${r.stderr ?? ""}`.trim();
+  return {
+    code: TOOL_OK,
+    shell_exit: r.status ?? undefined,
+    content: `exit: ${r.status}\n${out}`,
+    summary: `bash — sandbox-kill ${pid}${sig ? ` ${sig}` : ""} — ${r.status === 0 ? "signalled" : "refused"}`,
+  };
+}
+
+/**
+ * How `[sandbox] exec = "os"` runs one command: `gnomon-exec sandbox`, with the
+ * project root, a fresh per-call temp directory and any `extra_roots` as the
+ * only writable trees, and `--network off` unless the session allows the
+ * network. See crates/gnomon-exec/src/sandbox.rs for what the kernel enforces.
+ *
+ * An argv, not a shell line: the command reaches `sh -c` as one argument, so
+ * there is no second round of quoting to get wrong (sandboxCommand's history is
+ * the reason to want none).
+ *
+ * REFUSES -- returns a refusal instead of a plan -- on every path where the
+ * sandbox cannot be applied: no gnomon-exec, a gnomon-exec too old to sandbox,
+ * a kernel without Landlock, network = false where the network half cannot be
+ * enforced, Windows. It never falls back to running the command on the host:
+ * a sandbox that degrades to "off" in silence is the failure
+ * docs/SANDBOX-DESIGN.md records this repository shipping once already.
+ *
+ * `probe` is injectable so the refusals can be tested on any machine.
+ */
+export function osSandboxPlan(
+  command: string,
+  ctx: {
+    root: string;
+    extraRoots?: string[];
+    network?: boolean;
+    exec?: { network: boolean; reads?: string; readRoots?: string[] };
+    config?: GnomonConfig;
+  },
+  shellBin: string,
+  probe: OsSandboxProbe = defaultOsProbe,
+  installRoots: (bin: string) => string[] = gnomonInstallReadRoots
+):
+  | { refusal: ToolOutcome }
+  | { file: string; args: string[]; env: NodeJS.ProcessEnv; tmp: string; tmpId: OsTmpId; network: boolean } {
+  const refuse = (why: string, summary: string): { refusal: ToolOutcome } => ({
+    refusal: {
+      code: TOOL_FAILED,
+      content:
+        `Refused: [sandbox] exec = "os" is declared, and ${why}\n\n` +
+        `The command was NOT run. gnomon does not fall back to running it unsandboxed. ` +
+        `This is a property of the machine, not of the command, so retrying it will not help: ` +
+        `stop and tell the operator.`,
+      summary: `bash — refused (${summary})`,
+    },
+  });
+  if (process.platform === "win32") {
+    return refuse(
+      "Windows has no OS sandbox gnomon can apply. Run gnomon inside WSL2 (where Landlock " +
+        "is available on a 5.13+ kernel), or set exec = \"docker\", or exec = \"off\" to run " +
+        "bash unsandboxed on purpose.",
+      "os sandbox unsupported on Windows"
+    );
+  }
+  // [sandbox] reads. Checked before the probe: a misspelt value is a property
+  // of the surface, and it must not fall back to "all" in silence.
+  const reads = ctx.exec?.reads ?? "all";
+  if (reads !== "all" && reads !== "scoped") {
+    return refuse(
+      `[sandbox] reads = ${JSON.stringify(reads)} is not one of "all" | "scoped". It does not fall back to "all", ` +
+        `because a typo would then unscope reads without a word. Fix the value in .gnomon/policy.toml.`,
+      "invalid [sandbox] reads"
+    );
+  }
+  // Every tree the command will be able to write. gnomon-exec must not live
+  // in one: see OsSandboxProbe.
+  const forbid = osSandboxForbid(ctx.root, ctx.extraRoots);
+  const sb = probe(forbid);
+  if ("error" in sb) return refuse(`gnomon-exec, which applies the sandbox, is unavailable: ${sb.error}`, "no gnomon-exec");
+  if (!sb.probe.supported) {
+    return refuse(`this machine cannot enforce it: ${sb.probe.reason ?? "unsupported"}.`, "os sandbox unsupported here");
+  }
+  if (reads === "scoped" && sb.probe.reads_scoped_supported !== true) {
+    return refuse(
+      sb.probe.reads_scoped_supported === false
+        ? `[sandbox] reads = "scoped" is declared, and this platform cannot scope reads (${sb.probe.platform}: ` +
+            `it is implemented with Landlock on Linux only). Set reads = "all" to run with the write and network sandbox only.`
+        : `[sandbox] reads = "scoped" is declared, and ${sb.bin} predates it. Rebuild it with \`pnpm run build:native\`.`,
+      "read scoping unsupported here"
+    );
+  }
+  // The session grant (/network) wins over the declaration, as it does for
+  // webfetch. Only an explicit true opens the network.
+  const network = (ctx.network ?? ctx.exec?.network) === true;
+  if (!network && !sb.probe.network_supported) {
+    return refuse(
+      `network = false cannot be enforced on this machine: ${sb.probe.reason ?? "unsupported"}. ` +
+        `Setting [sandbox] network = true would run it with the filesystem sandbox only.`,
+      "network sandbox unsupported here"
+    );
+  }
+  // The temp dir's parent must not be writable by the command: an extra root
+  // (or the root) holding tmpdir() could swap the per-call dir for a symlink
+  // before it is cleaned (second review, finding D). Refused, not trimmed.
+  const tmpBase = (() => {
+    try {
+      return realpathSync(tmpdir());
+    } catch {
+      return resolve(tmpdir());
+    }
+  })();
+  for (const r of [ctx.root, ...(ctx.extraRoots ?? [])]) {
+    let real: string;
+    try {
+      real = realpathSync(r);
+    } catch {
+      continue;
+    }
+    if (tmpBase === real || tmpBase.startsWith(real.endsWith(sep) ? real : real + sep)) {
+      return refuse(
+        `${r === ctx.root ? "the project root" : `extra_roots entry ${r}`} contains the temp directory (${tmpBase}), ` +
+          `so a command could replace its own per-call temp dir with a link before gnomon cleans it. ` +
+          `Point TMPDIR somewhere outside the writable roots, or narrow the root.`,
+        "temp dir inside a writable root"
+      );
+    }
+  }
+  const tmp = mkdtempSync(join(tmpBase, "gnomon-sbx-"));
+  const tmpStat = statSync(tmp, { bigint: true });
+  const tmpId: OsTmpId = { dev: tmpStat.dev.toString(), ino: tmpStat.ino.toString() };
+  // Only roots that exist: gnomon-exec refuses a --write it cannot resolve,
+  // and a granted root that is not there grants nothing anyway.
+  const extra = (ctx.extraRoots ?? []).filter((r) => {
+    try {
+      return statSync(r).isDirectory();
+    } catch {
+      return false;
+    }
+  });
+  // reads = "scoped": what the command may read beyond the root, the temp dir,
+  // extra_roots and gnomon-exec's own system and toolchain defaults. Declared
+  // read_roots go through as written (gnomon-exec refuses one that would
+  // expose a credential store); the install's own directories are dropped
+  // when they are the home directory or above it, rather than refused.
+  const readGrants = [...new Set([...(ctx.exec?.readRoots ?? []).filter(existsPath), ...installRoots(sb.bin)])];
+  const readArgs = reads === "scoped" ? ["--reads", "scoped", ...readGrants.flatMap((r) => ["--read", r])] : [];
+  // From the first sandboxed command on, gnomon's own git runs sandboxed too
+  // (git_safe.ts): this command can write .git/config, and a host-side git
+  // would run whatever core.fsmonitor or a filter driver it names -- under
+  // the session's read scope, which it reads the root and extra_roots under
+  // rather than writes (third review, finding 9).
+  registerGitSandbox(sb.bin, reads === "scoped" ? [ctx.root, ...extra, ...readGrants] : null, ctx.config);
+  // gnomon's own state and git's control files, read-only to the command
+  // (fifth review, A): enforced by the kernel where gnomon-exec says it can
+  // (macOS), and on Linux -- where Landlock cannot take a subtree back out of
+  // the root's grant -- by the snapshot bashTool takes before the command and
+  // puts back after it (root_fs.ts restoreProtected). A gnomon-exec that
+  // predates --readonly is not handed it: it would refuse every command.
+  let readonly: string[];
+  try {
+    readonly = sb.probe.readonly_enforced === undefined ? [] : containedReadonlyPaths(ctx.root);
+  } catch (e) {
+    if (!(e instanceof RootWriteError)) throw e;
+    return refuse(`${e.message}.`, "gnomon state under the root is a symlink");
+  }
+  return {
+    file: sb.bin,
+    args: [
+      "sandbox",
+      "--root", ctx.root,
+      "--write", tmp,
+      ...extra.flatMap((r) => ["--write", r]),
+      "--network", network ? "on" : "off",
+      ...readArgs,
+      ...readonly.flatMap((r) => ["--readonly", r]),
+      // fd 3: gnomon-exec writes the supervisor's pid there (sandbox-kill).
+      "--report-fd", "3",
+      "--",
+      shellBin, "-c", command,
+    ],
+    // Point every temp-dir convention at the writable one, so tools that
+    // write scratch files (pytest, mktemp, compilers) work unchanged. Minus
+    // the bus/agent channels and gnomon's own secrets (osSandboxEnv).
+    env: { ...osSandboxEnv(process.env, ctx.config), TMPDIR: tmp, TMP: tmp, TEMP: tmp },
+    tmp,
+    tmpId,
+    network,
+  };
+}
+
+/**
+ * Tests only: switch off the put-back of protected paths under exec = "os",
+ * to test what holds when a write gets past it (a process the command left
+ * running in the background changes the surface after the check).
+ */
+let protectedGuardOn = true;
+export function _setProtectedGuard(on: boolean): void {
+  protectedGuardOn = on;
+}
+
+let gitSandboxRoot: string | null = null;
+/** The read scope gnomon's sandboxed git runs under: null (all) until a command ran scoped. Only tightens. */
+let gitSandboxReads: string[] | null = null;
+
+/**
+ * Run every later gnomon git under `gnomon-exec sandbox --network none`,
+ * writable only in an empty directory of its own (git_safe.ts layer 3). The
+ * bookkeeping reads; a git that needed to write would fail, and its caller
+ * treats that as "git could not answer", never as a pass.
+ *
+ * It ran with reads unconfined and loopback open, whatever the session's
+ * `reads` said: a filter a command planted could read ~/.ssh and hand it to a
+ * listener the command left running on 127.0.0.1 (third review, finding 9).
+ * So it takes the session's scope -- once a command ran under reads =
+ * "scoped", git does too, granted the root, extra_roots and the same
+ * read_roots and install directories, never more -- and `--network none`
+ * refuses loopback as well. Its environment drops what bash's does.
+ */
+function registerGitSandbox(bin: string, scopedReads: string[] | null, config?: GnomonConfig): void {
+  try {
+    gitSandboxRoot ??= mkdtempSync(join(tmpdir(), "gnomon-gitsbx-"));
+  } catch {
+    return;
+  }
+  if (scopedReads !== null) gitSandboxReads = scopedReads;
+  const root = gitSandboxRoot;
+  const reads = gitSandboxReads;
+  const readArgs = reads === null ? [] : ["--reads", "scoped", ...reads.filter(existsPath).flatMap((r) => ["--read", r])];
+  setGitSandbox((argv, env) => ({
+    file: bin,
+    args: ["sandbox", "--root", root, "--network", "none", ...readArgs, "--", ...argv],
+    env: osSandboxEnv(env, config),
+  }));
+}
+
+/** Tests only. */
+export function _resetGitSandboxScope(): void {
+  gitSandboxReads = null;
+}
+
+function existsPath(p: string): boolean {
+  try {
+    statSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The directories gnomon itself runs from, which a scoped bash must be able
+ * to read for `gnomon`, `node` and gnomon-exec to work inside it: the
+ * gnomon-exec binary's directory, the node runtime's prefix (nvm puts it under
+ * $HOME), and the gnomon packages -- the checkout for a source build, the
+ * outermost node_modules for an npm install. Each is dropped when it is the
+ * home directory or above it: granting that would expose every credential
+ * store, and gnomon-exec would refuse the command.
+ */
+export function gnomonInstallReadRoots(bin: string, here: string = fileURLToPath(import.meta.url)): string[] {
+  const out: string[] = [dirname(bin)];
+  try {
+    out.push(dirname(dirname(realpathSync(process.execPath))));
+  } catch {
+    // no runtime path to grant
+  }
+  const pkg = dirname(dirname(here)); // packages/gnomon-core, from src/ or dist/
+  const checkout = dirname(dirname(pkg));
+  const nm = here.split(sep).indexOf("node_modules");
+  if (existsPath(join(checkout, "pnpm-workspace.yaml")) && existsPath(join(checkout, "packages", "gnomon-cli"))) {
+    out.push(checkout);
+  } else if (nm > 0) {
+    out.push(here.split(sep).slice(0, nm + 1).join(sep) || sep);
+  } else {
+    out.push(pkg);
+  }
+  const home = resolve(homedir());
+  return [...new Set(out.map((p) => resolve(p)))].filter(
+    (p) => existsPath(p) && p !== home && !home.startsWith(p.endsWith(sep) ? p : p + sep)
+  );
+}
+
+/**
+ * Second review, finding G: when gnomon itself -- its packages, the node
+ * runtime it runs on -- lives under a tree a sandboxed command can write (a
+ * checkout being dogfooded as the project root, or under an extra root), the
+ * command can change gnomon, and the next gnomon to run is the changed one.
+ * The sandbox cannot help with that; the operator is told at startup.
+ */
+export function gnomonInstallWritable(writable: readonly string[], installRoots: readonly string[]): string[] {
+  const real = (p: string) => {
+    try {
+      return realpathSync(p);
+    } catch {
+      return resolve(p);
+    }
+  };
+  const w = writable.map(real);
+  return installRoots
+    .map(real)
+    .filter((i) => w.some((d) => i === d || i.startsWith(d.endsWith(sep) ? d : d + sep)));
+}
+
+/**
+ * One line for the operator: what `exec = "os"` will enforce on this machine,
+ * or that bash will refuse every command. Printed at startup and by
+ * `gnomon explain sandbox`, so the answer arrives before the first command.
+ */
+export function osSandboxSummary(
+  network: boolean,
+  probe: OsSandboxProbe = defaultOsProbe,
+  reads: string = "all",
+  forbid?: readonly string[]
+): { ok: boolean; line: string } {
+  if (process.platform === "win32") {
+    return { ok: false, line: `sandbox: exec = "os" is unsupported on Windows — bash will refuse every command (use WSL2, or exec = "docker")` };
+  }
+  const sb = probe(forbid);
+  if ("error" in sb) {
+    return { ok: false, line: `sandbox: exec = "os" cannot run — bash will refuse every command: ${sb.error.split("\n")[0]}` };
+  }
+  const p = sb.probe;
+  if (!p.supported) {
+    return { ok: false, line: `sandbox: exec = "os" is unsupported here — bash will refuse every command: ${p.reason ?? "no reason given"}` };
+  }
+  if (!network && !p.network_supported) {
+    return { ok: false, line: `sandbox: exec = "os" cannot enforce network = false here — bash will refuse every command: ${p.reason ?? "no reason given"}` };
+  }
+  if (reads !== "all" && reads !== "scoped") {
+    return { ok: false, line: `sandbox: [sandbox] reads = ${JSON.stringify(reads)} is not "all" or "scoped" — bash will refuse every command until it is` };
+  }
+  if (reads === "scoped" && p.reads_scoped_supported !== true) {
+    return { ok: false, line: `sandbox: reads = "scoped" cannot be enforced here (${p.platform}${p.reads_scoped_supported === undefined ? "; gnomon-exec predates it" : ""}) — bash will refuse every command` };
+  }
+  const abi = p.landlock_abi !== undefined ? `, Landlock ABI ${p.landlock_abi}` : "";
+  return {
+    ok: true,
+    line:
+      `sandbox: exec = "os" (${p.mechanism}${abi}) — bash writes only inside the root and a per-call temp dir; ` +
+      (network ? "network open" : "egress blocked, loopback allowed") +
+      (reads === "scoped"
+        ? "; reads scoped (root, system dirs, toolchains, read_roots; credential stores in $HOME unreadable)"
+        : "; reads unrestricted") +
+      (p.degraded.length > 0 ? `. Not on this kernel: ${p.degraded.join("; ")}` : ""),
+  };
 }
 
 /**
@@ -2081,7 +2845,8 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
     // `[sandbox] allow_package_index` (sweep_knobs.ts): a package download
     // from a listed host is not refused. Empty, the default, is the filter as
     // it was: the same call, the same answer. Inert under exec = "docker",
-    // whose --network none no host list opens.
+    // whose --network none no host list opens, and under exec = "os", whose
+    // supervisor admits loopback only (packageIndexOf).
     const listed = packageIndexOf(ctx);
     const egress = bashNetworkEgress(command, listed);
     if (egress) {
@@ -2295,7 +3060,7 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     if (t.how === "tar -x (archive)" || t.how === "unzip (archive)") {
       const into = targets.find((x) => x.how === t.how.replace("(archive)", "(into)") && x.cwd === t.cwd);
       const base = (into && resolveTarget(into.path, into.cwd)) ?? resolve(dirAbs(t.cwd ?? ""));
-      for (const m of archiveMembers(abs, t.how.startsWith("tar") ? "tar" : "unzip")) {
+      for (const m of archiveMembers(abs, t.how.startsWith("tar") ? "tar" : "unzip", fsRoots(ctx))) {
         judged.push({ path: m, abs: resolve(base, m), how: t.how.replace(" (archive)", ""), writeAllow: true, t });
       }
       continue;
@@ -2463,11 +3228,11 @@ function cleanReaches(ctx: ToolContext, at: string, clean: GitClean): { kind: "r
     // a symlinked temp dir (/var vs /private/var on macOS) reads as outside the
     // repository, and that would refuse a clean that reaches nothing.
     const spec = relative(at, p.dir).split(sep).join("/") || ".";
-    const r = spawnSync("git", ["-C", at, "status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all", "--", spec], {
-      encoding: "utf-8",
+    const r = safeGit(["-C", at, "status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all", "--", spec], {
+      cwd: at,
       timeout: 5000,
-      windowsHide: true,
       maxBuffer: 16 * 1024 * 1024,
+      hot: true,
     });
     if (r.status !== 0 || typeof r.stdout !== "string") {
       // Not a repository: git clean fails too. Anything else: assume reached.
@@ -2565,11 +3330,14 @@ function gitHooksRefusal(tool: string, path: string, how?: string): Precheck {
  * cannot be read; capped, since a patch is the agent's to make arbitrarily
  * large.
  */
+/** The largest archive the write precheck lists members of (seventh review, L4). */
+const ARCHIVE_LIST_MAX_BYTES = 256 * 1024 * 1024;
+
 function patchPaths(abs: string): string[] {
   let text: string;
   try {
     if (statSync(abs).size > 8 * 1024 * 1024) return [];
-    text = readFileSync(abs, "utf-8");
+    text = readRegular([], abs).toString("utf-8");
   } catch {
     return [];
   }
@@ -2589,11 +3357,43 @@ function patchPaths(abs: string): string[] {
  * missing or the listing fails: unknown is reported as unknown, which is the
  * pattern precheck's limit -- the kernel sandbox is what contains it.
  */
-function archiveMembers(abs: string, kind: "tar" | "unzip"): string[] {
-  if (!existsSync(abs)) return [];
+function archiveMembers(abs: string, kind: "tar" | "unzip", roots: string[] = []): string[] {
+  // Seventh review (L4): the archive is the model's file, and the host runs
+  // the archiver on it. Only a regular file (never a FIFO the listing would
+  // block on, or a device), at most ARCHIVE_LIST_MAX_BYTES, whose real path
+  // is in the root; the archiver gets no stdin, is killed (SIGKILL, not a
+  // TERM it can ignore) at the deadline, and its output is capped.
+  let st: Stats;
+  try {
+    st = statSync(abs);
+  } catch {
+    return [];
+  }
+  if (!st.isFile() || st.size > ARCHIVE_LIST_MAX_BYTES) return [];
+  if (roots.length > 0) {
+    let real: string;
+    try {
+      real = realpathSync(abs);
+    } catch {
+      return [];
+    }
+    const inside = roots.some((r) => {
+      let rr: string;
+      try {
+        rr = realpathSync(r);
+      } catch {
+        rr = resolve(r);
+      }
+      const rel = relative(rr, real);
+      return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+    });
+    if (!inside) return [];
+  }
   const r = spawnSync(kind, kind === "tar" ? ["-tf", abs] : ["-Z1", abs], {
     encoding: "utf-8",
     timeout: 5000,
+    killSignal: "SIGKILL",
+    stdio: ["ignore", "pipe", "ignore"],
     windowsHide: true,
     maxBuffer: 8 * 1024 * 1024,
   });
@@ -2623,10 +3423,16 @@ function withPackageIndex(outcome: ToolOutcome, args: Record<string, unknown>, c
 
 /**
  * The hosts `[sandbox] allow_package_index` admits in this context: none
- * under exec = "docker", where the container has no network to admit them to.
+ * under exec = "docker", where the container has no network to admit them to,
+ * and none under exec = "os", whose network = false supervisor admits loopback
+ * only. There is deliberately no per-host allow in that supervisor: a host
+ * name is not an address (a CDN answers from thousands, and DNS is the
+ * attacker's to answer), so matching one in the kernel path would be a hole
+ * dressed as a rule. The filter therefore refuses the download up front, with
+ * the same answer the kernel would give later.
  */
 export function packageIndexOf(ctx: Pick<ToolContext, "packageIndex" | "exec">): readonly string[] {
-  return ctx.exec?.mode === "docker" ? [] : (ctx.packageIndex ?? []);
+  return ctx.exec?.mode === "docker" || ctx.exec?.mode === "os" ? [] : (ctx.packageIndex ?? []);
 }
 
 /** The bucket of a tool outcome code, as conformance/exit_codes.json maps it. */
@@ -2641,6 +3447,21 @@ async function bashTool(
   const pre = bashPrecheck(args, ctx);
   if (pre) return outcomeOf(pre);
   const command = args.command as string;
+
+  // `[sandbox] exec` declared, and not a value this build knows ("OS",
+  // "landlock", "os "). It used to resolve to "off" and run the command on
+  // the host: a typo in an isolation request, honoured as no isolation.
+  if (ctx.exec?.invalid !== undefined) {
+    return {
+      code: TOOL_FAILED,
+      content:
+        `Refused: [sandbox] exec = ${JSON.stringify(ctx.exec.invalid)} is not one of "off" | "docker" | "os". ` +
+        `It does not fall back to "off", because a misspelt isolation request would then run every command ` +
+        `unsandboxed without a word.\n\nThe command was NOT run. Fix the value in .gnomon/policy.toml (or the ` +
+        `role's exec in roles.toml): this is a property of the surface, so retrying will not help: stop and tell the operator.`,
+      summary: "bash — refused (invalid [sandbox] exec)",
+    };
+  }
 
   // Repository-defined code (npm test, make, pip install -e .) is named in the
   // preview, and asked about whatever the gate says under repo_code = true.
@@ -2737,7 +3558,17 @@ async function bashTool(
   // container. Killing the process group stops `docker run`, not the container
   // it started -- the work would keep going with nobody watching it.
   const sandboxName = `gnomon-${process.pid}-${startedAt.toString(36)}`;
-  const spawned = sandboxCommand(command, ctx, sandboxName);
+  let spawned: string;
+  try {
+    spawned = sandboxCommand(command, ctx, sandboxName);
+  } catch (e) {
+    if (!(e instanceof RootWriteError)) throw e;
+    return {
+      code: TOOL_FAILED,
+      content: `Refused: ${e.message}`,
+      summary: "bash — refused (sandbox could not be set up safely)",
+    };
+  }
   const sandboxed = spawned !== command;
 
   // Refused, not silently run under a different language. See posixShell().
@@ -2750,16 +3581,39 @@ async function bashTool(
     };
   }
 
-  return new Promise<ToolOutcome>((done) => {
-    const proc = spawn(shellBin, ["-c", spawned], {
+  // exec = "os": `sandbox-kill <pid> [signal]` is gnomon's, not the shell's.
+  const killMatch = ctx.exec?.mode === "os" ? SANDBOX_KILL.exec(command) : null;
+  if (killMatch) {
+    const sb = (await loadOsSandboxProbe())(osSandboxForbid(ctx.root, ctx.extraRoots));
+    if ("error" in sb) {
+      return { code: TOOL_FAILED, content: `sandbox-kill: gnomon-exec is unavailable: ${sb.error}`, summary: "bash — sandbox-kill unavailable" };
+    }
+    return sandboxKill(sb.bin, killMatch[1]!, killMatch[2]);
+  }
+
+  // exec = "os": run through gnomon-exec instead, or refuse. See osSandboxPlan.
+  const osPlan = ctx.exec?.mode === "os" ? osSandboxPlan(command, ctx, shellBin, await loadOsSandboxProbe()) : undefined;
+  if (osPlan && "refusal" in osPlan) return osPlan.refusal;
+  let supervisor: number | null = null;
+  // exec = "os": what the command may not change, as it was before it ran.
+  const guarded = osPlan && protectedGuardOn ? snapshotProtected(ctx.root) : null;
+
+  // From here until docker run has returned -- or the container is confirmed
+  // removed -- gnomon runs no git on the host (git_safe liveContainer).
+  if (sandboxed) containerStarted(sandboxName, () => dockerContainerGone(sandboxName));
+
+  const running = new Promise<ToolOutcome>((done) => {
+    const proc = spawn(osPlan ? osPlan.file : shellBin, osPlan ? osPlan.args : ["-c", spawned], {
       cwd: ctx.root,
-      // The marker that says the agent is running this (AGENT_SESSION_ENV).
-      env: agentEnv(ctx.agentSession),
+      // The marker that says the agent is running this (AGENT_SESSION_ENV),
+      // and under exec = "os" the per-call temp dir (osSandboxPlan).
+      env: agentEnv(ctx.agentSession, osPlan ? osPlan.env : process.env),
       // stdin closed, stdout/stderr piped. An inherited stdin pipe that nobody
       // ever writes to makes any command that reads stdin block until the tool
       // timeout kills it -- `cat` with no argument, an npm prompt, a git
       // credential ask. Nothing here can answer them, so they get EOF instead.
-      stdio: ["ignore", "pipe", "pipe"],
+      // Under exec = "os" a fourth pipe: gnomon-exec's --report-fd 3.
+      stdio: osPlan ? ["ignore", "pipe", "pipe", "pipe"] : ["ignore", "pipe", "pipe"],
       // detached puts the command in its own process group, so killTree can
       // signal the group rather than only the `sh -c` in front of the real
       // work. Windows has no process groups to signal and `detached` there
@@ -2767,11 +3621,21 @@ async function bashTool(
       detached: process.platform !== "win32",
       // On the host, network = false is enforced only as the intent filter
       // above (bashNetworkEgress); the process itself can still open sockets.
-      // Under exec = "docker" the container gets --network none instead.
+      // Under exec = "docker" the container gets --network none instead, and
+      // under exec = "os" gnomon-exec blocks egress in the kernel.
     });
     let stdout = "";
     let stderr = "";
     let settled = false;
+    if (osPlan) {
+      let report = "";
+      const fd3 = proc.stdio[3] as NodeJS.ReadableStream | null | undefined;
+      fd3?.on("data", (d: Buffer) => {
+        report += d.toString();
+        if (supervisor === null && report.includes("\n")) supervisor = registerSupervisor(report);
+      });
+      fd3?.on("error", () => {});
+    }
     // Resolves when the shell itself has exited, however that happened.
     const exited = new Promise<void>((ok) => {
       if (proc.exitCode !== null || proc.signalCode !== null) ok();
@@ -2781,7 +3645,11 @@ async function bashTool(
     const timer = setTimeout(async () => {
       if (settled) return;
       settled = true;
+      // exec = "os": the supervisor's whole subtree, setsid'd jobs included --
+      // first, while the supervisor is alive to hold them beneath it.
+      if (supervisor !== null) killSupervisedTree(supervisor);
       await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
+      const containerLeft = sandboxed && !(await removeContainer(sandboxName));
       // What the command printed before it was killed is evidence the harness
       // already holds: the failing test, the last line of a build, the prompt it
       // was blocked on. Discarding it left the model with nothing to act on but
@@ -2814,7 +3682,8 @@ async function bashTool(
           `\n\nIt did not finish, so this output is partial. Re-running it unchanged will time out again: ` +
           `narrow it, or start it in the background and poll:\n      ${backgroundRecipe(command)}\n` +
           `    then read ${JOB_LOG_DIR}/job.log on a later step.` +
-          (drift ? `\n\n${drift.notice}` : ""),
+          (drift ? `\n\n${drift.notice}` : "") +
+          (containerLeft ? CONTAINER_NOT_GONE : ""),
         summary: `bash — timeout${clamped ? " (deadline)" : ""}${drift ? " · surface changed" : ""}`,
         surface_drift: drift ?? undefined,
       });
@@ -2826,7 +3695,9 @@ async function bashTool(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      if (supervisor !== null) killSupervisedTree(supervisor);
       await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
+      const containerLeft = sandboxed && !(await removeContainer(sandboxName));
       releasePipes(proc);
       const atDeadline = ctx.signal?.reason === DEADLINE_ABORT;
       done({
@@ -2841,7 +3712,8 @@ async function bashTool(
               .join("\n"),
             ctx,
             `bash-cancelled`
-          ),
+          ) +
+          (containerLeft ? CONTAINER_NOT_GONE : ""),
         summary: atDeadline ? `bash — stopped at the deadline` : `bash — cancelled`,
       });
     };
@@ -2853,6 +3725,8 @@ async function bashTool(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // The shell never started, so neither did a container.
+      if (sandboxed) containerGone(sandboxName);
       done({
         code: TOOL_FAILED,
         content: `Could not run command: ${err.message}`,
@@ -2890,6 +3764,22 @@ async function bashTool(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // `docker run --rm` returned with the container's status: it has exited,
+      // and with it every process in it. A docker run that died on a signal,
+      // or failed itself (125: it may have lost the daemon with the container
+      // running), says nothing of the kind; the container stays registered
+      // until docker reports it gone.
+      if (sandboxed) {
+        if (exit !== null && exit !== 125) {
+          containerGone(sandboxName);
+        } else {
+          try {
+            spawn("docker", ["rm", "-f", sandboxName], { stdio: "ignore", detached: true }).unref();
+          } catch {
+            /* the lazy check in git_safe still asks */
+          }
+        }
+      }
       // stderr BEFORE stdout when the command failed, and both ends kept.
       //
       // The old order put stderr last and clamped head-only, so a chatty build
@@ -2934,6 +3824,11 @@ async function bashTool(
             ? clampEnds(capped.text, capped.ctx, `bash-exit`)
             : clamp(capped.text, capped.ctx, `bash-exit`)) +
           pipelineStatusNote(command) +
+          (osPlan && failed && /\bkill\b[\s\S]*(Operation not permitted|not permitted)/i.test(stderr + stdout)
+            ? `\n\nUnder [sandbox] exec = "os" a call cannot signal a process an earlier call started. ` +
+              `Run \`sandbox-kill <pid> [signal]\` as the whole command: gnomon signals it from outside the sandbox, ` +
+              `if it is a process one of this session's sandboxed calls started.`
+            : "") +
           (drift ? `\n\n${drift.notice}` : ""),
         // `exit` is null when the child died on a signal, and "exit null" then
         // failed the verify gate's /exit (-?\d+)/ and fell through to its
@@ -2948,6 +3843,30 @@ async function bashTool(
       });
     };
   });
+  if (!osPlan) return running;
+  // The per-call temp dir lives exactly as long as the call. A job the command
+  // backgrounded loses it too -- such a job should keep its files under the
+  // repository, which is where the background recipe already logs. Removed
+  // by cleanOsSandboxTmp, never by an unsandboxed recursive rm: see there.
+  return running
+    .then((outcome) => {
+      if (!guarded) return outcome;
+      // Put back the surface and git's control files if the command changed
+      // them, and say so: the next gnomon read of either must not be the
+      // command's choice (fifth review, A, for exec = "os").
+      const { restored, unrestorable } = restoreProtected(guarded);
+      if (restored.length === 0 && unrestorable.length === 0) return outcome;
+      const note =
+        `\n\n[gnomon] This command changed files that are read-only to commands under exec = "os" ` +
+        `(gnomon's surface and git's control files). ` +
+        (restored.length > 0 ? `Put back: ${restored.slice(0, 8).join(", ")}${restored.length > 8 ? ` (+${restored.length - 8} more)` : ""}. ` : "") +
+        (unrestorable.length > 0 ? `Could NOT put back: ${unrestorable.slice(0, 8).join(", ")}. Tell the operator. ` : "") +
+        `Configuration under .gnomon/ is the operator's to change, not a command's.`;
+      return { ...outcome, content: `${outcome.content}${note}`, summary: `${outcome.summary} · protected files restored` };
+    })
+    .finally(() => {
+      cleanOsSandboxTmp(osPlan.file, osPlan.tmp, osPlan.tmpId);
+    });
 }
 
 /**
@@ -3258,13 +4177,12 @@ const GIT_STAMP_MAX_BUFFER = 32 * 1024 * 1024;
 
 /** stdout of one git call in `cwd`, or null if it did not start or did not exit 0. */
 function stampGit(cwd: string, args: string[]): string | null {
-  const r = spawnSync("git", args, {
+  const r = safeGit(args, {
     cwd,
-    encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: GIT_STAMP_TIMEOUT_MS,
     maxBuffer: GIT_STAMP_MAX_BUFFER,
-    windowsHide: true,
+    hot: true,
   });
   return r.error || r.status !== 0 ? null : r.stdout;
 }
@@ -4548,7 +5466,7 @@ async function grepTool(
   for (const f of files) {
     let text: string;
     try {
-      const buf = readFileSync(join(ctx.root, f));
+      const buf = readRegular(fsRoots(ctx), join(ctx.root, f));
       // A NUL in the first 8k is the standard binary heuristic. Without it a
       // grep over a repo with fixtures returns pages of mojibake.
       if (buf.subarray(0, 8192).includes(0)) continue;
@@ -4723,7 +5641,12 @@ async function writeTool(
         summary: `write ${path} — is a directory`,
       };
     }
-    const surfaceBefore = existsSync(abs) ? readFileSync(abs, "utf-8") : "";
+    let surfaceBefore: string;
+    try {
+      surfaceBefore = existsSync(abs) ? readModelFile(ctx, abs) : "";
+    } catch (err) {
+      return unreadable("write", path, err);
+    }
     const surfaceDiff = diffLines(surfaceBefore, content);
     const { added: sa, removed: sr } = diffStat(surfaceDiff);
     // custom always asks; all defers to the configured gate.
@@ -4744,8 +5667,7 @@ async function writeTool(
     try {
       // Pinned before the write so the drift report carries both ends.
       const beforeHash = surfaceHashOf(ctx);
-      mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, content, "utf-8");
+      writeModelFile(ctx, abs, content);
       // Signal it. The claim "the next turn runs under the new rules" was made
       // here and was FALSE: the running session holds the config it loaded at
       // startup, and nothing reloaded it. A user who changed a role's model,
@@ -4784,7 +5706,12 @@ async function writeTool(
     };
   }
 
-  const before = existsSync(abs) ? readFileSync(abs, "utf-8") : "";
+  let before: string;
+  try {
+    before = existsSync(abs) ? readModelFile(ctx, abs) : "";
+  } catch (err) {
+    return unreadable("write", path, err);
+  }
   // First write wins: the pre-image is the state at the start of the TURN, not
   // the previous step, so a file edited three times still compares against what
   // the turn inherited.
@@ -4830,7 +5757,12 @@ async function writeTool(
     // Checked only on the approval path, because that await is what opens it:
     // ungated, the read-to-write gap is microseconds and a check there would be
     // cost without a window to guard.
-    const nowOnDisk = existsSync(abs) ? readFileSync(abs, "utf-8") : "";
+    let nowOnDisk: string | null;
+    try {
+      nowOnDisk = existsSync(abs) ? readModelFile(ctx, abs) : "";
+    } catch {
+      nowOnDisk = null;
+    }
     if (nowOnDisk !== before) {
       return {
         code: TOOL_DENIED,
@@ -4845,8 +5777,7 @@ async function writeTool(
   }
 
   try {
-    mkdirSync(dirname(abs), { recursive: true });
-    writeFileSync(abs, content, "utf-8");
+    writeModelFile(ctx, abs, content);
     return {
       code: TOOL_OK,
       content: `Wrote ${path} (+${added} −${removed}).`,
@@ -4891,7 +5822,12 @@ async function editTool(
     };
   }
 
-  const before = readFileSync(abs, "utf-8");
+  let before: string;
+  try {
+    before = readModelFile(ctx, abs);
+  } catch (err) {
+    return unreadable("edit", path, err);
+  }
   if (ctx.preImages && !ctx.preImages.has(abs)) ctx.preImages.set(abs, before);
   // A CRLF file and an LF old_text. Git for Windows checks out with
   // core.autocrlf=true, `read` shows lines without their \r, and the model
@@ -4994,7 +5930,12 @@ async function editTool(
     // pre-approval `before`, so writing it would silently discard anything that
     // changed while the prompt was open -- and the operator approved a diff
     // against a version that no longer exists. The await IS the window.
-    const nowOnDisk = readFileSync(abs, "utf-8");
+    let nowOnDisk: string | null;
+    try {
+      nowOnDisk = readModelFile(ctx, abs);
+    } catch {
+      nowOnDisk = null;
+    }
     if (nowOnDisk !== before) {
       return {
         code: TOOL_DENIED,
@@ -5009,7 +5950,7 @@ async function editTool(
   }
 
   try {
-    writeFileSync(abs, after, "utf-8");
+    writeModelFile(ctx, abs, after);
     if (tier !== undefined && tier !== "exact") {
       return {
         code: TOOL_OK,
@@ -5225,11 +6166,9 @@ export function createSpillSink(
     if (unusable) return null;
     if (!dir) {
       try {
-        const base = join(root, OVERFLOW_DIR);
-        mkdirSync(base, { recursive: true });
+        const base = ensureDirIn(root, join(root, OVERFLOW_DIR));
         pruneSpillDirs(base, keep);
-        dir = join(base, safeSession);
-        mkdirSync(dir, { recursive: true });
+        dir = ensureDirIn(root, join(base, safeSession));
       } catch {
         // Read-only checkout, no permission, full disk. Truncation still works.
         unusable = true;
@@ -5239,7 +6178,7 @@ export function createSpillSink(
     const safe = label.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
     const name = `${String(++n).padStart(3, "0")}-${safe || "output"}.txt`;
     try {
-      writeFileSync(join(dir, name), text, "utf-8");
+      writeFileIn(root, join(dir, name), text);
     } catch {
       return null;
     }
