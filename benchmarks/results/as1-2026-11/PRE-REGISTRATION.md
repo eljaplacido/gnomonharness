@@ -461,3 +461,28 @@ tokens; at the lean budget (one adaptive round after burn-in) a 14th arm would c
 - Confirmation needs its own committed pre-registration (§6); at k = 2 the MDE80 vs the control is 0.122 and
   P(non-inferiority to opencode shown | parity) ≈ 0.27 (`SIZING.txt`).
 - Dry run under this pin: `DRY-RUN-amendment1.txt` (screen ~31 waves, ~15.5 h; interaction ~7 h).
+
+## Amendment 2 — non-decisional round-end reports (2026-11-06T19:15Z, during screening round 0; reporting only)
+
+Nothing in AS1's design, allocation, stopping, promotion, guards, budget or stages changes; `run_as1.py`,
+`allocation.py` and `chain_as1.sh` are not edited and the running chain (pid 627373) and screening runner
+(pid 598027) are not touched.
+
+- **What the pre-registration already allows.** §4.3 makes every screening round end a pre-specified look: the fixed
+  rule decides each arm (dropped / promoted / retired / active) and allocates the next round by Thompson sampling,
+  and the ledger entry (posteriors, guards, decisions, next plan) is committed at once. §4.6 lists exploratory
+  companions that are "reported, never decision-bearing", and §9 labels all stage-S/I numbers exploratory. Stage C
+  (confirmation) is the only confirmatory stage and is not covered here.
+- **Added.** `apparatus/watch_as1_rounds.py`, a separate read-only process (`watch --pid 627373`, polling every 60 s),
+  writes `interim/<stage>-r<round>-<kind>.txt` for every committed ledger entry that closes a screening round (kind
+  `round` or `end`) and for the interaction stage's end, and commits that one file under the shared lock. Each report
+  is headed **NON-DECISIONAL** and contains only (a) that ledger entry rendered (what the rule already decided) and
+  (b) §4.6's companions over the cells the decision used (cells with `t_end` ≤ the entry): per-arm buckets solved /
+  wrong / capped / invalid (asserted to sum), $/cell from the wire, the paired hidden-test fraction difference
+  against CTL, the A/A arm's SD of d. `run_as1.py` never reads `interim/`; the reports cannot feed back into
+  allocation. It exits when the chain does (after a last pass), so it never reports confirmation data.
+- **Expected report times** (screening at ~25 min/wave, 12 of round 0's 26 waves done at 19:00Z; peak windows Fri
+  night none until Mon): round 0 end ~Sat 2026-11-07 01:00–02:00Z (then one adaptive round of 4 waves under the lean
+  $25 cap, or the screening end if the budget stops it, ~Sat 03:30Z); interaction end ~7 h later (~Sat 10:00–11:00Z).
+- **Concurrency note (FG1 Amendment 2, 2026-11-06).** FG1 stays on one lane (slots 3–5); no third lane was added, so
+  AS1's host contention is as described in FG1 Amendment 1.
