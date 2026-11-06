@@ -177,6 +177,16 @@ def test_plan_is_complete_seeded_and_balanced():
         assert json.loads(committed.read_text())["waves"] == w
 
 
+def test_amendment1_relay_slots_disjoint_from_as1():
+    """Amendment 1: plan slot j runs on relay slot 3 + j; never one of AS1's 0-2; log relays 4743-4745."""
+    assert R.SLOTS == (3, 4, 5) and R.SLOT_BASE == 3 and not set(R.SLOTS) & set(R.AS1_SLOTS)
+    for x in R.plan():
+        assert sorted(R.SLOT_BASE + j for j in x["slots"].values()) == list(R.SLOTS)
+    assert [R.LOG_PORT0 + s for s in R.SLOTS] == [4743, 4744, 4745]
+    src = (HERE / "run_fg1.py").read_text()
+    assert "as1_runners()" not in src.split("def wait_for_wave")[1].split("def ")[0]  # no AS1 wait per wave
+
+
 def test_peak_windows():
     import datetime as dt
     sat = dt.datetime(2026, 11, 7, 2, 0, tzinfo=dt.timezone.utc)

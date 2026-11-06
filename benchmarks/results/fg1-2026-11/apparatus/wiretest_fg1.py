@@ -32,6 +32,8 @@ Plus two runs of the control:
   - NEGATIVE CONTROL: the same script without the trust grant. The key must NOT reach the fake (auth absent) or the
     run must be clamped: proves the `key` check can fail, i.e. that a pass above is evidence;
   - a read-only working directory: gnomon falls back to the state directory, the patch and the grant find it.
+Amendment 1 (--slots 3,4,5): plus the LIVE path of each relay slot FG1 now uses (log relay 4740+slot -> slot relay
+4710+slot -> OpenCode Go), one tiny real request per slot with the placeholder key; see live_slots().
 """
 import argparse
 import gzip
@@ -131,6 +133,66 @@ class Fake(BaseHTTPRequestHandler):
         self.wfile.write(b"data: [DONE]\n\n")
 
 
+GO_RATIO = 1.2  # allowance / list_cost on slot 0: all 955 AS1 calls to 2026-11-06T16:53Z and the A1 probe
+
+
+def live_slots(slots: list[int], work: Path) -> None:
+    """Amendment 1 (relay slots 3-5): the exact path a cell's requests take — FG1's log-relay.mjs on 4740+slot in
+    front of the slot relay on 4710+slot (relay-go.mjs, which injects the key), to OpenCode Go — with the cell's
+    placeholder key and a streamed request, one tiny prompt per slot. Checks: HTTP 200 and a usage-bearing reply,
+    the log relay classed the key `placeholder`, the slot relay's counters moved by exactly one request with usage and
+    no 4xx/5xx/error, billing_source go-plus and allowance / list_cost = GO_RATIO (slot 0's: no other price)."""
+    import urllib.request
+    say(f"\n== live slot path (Amendment 1): slots {slots}, one tiny streamed request each, placeholder key")
+    for s in slots:
+        port, up, cport = 4740 + s, 4710 + s, 4810 + s
+        ctr = lambda: json.load(urllib.request.urlopen(f"http://127.0.0.1:{cport}/counters", timeout=10))  # noqa: E731
+        wire = work / f"live-slot{s}"
+        relay = subprocess.Popen(["node", str(HERE / "log-relay.mjs"), f"172.17.0.1:{port}", f"http://172.17.0.1:{up}",
+                                  str(wire)], stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT,
+                                 env={**os.environ, "FG1_KEY_PLACEHOLDER": PLACEHOLDER})
+        time.sleep(1.5)
+        status, usage = None, None
+        try:
+            before = ctr()
+            body = {"model": MODEL, "stream": True, "stream_options": {"include_usage": True}, "temperature": 0,
+                    "max_tokens": 16, "messages": [{"role": "user", "content": "Reply with exactly the word: ok"}]}
+            req = urllib.request.Request(f"http://172.17.0.1:{port}/openai/v1/chat/completions", method="POST",
+                                         data=J(body).encode(), headers={
+                                             "content-type": "application/json", "authorization": f"Bearer {PLACEHOLDER}",
+                                             "user-agent": "gnomon-fg1-wiretest/1", "x-opencode-session": f"fg1-wt-slot{s}"})
+            with urllib.request.urlopen(req, timeout=120) as r:
+                status, text = r.status, r.read().decode(errors="replace")
+            for line in text.splitlines():
+                if line.startswith("data:") and line.strip() != "data: [DONE]":
+                    try:
+                        o = json.loads(line[5:])
+                    except Exception:
+                        continue
+                    usage = o.get("usage") or usage
+            time.sleep(1)
+            after = ctr()
+        finally:
+            relay.terminate()
+            relay.wait(timeout=10)
+        rows = [json.loads(l) for l in (wire / "calls.jsonl").read_text().splitlines() if l.strip()] \
+            if (wire / "calls.jsonl").exists() else []
+        d = {k: round(after[k] - before[k], 10) for k in ("chat_requests", "responses_with_usage", "status_4xx",
+                                                          "status_5xx", "errors", "allowance")}
+        oc = (usage or {}).get("opencode") or {}
+        ratio = round(oc["allowance"] / oc["list_cost"], 3) if oc.get("list_cost") else None
+        say(f"slot {s} (log relay {port} -> slot relay {up}): HTTP {status}, usage in {usage and usage.get('prompt_tokens')}"
+            f" out {usage and usage.get('completion_tokens')}, billing {oc.get('billing_source')}, allowance "
+            f"{oc.get('allowance')} / list {oc.get('list_cost')} = {ratio}; log-relay auth {[r.get('auth') for r in rows]};"
+            f" counters delta {d}")
+        check(status == 200 and usage is not None, f"slot {s}: HTTP 200 with usage")
+        check([r.get("auth") for r in rows] == ["placeholder"], f"slot {s}: the log relay saw the placeholder key")
+        check(d["chat_requests"] == 1 and d["responses_with_usage"] == 1 and not (d["status_4xx"] or d["status_5xx"]
+              or d["errors"]), f"slot {s}: slot relay metered one request with usage, no 4xx/5xx/error")
+        check(oc.get("billing_source") == "go-plus" and ratio == GO_RATIO,
+              f"slot {s}: billed as slot 0 (go-plus, allowance/list = {GO_RATIO})")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("prefix")
@@ -138,6 +200,8 @@ def main() -> int:
     ap.add_argument("--arms", default="")
     ap.add_argument("--out", default=str(HERE.parent / "wiretest-fg1.txt"))
     ap.add_argument("--build", default=str(HERE / "build.toml"))
+    ap.add_argument("--slots", default="", help="Amendment 1: also check the live path log relay -> slot relay -> Go "
+                    "for these slots (one tiny real request each, the cell's placeholder key)")
     a = ap.parse_args()
     import tomllib
     from gnomon_harbor import _PATCH
@@ -279,6 +343,8 @@ def main() -> int:
     check(p.returncode == 0 and gexit == "0" and root not in (".", "?") and patch.get("ok") and kc["result"] == "pass",
           "read-only cwd: state-directory fallback; the patch and the trust grant find it; the key reaches the relay")
     srv.shutdown()
+    if a.slots:
+        live_slots([int(s) for s in a.slots.split(",") if s.strip()], work)
     say(f"\nwire test: {'PASS' if ok_all else 'FAIL'} (gnomon {b['build_stamp']}, arms ['C'] + {want}, build.toml status "
         f"{b['status']})")
     Path(a.out).write_text("\n".join(LINES) + "\n", encoding="utf-8")

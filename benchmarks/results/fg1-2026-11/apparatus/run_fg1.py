@@ -3,21 +3,23 @@ See ../PRE-REGISTRATION.md.
 
     python3 run_fg1.py dry [--start ISO] [--write]   the plan, budget and calendar; touches nothing, spends nothing
     python3 run_fg1.py check                         launch gates (build pin, mirror files, wire test, ports, relays)
-    python3 run_fg1.py run --after-pid N [--push]    needs FG1_APPROVED=yes; WAITS (below) before touching anything
+    python3 run_fg1.py run [--push]                  needs FG1_APPROVED=yes (Amendment 1: no wait for AS1)
     python3 run_fg1.py report                        the pre-registered analysis (analyze_fg1.py) over the outcomes
 
 Apparatus as H3 (run_h3.py) and AS1 (run_as1.py): P2G's Harbor venv, dataset, model (deepseek-v4.1-flash via OpenCode
 Go), 1,800 s cap, Harbor flags, slot relays 172.17.0.1:4710+slot (counters 127.0.0.1:4810+slot), a log relay per cell
-(here 4740+slot, so FG1 never binds a port H3 (4720+) or AS1 (4730+) uses), three cells per wave on slots 0-2, the
+(here 4740+slot, so FG1 never binds a port H3 (4720+) or AS1 (4730+) uses), three cells per wave on relay slots 3-5
+(AMENDMENT 1, 2026-11-06: FG1 runs concurrently with AS1, which keeps slots 0-2; plan slot j -> relay slot 3+j), the
 build served from apparatus/build/ on 172.17.0.1:4749 (source = "mirror") and pinned three ways in every cell
 (gnomon_harbor_fg1 = AS1's adapter). FG1 specifics:
 - the plan is fixed before data (PLAN.json): attempt-major (all 29 tasks of attempt 1, then 2, then 3), task order
   per attempt and the arms' start order/slot per wave drawn from random.Random(SEED);
-- WAITING MODE: `run` first waits, without touching a relay, the mirror port, Docker or Harbor, until
-  (1) --after-pid (AS1's chain, chain_as1.sh) has exited, and (2) no `run_as1.py run` process exists; only then does
-  it run the launch check, start the mirror and plan the first wave. Before each wave: the three slot relays idle for
-  15 s, no run_as1.py runner, outside Go's 2x windows (weekdays 01-04, 06-10 UTC), load <= 30, >= 50 GB free on /,
-  >= 24 GB RAM available, and spent + reserve <= the $50 cap (spend from the wire);
+- (Amendment 1) no waiting for AS1: --after-pid, if given, still waits for that pid, but no run_as1.py check remains.
+  Before each wave: FG1's three slot relays (3-5) idle for 15 s, outside Go's 2x windows (weekdays 01-04, 06-10 UTC),
+  load <= 30, >= 50 GB free on /, >= 24 GB RAM available, and spent + reserve <= the $50 cap (spend from the wire);
+- (Amendment 1) per-wave covariates in ledger/covariates.jsonl, sampled every 30 s during the wave: host 1-min load
+  and available RAM, and concurrent AS1 activity (AS1 log relays alive = AS1 cells in flight; AS1 slot 0-2 requests,
+  read-only counters);
 - scoring (score()) = AS1's cell scoring + fg1_checks (key, trust, job tool, job audit, finish-gate audit, replay);
   any fatal mechanism failure makes the cell an apparatus failure (invalid), never a model failure;
 - 'fix, don't fail': after the 87 waves, each wave with an invalid cell is re-run ONCE as a whole (all three arms,
@@ -64,6 +66,10 @@ TB4_AGENT_TIMEOUT_S = 28800
 BUILD_TIMEOUT_MULT = 4.0
 RELAY_HOST = "172.17.0.1"
 RELAY_PORT0, COUNTERS_PORT0 = 4710, 4810
+SLOT_BASE = 3              # Amendment 1: FG1's relay slots are 3-5 (relay-go.mjs on 4713-4715, counters 4813-4815)
+SLOTS = (3, 4, 5)          # AS1 keeps 0-2; plan slot j (0-2, PLAN.json) runs on relay slot SLOT_BASE + j
+AS1_SLOTS = (0, 1, 2)      # read only, for the covariates
+COVARIATES = Path(__file__).resolve().parent.parent / "ledger" / "covariates.jsonl"
 LOG_PORT0 = 4740
 MIRROR_PORT = 4749
 PLACEHOLDER = "p2g-relay-placeholder"
@@ -170,9 +176,9 @@ def counters(slot: int) -> dict:
 
 
 def slots_idle() -> bool:
-    a = [counters(s) for s in (0, 1, 2)]
+    a = [counters(s) for s in SLOTS]
     time.sleep(15)
-    b = [counters(s) for s in (0, 1, 2)]
+    b = [counters(s) for s in SLOTS]
     return all(unsettled(y) <= 0 and y.get("chat_requests") == x.get("chat_requests") for x, y in zip(a, b))
 
 
@@ -208,9 +214,62 @@ def wait_for_as1(args) -> None:
         tail = AS1_STATUS.read_text(encoding="utf-8", errors="replace").splitlines()[-5:] if AS1_STATUS.exists() else []
         chain = [l for l in tail if " CHAIN " in l]
         say(f"AS1 chain pid {args.after_pid} has exited; AS1's last CHAIN line: {chain[-1] if chain else '(none in the last 5 lines)'}")
-    while as1_runners():
-        say(f"run_as1.py runner(s) {as1_runners()} still present; waiting")
-        time.sleep(300)
+
+
+def as1_cells_active() -> int:
+    """AS1 cells in flight now = AS1 log relays alive (run_as1 starts one per cell, stops it at the cell's end)."""
+    r = subprocess.run(["pgrep", "-fc", r"^node .*as1-2026-11/apparatus/log-relay\.mjs"], capture_output=True, text=True)
+    return int(r.stdout.strip() or 0)
+
+
+def as1_requests() -> int | None:
+    try:
+        return sum(counters(s)["chat_requests"] for s in AS1_SLOTS)
+    except Exception:
+        return None
+
+
+class Covariates:
+    """Amendment 1: per-wave host load and concurrent AS1 activity, sampled every 30 s while the wave runs (read only:
+    /proc, pgrep, AS1's slot counters). One row per wave in ledger/covariates.jsonl."""
+
+    def __init__(self, wave: str):
+        self.wave, self.samples, self.stop = wave, [], threading.Event()
+        self.t0, self.req0, self.th = utc(), as1_requests(), threading.Thread(target=self._loop, daemon=True)
+
+    def _sample(self):
+        self.samples.append((os.getloadavg()[0], avail_gb(), as1_cells_active()))
+
+    def _loop(self):
+        while True:
+            try:
+                self._sample()
+            except Exception:
+                pass
+            if self.stop.wait(30):
+                return
+
+    def start(self):
+        self.th.start()
+
+    def finish(self):
+        self.stop.set()
+        self.th.join(timeout=10)
+        req1 = as1_requests()
+        ld, ram, a1 = zip(*self.samples) if self.samples else ((), (), ())
+        row = {"wave": self.wave, "t_start": self.t0, "t_end": utc(), "n_samples": len(self.samples),
+               "load1_start": ld[0] if ld else None, "load1_max": max(ld, default=None),
+               "load1_mean": round(sum(ld) / len(ld), 2) if ld else None,
+               "avail_gb_min": round(min(ram), 1) if ram else None,
+               "as1_cells_start": a1[0] if a1 else None, "as1_cells_max": max(a1, default=None),
+               "as1_cells_mean": round(sum(a1) / len(a1), 2) if a1 else None,
+               "as1_requests": (req1 - self.req0) if (req1 is not None and self.req0 is not None) else None}
+        COVARIATES.parent.mkdir(parents=True, exist_ok=True)
+        with open(COVARIATES, "a", encoding="utf-8") as f:
+            f.write(json.dumps(row) + "\n")
+        say(f"covariates {self.wave}: load max {row['load1_max']} mean {row['load1_mean']}, RAM min "
+            f"{row['avail_gb_min']} GB, AS1 cells max {row['as1_cells_max']} mean {row['as1_cells_mean']}, "
+            f"AS1 requests {row['as1_requests']}")
 
 
 def wait_for_wave(args) -> None:
@@ -220,10 +279,6 @@ def wait_for_wave(args) -> None:
             nxt = next_offpeak(now)
             say(f"peak window: waiting until {nxt:%Y-%m-%dT%H:%MZ}")
             time.sleep(max(60, (nxt - now).total_seconds()))
-            continue
-        if as1_runners():
-            say(f"run_as1.py runner(s) {as1_runners()} present (AS1 on the same relay slots); waiting")
-            time.sleep(300)
             continue
         if avail_gb() < args.min_avail_gb:
             time.sleep(60)
@@ -416,10 +471,12 @@ def execute(waves: list[dict], args, build, sp: dict, P) -> bool:
 
         def go(a):
             try:
-                run_cell(cells[a], a, sp[a], w["task"], w["slots"][a], P)
+                run_cell(cells[a], a, sp[a], w["task"], SLOT_BASE + w["slots"][a], P)
             except Exception as e:  # an apparatus failure of one cell must not kill the wave
                 say(f"ERROR {cells[a]}: {type(e).__name__}: {e}")
 
+        cov = Covariates(w["id"])
+        cov.start()
         threads = []
         for a in w["order"]:  # the seeded start order; 20 s stagger between builds
             th = threading.Thread(target=go, args=(a,))
@@ -428,6 +485,7 @@ def execute(waves: list[dict], args, build, sp: dict, P) -> bool:
             time.sleep(20)
         for th in threads:
             th.join()
+        cov.finish()
         LEDGER_DIR.mkdir(parents=True, exist_ok=True)
         with open(OUTCOMES, "a", encoding="utf-8") as f:
             for a in w["order"]:
@@ -478,7 +536,7 @@ def dry(args) -> str:
                  f"{waves[-1]['eta']}, ends ~{(t):%a %Y-%m-%dT%H:%MZ}")
     for w in waves:
         lines.append(f"  {w['id']} {w['task']:<32} start order {w['order']} slots {w['slots']} eta {w['eta']}")
-    for slot in (0, 1, 2):
+    for slot in SLOTS:
         lines.append(f"log relay port {LOG_PORT0 + slot} free now: {port_free(LOG_PORT0 + slot)}")
     lines.append(f"mirror port {MIRROR_PORT} free now: {port_free(MIRROR_PORT)}")
     return "\n".join(lines)
@@ -502,12 +560,12 @@ def check(args, relays: bool = True) -> int:
     ok &= w_ok
     sp = specs()
     print("specs: " + ", ".join(f"{a} {sp[a]['sha256'][:12]}" for a in ARMS))
-    for port in [LOG_PORT0 + s for s in (0, 1, 2)] + [MIRROR_PORT]:
+    for port in [LOG_PORT0 + s for s in SLOTS] + [MIRROR_PORT]:
         f = port_free(port)
         print(f"port {port} free: {f}")
         ok &= f
     if relays:
-        for slot in (0, 1, 2):
+        for slot in SLOTS:
             try:
                 c = counters(slot)
                 print(f"slot {slot} relay counters ok (read only)")

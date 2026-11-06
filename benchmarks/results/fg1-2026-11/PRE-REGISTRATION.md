@@ -228,3 +228,81 @@ selector + trust grant), `fg1_checks.py`, `arms/{C,FG,SH}.toml`, `log-relay.mjs`
 `build.toml`. Top level: this file, `PLAN.json`, `DRY-RUN.txt`, `POWER.txt`, `OFFLINE-TESTS.txt` (24 passed),
 `wiretest-fg1.txt` (PASS on master-f8c8a39; its sha256 pinned in build.toml), `STATUS.txt`, later `ledger/` and
 `summary-fg1.txt`.
+
+---
+
+## Amendment 1 — 2026-11-06T17:05Z, before any FG1 cell: relay slots 3–5, concurrent with AS1
+
+Written and committed before any FG1 cell, wave or paid FG1 request exists (the waiting runner, pid 1377901, had made
+none: it never left §11 step 2; it is stopped by pid before the new one starts). It changes §5's slots, §10's AS1 guard,
+§11's waiting mode and §12's "never concurrent with AS1" line. Everything else stands.
+
+**A1.1 What changes.** FG1 runs **now, concurrently with AS1**, on its own relay slots **3–5**: three more
+`relay-go.mjs` instances from `p2g-2026-11/apparatus/`, started exactly as slots 0–2 (same script, same environment
+variable names: `RELAY_AUTH_FILE` = opencode's credential file read inside the relay, `RELAY_BIND` 172.17.0.1,
+`RELAY_PORT` 4713–4715, `RELAY_COUNTERS_PORT` 4813–4815; logs appended to `p2g-2026-11/relay-p2g-{3,4,5}.log`). Plan
+slot j (0–2, PLAN.json unchanged) runs on relay slot 3 + j; the per-cell log relay is 4740 + relay slot = **4743–4745**
+(free; AS1 binds 4730–4732, H3 4720+). AS1 keeps slots 0–2 (`run_as1.py`: `(j + idx) % 3`, its idle check reads 0–2
+only) and never touches 3–5. `run_fg1.py` drops the AS1 wait (§10's "no `run_as1.py run` process" and §11's
+`--after-pid`); every other per-wave guard stays: FG1's own three slot relays idle for 15 s, load ≤ 30, ≥ 24 GB RAM
+available, ≥ 50 GB free on /, spend + $2 ≤ $50, no wave inside Go's 2× windows.
+
+**A1.2 Why.** Time only. Waiting for AS1's chain put FG1's first wave at ~Sat 15:30Z and its end at ~Mon 2026-11-09
+21:45Z; concurrently, from ~Fri 17:15Z at the same 32 min/wave, the 87th wave ends ~Sun 2026-11-08 15:40Z (later if
+contention lengthens waves), before Monday's 2× windows.
+
+**A1.3 Go concurrency, checked before this amendment (not assumed)** — `A1-GO-PROBE.json`, `apparatus/go_probe_a1.py`:
+- Probe 1 (16:53Z): one identical tiny prompt (37 input tokens, temperature 0, max 16 tokens) through slots 0, 3, 4, 5
+  at once while AS1 had 2 cells running (slot 0 was idle between AS1 cells; no AS1 cell's counter window was touched).
+  All 200, no 4xx/5xx; billing_source `go-plus` on every slot; allowance 1.674e-05 for 37 in / 14 out on slots 0, 4
+  and 5, 1.53e-05 for 37 / 12 on slot 3 (the 2-token difference = the per-output-token price): **same price per
+  token on the new slots as on slot 0**; allowance / list_cost = 1.2 on every probe, as on all 955 AS1 calls so far.
+- Probe 2 (17:00Z): the same prompt through slots 3, 4, 5 at once while **AS1 had 3 requests in flight** on slots 0–2
+  (6 concurrent requests on one Go key): all 200 in ~1 s, `go-plus`, ratio 1.2, no 4xx; AS1's slots still 0 4xx/5xx.
+- Go's docs (opencode.ai/docs/go) state no request-rate or concurrency limit; limits are dollar allowances (5-hour,
+  weekly, monthly) — FG1 spends from the same allowance as AS1, so both runs draw it down faster in wall time — and
+  peak hours (DeepSeek V4.1 Flash, 01–04 and 06–10 UTC weekdays) bill double, which both runners already avoid.
+  P2 ran 6 concurrent slots on one Go key on the hub. A 429 or a limit would show as `status_4xx` on the slot
+  counters and as invalid cells (apparatus, re-run per §6), never as a model failure.
+
+**A1.4 Host, checked.** With AS1 running (3 cells): 1-min load 2–14 over the day (AS1's highest wave-start load 19),
+~67–70 GB RAM available of 121, ~114–122 GB free on /, 20 cores. One FG1 wave adds 3 Harbor task containers (memory
+limits 4–8 GB; the 6 largest P2G tasks together declare 48 GB, below the available RAM; TB tasks declare 4 CPUs, so
+6 cells declare up to 24 CPUs on 20 cores — oversubscribed on paper, as P2G41's 6-cell waves were (wave-start loads
+up to ~32)). The gx10 hard-halted once at load ~95–100; both runners keep the load ≤ 30 guard before every wave, so
+neither starts a wave on a loaded host. The guard is checked at wave start only; mid-wave load is recorded (A1.6).
+
+**A1.5 What this could confound, and why the contrasts survive.**
+- Host contention (CPU, memory, disk, Docker daemon, network) now varies with AS1's activity. Within an FG1 wave the
+  three arms run concurrently on the same task, so **every arm in a wave shares the same contention**; the
+  pre-registered contrasts are paired by (task, attempt) within waves (§8), so contention is a shared shock, not an
+  arm difference. Start order and slot remain randomised per wave (§5).
+- It can still interact with a mechanism: SH's 30 s yield and FG's < 15 %-time-left skip both depend on wall time,
+  so a slower host could change how often they fire. Reported via A1.6, not corrected for.
+- Absolute rates and wall times are not comparable to a quiet host; FG1 claims only within-study contrasts (already
+  §4's rule). Some C cells may cap that would not have on a quiet host; that affects all arms of the wave alike.
+- AS1 cells may also run slower. AS1 is a separate study whose contrasts are likewise within-wave (CTL in every
+  wave); this is noted in AS1's STATUS so its report can mention it. AS1's pre-registration is not changed.
+- Not a confound: spend. Each slot relay meters only its own traffic and each cell's spend is from its own wire log;
+  the probes show the same price on slots 3–5 as on slot 0.
+
+**A1.6 Added records (descriptive, not decision-bearing).** Per wave, `ledger/covariates.jsonl`, sampled every 30 s
+by the runner (read only: /proc, pgrep, AS1's slot counters): 1-min load at start / max / mean, minimum available RAM,
+AS1 cells in flight (AS1 log relays alive) at start / max / mean, AS1 requests during the wave. Each cell already
+records load at start and end. `analyze_fg1.py` adds a descriptive section: (a) C's agent wall time per task against
+the earlier controls on the same tasks, H3's R1 and AS1's CTL (medians, per-task differences, count slower) — a large
+upward shift is a flag that contention, not the arms, is moving times; (b) each arm's median agent wall time, capped
+and solved counts split by AS1 active vs idle and by per-wave max load above vs at/below its median. No decision uses
+these.
+
+**A1.7 Apparatus re-verified.** `wiretest_fg1.py --slots 3,4,5` re-ran the whole wire test on the pinned build (C, FG,
+SH, negative control, read-only cwd: PASS, unchanged) plus a live check of each new slot's real path (FG1's log relay
+on 4743–4745 → relay slot 4713–4715 → Go, the cell's placeholder key, one tiny streamed request each): HTTP 200 with
+usage, the log relay classed the key `placeholder`, the slot relay metered exactly one request with usage and no
+4xx/5xx/error, `go-plus` at ratio 1.2 — PASS. New `wiretest-fg1.txt` sha256 pinned in `build.toml`
+(`e91c8478…`, was `a52dd39e…`). Offline tests: 25 passed (+1: slots 3–5, disjoint from AS1's, no AS1 wait per wave).
+PLAN.json, the arms, the build pin, the scoring and the decision rule are unchanged.
+
+**A1.8 Launch.** The waiting runner (pid 1377901) is stopped by pid (SIGTERM; it had started no mirror, relay or
+cell). The new runner starts in the background with `FG1_APPROVED=yes run_fg1.py run --push` (no `--after-pid`).
+§12's line "never concurrent with AS1" is replaced by: concurrent with AS1 on disjoint relay slots, per this amendment.

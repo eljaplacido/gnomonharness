@@ -18,6 +18,11 @@ analysis/summarize.py (exact McNemar on discordant pairs, task-cluster bootstrap
   this power" (MDE80 ~ 0.15, POWER.txt), never "no effect".
 - Secondary (descriptive): hidden-test fraction difference (pairs with a ctrf on both; same bootstrap), capped counts,
   $/solved, median agent wall time, FG outcomes and caveats, SH job yields.
+- Amendment 1 (descriptive only, never decision-bearing): FG1 ran concurrently with AS1 on separate relay slots, so
+  host contention is a covariate. contention_lines() reports (a) C's agent wall time against the earlier controls on
+  the same tasks, H3's R1 (v0.4.2 + replay) and AS1's CTL (v0.4.4 + replay), per task matched, and (b) every arm's
+  median agent wall time and capped share split by the wave's concurrent AS1 activity and host load
+  (ledger/covariates.jsonl). Different builds: a gap is a flag to look at, not an effect estimate.
 """
 from __future__ import annotations
 
@@ -128,6 +133,72 @@ def arm_lines(arm: str, eff: list[dict]) -> tuple[list[str], dict]:
     return L, m
 
 
+RESULTS = HERE.parent.parent
+
+
+def _med(xs):
+    xs = [x for x in xs if x is not None]
+    return statistics.median(xs) if xs else None
+
+
+def _fmt(x):
+    return "n/a" if x is None else f"{x:.0f}s"
+
+
+def contention_lines(eff: list[dict], cov_path: Path) -> list[str]:
+    L = ["", "Amendment 1 — host contention (descriptive; FG1 ran concurrently with AS1 on relay slots 3-5)"]
+    c = [o for o in eff if o["arm"] == "C" and o["valid"]]
+    by_task = defaultdict(list)
+    for o in c:
+        by_task[o["task"]].append(o.get("agent_s"))
+    refs = {}
+    try:
+        refs["H3 R1"] = [(x["task"], x.get("agent_exec_s")) for x in json.loads(
+            (RESULTS / "h3-2026-11" / "analysis" / "cells.json").read_text()) if x.get("arm") == "R1" and x.get("valid")]
+    except Exception as e:
+        L.append(f"  H3 R1 reference unavailable: {e}")
+    try:
+        rows = [json.loads(l) for l in (RESULTS / "as1-2026-11" / "ledger" / "outcomes.jsonl").read_text().splitlines()
+                if l.strip()]
+        refs["AS1 CTL"] = [(x["task"], x.get("agent_s")) for x in rows if x.get("label") == "CTL" and x.get("valid")]
+    except Exception as e:
+        L.append(f"  AS1 CTL reference unavailable: {e}")
+    L.append(f"  FG1 C: {len(c)} valid cells, median agent wall {_fmt(_med(o.get('agent_s') for o in c))}")
+    for name, ref in refs.items():
+        rt = defaultdict(list)
+        for t, s in ref:
+            rt[t].append(s)
+        common = sorted(set(rt) & set(by_task))
+        diffs = [_med(by_task[t]) - _med(rt[t]) for t in common if _med(by_task[t]) is not None and _med(rt[t]) is not None]
+        L.append(f"  vs {name}: {len(ref)} cells; {len(common)} common tasks; median of per-task (FG1 C - {name}) "
+                 f"medians {_fmt(_med(diffs)) if diffs else 'n/a'}; tasks where FG1 C is slower {sum(d > 0 for d in diffs)}"
+                 f"/{len(diffs)}")
+    cov = {}
+    if cov_path.exists():
+        for l in cov_path.read_text().splitlines():
+            if l.strip():
+                r = json.loads(l)
+                cov[r["wave"]] = r
+    if not cov:
+        L.append("  no covariates recorded")
+        return L
+    loads = sorted(r["load1_max"] for r in cov.values() if r.get("load1_max") is not None)
+    cut = loads[len(loads) // 2] if loads else None
+    L.append(f"  covariates for {len(cov)} waves; AS1 cells in flight (mean per wave) > 0 in "
+             f"{sum(1 for r in cov.values() if (r.get('as1_cells_mean') or 0) > 0)}; median of per-wave max load {cut}")
+    for arm in ARMS:
+        cells = [o for o in eff if o["arm"] == arm and o["valid"] and o["wave"] in cov]
+        for name, pred in (("AS1 active", lambda r: (r.get("as1_cells_mean") or 0) > 0),
+                           ("AS1 idle", lambda r: not (r.get("as1_cells_mean") or 0) > 0),
+                           ("load max > median", lambda r: cut is not None and (r.get("load1_max") or 0) > cut),
+                           ("load max <= median", lambda r: cut is not None and (r.get("load1_max") or 0) <= cut)):
+            g = [o for o in cells if pred(cov[o["wave"]])]
+            if g:
+                L.append(f"  {arm} {name}: n {len(g)}, median agent wall {_fmt(_med(o.get('agent_s') for o in g))}, "
+                         f"capped {sum(o['capped'] for o in g)}, solved {sum(o['solved'] for o in g)}")
+    return L
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--outcomes", default=str(HERE.parent / "ledger" / "outcomes.jsonl"))
@@ -158,6 +229,7 @@ def main(argv=None) -> int:
         if meta[arm]["invalid_rate"] > INVALID_MAX or meta["C"]["invalid_rate"] > INVALID_MAX:
             why.append("more than 10% invalid cells")
         L.append(f"  DECISION {arm}: {'ADOPT as a default' if not why else 'NOT ADOPTED (' + '; '.join(why) + ')'}")
+    L += contention_lines(eff, Path(a.outcomes).parent / "covariates.jsonl")
     text = "\n".join(L)
     print(text)
     Path(a.out).write_text(text + "\n", encoding="utf-8")
