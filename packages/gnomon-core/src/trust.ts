@@ -600,7 +600,8 @@ export interface ToolPin {
  */
 export interface ExecFloor {
   root: string;
-  roles: Record<string, { mode: string; image: string }>;
+  /** mode is the resolved exec, or "invalid" for one that refuses bash; reads only under "os". */
+  roles: Record<string, { mode: string; image: string; reads?: string }>;
   at: string;
 }
 
@@ -695,10 +696,18 @@ export function grantTrust(config: GnomonConfig, by: string, path = trustPath())
 
 const contained = (mode: string) => mode !== "off";
 
+type FloorEntry = { mode: string; image: string; reads?: string };
+
+/** One resolved exec, as the floor keeps it: an exec that refuses bash is "invalid", not "off". */
+function floorEntry(e: { mode: string; image: string; reads?: string; invalid?: string }): FloorEntry {
+  const mode = e.invalid !== undefined ? "invalid" : e.mode;
+  return mode === "os" && e.reads !== undefined ? { mode, image: e.image, reads: e.reads } : { mode, image: e.image };
+}
+
 /** Each role's resolved exec under `config`, and `*` for a role with none of its own. */
-function execMap(config: GnomonConfig): Record<string, { mode: string; image: string }> {
-  const pick = (e: { mode: string; image: string }) => ({ mode: e.mode, image: e.image });
-  const out: Record<string, { mode: string; image: string }> = { "*": pick(resolveExec(config)) };
+function execMap(config: GnomonConfig): Record<string, FloorEntry> {
+  const pick = floorEntry;
+  const out: Record<string, FloorEntry> = { "*": pick(resolveExec(config)) };
   for (const r of listRoles(config)) out[r] = pick(resolveExec(config, r));
   return out;
 }
@@ -741,13 +750,22 @@ export function execDowngrades(config: GnomonConfig, floor: ExecFloor | undefine
   for (const role of listRoles(config)) {
     const was = floor.roles[role] ?? floor.roles["*"];
     if (!was || !contained(was.mode)) continue;
-    if (resolveExec(config, role).mode !== "off") continue;
-    out.push({
-      key: `exec:${role}:off`,
-      subject: `role ${role}`,
-      grants: `runs bash on this machine (exec = "off"); it ran in ${was.mode} here`,
-      default: `exec = "${was.mode}", as this project last ran`,
-    });
+    const now = floorEntry(resolveExec(config, role));
+    if (now.mode === "off") {
+      out.push({
+        key: `exec:${role}:off`,
+        subject: `role ${role}`,
+        grants: `runs bash on this machine (exec = "off"); it ran in ${was.mode} here`,
+        default: `exec = "${was.mode}", as this project last ran`,
+      });
+    } else if (was.mode === "os" && was.reads === "scoped" && now.mode === "os" && now.reads === "all") {
+      out.push({
+        key: `exec:${role}:reads-all`,
+        subject: `role ${role}`,
+        grants: `bash reads every file your user can (reads = "all"); it ran with reads = "scoped" here`,
+        default: `reads = "scoped", as this project last ran`,
+      });
+    }
   }
   return out;
 }
@@ -755,11 +773,19 @@ export function execDowngrades(config: GnomonConfig, floor: ExecFloor | undefine
 /** Put every role `execDowngrades` names back in the container it ran in. */
 function restoreExecFloor(c: GnomonConfig, floor: ExecFloor): void {
   for (const g of execDowngrades(c, floor)) {
-    const role = g.key.slice("exec:".length, -":off".length);
-    const was = floor.roles[role] ?? floor.roles["*"]!;
-    const def = (c.roles[role] ??= {} as RoleDef) as RoleDef & { exec?: string; image?: string };
-    def.exec = was.mode;
-    def.image = was.image;
+    const [, role, what] = /^exec:(.*):(off|reads-all)$/.exec(g.key)!;
+    const was = floor.roles[role!] ?? floor.roles["*"]!;
+    if (what === "off") {
+      const def = (c.roles[role!] ??= {} as RoleDef) as RoleDef & { exec?: string; image?: string };
+      def.exec = was.mode;
+      def.image = was.image;
+    }
+    // reads is [sandbox]-wide: putting it back scopes every os role, which is
+    // only ever tighter.
+    if (was.reads === "scoped") {
+      const policy = (c.policy ??= {}) as Record<string, any>;
+      policy.sandbox = { ...(policy.sandbox ?? {}), reads: "scoped" };
+    }
   }
 }
 
