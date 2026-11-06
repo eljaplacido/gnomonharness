@@ -13,7 +13,7 @@
  * marker -- so the planted config is live and the test could have failed.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync, existsSync, appendFileSync, utimesSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, existsSync, appendFileSync, utimesSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
@@ -111,6 +111,46 @@ describe.skipIf(onWindows)("finding A — gnomon's own git runs nothing the repo
     writeFileSync(join(repo, "a.txt"), "four\n");
     expect(safeGit(["diff", "--numstat"], { cwd: repo }).status).toBe(0);
     expect(existsSync(marker)).toBe(false);
+    spawnSync("git", ["diff"], { cwd: repo, stdio: "ignore" });
+    expect(existsSync(marker), "control").toBe(true);
+  });
+
+  it("a driver defined later in an INCLUDED file is still blanked (no stale cached listing)", () => {
+    // The cache key holds .git/config's stat, not an include target's: a
+    // repository that includes anything is never cached.
+    appendFileSync(join(repo, ".git", "config"), `[include]\n\tpath = inc.cfg\n`);
+    expect(safeGit(["diff", "--numstat"], { cwd: repo }).status).toBe(0);
+    const marker = join(outside, "inc-ran");
+    writeFileSync(join(repo, ".git", "inc.cfg"), `[filter "inc"]\n\tclean = "touch '${marker}'; cat"\n`);
+    writeFileSync(join(repo, ".gitattributes"), "*.txt filter=inc\n");
+    writeFileSync(join(repo, "a.txt"), "five\n");
+    expect(safeGit(["diff", "--numstat"], { cwd: repo }).status).toBe(0);
+    expect(existsSync(marker), "a driver from an include target ran").toBe(false);
+    spawnSync("git", ["diff"], { cwd: repo, stdio: "ignore" });
+    expect(existsSync(marker), "control").toBe(true);
+  });
+
+  it("a same-size in-place rewrite of .git/config with its mtime restored still re-lists", () => {
+    const cfg = join(repo, ".git", "config");
+    const marker = join(outside, "forged-ran");
+    const def = `[filter "f"]\n\tclean = "touch '${marker}'; cat"\n`;
+    const before = readFileSync(cfg, "utf8");
+    // Same length as the definition planted later: a comment.
+    writeFileSync(cfg, before + "#" + "x".repeat(def.length - 2) + "\n");
+    // A whole-second mtime, which utimes can restore exactly.
+    const t = new Date(Math.floor(Date.now() / 1000) * 1000 - 60_000);
+    utimesSync(cfg, t, t);
+    expect(safeGit(["diff", "--numstat"], { cwd: repo }).status).toBe(0);
+    const st = statSync(cfg);
+    writeFileSync(cfg, before + def);
+    utimesSync(cfg, t, t);
+    expect(statSync(cfg).size).toBe(st.size);
+    expect(statSync(cfg).mtimeMs).toBe(st.mtimeMs);
+    expect(statSync(cfg).ino).toBe(st.ino);
+    writeFileSync(join(repo, ".gitattributes"), "*.txt filter=f\n");
+    writeFileSync(join(repo, "a.txt"), "six\n");
+    expect(safeGit(["diff", "--numstat"], { cwd: repo }).status).toBe(0);
+    expect(existsSync(marker), "a driver behind a forged signature ran").toBe(false);
     spawnSync("git", ["diff"], { cwd: repo, stdio: "ignore" });
     expect(existsSync(marker), "control").toBe(true);
   });

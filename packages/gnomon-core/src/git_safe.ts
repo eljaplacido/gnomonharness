@@ -143,10 +143,13 @@ function gitDirOf(cwd: string, args: readonly string[]): string {
  * the config lives somewhere this walk does not follow.
  */
 function configSignature(dir: string, env: NodeJS.ProcessEnv): string | null {
+  // ctime too: size, mtime and inode can all be kept by an in-place
+  // same-length rewrite followed by utimes, but no unprivileged process can
+  // set ctime, and any write moves it.
   const st = (p: string) => {
     try {
-      const s = statSync(p);
-      return `${s.size}:${s.mtimeMs}:${s.ino}`;
+      const s = statSync(p, { bigint: true });
+      return `${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;
     } catch {
       return "-";
     }
@@ -182,22 +185,26 @@ function configSignature(dir: string, env: NodeJS.ProcessEnv): string | null {
 /**
  * Driver listings by configSignature, so one `gnomon check` (dozens of git
  * calls; ~50 ms per spawn on Windows) lists once per config state. A config
- * file that changes -- size, mtime or inode -- lists again.
+ * file that changes -- size, mtime, ctime or inode -- lists again. A listing
+ * that names any `include.*` or `includeIf.*` key is NEVER cached: the files
+ * it pulls in (which may not exist yet, or apply only on some branch) are
+ * not in the signature. Nor is a repository whose `.git` is not a directory.
  */
 const driverCache = new Map<string, string[]>();
 
 export function neutralizeDriversEnv(dir: string, env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const sig = configSignature(dir, env);
   const cached = sig === null ? undefined : driverCache.get(sig);
-  const keys = cached ?? listDriverKeys(dir, env);
-  if (sig !== null && cached === undefined) {
+  if (cached !== undefined) return driverEnv(cached, env);
+  const { keys, includes } = listDriverKeys(dir, env);
+  if (sig !== null && !includes) {
     if (driverCache.size > 64) driverCache.clear();
     driverCache.set(sig, keys);
   }
   return driverEnv(keys, env);
 }
 
-function listDriverKeys(dir: string, env: NodeJS.ProcessEnv): string[] {
+function listDriverKeys(dir: string, env: NodeJS.ProcessEnv): { keys: string[]; includes: boolean } {
   const r = spawnSync("git", [...GIT_HARDENING, "config", "-z", "--list"], {
     cwd: dir,
     encoding: "utf8",
@@ -214,9 +221,12 @@ function listDriverKeys(dir: string, env: NodeJS.ProcessEnv): string[] {
       keys.push(k);
     }
   };
+  // A listing that failed is never cached either.
+  let includes = !(r.status === 0 && typeof r.stdout === "string");
   if (r.status === 0 && typeof r.stdout === "string") {
     for (const entry of r.stdout.split("\0")) {
       const key = entry.split("\n", 1)[0] ?? "";
+      if (/^include(if)?\./i.test(key)) includes = true;
       let m = /^filter\.(.+)\.(clean|smudge|process|required)$/i.exec(key);
       if (m) {
         const n = m[1]!;
@@ -235,7 +245,7 @@ function listDriverKeys(dir: string, env: NodeJS.ProcessEnv): string[] {
       if (m) add(`merge.${m[1]}.driver`);
     }
   }
-  return keys;
+  return { keys, includes };
 }
 
 function driverEnv(keys: readonly string[], env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
