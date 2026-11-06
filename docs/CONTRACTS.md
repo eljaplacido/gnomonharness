@@ -214,7 +214,9 @@ last, so the four published before it keep their positions. It was the one
 enumerated surface key missing from the contract: `[sandbox] exec` had a closed
 set of values in `config.ts` (`EXEC_VALUES`) and an audit for misspellings, but
 `gnomon enumerations` did not publish it. All three values are implemented.
-`os_sandbox.test.ts` fails if `EXEC_VALUES` and the golden disagree.
+`os_sandbox.test.ts` fails if `EXEC_VALUES` and the golden disagree. An
+`exec` value outside the set (`"OS"`, `"landlock"`, `"os "`) does not fall
+back to `"off"`: `bash` refuses every command until it is fixed (2026-11-06).
 
 **`role_profile` is implemented.** This paragraph said it was "declared and not
 implemented" and stayed there after `495fa40` made it route: `applyProfile`

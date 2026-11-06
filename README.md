@@ -87,8 +87,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2574 TypeScript tests (2056 core, 493 cli, 18
-> natives, 7 tui) and 96 Rust tests — **2670 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2584 TypeScript tests (2066 core, 493 cli, 18
+> natives, 7 tui) and 105 Rust tests — **2689 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1696,11 +1696,34 @@ of HOME credentials that the other two let through
   and the command's stderr says which address was blocked.
 - **No privilege gain.** `no_new_privs` is set, so `sudo` and other setuid
   binaries cannot become root.
+- **No daemons outside the sandbox (Linux).** A `connect` to a unix socket
+  outside the root, `$TMPDIR` and `extra_roots` — the session bus
+  (`systemd-run --user`), docker, tmux, an ssh or gpg agent — and to any
+  abstract socket is refused, under `network = true` as well as `false`. A few
+  lookup-only system sockets stay reachable (nscd, systemd-resolved, systemd's
+  user database, journald). The variables that point at such sockets
+  (`DBUS_SESSION_BUS_ADDRESS`, `SSH_AUTH_SOCK`, `TMUX`, `XDG_RUNTIME_DIR`,
+  `DISPLAY`, …) are removed from `bash`'s environment, and so are the
+  credentials gnomon supplied itself (its credential store, every
+  `api_key_env` the surface declares).
+- **The sandbox a session starts with is a floor.** `.gnomon/policy.toml` is
+  inside the root, so a command could write `exec = "off"` there. A later
+  reload of the surface may tighten `exec`, `reads`, `read_roots`, `network`,
+  `extra_roots` and `level`, never loosen them: the session says so and keeps
+  the old value until you restart gnomon.
+- **The temp dir is removed safely.** After each call `$TMPDIR` is emptied by
+  `gnomon-exec sandbox-clean`, which follows no symlink and runs confined to
+  that directory; a job the command left running cannot redirect the cleanup.
+- **The sandbox binary is pinned.** `gnomon-exec` is resolved once per
+  session, never from beneath the root, `extra_roots` or the temp dir (a
+  command could overwrite it there), and is refused if it changes.
 - **Reads, if you opt in (`reads = "scoped"`, Linux).** See
   [below](#reads--scoped--credential-stores-unreadable-to-bash): credential
   stores in `$HOME` become unreadable to `bash`. Off by default.
 - **Refusal, never degradation.** On a machine that cannot enforce it — no
-  `gnomon-exec`, a kernel without Landlock, Windows, a container whose seccomp
+  `gnomon-exec` outside the project, a kernel without Landlock, Windows, an
+  `exec` value it does not know (`"OS"`, `"landlock"`: refused, not read as
+  `"off"`), a container whose seccomp
   profile refuses `pidfd_getfd` under `network = false`, `reads = "scoped"`
   anywhere but Linux — every `bash` call is refused with the reason, and is not
   run. Startup and `gnomon explain sandbox` say which it is before the first
@@ -1726,17 +1749,27 @@ network lines let a connect to 192.0.2.1 through, so `bash` refuses under
   under the root stay writable to `bash`, so in-root guarantees still come from
   `bash_deny` and the surface-drift check. In G2b's own probes (all in-root),
   `os` and `off` gave the same verdicts.
-- **Unix sockets are not restricted.** A daemon reachable over one acts outside
-  the sandbox: the docker socket, `systemd-run --user` over the user bus, a
-  running tmux server. If your user can reach such a daemon, `os` does not
-  contain a determined command.
+- **Unix sockets, where the supervisor cannot run.** In a container whose
+  seccomp profile refuses `pidfd_getfd`, `network = true` runs without the
+  supervisor, and a daemon reachable over a unix socket (docker, the user bus,
+  tmux) can act outside the sandbox; the probe lists this under `degraded`.
+  On macOS unix sockets are not restricted at all: Seatbelt's profile is
+  allow-by-default for everything but writes, and mach services are not
+  scoped. A datagram sent with `sendto` to a socket path is not vetted on
+  Linux either.
 - **Loopback services can reach out for it.** A local proxy or DNS resolver is
   reachable, and DNS lookups through the system resolver still leave the
   machine.
 - **Inbound is not blocked.** A server bound to a non-loopback address accepts
   connections from elsewhere.
-- **Signals are not scoped.** The command can signal other processes your user
-  owns.
+- **Signals.** On Landlock ABI 6+ (Linux 6.12) a command can signal only
+  processes of its own call — which also means it cannot stop a server an
+  EARLIER `bash` call started; let that call's job exit on its own, or end it
+  from the call that started it. Below ABI 6, and on macOS, it can signal any
+  process your user owns.
+- **Metadata outside the root.** Landlock does not confine `chmod`, `chown`,
+  `utime` or extended attributes, so those still work on files outside the
+  root.
 - **Package caches in `$HOME` are read-only**, so a tool that writes one (npm,
   pip, cargo's registry) fails unless it is pointed at the temp dir or the
   cache is granted with `extra_roots`.
@@ -1762,7 +1795,8 @@ Opt-in, and only under `exec = "os"`. Landlock's read rights are handled, so a
 
 - the root, the per-call `$TMPDIR` and `extra_roots`;
 - the system directories `/usr`, `/bin`, `/sbin`, `/lib*`, `/etc`, `/opt`,
-  `/proc`, `/sys`, `/dev`, and `/snap`, `/nix/store` and Homebrew's
+  `/proc`, `/sys`, the device files `/dev/{null,zero,full,random,urandom,tty,ptmx,pts}`
+  (not the rest of `/dev`: no `/dev/shm`), and `/snap`, `/nix/store` and Homebrew's
   `/home/linuxbrew/.linuxbrew` where they exist, plus the file
   `/etc/resolv.conf` points at;
 - toolchains and package caches in `$HOME`, where they exist: `~/.local/bin`,
@@ -1794,11 +1828,17 @@ misspelt `reads` value refuses too, rather than falling back to `"all"`.
   left world-readable there.
 - **Inside the root everything is readable**: a `.env`, a token in
   `.git/config`, a key someone committed.
-- **The environment.** `bash` inherits gnomon's, so a token in an environment
-  variable is one `printenv` away.
-- **Agents.** A command can still *use* a key through a unix socket — ssh-agent,
-  gpg-agent, a keyring over D-Bus, the docker socket — though it cannot read the
-  key file.
+- **Only `bash`.** gnomon's own `read` and `grep` tools are bounded by
+  `[sandbox] level`, not by `reads = "scoped"`.
+- **The environment.** `bash` inherits gnomon's minus the socket variables and
+  gnomon-supplied credentials above, so a token you exported in your shell is
+  one `printenv` away.
+- **Agents, where the supervisor cannot run** (see above): a command can then
+  still *use* a key through a unix socket — ssh-agent, gpg-agent, a keyring
+  over D-Bus, the docker socket — though it cannot read the key file.
+- **Writes and metadata are not what it scopes.** `chmod`/`utime`/xattrs
+  outside the root are not confined (Landlock), and below ABI 3 (Linux 6.2)
+  neither is `truncate(2)`.
 - **A hard link to a credential placed inside the root beforehand** is readable:
   Landlock judges the path, not the inode. Making one from inside the sandbox is
   refused.

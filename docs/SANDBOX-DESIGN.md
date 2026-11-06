@@ -274,13 +274,50 @@ false` still refuses.
 
 The same list `gnomon-exec sandbox-probe` prints and the README states: reads
 are unrestricted under `reads = "all"` (the default); everything inside the root, `.gnomon/` and `.git/` included,
-stays writable; unix sockets are unrestricted (the docker socket, `systemd-run
---user`, a tmux server are escapes for a determined command); loopback services
-that reach out (a proxy, DNS via the system resolver) are reachable; inbound
-connections to a non-loopback bind are not blocked; signals are not scoped (a
-per-call Landlock domain with signal scoping would stop the next call from
-killing a job the previous one started); package caches in `$HOME` are
-read-only. Older kernels give less, and the probe says what.
+stays writable; loopback services that reach out (a proxy, DNS via the system
+resolver) are reachable; inbound connections to a non-loopback bind are not
+blocked; `chmod`/`chown`/`utime`/xattrs outside the root are not confined
+(Landlock does not handle them); package caches in `$HOME` are read-only.
+Older kernels give less, and the probe says what.
+
+### Hardening after the PR #156 review (2026-11-06)
+
+- **Unix sockets.** The supervisor now runs under `network = true` too (a
+  connect-only filter), and refuses a `connect` to a pathname socket outside
+  the root and the writable directories, and to any abstract socket.
+  `systemd-run --user --pipe` over the user bus had read keys under
+  `reads = "scoped"`, written outside the root and reached the network under
+  `network = false`. The path is checked before the connect, by canonical
+  path, and the server's own bound name (`getpeername`) after it, so a
+  directory swapped for a symlink in between is caught. Lookup-only system
+  sockets stay allowed (`SYSTEM_QUERY_SOCKETS`: nscd, systemd-resolved, the
+  userdb, journald). The socket-naming variables (`DBUS_SESSION_BUS_ADDRESS`,
+  `SSH_AUTH_SOCK`, `TMUX`, `XDG_RUNTIME_DIR`, …) are removed from the
+  environment, as are the credentials gnomon itself supplied. Where the
+  supervisor cannot run (a container refusing `pidfd_getfd`), `network = true`
+  runs without it and the probe lists the gap in `degraded`. Not vetted:
+  datagrams sent with `sendto` to a socket path; macOS (Seatbelt is
+  allow-default, mach services unscoped).
+- **Signals and abstract sockets are Landlock-scoped on ABI 6+.** This was
+  rejected earlier because a per-call domain stops a later call from
+  signalling a job an earlier call started, and that is still the cost: a
+  server started in one call cannot be `kill`ed from the next. The review
+  asked for it, and signalling any process the user owns was the larger hole;
+  revisit if that workflow matters more.
+- **The temp-dir cleanup** no longer `rm -rf`s unsandboxed: `gnomon-exec
+  sandbox-clean` empties it fd-relative with `O_NOFOLLOW`, inside a Landlock
+  domain that can write only beneath it, and gnomon `rmdir`s the empty
+  directory. Jobs the command backgrounded are deliberately not killed (the
+  background recipe is a supported workflow); a cleanup that follows no link
+  does not need the tree to be quiet.
+- **The binary is pinned**: never taken from beneath the root, `extra_roots`
+  or the temp dir, resolved once by real path and SHA-256, refused if it
+  changes.
+- **The sandbox is pinned per session** (`sandbox_pin.ts`): a reload may only
+  tighten `exec`, `reads`, `read_roots`, `network`, `extra_roots` and `level`.
+- **An unknown `exec` value refuses** bash instead of resolving to `"off"`.
+- **`/dev` is no longer granted whole** under `reads = "scoped"`; only the
+  usual device files are (`DEVICE_READ`), so not `/dev/shm`.
 
 ## `reads = "scoped"` — read scoping, added 2026-11-05
 
@@ -396,9 +433,12 @@ used to pass the probe and then refuse every connect, loopback included).
 
 `SCOPED_NOT_ENFORCED` in `sandbox.rs`, printed by the probe and in the README:
 the system directories stay readable (`/etc` included); the root is readable
-(`.env`, `.git/config`); the environment is inherited (`printenv`); agents
-reachable over unix sockets can be asked to use a key (ssh-agent, gpg-agent, a
-keyring over D-Bus, the docker socket); a hard link to a credential placed in
+(`.env`, `.git/config`); the environment is inherited (`printenv`) minus the
+socket variables and gnomon-supplied credentials; where the supervisor cannot
+run, agents reachable over unix sockets can be asked to use a key (ssh-agent,
+gpg-agent, a keyring over D-Bus, the docker socket); only `bash` is scoped
+(the `read`/`grep` tools follow `[sandbox] level`); below ABI 3 `truncate(2)`
+outside the root is not blocked; a hard link to a credential placed in
 the root beforehand is readable; already-open descriptors; `/proc/<pid>/cmdline`
 of other processes (their environments and memory are not — Landlock denies
 ptrace-mode access to processes outside the sandbox, which also holds under
