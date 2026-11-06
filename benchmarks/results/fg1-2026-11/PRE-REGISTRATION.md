@@ -306,3 +306,100 @@ PLAN.json, the arms, the build pin, the scoring and the decision rule are unchan
 **A1.8 Launch.** The waiting runner (pid 1377901) is stopped by pid (SIGTERM; it had started no mirror, relay or
 cell). The new runner starts in the background with `FG1_APPROVED=yes run_fg1.py run --push` (no `--after-pid`).
 §12's line "never concurrent with AS1" is replaced by: concurrent with AS1 on disjoint relay slots, per this amendment.
+
+---
+
+## Amendment 2 — 2026-11-06T19:10Z, during attempt 1 (5 of 29 waves done): group-sequential interim looks; no third lane
+
+Written and committed before the change takes effect: the running runner (pid 1484501) keeps executing the code it
+started with until it is stopped by SIGINT at a wave boundary (between a wave's END lines and the next START; no cell
+in flight, the mirror closed by the runner's own `finally`) and restarted with the amended code. No completed cell is
+touched; finished waves are skipped as before. PLAN.json, the arms, the build pin, the scoring, the guards and the
+re-run rule are unchanged.
+
+**A2.0 Disclosure — outcomes seen before this amendment.** The lead looked at the outcomes of FG1's first 4 waves
+descriptively before asking for this amendment (C solved 1/4, FG 0/4, SH 1/4; hidden-test fractions ~0.81–0.87 per
+arm). The agent who wrote this amendment also saw wave a1w04's outcome in STATUS.txt and
+ledger/outcomes.jsonl (all three arms unsolved), i.e. 5 waves: C 1/5, FG 0/5, SH 1/5. These counts inform nothing
+here: the boundaries are the standard Lan-DeMets O'Brien-Fleming spending function at the pre-registered alpha, fixed
+by formula; the futility rule was chosen from simulations of POWER.txt's pre-registered model only (A2.3), by a
+criterion stated there. Note, so that it is visible: FG's current 5-wave count (0 vs 1) would meet look 1's futility
+condition (est < 0) if it held at 29 pairs; 24 waves of attempt 1 remain, and the condition was not chosen for that.
+
+**A2.1 Why.** Time. If an arm's effect is very large, or plainly absent, the answer is in the data well before 87
+waves. Looks at 1/3 and 2/3 of the information let the study stop then, at a pre-specified price in alpha.
+
+**A2.2 The looks and the boundaries (`apparatus/interim_fg1.py`, `INTERIM-SIM.txt`).** Per comparison (FG vs C, SH
+vs C), exactly as §8 pairs them:
+- Look 1 before the first wave of attempt 2 (all 29 attempt-1 waves run); look 2 before the first wave of attempt 3
+  (58); look 3 = §8's final analysis (87 + re-runs). Information fraction t_k = valid pairs / 87 (t_3 = 1).
+- Efficacy: Lan-DeMets O'Brien-Fleming-type spending, one-sided alpha = 0.025 per comparison,
+  alpha(t) = 2 − 2 Φ(z_0.9875 / √t), boundaries from the canonical joint normal (corr √(t_i/t_j)), recomputed at the
+  actual fractions. Planned (t = 1/3, 2/3, 1): **c = 3.710, 2.511, 1.993**; nominal one-sided p = **0.000104,
+  0.00601, 0.0231**; cumulative alpha 0.00010, 0.00605, 0.02500.
+- Statistic: est = paired solve-rate difference; Z = est / SE, SE = SD of the task-cluster bootstrap (10,000
+  resamples, seed [20261107, k]) — §8's bootstrap.
+- Interim efficacy (looks 1, 2) iff Z ≥ c_k **and** the exact one-sided McNemar (sign) p ≤ p_k (on rare binary data
+  the conjunction only makes an early stop harder; at look 1 it needs ≥ 14 discordant pairs all for the arm), **and**
+  §8's guards on the pairs so far: capped(arm) − capped(C) ≤ ⌊3n/87⌋ (1 at 29, 2 at 58), spend ratio ≤ 1.3,
+  mechanism delivered (§7), ≤ 10 % invalid. A crossed boundary with a failing guard is reported and the comparison
+  continues.
+- Interim futility (non-binding: the efficacy boundaries ignore it, so it cannot raise alpha): look 1 iff est < 0
+  (the arm solved fewer paired cells than C); look 2 iff Z ≤ 0.75.
+- Final (look 3, `analyze_fg1.py`): §8's rule with the lower bound taken at the one-sided level p_3 (planned 0.0231,
+  i.e. a two-sided ~95.4 % percentile interval) instead of 0.025; the 95 % CI is still printed.
+- A comparison decided at a look keeps its decision (efficacy = ADOPT if the guards held, futility = NOT ADOPTED);
+  its later cells are descriptive. **The study stops early only when both comparisons are decided** at a look;
+  otherwise all three arms continue unchanged in PLAN order (waves stay three-arm and paired, nothing is dropped).
+  An early stop runs no further wave and no re-run (the decision was taken on the data at the look); the summary is
+  then written over the cells run, and the stop is committed.
+- **Alpha.** Each comparison spends exactly 0.025 one-sided under the normal approximation (Lan-DeMets); two
+  comparisons → familywise ≤ 0.05 (Bonferroni, as §8). On the real discrete data, simulated under POWER.txt's model
+  with C shared by both comparisons: under the global null, **familywise false adoption 0.047 (Beta(0.5, 4.5)) and
+  0.047 (Beta(1.4, 18.6)), 20,000 studies each, MC SE 0.0015**; per comparison 0.025–0.028 (the fixed design's was
+  0.023–0.027 in POWER.txt: the bootstrap's discreteness, present before this amendment).
+- **Automation.** `run_fg1.py` runs the look itself at those two points (`interim_gate`), writes
+  `interim/look{k}.json` and `.txt`, logs INTERIM lines in STATUS.txt, commits them under the shared lock (with
+  `--push`, as every FG1 commit), and stops only on `stop_study`. A look that crashes is logged, committed and
+  skipped (a skipped look spends no alpha; the final boundary is computed from the looks actually taken). A restarted
+  runner refuses to continue a study that stopped.
+
+**A2.3 Futility rule, how chosen (POWER.txt model only).** Candidates (look 1, look 2): none; (Z ≤ 0, none);
+(Z ≤ 0, Z ≤ 0.5); (Z ≤ 0, Z ≤ 1.0); (est < 0, Z ≤ 0.75), 1,500 simulations each. Criterion, stated before choosing:
+the smallest loss of power at the MDE (+0.15) with at least ~0.75 probability of stopping a null comparison. Chosen
+(est < 0, Z ≤ 0.75): at 4,000 studies, P(adopt) at +0.15 is 0.82–0.83 (no futility: 0.83), at +0.10 0.53, at +0.075
+0.33–0.35; a null comparison is stopped for futility 0.77–0.79. (Z ≤ 0 at look 1 also stops ties, which on rare
+solves are common, and lost up to 0.06 power.)
+
+**A2.4 What it buys (INTERIM-SIM.txt).** Global null: the study stops at look 1 with probability 0.25 and at look 2
+0.41; expected waves 60.5 of 87. One arm at +0.15, the other null: stop at look 1 0.02, look 2 0.22, E[waves] 79.
+Both arms at +0.15: E[waves] 81.5. Interim efficacy stops are rare by design (O'Brien-Fleming); the time saving
+comes mostly from futility on null arms.
+
+**A2.5 Third lane — measured, not added.** A third concurrent lane (relay slots 6–8, 9 cells) was considered and
+**not** started: with 6 concurrent cells (AS1 3 + FG1 3) the per-wave 1-min load maxima were 8.3–20.7 (covariates
+a1w00–a1w04, 30-s samples) and a 20-s sample on 2026-11-06 at 18:53–19:05Z reached **29.6** (FG1 a1w05,
+layout-config-recreation2, 3 containers at ~250 % CPU each during build/test; AS1 retro-console-soc), against the
+30 guard; minimum available RAM per wave 36.4 GB (a1w00, vf2-speedup-networkx) to 64 GB. Steady-state per-cell CPU is
+small (1–9 % while waiting on the model) but build/test phases run 1–2.5 cores per container, ~4.5 load per cell.
+Projected for 9 cells: mid-wave load peaks ~43 (> 30; the gx10 hard-halted at ~95–100 on 2026-11-05 with four
+studies' containers), and RAM ~6–36 GB at the minimum if two heavy tasks coincide (< 24). Go's 5-hour allowance was
+not the limit (A2.6). So FG1 stays on one lane, slots 3–5 (Amendment 1).
+
+**A2.6 Go allowance.** Relay counters (read only) at 18:48Z: slots 0–2 (AS1) $3.68 since ~14:35Z, slots 3–5 (FG1)
+$1.74 since 17:02Z: ~$0.87/h + ~$0.98/h = **~$1.85/h** (x1.5 for a third lane: ~$2.8/h, ~$14 per 5 h). Go's listing
+(opencode.ai/docs/go, fetched 2026-11-06) for DeepSeek V4.1 Flash: Go $20 / $50 / $100 (5 h / week / month), Go Plus
+$40 / $100 / $200; the relays bill `go-plus`. The 5-hour cap is not hit at either rate. The weekly allowance is the
+one to watch: FG1's remaining ~$27 (at the measured ~$0.33/wave) plus AS1's remaining caps (~$31 for screening and
+interaction) is ~$58 over ~2 days, against $100/week of which this week's earlier spend is not visible from these
+relays. A limit would show as `status_4xx` and invalid cells (re-run per §6), never as a model failure.
+
+**A2.7 Calendar (one lane, ~22 min/wave measured over a1w00–a1w04, no weekday 2× windows on Sat/Sun).** Look 1
+~Sat 2026-11-07 03:30–04:00Z; look 2 ~Sat 14:00–14:30Z; final (87 waves) ~Sun 2026-11-08 00:30–01:30Z plus re-runs
+(was ~Sun 15:40Z at Amendment 1's 32 min/wave). Earlier if a look stops the study.
+
+**A2.8 Files.** `apparatus/interim_fg1.py` (new: boundaries, looks, simulation), `apparatus/run_fg1.py`
+(`interim_gate`, `stopped_look`, commit includes `interim/`), `apparatus/analyze_fg1.py` (final level p_3, interim
+decisions kept), `apparatus/test_fg1.py` (+5 tests: boundaries, look-1 efficacy/futility/stop, guard blocks early
+efficacy, look 2 uses attempts 1–2 and keeps decisions, the runner stops before attempt 2's first wave),
+`OFFLINE-TESTS.txt` (30 passed), `INTERIM-SIM.txt`.

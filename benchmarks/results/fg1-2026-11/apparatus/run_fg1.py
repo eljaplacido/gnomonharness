@@ -24,6 +24,11 @@ build served from apparatus/build/ on 172.17.0.1:4749 (source = "mirror") and pi
   any fatal mechanism failure makes the cell an apparatus failure (invalid), never a model failure;
 - 'fix, don't fail': after the 87 waves, each wave with an invalid cell is re-run ONCE as a whole (all three arms,
   fresh cells, same attempt index, suffix r), and the re-run replaces the original wave for every arm.
+- (Amendment 2) group-sequential interim looks: before the first wave of attempt 2 (after attempt 1's 29 waves) and
+  before the first wave of attempt 3 (after 58), the runner runs interim_fg1.look(k), writes interim/look{k}.json/.txt,
+  commits them, and stops the study (no further wave, no re-runs) only if both comparisons are decided (efficacy or
+  futility boundary crossed); otherwise it continues in plan order. A look that crashes is logged and skipped (a
+  skipped look spends no alpha; the final boundary is computed from the looks actually taken).
 """
 from __future__ import annotations
 
@@ -441,7 +446,8 @@ def load_outcomes() -> list[dict]:
 
 def commit(msg: str, push: bool = False) -> bool:
     """Only FG1's ledger and STATUS, under the M1 chains' shared commit lock, with retries (as run_as1.commit)."""
-    rel = [str(p.resolve().relative_to(REPO)) for p in (LEDGER_DIR, STATUS, ROOT / "summary-fg1.txt") if p.exists()]
+    rel = [str(p.resolve().relative_to(REPO)) for p in (LEDGER_DIR, STATUS, ROOT / "summary-fg1.txt", ROOT / "interim")
+           if p.exists()]
     for _ in range(6):
         r = subprocess.run(["flock", "-w", "300", str(COMMIT_LOCK), "sh", "-c",
                             'git add -A -- "$@" >/dev/null 2>&1 && git commit -q -m "$0" -- "$@"', msg + TRAILER, *rel],
@@ -457,9 +463,48 @@ def commit(msg: str, push: bool = False) -> bool:
     return False
 
 
-def execute(waves: list[dict], args, build, sp: dict, P) -> bool:
+INTERIM_DIR = ROOT / "interim"
+
+
+def stopped_look() -> int | None:
+    for k in (1, 2):
+        f = INTERIM_DIR / f"look{k}.json"
+        if f.exists() and json.loads(f.read_text(encoding="utf-8")).get("stop_study"):
+            return k
+    return None
+
+
+def interim_gate(k: int, args) -> bool:
+    """Amendment 2: interim look k (after attempt k). Returns True iff the study stops here."""
+    if (INTERIM_DIR / f"look{k}.json").exists():
+        return bool(json.loads((INTERIM_DIR / f"look{k}.json").read_text(encoding="utf-8")).get("stop_study"))
+    say(f"INTERIM look {k}: attempt {k} complete; running the pre-specified analysis (interim_fg1.py, Amendment 2)")
+    try:
+        import interim_fg1 as IM
+        res, text = IM.look(k, OUTCOMES)
+        INTERIM_DIR.mkdir(parents=True, exist_ok=True)
+        (INTERIM_DIR / f"look{k}.json").write_text(json.dumps(res, indent=1) + "\n", encoding="utf-8")
+        (INTERIM_DIR / f"look{k}.txt").write_text(text + "\n", encoding="utf-8")
+    except Exception as e:
+        say(f"INTERIM look {k} FAILED ({type(e).__name__}: {e}); look skipped (no alpha spent), study continues")
+        commit(f"bench(fg1): interim look {k} failed and skipped", args.push)
+        return False
+    for arm, r in res["comparisons"].items():
+        say(f"INTERIM look {k} {arm} vs C: n {r['n']} est {r['est']:+.3f} Z {r['z']:+.3f} c {r['c']:.3f} "
+            f"McNemar1s {r['p_mcnemar_1s']:.4g} -> {r['note']}")
+    stop = bool(res["stop_study"])
+    say(f"INTERIM look {k}: {'STOP the study early (both comparisons decided)' if stop else 'continue'}")
+    commit(f"bench(fg1): interim look {k} — {'STOP early' if stop else 'continue'} (Amendment 2)", args.push)
+    return stop
+
+
+def execute(waves: list[dict], args, build, sp: dict, P, interim: bool = False) -> bool | str:
     done = {o["cell"] for o in load_outcomes()}
     for n, w in enumerate(waves):
+        if interim and w["attempt"] > 1:
+            for k in range(1, w["attempt"]):
+                if interim_gate(k, args):
+                    return "stopped"
         cells = {a: f"fg1-{w['id']}-{a}-{w['task']}" for a in w["order"]}
         if all(c in done for c in cells.values()):
             continue
@@ -612,6 +657,9 @@ def main() -> int:
     if check(args, relays=False) != 0:  # offline gates now (build, wire test, ports); the relays after the wait
         print("refusing: launch gates not met (run_fg1.py check)")
         return 2
+    if stopped_look():
+        print(f"refusing: the study stopped early at interim look {stopped_look()} (interim/look{stopped_look()}.json)")
+        return 2
     say(f"FG1 runner pid {os.getpid()} started; build {build['version']} {build['commit'][:12]} {build['build_stamp']}; "
         f"{len(waves)} waves; budget ${BUDGET}")
     wait_for_as1(args)
@@ -625,7 +673,10 @@ def main() -> int:
                                "--directory", str(HERE / "build")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     say(f"mirror pid {mirror.pid} serving apparatus/build on {RELAY_HOST}:{MIRROR_PORT}")
     try:
-        if execute(waves, args, build, sp, P):
+        ex = execute(waves, args, build, sp, P, interim=True)
+        if ex == "stopped":
+            say(f"FG1 STOPPED EARLY at interim look {stopped_look()} (Amendment 2): no further waves, no re-runs")
+        elif ex:
             rr = rerun_waves(waves)
             if rr:
                 say(f"re-running {len(rr)} wave(s) with an invalid or missing cell: {[w['id'] for w in rr]}")

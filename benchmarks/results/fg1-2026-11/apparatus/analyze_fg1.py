@@ -18,6 +18,10 @@ analysis/summarize.py (exact McNemar on discordant pairs, task-cluster bootstrap
   this power" (MDE80 ~ 0.15, POWER.txt), never "no effect".
 - Secondary (descriptive): hidden-test fraction difference (pairs with a ctrf on both; same bootstrap), capped counts,
   $/solved, median agent wall time, FG outcomes and caveats, SH job yields.
+- Amendment 2 (group-sequential): the decision's lower bound (1) is taken at the final look's nominal one-sided level
+  p_3 from interim_fg1.final_level() (Lan-DeMets O'Brien-Fleming spending; planned p_3 = 0.0231, i.e. a two-sided
+  ~95.4 % percentile interval) instead of 2.5 %; the 95 % CI is still printed. A comparison decided at an interim
+  look (interim/look{1,2}.json) keeps that decision; its later cells are descriptive.
 - Amendment 1 (descriptive only, never decision-bearing): FG1 ran concurrently with AS1 on separate relay slots, so
   host contention is a covariate. contention_lines() reports (a) C's agent wall time against the earlier controls on
   the same tasks, H3's R1 (v0.4.2 + replay) and AS1's CTL (v0.4.4 + replay), per task matched, and (b) every arm's
@@ -99,7 +103,18 @@ def compare(arm: str, eff: list[dict], rng) -> tuple[list[str], dict]:
     wc = [c["agent_s"] for c, _ in pairs if c["agent_s"]]
     L.append(f"  median agent wall {arm} {statistics.median(wx) if wx else float('nan'):.0f} s vs C "
              f"{statistics.median(wc) if wc else float('nan'):.0f} s")
-    return L, {"lo": lo, "cap_diff": cx - cc, "ratio": ratio, "n": len(pairs)}
+    return L, {"lo": lo, "cap_diff": cx - cc, "ratio": ratio, "n": len(pairs), "diffs": d}
+
+
+def lb_at(diffs_by_task: dict[str, list[float]], q: float, rng) -> float:
+    """Task-cluster bootstrap percentile at one-sided level q (Amendment 2's final level)."""
+    tasks = sorted(diffs_by_task)
+    if not tasks:
+        return float("nan")
+    sums = np.array([sum(diffs_by_task[t]) for t in tasks])
+    ns = np.array([len(diffs_by_task[t]) for t in tasks])
+    idx = rng.integers(0, len(tasks), (BOOT, len(tasks)))
+    return float(np.percentile(sums[idx].sum(axis=1) / ns[idx].sum(axis=1), 100 * q))
 
 
 def arm_lines(arm: str, eff: list[dict]) -> tuple[list[str], dict]:
@@ -210,6 +225,12 @@ def main(argv=None) -> int:
     L = [f"FG1 summary (pre-registered, analyze_fg1.py; seed {SEED}, {BOOT} bootstrap resamples). "
          f"{len(outs)} outcome rows, {len(eff)} effective cells."]
     meta = {}
+    try:
+        import interim_fg1 as IM
+        levels, decided = IM.final_level(), IM.decided_at(IM.prior_looks())
+    except Exception as e:  # no interim module or looks: the pre-registered 2.5 %
+        levels, decided = {}, {}
+        L.append(f"(interim levels unavailable: {e}; final level 0.025)")
     for arm in ARMS:
         l, meta[arm] = arm_lines(arm, eff)
         L += l
@@ -217,9 +238,16 @@ def main(argv=None) -> int:
         L.append("")
         l, r = compare(arm, eff, rng)
         L += l
+        q = levels.get(arm, (0.025, []))[0]
+        lo = lb_at(r["diffs"], q, np.random.default_rng([SEED, 3])) if levels else r["lo"]
+        L.append(f"  final-look level (Amendment 2): one-sided {q:.4f}; bootstrap lower bound at that level {lo:+.3f}")
+        if arm in decided:
+            L.append(f"  DECISION {arm}: decided at interim look {decided[arm]['look']}: {decided[arm]['decision']} "
+                     f"(interim/look{decided[arm]['look']}.txt); {'ADOPT as a default' if decided[arm]['decision'] == 'efficacy' else 'NOT ADOPTED (futility at an interim look)'}")
+            continue
         why = []
-        if not (r["lo"] > 0):
-            why.append(f"bootstrap lower bound {r['lo']:+.3f} <= 0")
+        if not (lo > 0):
+            why.append(f"bootstrap lower bound {lo:+.3f} <= 0 (one-sided level {q:.4f})")
         if r["cap_diff"] > CAP_GUARD:
             why.append(f"caps +{r['cap_diff']} > +{CAP_GUARD}")
         if r["ratio"] > SPEND_GUARD:

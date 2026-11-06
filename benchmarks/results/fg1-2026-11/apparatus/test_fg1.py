@@ -349,3 +349,87 @@ def test_analysis_guards_block_adoption(tmp_path):
     AN.main(["--outcomes", str(f), "--out", str(tmp_path / "s.txt")])
     s = (tmp_path / "s.txt").read_text()
     assert "DECISION FG: NOT ADOPTED (caps +4 > +3; spend ratio 2.00 > 1.3)" in s
+
+# ------------------------------------------------------------------------------------------------ Amendment 2: interim looks
+
+import interim_fg1 as IM  # noqa: E402
+
+
+def _rows(solve: dict, attempts=(1,), tasks=29):
+    """Synthetic outcomes: solve[arm](task_index, attempt) -> bool. FG fires, SH yields (mechanisms delivered)."""
+    rows = []
+    for att in attempts:
+        for i in range(tasks):
+            for arm in R.ARMS:
+                rows.append({"cell": f"fg1-a{att}w{i:02d}-{arm}-t{i}", "wave": f"a{att}w{i:02d}", "attempt": att,
+                             "arm": arm, "task": f"t{i}", "valid": True, "invalid_reason": None,
+                             "solved": bool(solve[arm](i, att)), "capped": False, "usd": 0.1, "frac": 0.5,
+                             "agent_s": 600, "job_yields": 1 if arm == "SH" else 0,
+                             "finish_gate": {"applicable": True, "fired": True, "outcome": "passed"} if arm == "FG" else None})
+    return rows
+
+
+def _write(tmp_path, rows):
+    f = tmp_path / "outcomes.jsonl"
+    f.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    return f
+
+
+def test_interim_boundaries_are_obrien_fleming_at_alpha_025():
+    c = IM.boundaries(list(IM.PLANNED_T))
+    assert [round(x, 2) for x in c] == [3.71, 2.51, 1.99]
+    assert abs(IM.spend(1.0) - 0.025) < 1e-12 and IM.spend(1 / 3) < 2e-4
+    assert c == IM.boundaries(list(IM.PLANNED_T))  # deterministic (seeded)
+
+
+def test_interim_look1_futility_and_efficacy_and_stop(tmp_path, monkeypatch):
+    monkeypatch.setattr(IM, "INTERIM_DIR", tmp_path / "interim")
+    # FG far better than C (efficacy at look 1 needs >= 14 discordant wins: 0.5^14 < 1.04e-4), SH worse (futility)
+    rows = _rows({"C": lambda i, a: i == 0, "FG": lambda i, a: i < 20, "SH": lambda i, a: False})
+    res, text = IM.look(1, _write(tmp_path, rows))
+    assert res["comparisons"]["FG"]["decision"] == "efficacy", text
+    assert res["comparisons"]["SH"]["decision"] == "futility", text
+    assert res["stop_study"] is True
+    # a modest FG gain does not cross the O'Brien-Fleming boundary at look 1 -> continue
+    rows = _rows({"C": lambda i, a: i == 0, "FG": lambda i, a: i < 4, "SH": lambda i, a: False})
+    res, text = IM.look(1, _write(tmp_path, rows))
+    assert res["comparisons"]["FG"]["decision"] == "continue" and res["stop_study"] is False
+
+
+def test_interim_guard_blocks_early_efficacy(tmp_path, monkeypatch):
+    monkeypatch.setattr(IM, "INTERIM_DIR", tmp_path / "interim")
+    rows = _rows({"C": lambda i, a: False, "FG": lambda i, a: i < 20, "SH": lambda i, a: False})
+    for r in rows:
+        if r["arm"] == "FG":
+            r["usd"] = 0.5  # spend ratio 5 > 1.3
+    res, _ = IM.look(1, _write(tmp_path, rows))
+    assert res["comparisons"]["FG"]["efficacy_crossed"] and res["comparisons"]["FG"]["decision"].startswith("continue")
+
+
+def test_interim_look2_uses_both_attempts_and_keeps_earlier_decisions(tmp_path, monkeypatch):
+    monkeypatch.setattr(IM, "INTERIM_DIR", tmp_path / "interim")
+    (tmp_path / "interim").mkdir()
+    (tmp_path / "interim" / "look1.json").write_text(json.dumps({"look": 1, "stop_study": False, "comparisons": {
+        "FG": {"t": 29 / 87, "decision": "continue"}, "SH": {"t": 29 / 87, "decision": "futility"}}}))
+    rows = _rows({"C": lambda i, a: False, "FG": lambda i, a: i < 3, "SH": lambda i, a: False}, attempts=(1, 2, 3))
+    res, text = IM.look(2, _write(tmp_path, rows))
+    assert res["comparisons"]["FG"]["n"] == 58  # attempt 3 rows excluded
+    assert res["comparisons"]["SH"]["decision"] == "futility" and "already decided" in res["comparisons"]["SH"]["note"]
+    assert abs(res["comparisons"]["FG"]["c"] - 2.511) < 0.01
+
+
+def test_runner_interim_gate_runs_before_attempt_2_and_stops(tmp_path, monkeypatch):
+    monkeypatch.setattr(IM, "INTERIM_DIR", tmp_path / "interim")
+    monkeypatch.setattr(R, "INTERIM_DIR", tmp_path / "interim")
+    monkeypatch.setattr(R, "STATUS", tmp_path / "STATUS.txt")
+    monkeypatch.setattr(R, "commit", lambda *a, **k: True)
+    rows = _rows({"C": lambda i, a: i == 0, "FG": lambda i, a: i < 20, "SH": lambda i, a: False})
+    monkeypatch.setattr(R, "OUTCOMES", _write(tmp_path, rows))
+    ran = []
+    monkeypatch.setattr(R, "wait_for_wave", lambda args: ran.append("wait"))
+    waves = [w for w in R.plan() if w["attempt"] == 2][:1]
+
+    class A:
+        push = False
+    assert R.execute(waves, A(), {}, {}, None, interim=True) == "stopped"
+    assert not ran and (tmp_path / "interim" / "look1.json").exists() and R.stopped_look() == 1
