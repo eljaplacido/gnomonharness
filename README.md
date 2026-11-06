@@ -92,8 +92,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2579 TypeScript tests (2058 core, 496 cli, 18
-> natives, 7 tui) and 61 Rust tests — **2640 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2583 TypeScript tests (2062 core, 496 cli, 18
+> natives, 7 tui) and 61 Rust tests — **2644 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -714,6 +714,15 @@ An endpoint may declare its model's context window, `max_context_tokens =
 model listing once per session ([GUIDE §5.2](docs/GUIDE.md), [CONTRACTS](docs/CONTRACTS.md)).
 Without either, its turns are trimmed to `[defaults] max_context_tokens`, which
 is sized for a local model; a session on a remote endpoint says so at startup.
+
+**Reasoning replay** (`replay_reasoning`) is on by default for **hosted**
+endpoints since v0.4.4: once one answers a tool call with reasoning content,
+that reasoning goes back on every later assistant message. H3 (pre-registered,
+hosted only) adopted it: hidden-test fraction +0.160 [95% +0.042, +0.293],
+capped runs 19 → 14 ([summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+On a **local lane** — a loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local, CGNAT/Tailscale (100.64/10), `*.local` or `host.docker.internal` host, a single-label name, or Ollama's `/api/chat` — it is untested and off unless
+`replay_reasoning = true` is declared. `replay_reasoning = false` turns it off
+anywhere ([GUIDE §5.2](docs/GUIDE.md)).
 
 #### Keys
 

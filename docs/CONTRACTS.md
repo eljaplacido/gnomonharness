@@ -2450,13 +2450,14 @@ and a 60 s provider grace outlasted by 503s.
 
 | key | before | now | to restore |
 |---|---|---|---|
-| `[endpoints.<name>] replay_reasoning` | off unless declared (or `api.deepseek.com`) | undeclared: on from the request after the endpoint first answers a tool call with reasoning content (`reasoning_content` or `reasoning`), for the session | `replay_reasoning = false` |
+| `[endpoints.<name>] replay_reasoning` | off unless declared (or `api.deepseek.com`) | undeclared on a **hosted** endpoint: on from the request after it first answers a tool call with reasoning content (`reasoning_content` or `reasoning`), for the session. Undeclared on a **local lane** (a loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local, CGNAT/Tailscale (100.64/10), `*.local` or `host.docker.internal` host, a single-label name, or Ollama's `/api/chat`; `isLocalLaneUrl`; a fallback by its own URL): off, as before | `replay_reasoning = false` |
 | `[turn] nudge_after_idle` | `12` | `12`, unchanged; a declared `0` is now off (it was floored to 1) | — |
 
 Replay is H3's verdict (pre-registered; hosted DeepSeek V4.1 Flash, 30-minute
 caps): replay alone against the 0.4.2 defaults raised the hidden-test fraction
 by +0.160 [95% bootstrap +0.042, +0.293] and cut capped runs from 19 to 14, so
-both arms of its decision rule were met
+both arms of its decision rule were met. H3 measured hosted endpoints only,
+so local lanes are untested and off unless declared
 ([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
 The nudge stays because LG1 (pre-registered, local RTX lane) measured the
 build that switched it off against 0.4.2: 18 vs 18 solved at 1.43× the local
@@ -2476,7 +2477,7 @@ turn record's `wire` carries, beside `replay_reasoning: true`,
 | value | when |
 |---|---|
 | `declared` | `replay_reasoning = true` |
-| `default` | gnomon turned it on: `api.deepseek.com`, or an undeclared endpoint that answered a tool call with reasoning |
+| `default` | gnomon turned it on: `api.deepseek.com`, or an undeclared hosted endpoint that answered a tool call with reasoning |
 
 **`gnomon task --deadline <seconds|ISO 8601 time with a zone>`**, else
 `GNOMON_DEADLINE`. Opt-in; absent, nothing below happens. A value that is not
@@ -2518,7 +2519,7 @@ for being blank or markup. Two cuts in a row still end the turn (§1).
 **What must not change.** With `replay_reasoning = false` declared, every
 request body of a scripted turn is byte-identical to master's (0.4.2 + #151),
 with and without a far `--deadline`; an undeclared endpoint that sends no
-reasoning gets master's bytes with nothing declared. The tool timing, the task
+reasoning, or any local lane, gets master's bytes with nothing declared. The tool timing, the task
 grace and the read-only fallback change no request.
 
 **Fixture**: `conformance/long_tasks.json`; `packages/gnomon-core/src/long_tasks.test.ts`

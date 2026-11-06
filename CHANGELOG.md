@@ -27,23 +27,28 @@
 ## [Unreleased]
 
 v0.4.4 candidate: long hosted-model tasks, from the P2G41 root causes
-(2026-11-05). **One default changes: reasoning replay is on for an endpoint
-that returns reasoning**, adopted by H3's pre-registered decision rule. The
+(2026-11-05). **One default changes: reasoning replay is on for a hosted
+endpoint that returns reasoning**, adopted by H3's pre-registered decision
+rule; H3 measured hosted endpoints only, so local lanes stay off unless they
+declare it. The
 idle nudge stays at 12, as in 0.4.3: LG1 measured switching it off on the
 local lane and it cost tokens. Everything else is opt-in, record-only or
 robustness. With `replay_reasoning = false` declared, request bodies are
-byte-identical to master; on an endpoint that returns no reasoning field
-(LG1's local lane, Ollama's /api/chat) they are byte-identical with nothing
-declared (`long_tasks.test.ts` pins both).
+byte-identical to master; with nothing declared they are byte-identical on
+any local lane (reasoning field or not) and on a hosted endpoint that returns
+no reasoning field (`long_tasks.test.ts` pins all three).
 
 ### Changed (default)
 
-- **Reasoning replay is on by default for an endpoint that reasons.** An
-  OpenAI-shaped endpoint that declares no `replay_reasoning` and answers a
+- **Reasoning replay is on by default for hosted endpoints; local lanes
+  untested, off unless declared.** A hosted OpenAI-shaped endpoint that
+  declares no `replay_reasoning` and answers a
   tool call with reasoning content (`reasoning_content` or `reasoning`) gets
   that reasoning back on every assistant message from the next request on,
-  for the session. An endpoint that sends no reasoning is sent none, and
-  Ollama's /api/chat is never sent it. A 400 naming `reasoning_content` is
+  for the session. An endpoint that sends no reasoning is sent none. A local
+  lane — a loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local, CGNAT/Tailscale (100.64/10), `*.local` or `host.docker.internal` host, a single-label name, or Ollama's `/api/chat` — is not replayed unless it declares
+  `replay_reasoning = true` (`isLocalLaneUrl`); a fallback is judged by its
+  own URL. A 400 naming `reasoning_content` is
   resent once without it and replay stays off for that endpoint
   (`counters.replay_reasoning_refused`). `replay_reasoning = false` still turns
   it off. The turn record's `wire` adds `replay_reasoning_source`:

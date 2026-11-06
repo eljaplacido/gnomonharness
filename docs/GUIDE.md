@@ -686,8 +686,8 @@ token_estimate = "calibrated"   # default "chars4"; trims divide by the measured
 
 **Reasoning replay.** gnomon sends each assistant message's reasoning back as
 `reasoning_content`, earlier turns of the session as well as the current one,
-to an OpenAI-shaped endpoint that reasons. Undeclared, it turns on the first
-time the endpoint answers a tool call with reasoning content
+to a hosted OpenAI-shaped endpoint that reasons. Undeclared, it turns on the
+first time such an endpoint answers a tool call with reasoning content
 (`reasoning_content` or `reasoning`) and stays on for the session; an endpoint
 that never sends reasoning is sent none, so its requests are unchanged. Every
 2026 open-weights family asks for it (DeepSeek V4, GLM-5, Kimi K3, Qwen3.6+,
@@ -702,10 +702,12 @@ request. The turn record's `wire` says `replay_reasoning: true` with
 unless declared. The default is H3's (2026-11-06, pre-registered, hosted
 DeepSeek V4.1 Flash under 30-minute caps): replay alone raised the hidden-test
 fraction by +0.160 [95% +0.042, +0.293] and cut capped runs from 19 to 14
-([summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)). On a local server that returns
-reasoning (llama.cpp with a thinking model, vLLM with a reasoning parser,
-Ollama's `/v1`) it turns on too and the prompt grows by the replayed
-reasoning; declare `replay_reasoning = false` there to keep the old bytes.
+([summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+H3 measured hosted endpoints only, so **local lanes are untested and off unless
+declared**: an endpoint whose URL host is a loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local, CGNAT/Tailscale (100.64/10), `*.local` or `host.docker.internal` host, a single-label name, or Ollama's `/api/chat` gets no replay by default,
+even when it returns reasoning (llama.cpp with a thinking model, vLLM with a
+reasoning parser, Ollama's `/v1`). Declare `replay_reasoning = true` there to
+turn it on; a fallback is judged by its own URL.
 
 **Steering role.** gnomon steers a turn with messages of its own: the idle
 nudge, the convergence push, a failed verification, the tool-less wrap-up,

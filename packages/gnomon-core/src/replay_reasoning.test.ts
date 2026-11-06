@@ -20,6 +20,27 @@ import { adaptReplayReasoning, callEndpoint, runSessionTurn, runTask, wireOf } f
 import { auditSurface, loadConfig, replayFieldsOf, resolveReplayReasoning, resolveUi, routeRole } from "./config.js";
 import { Progress } from "./render.js";
 
+/**
+ * A hosted-looking URL for a fake server on 127.0.0.1: the replay default
+ * applies only to hosted (non-local) endpoints (isLocalLaneUrl), so a test of
+ * the default needs a URL whose host is public. `fetch` is wrapped to send
+ * that host's requests to the local server; restored after each test.
+ */
+const realFetch = globalThis.fetch;
+function asHosted(localUrl: string): string {
+  const local = new URL(localUrl);
+  const origin = `https://hosted-${local.port}.example.com`;
+  const prev = globalThis.fetch;
+  globalThis.fetch = ((input: any, init?: any) => {
+    const u: string = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    return u.startsWith(origin) ? prev(local.origin + u.slice(origin.length), init) : prev(input, init);
+  }) as typeof fetch;
+  return origin + local.pathname + local.search;
+}
+afterEach(() => {
+  globalThis.fetch = realFetch;
+});
+
 let servers: Server[] = [];
 const roots: string[] = [];
 afterEach(async () => {
@@ -161,9 +182,9 @@ describe("on by default when the endpoint reasons (v0.4.3)", () => {
     return lines.find((r) => r.kind === "turn");
   };
 
-  it("an undeclared endpoint that answers a tool call with reasoning gets it back, and the wire says default", async () => {
+  it("an undeclared hosted endpoint that answers a tool call with reasoning gets it back, and the wire says default", async () => {
     const { url, bodies } = await serve(false);
-    const root = audited(url, "stream = false");
+    const root = audited(asHosted(url), "stream = false");
     const rec = await runTask(loadConfig(root), "read x.txt", { role: "smol", yes: true });
     expect(rec.output).toContain("done");
     // The first request had nothing to replay; the second carries it.
@@ -175,8 +196,25 @@ describe("on by default when the endpoint reasons (v0.4.3)", () => {
 
   it("the same for a streamed reply", async () => {
     const { url, bodies } = await serve(true);
-    await runTask(loadConfig(surface(url, "stream = true")), "read x.txt", { role: "smol", yes: true });
+    await runTask(loadConfig(surface(asHosted(url), "stream = true")), "read x.txt", { role: "smol", yes: true });
     expect(assistants(bodies[1]!)[0]!.reasoning_content).toBe("I should read x.txt first.");
+  });
+
+  it("a local lane (llama.cpp-style, 127.0.0.1) that returns reasoning_content is not replayed by default; declared true, it is", async () => {
+    // H3 measured hosted endpoints only; on a local lane the default is off.
+    const off = await serve(false);
+    const root = audited(off.url, "stream = false");
+    const rec = await runTask(loadConfig(root), "read x.txt", { role: "smol", yes: true });
+    expect(rec.output).toContain("done");
+    expect(off.bodies).toHaveLength(2);
+    expect(JSON.stringify(off.bodies[1])).not.toContain("reasoning_content");
+    expect(turnRecord(root).wire.replay_reasoning).toBeUndefined();
+
+    const on = await serve(false);
+    const declared = audited(on.url, "stream = false\nreplay_reasoning = true");
+    await runTask(loadConfig(declared), "read x.txt", { role: "smol", yes: true });
+    expect(assistants(on.bodies[1]!)[0]!.reasoning_content).toBe("I should read x.txt first.");
+    expect(turnRecord(declared).wire).toMatchObject({ replay_reasoning: true, replay_reasoning_source: "declared" });
   });
 
   it("an endpoint that never sends reasoning is sent none: the same bytes as replay_reasoning = false", async () => {
@@ -217,15 +255,15 @@ describe("on by default when the endpoint reasons (v0.4.3)", () => {
       replayReasoning: true,
       replayReasoningSource: "default",
     });
-    expect(replayFieldsOf({ url: "https://x/v1/chat/completions", kind: "openai", replay_reasoning: false })).toEqual({ replayReasoning: false });
-    expect(replayFieldsOf({ url: "https://x/v1/chat/completions", kind: "openai" })).toEqual({
+    expect(replayFieldsOf({ url: "https://x.example/v1/chat/completions", kind: "openai", replay_reasoning: false })).toEqual({ replayReasoning: false });
+    expect(replayFieldsOf({ url: "https://x.example/v1/chat/completions", kind: "openai" })).toEqual({
       replayReasoning: false,
       replayReasoningAuto: true,
     });
     // Ollama's /api/chat is never sent it, declared or not.
     expect(replayFieldsOf({ url: "http://127.0.0.1:11434/api/chat" })).toEqual({ replayReasoning: false });
     // Learned for the session: on, as a default; refused: off again.
-    const auto = routeRole(loadConfig(surface("http://127.0.0.1:1/v1/chat/completions", "")), "smol").target;
+    const auto = routeRole(loadConfig(surface("https://hosted.example.com/v1/chat/completions", "")), "smol").target;
     const state: any = { replayReasoningLearned: new Set([`${auto.url}|${auto.model}`]) };
     expect(wireOf(adaptReplayReasoning(state, auto))).toMatchObject({ replay_reasoning: true, replay_reasoning_source: "default" });
     state.replayReasoningRefused = new Set([`${auto.url}|${auto.model}`]);
@@ -258,7 +296,7 @@ describe("on by default when the endpoint reasons (v0.4.3)", () => {
     });
     servers.push(server);
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
-    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/chat/completions`;
+    const url = asHosted(`http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/chat/completions`);
     const errs: string[] = [];
     const rec = await runTask(loadConfig(surface(url, "stream = false")), "read x.txt", {
       role: "smol",

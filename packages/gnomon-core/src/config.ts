@@ -2095,7 +2095,7 @@ const REPLAY_REASONING_HOSTS = [/(^|\.)api\.deepseek\.com$/];
  * from its first request.
  *
  * Declared wins. Undeclared it is off at the start, except for a host listed
- * above, and turns on at run time once the endpoint answers a tool call with
+ * above, and on a hosted endpoint turns on at run time once it answers a tool call with
  * reasoning (replayFieldsOf, prompt_loop.ts adaptReplayReasoning): the field
  * is not part of OpenAI's message schema and strict servers refuse extra
  * message fields (opencode's Console Go answered gnomon's surplus
@@ -2121,16 +2121,67 @@ export function resolveReplayReasoning(endpoint: {
 }
 
 /**
+ * Whether an endpoint URL is a local lane for the reasoning-replay default:
+ * the operator's own hardware, where H3 never measured replay.
+ *
+ * Wider than isLocalEndpoint (which feeds listings and trust and is left
+ * alone): loopback (all of 127/8, ::1, localhost, *.localhost, 0.0.0.0), the
+ * private ranges (10/8, 172.16/12, 192.168/16, IPv6 fc00::/7), link-local
+ * (169.254/16, fe80::/10), CGNAT and Tailscale (100.64/10), `*.local`,
+ * `host.docker.internal`, and a bare single-label host (a container or LAN
+ * name). A URL that does not parse counts as local, so the default stays off
+ * for it: it can only make replay less likely, never more.
+ */
+export function isLocalLaneUrl(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return true;
+  }
+  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+  if (host === "" || host === "localhost" || host.endsWith(".localhost")) return true;
+  if (host.endsWith(".local") || host === "host.docker.internal") return true;
+  if (host.includes(":")) {
+    // IPv6: loopback, unspecified, unique-local fc00::/7, link-local fe80::/10,
+    // and an IPv4-mapped address judged as its IPv4 part.
+    if (host === "::1" || host === "::") return true;
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(host);
+    if (mapped) return isLocalLaneUrl(`http://${mapped[1]}/`);
+    return /^f[cd][0-9a-f]{0,2}:/.test(host) || /^fe[89ab][0-9a-f]?:/.test(host);
+  }
+  const v4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(host);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    return (
+      a === 127 ||
+      a === 10 ||
+      a === 0 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254) ||
+      (a === 100 && b >= 64 && b <= 127)
+    );
+  }
+  // A name with no dot is not a public host: a container, a LAN machine.
+  return !host.includes(".");
+}
+
+/**
  * The replay fields of a route target: `replayReasoning`, why it is on, and
  * whether it may still turn on at run time.
  *
- * v0.4.3: undeclared means "on once the endpoint shows it reasons". An
- * endpoint that answers a tool call with reasoning content gets it back on
- * every later assistant message, which every 2026 open-weights family asks
- * for (DeepSeek V4, GLM-5, Kimi K3, Qwen3.6+, MiniMax), and which halved
- * reasoning per cell in P2G41 (A41 153k vs B41 77k, B41 replaying). An
- * endpoint that never sends reasoning is never sent any, so its requests are
- * the bytes they were. `replay_reasoning = false` still turns it off.
+ * v0.4.4: undeclared on a HOSTED endpoint means "on once the endpoint shows it
+ * reasons". An endpoint that answers a tool call with reasoning content gets
+ * it back on every later assistant message, which every 2026 open-weights
+ * family asks for. H3 (2026-11-06, pre-registered, hosted DeepSeek V4.1
+ * Flash) adopted it: hidden-test fraction +0.160 [95% +0.042, +0.293], capped
+ * 14 vs 19 (https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt).
+ * H3 measured hosted endpoints only, and LG1's local lane returned no
+ * reasoning, so on a local lane (isLocalLaneUrl, and Ollama's /api/chat) the
+ * default is off: replay there is untested and would grow every prompt.
+ * `replay_reasoning = true` turns it on anywhere; `false` turns it off. An
+ * endpoint that never sends reasoning is never sent any.
  */
 export function replayFieldsOf(
   endpoint: { url?: string; kind?: EndpointKind; replay_reasoning?: unknown },
@@ -2139,7 +2190,9 @@ export function replayFieldsOf(
   const on = resolveReplayReasoning(endpoint, unclear);
   const declared = typeof endpoint.replay_reasoning === "boolean";
   if (on) return { replayReasoning: true, replayReasoningSource: declared ? "declared" : "default" };
-  if (declared || endpointKind(endpoint, unclear) === "ollama") return { replayReasoning: false };
+  if (declared || endpointKind(endpoint, unclear) === "ollama" || isLocalLaneUrl(endpoint.url ?? "")) {
+    return { replayReasoning: false };
+  }
   return { replayReasoning: false, replayReasoningAuto: true };
 }
 
@@ -4022,7 +4075,8 @@ export function routeRole(
       streamTotalMs: resilience.stream_total_timeout_ms,
       maxTokens: resolveMaxTokens(config, roleDef, fbEndpoint),
       ...contextWindowOf(config, fbEndpoint?.max_context_tokens, { url: fbUrl, kind: fbKind, model: fb.model }),
-      ...replayFieldsOf(fbEndpoint ?? { url: fb.url }, "openai"),
+      // By its own URL: the one the fallback is actually sent to.
+      ...replayFieldsOf({ ...(fbEndpoint ?? {}), url: fbUrl }, "openai"),
       ...(resolveSteerRole(fbEndpoint) === "user" ? { steerRole: "user" as const } : {}),
       ...knobsOf(roleDef, fbEndpoint, fbKind),
     };

@@ -29,8 +29,10 @@ import {
   LOOP_DEFAULTS,
   TASK_TRANSPORT_GRACE_MS,
   loadConfig,
+  isLocalLaneUrl,
   parseDeadline,
   replayFieldsOf,
+  routeRole,
   resolveDeadline,
   resolveGnomonDir,
   resolveLoop,
@@ -62,21 +64,81 @@ describe("conformance/long_tasks.json", () => {
 });
 
 describe("v0.4.4 release defaults (H3 adopt, LG1 keep)", () => {
-  it("replay: undeclared on an OpenAI-shaped endpoint it waits for reasoning; Ollama's /api/chat never; false stays off", () => {
-    // H3 adopted replay as a default: it turns on once the endpoint returns reasoning.
+  it("replay: undeclared on a hosted endpoint it waits for reasoning; local lanes and Ollama never; false stays off", () => {
+    // H3 adopted replay as a default, measured on hosted endpoints only.
     expect(replayFieldsOf({ url: "https://openrouter.ai/api/v1/chat/completions" })).toEqual({
       replayReasoning: false,
       replayReasoningAuto: true,
     });
-    expect(replayFieldsOf({ url: "http://127.0.0.1:8080/v1/chat/completions" })).toEqual({
-      replayReasoning: false,
-      replayReasoningAuto: true,
-    });
+    // A local lane (llama.cpp on this machine, the LAN, Tailscale): off unless declared.
+    for (const url of ["http://127.0.0.1:8080/v1/chat/completions", "http://192.168.1.20:8000/v1", "http://100.86.231.23:4310/v1"]) {
+      expect(replayFieldsOf({ url }), url).toEqual({ replayReasoning: false });
+      expect(replayFieldsOf({ url, replay_reasoning: true }), url).toEqual({
+        replayReasoning: true,
+        replayReasoningSource: "declared",
+      });
+    }
     // The built-in `local` endpoint (Ollama's /api/chat) is never sent it.
     expect(replayFieldsOf({ url: "http://127.0.0.1:11434/api/chat", kind: "ollama" })).toEqual({ replayReasoning: false });
-    expect(replayFieldsOf({ url: "http://127.0.0.1:8080/v1/chat/completions", replay_reasoning: false })).toEqual({
+    expect(replayFieldsOf({ url: "https://openrouter.ai/api/v1/chat/completions", replay_reasoning: false })).toEqual({
       replayReasoning: false,
     });
+  });
+
+  it("a fallback follows the same rule by its own URL", () => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-fb-"));
+    roots.push(root);
+    mkdirSync(join(root, ".gnomon"), { recursive: true });
+    writeFileSync(
+      join(root, ".gnomon", "config.toml"),
+      `[endpoints.cloud]\nurl = "https://openrouter.ai/api/v1/chat/completions"\n\n` +
+        `[endpoints.lan]\nurl = "http://10.0.0.5:8080/v1/chat/completions"\n`
+    );
+    writeFileSync(
+      join(root, ".gnomon", "roles.toml"),
+      `[roles.a]\nmodel = "m"\nendpoint = "cloud"\n\n[roles.a.fallback]\nendpoint = "lan"\nmodel = "l"\n\n` +
+        `[roles.b]\nmodel = "l"\nendpoint = "lan"\n\n[roles.b.fallback]\nendpoint = "cloud"\nmodel = "m"\n`
+    );
+    writeFileSync(join(root, ".gnomon", "system.md"), "x\n");
+    const a = routeRole(loadConfig(root), "a");
+    expect(a.fallback?.url).toBe("http://10.0.0.5:8080/v1/chat/completions");
+    expect(a.target.replayReasoningAuto).toBe(true);
+    expect(a.fallback?.replayReasoningAuto).toBeUndefined();
+    const b = routeRole(loadConfig(root), "b");
+    expect(b.target.replayReasoningAuto).toBeUndefined();
+    expect(b.fallback?.replayReasoningAuto).toBe(true);
+  });
+
+  it("isLocalLaneUrl: loopback, private, link-local, CGNAT/Tailscale, *.local, host.docker.internal are local", () => {
+    const local = [
+      "http://localhost:8080/v1",
+      "http://127.0.0.2:1/v1",
+      "http://[::1]:8080/v1",
+      "http://0.0.0.0:8000/v1",
+      "http://10.1.2.3/v1",
+      "http://172.20.0.2:8000/v1",
+      "http://192.168.0.9/v1",
+      "http://169.254.1.1/v1",
+      "http://[fe80::1]/v1",
+      "http://[fd12:3456::1]/v1",
+      "http://100.64.0.1/v1",
+      "http://100.127.255.254/v1",
+      "http://gx10.local:11434/v1",
+      "http://host.docker.internal:8080/v1",
+      "http://vllm:8000/v1",
+      "not a url",
+    ];
+    const hosted = [
+      "https://openrouter.ai/api/v1",
+      "https://api.deepseek.com/v1",
+      "http://100.63.0.1/v1",
+      "http://100.128.0.1/v1",
+      "http://172.32.0.1/v1",
+      "https://8.8.8.8/v1",
+      "https://[2001:db8::1]/v1",
+    ];
+    for (const u of local) expect(isLocalLaneUrl(u), u).toBe(true);
+    for (const u of hosted) expect(isLocalLaneUrl(u), u).toBe(false);
   });
 
   it("the idle nudge is v0.4.3's: 12 with nothing declared", () => {
@@ -85,6 +147,27 @@ describe("v0.4.4 release defaults (H3 adopt, LG1 keep)", () => {
     expect(resolveLoop({ config: {} } as never).nudge_after_idle).toBe(12);
     expect(FIXTURE.defaults["turn.nudge_after_idle"]).toBe(12);
   });
+});
+
+/**
+ * A hosted-looking URL for a fake server on 127.0.0.1: the replay default
+ * applies only to hosted (non-local) endpoints (isLocalLaneUrl), so a test of
+ * the default needs a URL whose host is public. `fetch` is wrapped to send
+ * that host's requests to the local server; restored after each test.
+ */
+const realFetch = globalThis.fetch;
+function asHosted(localUrl: string): string {
+  const local = new URL(localUrl);
+  const origin = `https://hosted-${local.port}.example.com`;
+  const prev = globalThis.fetch;
+  globalThis.fetch = ((input: any, init?: any) => {
+    const u: string = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    return u.startsWith(origin) ? prev(local.origin + u.slice(origin.length), init) : prev(input, init);
+  }) as typeof fetch;
+  return origin + local.pathname + local.search;
+}
+afterEach(() => {
+  globalThis.fetch = realFetch;
 });
 
 let servers: Server[] = [];
@@ -468,10 +551,10 @@ const MASTER_B0F1D34E = {
 /** The request bodies of the scripted turn, each hashed with the Windows platform note cut out. */
 async function scripted(
   scenario: "reasoning" | "plain" | "trunc" | "trunc2",
-  opts: { endpoint?: string; turn?: string; deadlineS?: number } = {}
+  opts: { endpoint?: string; turn?: string; deadlineS?: number; hosted?: boolean } = {}
 ): Promise<{ hashes: string[]; rec: Awaited<ReturnType<typeof runTask>> }> {
   const reasons = scenario !== "plain";
-  const { url, raws } = await serve((n) => {
+  const { url: localUrl, raws } = await serve((n) => {
     if (scenario === "trunc2" && n === 4) return answer("");
     if ((scenario === "trunc" || scenario === "trunc2") && (n === 3 || n === 5)) return answer("partial ans", "length");
     if (n <= 14) {
@@ -479,6 +562,7 @@ async function scripted(
     }
     return answer("done");
   });
+  const url = opts.hosted ? asHosted(localUrl) : localUrl;
   const root = mkdtempSync(join(tmpdir(), "gnomon-ident-"));
   roots.push(root);
   mkdirSync(join(root, ".gnomon"), { recursive: true });
@@ -518,16 +602,25 @@ describe("byte-identity with master (b0f1d34e)", () => {
   });
 
   it("the release defaults are master's bytes for an endpoint that sends no reasoning: nothing declared", async () => {
-    // The local-lane case LG1 measured: no reasoning field, so replay never
-    // fires, and the nudge is master's. Every request is byte-identical.
+    // The case LG1 measured: no reasoning field, so replay never fires, and
+    // the nudge is master's. Every request is byte-identical, local or hosted.
     const plain = await scripted("plain");
     expect(plain.hashes).toEqual(MASTER_B0F1D34E.reasoning);
     expect(plain.rec.counters.nudges).toBe(1);
+    expect((await scripted("plain", { hosted: true })).hashes).toEqual(MASTER_B0F1D34E.reasoning);
+  });
+
+  it("a local lane that returns reasoning gets master's bytes by default (replay untested there); declared true, replay", async () => {
+    expect((await scripted("reasoning")).hashes).toEqual(MASTER_B0F1D34E.reasoning);
+    expect((await scripted("trunc")).hashes).toEqual(MASTER_B0F1D34E.trunc);
+    const declared = await scripted("reasoning", { endpoint: "replay_reasoning = true\n" });
+    expect(declared.hashes[0]).toBe(MASTER_B0F1D34E.reasoning[0]);
+    expect(declared.hashes[1]).not.toBe(MASTER_B0F1D34E.reasoning[1]);
   });
 
   it("where behaviour does change, it changes only from the point it should", async () => {
-    // Replay on: request 2 is the first to carry reasoning back.
-    const replay = await scripted("reasoning");
+    // Replay on (a hosted endpoint): request 2 is the first to carry reasoning back.
+    const replay = await scripted("reasoning", { hosted: true });
     expect(replay.hashes[0]).toBe(MASTER_B0F1D34E.reasoning[0]);
     expect(replay.hashes[1]).not.toBe(MASTER_B0F1D34E.reasoning[1]);
     // Nudge declared off (0): identical until the request master nudged in
