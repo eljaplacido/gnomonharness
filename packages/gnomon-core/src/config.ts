@@ -3930,7 +3930,7 @@ export function isLocalEndpoint(url: string): boolean {
   } catch {
     return false;
   }
-  if (["localhost", "127.0.0.1", "0.0.0.0", "::1"].includes(host)) return true;
+  if (["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"].includes(host)) return true;
   if (host.endsWith(".local")) return true;
   return (
     /^10\./.test(host) ||
@@ -3938,6 +3938,27 @@ export function isLocalEndpoint(url: string): boolean {
     /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
     /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)
   );
+}
+
+/**
+ * Whether an endpoint URL is THIS machine: localhost, 127.0.0.0/8, ::1.
+ *
+ * What a decision to send a key (or session text) without a grant may
+ * count as local (seventh review, L3). isLocalEndpoint's `.local`, RFC1918
+ * and CGNAT hosts are local for a listing, but anyone on the LAN or the
+ * tailnet can listen there -- and a surface below a contained root is a
+ * container's to have written, so `api_key_env` aimed at 10.0.0.5 sent the
+ * key there with no grant.
+ */
+export function isLoopbackEndpoint(url: string): boolean {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (host === "localhost" || host === "::1" || host === "[::1]") return true;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
 }
 
 const KNOWN_PROVIDERS: Array<[RegExp, string]> = [
@@ -4343,6 +4364,29 @@ export interface ResolvedExec {
  * start must refuse rather than silently run unsandboxed, so it is not offered
  * rather than offered-and-broken.
  */
+/**
+ * A container image reference: `[registry[:port]/]path[:tag][@algo:hex]`, the
+ * grammar of the distribution reference. Nothing else is accepted for
+ * `[sandbox] image` or a role's `image`.
+ *
+ * WHY (fifth review, finding 5). The image was interpolated unquoted into the
+ * host's `sh -c` line, and nothing checked it: `image = "x; touch ~/p"` ran
+ * the tail on the host, and `image = "--privileged"` was a docker flag. The
+ * surface is writable by whoever wrote it last, which under a container may
+ * have been the container.
+ */
+const IMAGE_DOMAIN = "(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?)(?:\\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?))*(?::[0-9]+)?";
+const IMAGE_COMPONENT = "[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*";
+const IMAGE_REF = new RegExp(
+  `^(?:${IMAGE_DOMAIN}/)?${IMAGE_COMPONENT}(?:/${IMAGE_COMPONENT})*` +
+    "(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?" +
+    "(?:@[A-Za-z][A-Za-z0-9]*(?:[-_+.][A-Za-z][A-Za-z0-9]*)*:[0-9a-fA-F]{32,})?$"
+);
+
+export function isValidImageRef(image: unknown): image is string {
+  return typeof image === "string" && image.length > 0 && image.length <= 255 && !image.startsWith("-") && IMAGE_REF.test(image);
+}
+
 export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
   const sandbox = (config.policy?.sandbox ?? {}) as {
     exec?: unknown;

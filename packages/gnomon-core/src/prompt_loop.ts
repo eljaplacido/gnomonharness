@@ -9,11 +9,16 @@
  */
 
 import * as readline from "node:readline";
-import { execFileSync, spawnSync } from "node:child_process";
+import { safeGit } from "./git_safe.js";
+import { pinCredentials, holdCredentials, heldNotice, type CredentialPin } from "./credential_pin.js";
+import { pinSandbox, applySandboxPin, describeLoosening, type SandboxPin } from "./sandbox_pin.js";
 import { checkCitations } from "./citations.js";
 import { mustFailFirst, readVerifyExit } from "./must_fail_first.js";
 import { resolve, dirname, join, basename, sep } from "node:path";
-import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, realpathSync, renameSync } from "node:fs";
+import { readRegular } from "./root_fs.js";
+import { createHash } from "node:crypto";
+import { gnomonDataDir } from "./credentials.js";
 import { fileURLToPath } from "node:url";
 import {
   GnomonConfig,
@@ -185,7 +190,7 @@ import {
 import { resolveContextWindow, type ContextSource } from "./context_window.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
 import { applyCredentials } from "./credentials.js";
-import { clampToDefaults, type TrustOutcome } from "./trust.js";
+import { assertContainableRoot, mcpSpawnDir, clampToDefaults, recordExecFloor, pinSessionRepository, type TrustOutcome } from "./trust.js";
 import {
   resolveSessionStore,
   saveSession,
@@ -292,6 +297,16 @@ export interface PromptState {
    */
   network?: boolean;
   sandbox?: SandboxLevel;
+  /**
+   * The sandbox the session started under (sandbox_pin.ts): a later reload
+   * of the surface may tighten it, never loosen it. Set at the session's start.
+   */
+  sandboxPin?: SandboxPin;
+  /**
+   * Where the session's keys go, as it started (credential_pin.ts): a reload
+   * that moves an endpoint's url or api_key_env, or an MCP server, is held.
+   */
+  credentialPin?: CredentialPin;
   /** Connected MCP servers, if the surface declares any. Set once at startup. */
   mcp?: McpRegistry;
   /**
@@ -3709,9 +3724,10 @@ export function measureTreeDelta(
   const run = (args: string[]): string | null => {
     __treeGitCalls.n++;
     try {
-      return execFileSync("git", args, {
-        cwd: root, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"],
-      });
+      // git_safe: a repository's own config (core.fsmonitor, a filter
+      // driver) cannot make this bookkeeping run a program on the host.
+      const r = safeGit(args, { cwd: root, timeout: 5000, stdio: ["ignore", "pipe", "ignore"], hot: true });
+      return r.status === 0 && typeof r.stdout === "string" ? r.stdout : null;
     } catch {
       return null;
     }
@@ -3767,7 +3783,7 @@ export function measureTreeDelta(
     ? fast.untracked
     : (run(["ls-files", "--others", "--exclude-standard"]) ?? "")
       .split("\n").map((l) => l.trim()).filter(Boolean);
-  for (const rel of untrackedRels) untracked.set(rel, countLines(join(root, rel)));
+  for (const rel of untrackedRels) untracked.set(rel, countLines(root, rel));
   const head = fast ? fast.head : (run(["rev-parse", "HEAD"]) ?? "").trim() || null;
   const a = parse(plain);
 
@@ -3893,8 +3909,8 @@ function gitStatusGate(root: string):
   const key = (() => { try { return realpathSync(root); } catch { return root; } })();
   const first = !__indexRefreshed.has(key);
   __indexRefreshed.add(key);
-  const r = spawnSync("git", [...(first ? [] : ["--no-optional-locks"]), "status", "--porcelain=v2", "-z",
-    "--branch", "--untracked-files=all"], { cwd: root, encoding: "utf8", timeout: 5000 });
+  const r = safeGit([...(first ? [] : ["--no-optional-locks"]), "status", "--porcelain=v2", "-z",
+    "--branch", "--untracked-files=all"], { cwd: root, timeout: 5000, hot: true });
   if (r.status !== 0 || typeof r.stdout !== "string") {
     return /not a git repository/i.test(String(r.stderr ?? "")) ? "not-a-repo" : null;
   }
@@ -3944,9 +3960,17 @@ function worktreeTop(root: string): string | null {
 }
 
 /** Line count of a file, or null when it is binary or unreadable. */
-function countLines(path: string): number | null {
+/**
+ * Lines in an untracked file, or null (binary, unreadable, not a regular
+ * file in the root, or over 16 MiB). Seventh review (L2): the path is the
+ * model's to shape under exec = "docker", and a plain readFileSync followed
+ * a symlink -- to /dev/zero (the turn hung) or to a host file (its line
+ * count reached the record). readRegular reads only a regular file whose
+ * real path is in the root, opened non-blocking.
+ */
+function countLines(root: string, rel: string): number | null {
   try {
-    const buf = readFileSync(path);
+    const buf = readRegular([root], join(root, rel), { maxBytes: COUNT_LINES_MAX_BYTES });
     // Same heuristic git uses to call a file binary: a NUL in the first 8000 bytes.
     if (buf.subarray(0, 8000).includes(0)) return null;
     const text = buf.toString("utf-8");
@@ -3956,6 +3980,8 @@ function countLines(path: string): number | null {
     return null;
   }
 }
+
+const COUNT_LINES_MAX_BYTES = 16 * 1024 * 1024;
 
 export interface TurnCounters {
   /**
@@ -4619,10 +4645,14 @@ export async function runAgenticTurn(
   // One resolver each, shared with `gnomon guard`, so another harness's call
   // is gated by the same reading of the surface this loop makes.
   const gate: ApprovalGate = resolveApprovalGate(config);
-  const sandbox: SandboxLevel = state.sandbox ?? resolveSandboxLevel(config);
+  // The sandbox as the session started it, tightened by any reload since and
+  // never loosened (sandbox_pin.ts): policy.toml and roles.toml are inside the
+  // root a contained bash can write.
+  const pinned = applySandboxPin((state.sandboxPin ??= pinSandbox(config)), config, role);
+  const sandbox: SandboxLevel = state.sandbox ?? pinned.level;
 
   // Session grant wins over the declared default; the surface is unchanged.
-  const declaredNetwork = (policy.sandbox as { network?: boolean } | undefined)?.network;
+  const declaredNetwork = pinned.network;
   const network = state.network ?? declaredNetwork;
   const packageIndex = resolvePackageIndex(config);
   const editVariant = resolveEditVariant(config);
@@ -4657,11 +4687,11 @@ export async function runAgenticTurn(
     sandbox,
     // Declared in policy.toml, hashed with the surface. A grant that does not
     // move the surface hash would be a grant nobody could audit.
-    extraRoots: resolveExtraRoots(config),
+    extraRoots: pinned.extraRoots,
     taskAllow: config.roles[role]?.task_allow,
     // Where bash runs. "off" by default, so nothing moves unless a surface
-    // asks for it.
-    exec: resolveExec(config, role),
+    // asks for it -- and, once the session has started, only ever tighter.
+    exec: pinned.exec,
     gate,
     approve,
     timeoutMs: toolTimeoutMs(config),
@@ -6165,6 +6195,10 @@ export async function runAgenticTurn(
               new Set(["bash"])
             )
           );
+          for (const w of mff.warnings ?? []) say(paint(deps.ui, "yellow", `  ⚠ test_must_fail_first: ${w}`));
+          if (!mff.ran && mff.reason?.startsWith("not re-run:")) {
+            say(paint(deps.ui, "yellow", `  ⚠ test_must_fail_first ${mff.reason}`));
+          }
           if (mff.pinsNothing) {
             pinsNothing = true;
             say(
@@ -7851,6 +7885,14 @@ export async function runTask(
   const chainGate = resolveChainGate(config);
 
   const state: PromptState = { config, exchanges: [], currentRole: role };
+  // Where this task's bash runs, recorded for the next session (trust.ts
+  // exec floor): a role that ran contained here may not leave it unasked.
+  // First: a root holding gnomon's own code, its data dir or the home
+  // directory cannot be contained at all (sixth review).
+  assertContainableRoot(config);
+  recordExecFloor(config);
+  // The repository every gnomon git of this task names (git_safe.ts).
+  pinSessionRepository(config);
   const ui: ResolvedUi = { ...resolveUi(config), spinner: false, color: false };
   // `let`, as are `shadow` and `trust` below: an MCP server whose tools
   // changed since they were pinned clamps the run after its servers connect
@@ -8034,7 +8076,7 @@ export async function runTask(
   // Failure to connect is reported and skipped, never fatal -- an unreachable
   // MCP server should cost its own tools, not the whole run.
   if (config.tools.mcp_servers && Object.keys(config.tools.mcp_servers).length > 0) {
-      state.mcp = await connectMcp(config.tools.mcp_servers, note, auditForTurn, warn);
+      state.mcp = await connectMcp(config.tools.mcp_servers, note, auditForTurn, warn, { cwd: mcpSpawnDir(config) });
   }
 
   // What each server offered, against this machine's pin for it (GV10). One
@@ -8445,9 +8487,11 @@ export function completePath(line: string, root: string): [string[], string] {
  *
  * readline was constructed with no `history` option and no file, so Node's
  * in-memory default gave up-arrow within one run and nothing across runs --
- * re-running yesterday's prompt meant retyping it. Stored beside
- * `.gnomon-sessions/`, not inside `.gnomon/`: it is per-machine state like a
- * session log, not configuration, so it must not touch the surface hash.
+ * re-running yesterday's prompt meant retyping it. Per-machine state, kept in
+ * gnomon's data dir and keyed by the project's real path -- not in the
+ * project. It used to be `.gnomon-sessions/history`, inside the root, where a
+ * contained command replaced it with a symlink to the trust store and the
+ * next prompt's rewrite corrupted it (fifth review, finding 1).
  *
  * Bounded, newest last on disk. Failures are silent by design -- a read-only
  * checkout should still get a prompt, just without history.
@@ -8455,7 +8499,14 @@ export function completePath(line: string, root: string): [string[], string] {
 export const HISTORY_LIMIT = 500;
 
 export function historyPath(config: GnomonConfig): string {
-  return join(resolve(config.gnomonDir, ".."), ".gnomon-sessions", "history");
+  const root = resolve(config.gnomonDir, "..");
+  let real = root;
+  try {
+    real = realpathSync(root);
+  } catch {
+    /* not there: its spelling */
+  }
+  return join(gnomonDataDir(), "history", createHash("sha256").update(real).digest("hex").slice(0, 16));
 }
 
 export function loadHistory(config: GnomonConfig): string[] {
@@ -8475,8 +8526,10 @@ export function appendHistory(config: GnomonConfig, line: string): void {
   try {
     const kept = [...loadHistory(config).filter((l) => l !== text), text].slice(-HISTORY_LIMIT);
     const p = historyPath(config);
-    mkdirSync(dirname(p), { recursive: true });
-    writeFileSync(p, kept.join("\n") + "\n");
+    mkdirSync(dirname(p), { recursive: true, mode: 0o700 });
+    const tmp = `${p}.${process.pid}.tmp`;
+    writeFileSync(tmp, kept.join("\n") + "\n", { mode: 0o600 });
+    renameSync(tmp, p);
   } catch {
     /* history is a convenience; never let it break the prompt */
   }
@@ -8536,6 +8589,14 @@ export const LIVE_SAFE_COMMANDS = new Set([
  * so the note keeps saying what it is not, and points at the setting that is
  * isolation: [sandbox] exec = "docker", which runs bash with --network none.
  */
+/** The operator's line for a reload whose looser sandbox was not applied (sandbox_pin.ts). */
+export function sandboxKeptNotice(kept: readonly string[]): string {
+  return (
+    `sandbox NOT loosened: the surface now asks for ${kept.join("; ")}. ` +
+    `This session keeps the sandbox it started with; restart gnomon to apply a looser one.`
+  );
+}
+
 export const NETWORK_OFF_NOTE =
   "  note: network = false refuses webfetch and curl/ssh in bash — a filter, not isolation (see exec)";
 
@@ -10317,8 +10378,16 @@ export async function runSessionTurn(
     try {
       // Under the same --profile the session started with (see reloadConfig),
       // and through the front end's trust decision.
-      const reloaded = (deps.reconfigure ?? ((fresh: GnomonConfig) => fresh))(reloadConfig(state.config));
+      const pin = (state.credentialPin ??= pinCredentials(state.config));
+      const settled = (deps.reconfigure ?? ((fresh: GnomonConfig) => fresh))(reloadConfig(state.config));
+      // Key routing is held to the session's start (credential_pin.ts).
+      const { config: reloaded, held } = holdCredentials(pin, settled);
       state.config = reloaded;
+      const heldLine = heldNotice(held);
+      if (heldLine) print(paint(ui, "yellow", `  ${heldLine}`));
+      // A loosened sandbox is not applied (sandbox_pin.ts). Said, not hidden.
+      const kept = state.sandboxPin ? describeLoosening(state.sandboxPin, reloaded) : [];
+      if (kept.length > 0) print(paint(ui, "yellow", `  ${sandboxKeptNotice(kept)}`));
       const short = recomputeManifest(reloaded.gnomonDir).surface_hash.slice(0, 16);
       print(
         paint(ui, "green", `  ✓ surface reloaded — now ${short}… · this session runs under it from the next turn`)
@@ -10578,7 +10647,9 @@ export async function runPromptLoop(
     state.mcp = await connectMcp(
       config.tools.mcp_servers,
       (l) => console.log(paint(uiOf(state), "gray", l)),
-      audit
+      audit,
+      undefined,
+      { cwd: mcpSpawnDir(config) }
     );
   }
 
@@ -10596,6 +10667,16 @@ export async function runPromptLoop(
     audit.write("trust", { ...clamp.outcome, root: resolve(config.gnomonDir, "..") });
     console.log(paint(uiOf(state), "yellow", `  ${clamp.notice}`));
   }
+  // Where the keys go, as this session starts (credential_pin.ts): a reload
+  // may not move an endpoint's url or api_key_env, or an MCP server.
+  state.credentialPin ??= pinCredentials(state.config);
+  // The sandbox this session is held to from here on (sandbox_pin.ts), and
+  // this machine's record of it for the next session (trust.ts exec floor).
+  state.sandboxPin ??= pinSandbox(state.config);
+  assertContainableRoot(state.config);
+  recordExecFloor(state.config);
+  // The repository every gnomon git of this session names (git_safe.ts).
+  pinSessionRepository(state.config);
 
   // Rotating and switching need the loop's id and its persist(), so they are
   // supplied here rather than reached for from a command.
@@ -11714,8 +11795,13 @@ export async function runPromptLoop(
           // moved, because a surface that changes without saying so is the
           // thing this harness exists to prevent. Under the same --profile
           // (see reloadConfig), and through the session's trust decision.
-          const fresh = reconfigure(reloadConfig(config));
+          const pin = (state.credentialPin ??= pinCredentials(state.config));
+          const { config: fresh, held } = holdCredentials(pin, reconfigure(reloadConfig(config)));
           state.config = fresh;
+          const heldLine = heldNotice(held);
+          if (heldLine) console.log(paint(ui0, "yellow", `  ${heldLine}`));
+          const kept = state.sandboxPin ? describeLoosening(state.sandboxPin, fresh) : [];
+          if (kept.length > 0) console.log(paint(ui0, "yellow", `  ${sandboxKeptNotice(kept)}`));
           console.log(
             `\n  ${paint(ui0, "green", "✓")} ${paint(ui0, "bold", pickedRole)} → ` +
               `${modelTag} @${pickedEndpoint}`

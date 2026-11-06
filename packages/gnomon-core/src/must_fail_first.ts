@@ -14,8 +14,18 @@
  * tree whatever happens.
  */
 
-import { existsSync, readFileSync, unlinkSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname, relative, sep } from "node:path";
+import { relative, sep } from "node:path";
+import {
+  CONTAINED_READONLY_DIRS,
+  identityOf,
+  readExactIn,
+  removeIn,
+  sameIdentity,
+  writeFileIn,
+  RootWriteError,
+  type FileIdentity,
+} from "./root_fs.js";
+import { foldTreeName, unsafeTreePath } from "./surface_tree.js";
 import type { ResolvedVerify } from "./config.js";
 import { globToRegExp, type ToolOutcome } from "./tools.js";
 
@@ -77,6 +87,46 @@ export function isTestPath(testPaths: string[], rel: string): boolean {
   });
 }
 
+/** gnomon's own directories, by name: the surface and every state dir. */
+const OWN_DIRS = new Set<string>([...CONTAINED_READONLY_DIRS, ".gnomon-jobs", ".gnomon-out"]);
+
+/**
+ * Why host gnomon must not put a pre-image at `rel` (repo- or root-relative,
+ * `/`-separated), or null when it may (eighth review).
+ *
+ * The pre-images come from `git diff <base>`, and the base is a commit the
+ * model can make: its tree can hold `.git/config` (an fsmonitor the user's own
+ * git then runs) or a `.gnomon/` other than the live one. Either, written for
+ * the re-run, is in the tree for its length -- and for good after a SIGKILL
+ * in that window. So: nothing with a `.git` component at any depth, nothing
+ * `..` or absolute (surface_tree.ts), and nothing under the surface or a
+ * gnomon state dir. A change to those is judged by the other checks; it is
+ * never something the re-run needs to undo.
+ *
+ * Components are compared folded (case, trailing dots and spaces,
+ * HFS-ignorable code points), and a Windows short name (`GNOMON~1`) is
+ * refused outright, as it can name any of them. `ownDirs` names the live
+ * `[audit] dir` (relative, `/`-separated) when it is not a default one
+ * (ninth review).
+ */
+export function unwritablePreImage(rel: string, ownDirs: readonly string[] = []): string | null {
+  const bad = unsafeTreePath(rel);
+  if (bad) return bad;
+  const parts = rel.split("/").map(foldTreeName);
+  for (const [i, folded] of parts.entries()) {
+    if (OWN_DIRS.has(folded)) return `a path under gnomon's own ${rel.split("/")[i]}/`;
+  }
+  // The live [audit] dir by its configured name (ninth review): compared
+  // folded, so a case or trailing-dot variant of it is refused as well.
+  for (const own of ownDirs) {
+    const want = own.split("/").filter(Boolean).map(foldTreeName);
+    if (want.length > 0 && want.length <= parts.length && want.every((w, i) => parts[i] === w)) {
+      return `a path under gnomon's own ${own}/`;
+    }
+  }
+  return null;
+}
+
 export interface MustFailFirstResult {
   /** Whether the check was actually re-run against the pre-images. */
   ran: boolean;
@@ -88,6 +138,12 @@ export interface MustFailFirstResult {
   restored: string[];
   /** Why it did not run, when `ran` is false. */
   reason?: string;
+  /**
+   * Files NOT put back after the re-run because something replaced them
+   * while it ran (the re-run executes the model's code): each says which and
+   * why. The tree is left as that code left it, for a person to look at.
+   */
+  warnings?: string[];
 }
 
 /**
@@ -120,6 +176,15 @@ export async function mustFailFirst(
   const sources = [...preImages.entries()].filter(([abs]) => !isTest(abs));
   const restored = sources.map(([abs]) => rel(abs));
 
+  // Refused before anything is read or written: the loop's caller and
+  // `check` both filter these, so one arriving here is a defect upstream.
+  for (const abs of preImages.keys()) {
+    const why = unwritablePreImage(rel(abs));
+    if (why) {
+      return { ran: false, pinsNothing: false, tests, restored: [], reason: `not re-run: ${rel(abs)} is ${why}; gnomon does not write it` };
+    }
+  }
+
   if (tests.length === 0) {
     return { ran: false, pinsNothing: false, tests, restored: [], reason: "the change touched no test" };
   }
@@ -136,23 +201,52 @@ export async function mustFailFirst(
     };
   }
 
-  const current = new Map<string, Buffer | null>(
-    sources.map(([abs]) => [abs, existsSync(abs) ? readFileSync(abs) : null])
-  );
-  const put = (abs: string, content: string | Buffer | null) => {
-    if (content === null) {
-      if (existsSync(abs)) unlinkSync(abs);
-      return;
+  // The re-run puts files back and later restores them, as host gnomon, in a
+  // tree the model's code has been writing (sixth review). Every source path
+  // is read without following anything and must be a regular single-link
+  // file (or absent); a symlink there made the pre-image land in ~/.bashrc and
+  // the "current" copy read a credentials file into src/. Anything else
+  // refuses the check rather than touching it.
+  const current = new Map<string, { data: Buffer; mode: number } | null>();
+  for (const [abs] of sources) {
+    try {
+      current.set(abs, readExactIn(root, abs));
+    } catch (e) {
+      if (!(e instanceof RootWriteError)) throw e;
+      return { ran: false, pinsNothing: false, tests, restored: [], reason: `not re-run: ${e.message}` };
     }
-    mkdirSync(dirname(abs), { recursive: true });
-    writeFileSync(abs, content);
+  }
+  const put = (abs: string, content: string | Buffer | null, mode?: number) => {
+    if (content === null) removeIn(root, abs);
+    else writeFileIn(root, abs, content, mode);
   };
+  // What each path is after gnomon wrote it; compared before the restore.
+  const placed = new Map<string, FileIdentity | null>();
+  const warnings: string[] = [];
   try {
-    for (const [abs, pre] of sources) put(abs, pre);
+    for (const [abs, pre] of sources) {
+      put(abs, pre, current.get(abs)?.mode);
+      placed.set(abs, identityOf(abs));
+    }
     const again = await run(verify.command);
     const stillPasses = again.code === 0 && /exit 0\b/.test(again.summary);
-    return { ran: true, pinsNothing: stillPasses, tests, restored };
+    // `warnings` is filled by the finally below, after this object is built.
+    return { ran: true, pinsNothing: stillPasses, tests, restored, warnings };
   } finally {
-    for (const [abs, now] of current) put(abs, now);
+    for (const [abs, now] of current) {
+      // Not written (put threw first): nothing of gnomon's to undo there.
+      if (!placed.has(abs)) continue;
+      const was = placed.get(abs) ?? null;
+      const is = identityOf(abs);
+      if (!sameIdentity(was, is)) {
+        warnings.push(`${rel(abs)} was replaced while the check re-ran; not restored (left as the re-run left it)`);
+        continue;
+      }
+      try {
+        put(abs, now ? now.data : null, now?.mode);
+      } catch (e) {
+        warnings.push(`${rel(abs)} could not be restored: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
   }
 }

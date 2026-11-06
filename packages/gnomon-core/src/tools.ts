@@ -14,6 +14,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { safeGit, containerStarted, containerGone, dockerContainerGone, CONTAINER_ROOT_LABEL } from "./git_safe.js";
 import { recordDegradation, type DegradationSink } from "./degradation.js";
 import {
   readFileSync,
@@ -40,6 +41,7 @@ import {
   isToolEnabled,
   recomputeManifest,
   toolMaxLines,
+  isValidImageRef,
 } from "./config.js";
 import { proposeSkill, ProposalRefused, renderSkill, SkillProposal } from "./skills.js";
 import { compute, ComputeError } from "./compute.js";
@@ -66,6 +68,34 @@ import {
   type RepoCodeRun,
   type WriteTarget,
 } from "./shell.js";
+import { containedMountPoints, containedReadonlyPaths, ensureDirIn, readRegular, RootWriteError, writeFileIn, writeRegular } from "./root_fs.js";
+
+/**
+ * The roots host reads and writes of model-named files must stay under (sixth
+ * review): none when sandbox = "off", which confines nothing.
+ */
+function fsRoots(ctx: Pick<ToolContext, "sandbox" | "root" | "extraRoots">): string[] {
+  return ctx.sandbox === "off" ? [] : [ctx.root, ...(ctx.extraRoots ?? [])];
+}
+
+/** A model-named file's text, read only if it is a regular file under the roots. */
+function readModelFile(ctx: Pick<ToolContext, "sandbox" | "root" | "extraRoots">, abs: string): string {
+  return readRegular(fsRoots(ctx), abs).toString("utf-8");
+}
+
+/** A write or edit refused because the file there is not one gnomon will read. */
+function unreadable(tool: "write" | "edit", path: string, err: unknown): ToolOutcome {
+  return {
+    code: TOOL_FAILED,
+    content: `Could not read ${path}: ${err instanceof Error ? err.message : String(err)}`,
+    summary: `${tool} ${path} — not a regular file`,
+  };
+}
+
+/** Write a model-named file: never through a symlink, a hard link, or into a non-regular file. */
+function writeModelFile(ctx: Pick<ToolContext, "sandbox" | "root" | "extraRoots">, abs: string, text: string): void {
+  writeRegular(fsRoots(ctx), abs, text);
+}
 
 // ---------------------------------------------------------------------------
 // Outcome codes
@@ -1334,7 +1364,7 @@ async function readTool(
         summary: `read ${path.replace(/\/+$/, "")}/ — ${entries.length} entries`,
       };
     }
-    const raw = readFileSync(abs, "utf-8");
+    const raw = readModelFile(ctx, abs);
     // Split on CRLF too. A trailing \r on every line of a Windows checkout is
     // invisible in the transcript and poison in anything copied from it.
     // `edit` matches LF text against CRLF files, so what is shown here is what
@@ -1615,7 +1645,7 @@ function killTree(
   // A container is not in the process group. Killing `docker run` returns the
   // shell to us and leaves the container running, so a timed-out command would
   // keep working -- writing into the repository -- after the turn had given up
-  // on it. Remove it explicitly, best-effort and without waiting.
+  // on it. The caller removes it, and waits for that (removeContainer).
   if (containerName) {
     try {
       spawn("docker", ["rm", "-f", containerName], {
@@ -1659,6 +1689,68 @@ function killTree(
   }
   return Promise.resolve();
 }
+
+/** How long a killed command's container may take to be removed before the turn stops waiting. */
+const CONTAINER_REMOVE_MS = 20_000;
+
+/**
+ * Remove a killed command's container and wait until docker says it is gone,
+ * bounded by CONTAINER_REMOVE_MS. Returns whether it is confirmed gone.
+ *
+ * WHY (fourth review, finding 4). killTree used to start `docker rm -f` and
+ * return. The turn went on to its host-side git -- worktreeMoved, the
+ * turn-end measurement, a config reload -- while the container still ran and
+ * could rewrite .git/config between gnomon's driver listing and the git that
+ * trusted it. Now the tool returns only once the container is gone. One that
+ * cannot be confirmed gone stays registered with git_safe, and no gnomon git
+ * runs on this machine until docker says it is.
+ */
+async function removeContainer(name: string): Promise<boolean> {
+  const until = Date.now() + CONTAINER_REMOVE_MS;
+  const run = (args: string[], ms: number) =>
+    new Promise<{ code: number | null; err: string }>((done) => {
+      let err = "";
+      let child;
+      try {
+        child = spawn("docker", args, { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+      } catch {
+        done({ code: null, err: "" });
+        return;
+      }
+      const timer = setTimeout(() => {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* gone */
+        }
+        done({ code: null, err });
+      }, Math.max(1, ms));
+      child.stderr?.on("data", (d: Buffer) => (err += d.toString()));
+      child.once("error", () => {
+        clearTimeout(timer);
+        done({ code: null, err });
+      });
+      child.once("exit", (code) => {
+        clearTimeout(timer);
+        done({ code, err });
+      });
+    });
+  while (Date.now() < until) {
+    await run(["rm", "-f", name], until - Date.now());
+    const seen = await run(["inspect", "--format", "{{.State.Status}}", name], Math.min(5000, Math.max(1, until - Date.now())));
+    if (seen.code !== null && seen.code !== 0 && /no such (object|container)/i.test(seen.err)) {
+      containerGone(name);
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return false;
+}
+
+/** What the model is told when its killed command's container could not be confirmed removed. */
+const CONTAINER_NOT_GONE =
+  "\n\n(The sandbox container could not be confirmed removed. gnomon runs no git on this machine " +
+  "until docker reports it gone, so changes made meanwhile are not measured.)";
 
 /**
  * On Windows, a timed-out or cancelled command is reported only once its tree
@@ -1736,6 +1828,20 @@ export function sandboxCommand(
   // bash_deny, bash_allow and the approval prompt have all read the ORIGINAL
   // text, where it was a harmless grep pattern.
   const inner = shq(command);
+  // The image is a word of the host's shell line and a docker argument: a
+  // value starting with `-` was a docker FLAG (`--privileged`), and one with
+  // a space or `;` was more of the line (fifth review, finding 5). Checked
+  // against the reference grammar, refused otherwise, and quoted regardless.
+  if (!isValidImageRef(ex.image)) throw new RootWriteError(`[sandbox] image ${JSON.stringify(ex.image)} is not a container image reference`);
+  // gnomon's own state and git's control files, read-only inside (root_fs.ts
+  // containedReadonlyPaths). Throws when one is a symlink.
+  const readonly = containedReadonlyPaths(ctx.root);
+  let realRoot = ctx.root;
+  try {
+    realRoot = realpathSync(ctx.root);
+  } catch {
+    /* not there: its spelling */
+  }
   const uid = typeof process.getuid === "function" ? process.getuid() : 0;
   const gid = typeof process.getgid === "function" ? process.getgid() : 0;
   return [
@@ -1743,6 +1849,12 @@ export function sandboxCommand(
     `--name ${name}`,
     ex.network ? "" : "--network none",
     `--user ${uid}:${gid}`,
+    // No capabilities and no setuid way back to any (sixth review): a setuid
+    // binary in the image would make the container root, and root can mknod
+    // a device or leave a setuid-root file in the bind-mounted project.
+    // Commands run as the user's uid and need none.
+    "--cap-drop ALL",
+    "--security-opt no-new-privileges",
     // shq, NOT JSON.stringify. JSON.stringify produces a DOUBLE-quoted word,
     // and `$( )` inside double quotes is still command substitution -- so a
     // project directory named `/tmp/proj-$(cmd)` executed `cmd` on the host the
@@ -1752,12 +1864,20 @@ export function sandboxCommand(
     // which is the more common shape of a quoting bug -- one call site noticed,
     // its neighbours not.
     `-v ${shq(ctx.root)}:${shq(ctx.root)}`,
+    // `.git` a mount point of its own, so it cannot be renamed away from
+    // the read-only mounts inside it (root_fs.ts containedMountPoints).
+    ...containedMountPoints(ctx.root).map((p) => `-v ${shq(p)}:${shq(p)}`),
+    ...readonly.map((p) => `-v ${shq(p)}:${shq(p)}:ro`),
     `-w ${shq(ctx.root)}`,
+    // Which project the container can write, for any gnomon process to ask
+    // (git_safe liveContainer): the dashboard, `gnomon check`, `gnomon
+    // guard` and a second session do not share this process's registry.
+    `--label ${shq(`${CONTAINER_ROOT_LABEL}=${realRoot}`)}`,
     // The agent-session marker, into the container too: a `gnomon skill
     // accept` installed in the image is the agent's as much as one on the
     // host. `-e NAME=value`, the value quoted for the host shell.
     `-e ${AGENT_SESSION_ENV}=${shq(ctx.agentSession || `pid-${process.pid}`)}`,
-    ex.image,
+    shq(ex.image),
     `sh -c ${inner}`,
   ]
     .filter(Boolean)
@@ -2295,7 +2415,7 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     if (t.how === "tar -x (archive)" || t.how === "unzip (archive)") {
       const into = targets.find((x) => x.how === t.how.replace("(archive)", "(into)") && x.cwd === t.cwd);
       const base = (into && resolveTarget(into.path, into.cwd)) ?? resolve(dirAbs(t.cwd ?? ""));
-      for (const m of archiveMembers(abs, t.how.startsWith("tar") ? "tar" : "unzip")) {
+      for (const m of archiveMembers(abs, t.how.startsWith("tar") ? "tar" : "unzip", fsRoots(ctx))) {
         judged.push({ path: m, abs: resolve(base, m), how: t.how.replace(" (archive)", ""), writeAllow: true, t });
       }
       continue;
@@ -2463,11 +2583,11 @@ function cleanReaches(ctx: ToolContext, at: string, clean: GitClean): { kind: "r
     // a symlinked temp dir (/var vs /private/var on macOS) reads as outside the
     // repository, and that would refuse a clean that reaches nothing.
     const spec = relative(at, p.dir).split(sep).join("/") || ".";
-    const r = spawnSync("git", ["-C", at, "status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all", "--", spec], {
-      encoding: "utf-8",
+    const r = safeGit(["-C", at, "status", "--porcelain=v1", "-z", "--ignored=matching", "--untracked-files=all", "--", spec], {
+      cwd: at,
       timeout: 5000,
-      windowsHide: true,
       maxBuffer: 16 * 1024 * 1024,
+      hot: true,
     });
     if (r.status !== 0 || typeof r.stdout !== "string") {
       // Not a repository: git clean fails too. Anything else: assume reached.
@@ -2565,11 +2685,14 @@ function gitHooksRefusal(tool: string, path: string, how?: string): Precheck {
  * cannot be read; capped, since a patch is the agent's to make arbitrarily
  * large.
  */
+/** The largest archive the write precheck lists members of (seventh review, L4). */
+const ARCHIVE_LIST_MAX_BYTES = 256 * 1024 * 1024;
+
 function patchPaths(abs: string): string[] {
   let text: string;
   try {
     if (statSync(abs).size > 8 * 1024 * 1024) return [];
-    text = readFileSync(abs, "utf-8");
+    text = readRegular([], abs).toString("utf-8");
   } catch {
     return [];
   }
@@ -2589,11 +2712,43 @@ function patchPaths(abs: string): string[] {
  * missing or the listing fails: unknown is reported as unknown, which is the
  * pattern precheck's limit -- the kernel sandbox is what contains it.
  */
-function archiveMembers(abs: string, kind: "tar" | "unzip"): string[] {
-  if (!existsSync(abs)) return [];
+function archiveMembers(abs: string, kind: "tar" | "unzip", roots: string[] = []): string[] {
+  // Seventh review (L4): the archive is the model's file, and the host runs
+  // the archiver on it. Only a regular file (never a FIFO the listing would
+  // block on, or a device), at most ARCHIVE_LIST_MAX_BYTES, whose real path
+  // is in the root; the archiver gets no stdin, is killed (SIGKILL, not a
+  // TERM it can ignore) at the deadline, and its output is capped.
+  let st: Stats;
+  try {
+    st = statSync(abs);
+  } catch {
+    return [];
+  }
+  if (!st.isFile() || st.size > ARCHIVE_LIST_MAX_BYTES) return [];
+  if (roots.length > 0) {
+    let real: string;
+    try {
+      real = realpathSync(abs);
+    } catch {
+      return [];
+    }
+    const inside = roots.some((r) => {
+      let rr: string;
+      try {
+        rr = realpathSync(r);
+      } catch {
+        rr = resolve(r);
+      }
+      const rel = relative(rr, real);
+      return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+    });
+    if (!inside) return [];
+  }
   const r = spawnSync(kind, kind === "tar" ? ["-tf", abs] : ["-Z1", abs], {
     encoding: "utf-8",
     timeout: 5000,
+    killSignal: "SIGKILL",
+    stdio: ["ignore", "pipe", "ignore"],
     windowsHide: true,
     maxBuffer: 8 * 1024 * 1024,
   });
@@ -2737,7 +2892,17 @@ async function bashTool(
   // container. Killing the process group stops `docker run`, not the container
   // it started -- the work would keep going with nobody watching it.
   const sandboxName = `gnomon-${process.pid}-${startedAt.toString(36)}`;
-  const spawned = sandboxCommand(command, ctx, sandboxName);
+  let spawned: string;
+  try {
+    spawned = sandboxCommand(command, ctx, sandboxName);
+  } catch (e) {
+    if (!(e instanceof RootWriteError)) throw e;
+    return {
+      code: TOOL_FAILED,
+      content: `Refused: ${e.message}`,
+      summary: "bash — refused (sandbox could not be set up safely)",
+    };
+  }
   const sandboxed = spawned !== command;
 
   // Refused, not silently run under a different language. See posixShell().
@@ -2749,6 +2914,10 @@ async function bashTool(
       summary: "bash — refused (no POSIX shell on this machine)",
     };
   }
+
+  // From here until docker run has returned -- or the container is confirmed
+  // removed -- gnomon runs no git on the host (git_safe liveContainer).
+  if (sandboxed) containerStarted(sandboxName, () => dockerContainerGone(sandboxName));
 
   return new Promise<ToolOutcome>((done) => {
     const proc = spawn(shellBin, ["-c", spawned], {
@@ -2782,6 +2951,7 @@ async function bashTool(
       if (settled) return;
       settled = true;
       await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
+      const containerLeft = sandboxed && !(await removeContainer(sandboxName));
       // What the command printed before it was killed is evidence the harness
       // already holds: the failing test, the last line of a build, the prompt it
       // was blocked on. Discarding it left the model with nothing to act on but
@@ -2814,7 +2984,8 @@ async function bashTool(
           `\n\nIt did not finish, so this output is partial. Re-running it unchanged will time out again: ` +
           `narrow it, or start it in the background and poll:\n      ${backgroundRecipe(command)}\n` +
           `    then read ${JOB_LOG_DIR}/job.log on a later step.` +
-          (drift ? `\n\n${drift.notice}` : ""),
+          (drift ? `\n\n${drift.notice}` : "") +
+          (containerLeft ? CONTAINER_NOT_GONE : ""),
         summary: `bash — timeout${clamped ? " (deadline)" : ""}${drift ? " · surface changed" : ""}`,
         surface_drift: drift ?? undefined,
       });
@@ -2827,6 +2998,7 @@ async function bashTool(
       settled = true;
       clearTimeout(timer);
       await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
+      const containerLeft = sandboxed && !(await removeContainer(sandboxName));
       releasePipes(proc);
       const atDeadline = ctx.signal?.reason === DEADLINE_ABORT;
       done({
@@ -2841,7 +3013,8 @@ async function bashTool(
               .join("\n"),
             ctx,
             `bash-cancelled`
-          ),
+          ) +
+          (containerLeft ? CONTAINER_NOT_GONE : ""),
         summary: atDeadline ? `bash — stopped at the deadline` : `bash — cancelled`,
       });
     };
@@ -2853,6 +3026,8 @@ async function bashTool(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // The shell never started, so neither did a container.
+      if (sandboxed) containerGone(sandboxName);
       done({
         code: TOOL_FAILED,
         content: `Could not run command: ${err.message}`,
@@ -2890,6 +3065,22 @@ async function bashTool(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      // `docker run --rm` returned with the container's status: it has exited,
+      // and with it every process in it. A docker run that died on a signal,
+      // or failed itself (125: it may have lost the daemon with the container
+      // running), says nothing of the kind; the container stays registered
+      // until docker reports it gone.
+      if (sandboxed) {
+        if (exit !== null && exit !== 125) {
+          containerGone(sandboxName);
+        } else {
+          try {
+            spawn("docker", ["rm", "-f", sandboxName], { stdio: "ignore", detached: true }).unref();
+          } catch {
+            /* the lazy check in git_safe still asks */
+          }
+        }
+      }
       // stderr BEFORE stdout when the command failed, and both ends kept.
       //
       // The old order put stderr last and clamped head-only, so a chatty build
@@ -3258,13 +3449,12 @@ const GIT_STAMP_MAX_BUFFER = 32 * 1024 * 1024;
 
 /** stdout of one git call in `cwd`, or null if it did not start or did not exit 0. */
 function stampGit(cwd: string, args: string[]): string | null {
-  const r = spawnSync("git", args, {
+  const r = safeGit(args, {
     cwd,
-    encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
     timeout: GIT_STAMP_TIMEOUT_MS,
     maxBuffer: GIT_STAMP_MAX_BUFFER,
-    windowsHide: true,
+    hot: true,
   });
   return r.error || r.status !== 0 ? null : r.stdout;
 }
@@ -4548,7 +4738,7 @@ async function grepTool(
   for (const f of files) {
     let text: string;
     try {
-      const buf = readFileSync(join(ctx.root, f));
+      const buf = readRegular(fsRoots(ctx), join(ctx.root, f));
       // A NUL in the first 8k is the standard binary heuristic. Without it a
       // grep over a repo with fixtures returns pages of mojibake.
       if (buf.subarray(0, 8192).includes(0)) continue;
@@ -4723,7 +4913,12 @@ async function writeTool(
         summary: `write ${path} — is a directory`,
       };
     }
-    const surfaceBefore = existsSync(abs) ? readFileSync(abs, "utf-8") : "";
+    let surfaceBefore: string;
+    try {
+      surfaceBefore = existsSync(abs) ? readModelFile(ctx, abs) : "";
+    } catch (err) {
+      return unreadable("write", path, err);
+    }
     const surfaceDiff = diffLines(surfaceBefore, content);
     const { added: sa, removed: sr } = diffStat(surfaceDiff);
     // custom always asks; all defers to the configured gate.
@@ -4744,8 +4939,7 @@ async function writeTool(
     try {
       // Pinned before the write so the drift report carries both ends.
       const beforeHash = surfaceHashOf(ctx);
-      mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, content, "utf-8");
+      writeModelFile(ctx, abs, content);
       // Signal it. The claim "the next turn runs under the new rules" was made
       // here and was FALSE: the running session holds the config it loaded at
       // startup, and nothing reloaded it. A user who changed a role's model,
@@ -4784,7 +4978,12 @@ async function writeTool(
     };
   }
 
-  const before = existsSync(abs) ? readFileSync(abs, "utf-8") : "";
+  let before: string;
+  try {
+    before = existsSync(abs) ? readModelFile(ctx, abs) : "";
+  } catch (err) {
+    return unreadable("write", path, err);
+  }
   // First write wins: the pre-image is the state at the start of the TURN, not
   // the previous step, so a file edited three times still compares against what
   // the turn inherited.
@@ -4830,7 +5029,12 @@ async function writeTool(
     // Checked only on the approval path, because that await is what opens it:
     // ungated, the read-to-write gap is microseconds and a check there would be
     // cost without a window to guard.
-    const nowOnDisk = existsSync(abs) ? readFileSync(abs, "utf-8") : "";
+    let nowOnDisk: string | null;
+    try {
+      nowOnDisk = existsSync(abs) ? readModelFile(ctx, abs) : "";
+    } catch {
+      nowOnDisk = null;
+    }
     if (nowOnDisk !== before) {
       return {
         code: TOOL_DENIED,
@@ -4845,8 +5049,7 @@ async function writeTool(
   }
 
   try {
-    mkdirSync(dirname(abs), { recursive: true });
-    writeFileSync(abs, content, "utf-8");
+    writeModelFile(ctx, abs, content);
     return {
       code: TOOL_OK,
       content: `Wrote ${path} (+${added} −${removed}).`,
@@ -4891,7 +5094,12 @@ async function editTool(
     };
   }
 
-  const before = readFileSync(abs, "utf-8");
+  let before: string;
+  try {
+    before = readModelFile(ctx, abs);
+  } catch (err) {
+    return unreadable("edit", path, err);
+  }
   if (ctx.preImages && !ctx.preImages.has(abs)) ctx.preImages.set(abs, before);
   // A CRLF file and an LF old_text. Git for Windows checks out with
   // core.autocrlf=true, `read` shows lines without their \r, and the model
@@ -4994,7 +5202,12 @@ async function editTool(
     // pre-approval `before`, so writing it would silently discard anything that
     // changed while the prompt was open -- and the operator approved a diff
     // against a version that no longer exists. The await IS the window.
-    const nowOnDisk = readFileSync(abs, "utf-8");
+    let nowOnDisk: string | null;
+    try {
+      nowOnDisk = readModelFile(ctx, abs);
+    } catch {
+      nowOnDisk = null;
+    }
     if (nowOnDisk !== before) {
       return {
         code: TOOL_DENIED,
@@ -5009,7 +5222,7 @@ async function editTool(
   }
 
   try {
-    writeFileSync(abs, after, "utf-8");
+    writeModelFile(ctx, abs, after);
     if (tier !== undefined && tier !== "exact") {
       return {
         code: TOOL_OK,
@@ -5225,11 +5438,9 @@ export function createSpillSink(
     if (unusable) return null;
     if (!dir) {
       try {
-        const base = join(root, OVERFLOW_DIR);
-        mkdirSync(base, { recursive: true });
+        const base = ensureDirIn(root, join(root, OVERFLOW_DIR));
         pruneSpillDirs(base, keep);
-        dir = join(base, safeSession);
-        mkdirSync(dir, { recursive: true });
+        dir = ensureDirIn(root, join(base, safeSession));
       } catch {
         // Read-only checkout, no permission, full disk. Truncation still works.
         unusable = true;
@@ -5239,7 +5450,7 @@ export function createSpillSink(
     const safe = label.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
     const name = `${String(++n).padStart(3, "0")}-${safe || "output"}.txt`;
     try {
-      writeFileSync(join(dir, name), text, "utf-8");
+      writeFileIn(root, join(dir, name), text);
     } catch {
       return null;
     }

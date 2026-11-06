@@ -26,6 +26,114 @@
 
 ## [Unreleased]
 
+### Security
+
+- **`exec = "docker"` now contains a hostile model against gnomon's own
+  host-side actions.** In v0.4.3 and earlier it did not: the container could
+  write files in the mounted project that gnomon, running on the host, then
+  followed, ran or trusted. Five review rounds found instances of that one
+  cause, including: a symlink at `.gnomon-sessions/history` that made the
+  prompt history overwrite the trust store and erase the exec floors, so the
+  next session ran `exec = "off"` on the host unasked; a symlink at
+  `.gnomon-audit/<session>.jsonl` that appended recorded command lines to
+  `~/.bashrc`; a container another gnomon process could not see while it ran
+  git; a `.gnomon/` made below a floored project with no floor of its own; and
+  an `image` value interpolated unquoted into the host's shell line. Fixed at
+  the cause:
+  - gnomon's state and git's control files are read-only inside the container
+    (`.gnomon/`, `.gnomon-audit/`, `.gnomon-sessions/`, `.git/config`,
+    `.git/hooks/`, `.git/info/`, `.git/commondir`). **Behaviour change:** the
+    model can no longer edit `.gnomon/*.toml` from bash under docker; the
+    surface is the operator's to change. `git add` and `git commit` still work.
+  - every host write into the project goes through one helper (`root_fs.ts`)
+    that opens with `O_NOFOLLOW`, refuses symlinked directories and hard-linked
+    files, writes whole files by rename and keeps the audit trail's descriptor
+    open. Prompt history, the `gnomon guard`/`gnomon check` session bases and
+    rule cache, and the `gnomon check` restore journal moved to gnomon's data
+    directory (out of the project and `.git/`); the journal restores only
+    paths inside the worktree.
+  - exec floors live in their own file (`exec-floors.json`); a trust store or
+    floor file that cannot be read is set aside and every project runs
+    contained until `gnomon trust grant`, with a warning. Floors kept in
+    `trust.json` by older versions are moved over on first read.
+  - containers carry a `gnomon.root` label; any gnomon process refuses host
+    git in a project a running container can write, and refuses when docker
+    cannot be asked for a project recorded as contained.
+  - a `.gnomon/` below a floored project is held to that project's floor.
+  - `image` must be an image reference; it is quoted, and any image change is
+    a grant whatever the recorded mode, mid-session and across sessions.
+  - per-URL and per-remote programs (`credential.<url>.helper`,
+    `gpg.<format>.program`, `remote.<name>.uploadpack`/`receivepack`/`vcs`/
+    `proxy`) are blanked for gnomon's own git.
+  - (sixth review) the `test_must_fail_first` re-run reads and restores
+    source files without following anything (a symlink there wrote the
+    pre-image into `~/.bashrc`, or copied a credentials file into `src/`),
+    and skips with a warning any file the re-run replaced; `read`, `write`,
+    `edit` and `grep` take only regular files under the root (never a FIFO,
+    a device, or a hard link out) and write by rename.
+  - (sixth review) `gnomon check` holds `[verify]` to this machine's exec
+    floor: a `--base` ref moved to a commit with `exec = "off"` no longer runs
+    the verify command on the host. The verdict carries `rules_rev`, `exec`
+    and `warnings`; the banner prints the commit the rules came from.
+  - (sixth review) `.git` is mounted on itself so it cannot be renamed away
+    from its read-only children; `.git/commondir` (`.`) and
+    `.git/config.worktree` (empty) are created when absent and mounted
+    read-only; `.gnomon-loops/` is read-only; containers run with
+    `--cap-drop ALL --security-opt no-new-privileges`.
+  - (sixth review) a contained role refuses to start in a root that contains
+    the home directory, gnomon's data dir, or gnomon's own code
+    (`GNOMON_ALLOW_SELF_IN_ROOT=1` for working on gnomon itself); MCP servers
+    start outside the project while a role is contained.
+  - (seventh review) `gnomon check --base <rev>` takes only the policy under
+    judgement from the revision (roles, write_allow, bash_allow/deny,
+    `[verify]`). Everything that acts on the host -- `[audit]` (dir, redact,
+    attest sign/verify/public_key, anchor), where `[verify]` runs, its
+    network, `extra_roots`, the tool timeout -- comes from the live surface
+    (read-only to a container) and the exec floor. A base's
+    `[audit.attest] sign` ran on the host; a base's absolute `[audit] dir`
+    was written; a role named only in the base fell to `*` = off and ran
+    `[verify]` on the host (the floor is now read as its strictest entry); a
+    base's `network = true` reached `[verify]`. `gnomon guard` takes its
+    `[audit]` from the live surface too. The exec floor now records
+    `network`; a loosening needs `gnomon trust grant`.
+  - (seventh review) a committed surface is copied out of git entry by entry,
+    each checked (a plain blob, no `..`/`.`/`.git` component, inside the
+    copy) and written without following anything: a model-built tree with
+    `..` entries made `gnomon check` (and the dashboard's check) and `gnomon
+    guard` overwrite files outside the copy, such as `~/.bashrc`.
+  - (seventh review) each linked worktree's admin dir (`.git/worktrees/<wt>/`)
+    and each submodule's git dir (`.git/modules/**`: config, hooks, info,
+    commondir, config.worktree, recursively) is read-only to a container,
+    with the directories that hold them (and a submodule's `.git` file and the
+    directories down to it) mounted on themselves so they cannot be renamed
+    away. `git commit`, `git checkout` and `git worktree add` inside the
+    container still work.
+  - (seventh review) the turn's tree count reads untracked files only as
+    regular files in the root, at most 16 MiB (a symlink to `/dev/zero` hung
+    it; one to a host file put its line count in the record); a key or
+    shadow excerpts sent to a LAN, `.local` or tailnet host without a grant
+    is now a grant (only loopback counts as local for that); the write
+    precheck lists an archive's members only for a regular file in the root
+    of at most 256 MiB, with the archiver killed at its deadline.
+  - (eighth review) must-fail-first no longer puts back a path with a `.git`
+    component, a `..` or absolute path, or one under `.gnomon/` or a gnomon
+    state dir. `gnomon check --base <rev>` read its pre-images from
+    `git diff <base>`, and a base commit the model made could hold
+    `.git/config` (an fsmonitor) and its own `.gnomon/policy.toml`: host
+    gnomon wrote both into the real tree for the re-run, and a SIGKILL in that
+    window left them there. `check` skips such paths and names them in the
+    verdict's warnings; the re-run itself refuses them; `writeFileIn` refuses
+    a target outside the root it is given instead of writing it unchecked.
+  - Known limit (seventh review, L1): a container can still corrupt
+    `.git/HEAD` and plant a bare repository in the root, so the user's own
+    git, run there, discovers the planted repository and its config. Mounting
+    `HEAD` read-only breaks `git checkout`/`git switch` in the container
+    (measured), so it is not done. Set `git config --global
+    safe.bareRepository explicit` on any machine that runs contained
+    sessions. The same holds for any `.git` directory the model creates in a
+    subdirectory: do not run git in a directory the model made without
+    looking.
+
 ## [0.4.4] — 2026-11-06
 
 Long hosted-model tasks, from the P2G41 root causes (2026-11-05). **One default

@@ -25,7 +25,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { PassThrough, Writable } from "node:stream";
-import { mkdtempSync, cpSync, rmSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, cpSync, rmSync, readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadConfig, routeRole } from "./config.js";
@@ -34,7 +34,7 @@ import { verifyTrail } from "./audit.js";
 import { stubDeclaredKeys } from "./test_support.js";
 
 // The real surface, copied per test. loadConfig is fine on the repo itself, but
-// the loop APPENDS to `<root>/.gnomon-sessions/history` and saves a session
+// the loop saves a session
 // snapshot after every turn -- pointed at the checkout that would be writing
 // into the repo under test. Same idiom as prompt_loop.test.ts's /allow test.
 const REPO_SURFACE = resolve(process.cwd(), "..", "..", ".gnomon");
@@ -683,4 +683,134 @@ describe("a surface written mid-session takes effect", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 30000);
+});
+
+// Found reviewing #156 (finding B), and it holds in every exec mode: a
+// command rewrote .gnomon/config.toml, the loop reloaded the surface, and
+// the next model request -- with its key -- went wherever the file now said.
+// A loopback url is "local" to the trust gate, so it was never held, and
+// under --trust nothing was. exec = "docker" hides the key from the
+// container, not from gnomon's own request.
+describe("a command cannot reroute the session's model requests through the surface", () => {
+  let restoreKeys: () => void;
+  beforeAll(() => {
+    restoreKeys = stubDeclaredKeys(loadConfig(resolve(process.cwd(), "..", "..")));
+  });
+  afterAll(() => restoreKeys());
+
+  it("a rewritten endpoint url is held, said, and not used", async () => {
+    const root = makeProject();
+    const policyPath = join(root, ".gnomon", "policy.toml");
+    writeFileSync(
+      policyPath,
+      readFileSync(policyPath, "utf8")
+        .replace(/^\[verify\][\s\S]*?(?=^\[)/m, "")
+        .replace(/^gate = "on_write".*$/m, 'gate = "never"')
+    );
+    const cfgPath = join(root, ".gnomon", "config.toml");
+    const original = /^\[endpoints\.local\]\nurl = "([^"]+)"/m.exec(readFileSync(cfgPath, "utf8"))?.[1];
+    expect(original).toBeTruthy();
+    // Assembled at run time: the text rules refuse a command naming the surface.
+    const code =
+      `p = ".gno" + "mon/config.toml"; s = open(p).read(); ` +
+      `open(p, "w").write(s.replace(${JSON.stringify(original)}, "http://127.0.0.1:9/steal"))`;
+    try {
+      let call = 0;
+      const seen = await drive(root, ["reroute it", "and again", "/quit"], {
+        initialRole: "implement",
+        onExit: (_c, stop) => stop(),
+        budgetMs: 30000,
+        reply: () => {
+          call++;
+          if (call === 1) {
+            return {
+              message: {
+                content: "",
+                tool_calls: [{ function: { name: "bash", arguments: { command: `python3 -c '${code.replace(/'/g, `'\\''`)}'` } } }],
+              },
+            };
+          }
+          return { message: { content: "done" } };
+        },
+      });
+      // The surface did move, and was reloaded...
+      expect(readFileSync(cfgPath, "utf8")).toContain("127.0.0.1:9/steal");
+      expect(seen.seen, seen.seen.slice(-3000)).toContain("surface reloaded");
+      // ...the reroute was held and said...
+      expect(seen.seen).toContain("key routing NOT applied");
+      // ...and every request, after the reload too, went where the session started.
+      expect(seen.calls.length).toBeGreaterThanOrEqual(3);
+      for (const c of seen.calls) expect(c.url).not.toContain("/steal");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 60000);
+});
+
+// Third review, finding 1, on the released exec = "docker": the container
+// bind-mounts the root, a command rewrote policy.toml's `exec = "docker"` to
+// "off", the loop reloaded the surface, and the next command ran on the host.
+// `docker` is stubbed on PATH (it records its argv and exits 0), so a command
+// that still goes through it leaves no file; one run on the host does.
+describe("a contained command cannot switch exec off through the surface", () => {
+  let restoreKeys: () => void;
+  beforeAll(() => {
+    restoreKeys = stubDeclaredKeys(loadConfig(resolve(process.cwd(), "..", "..")));
+  });
+  afterAll(() => restoreKeys());
+
+  it.skipIf(process.platform === "win32")('exec = "off" written by a docker-mode command is not applied; the next command still goes to docker', async () => {
+    const root = makeProject();
+    const outside = mkdtempSync(join(tmpdir(), "gnomon-pin-outside-"));
+    const bin = mkdtempSync(join(tmpdir(), "gnomon-fake-docker-"));
+    const dockerLog = join(bin, "argv.log");
+    const policyPath = join(root, ".gnomon", "policy.toml");
+    // The first "container" does what a contained command can: rewrite the
+    // bind-mounted policy.toml.
+    writeFileSync(
+      join(bin, "docker"),
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> '${dockerLog}'\n` +
+        `if [ ! -e '${bin}/wrote' ]; then : > '${bin}/wrote'; t='${bin}/p.tmp'; ` +
+        `sed 's/^exec = "docker"$/exec = "off"/' '${policyPath}' > "$t" && cat "$t" > '${policyPath}'; fi\nexit 0\n`,
+      { mode: 0o755 }
+    );
+    writeFileSync(
+      policyPath,
+      readFileSync(policyPath, "utf8")
+        .replace(/^\[verify\][\s\S]*?(?=^\[)/m, "")
+        .replace(/^level = "confined".*$/m, 'level = "confined"\nexec = "docker"\nimage = "gnomon-test-stub:1"')
+        .replace(/^gate = "on_write".*$/m, 'gate = "never"')
+    );
+    expect(readFileSync(policyPath, "utf8")).toMatch(/^exec = "docker"$/m);
+    const path = process.env.PATH;
+    process.env.PATH = `${bin}:${path}`;
+    try {
+      let call = 0;
+      const bashCall = (command: string) => ({
+        message: { content: "", tool_calls: [{ function: { name: "bash", arguments: { command } } }] },
+      });
+      const seen = await drive(root, ["loosen it", "now escape", "/quit"], {
+        initialRole: "implement",
+        onExit: (_c, stop) => stop(),
+        budgetMs: 40000,
+        reply: () => {
+          call++;
+          if (call === 1) return bashCall("true");
+          if (call === 3) return bashCall(`echo escaped > '${outside}/escaped.txt'`);
+          return { message: { content: "done" } };
+        },
+      });
+      expect(readFileSync(policyPath, "utf8")).toMatch(/^exec = "off"$/m);
+      expect(seen.seen, seen.seen.slice(-3000)).toContain("surface reloaded");
+      expect(existsSync(join(outside, "escaped.txt")), "the next command ran on the host").toBe(false);
+      expect(seen.seen).toContain("sandbox NOT loosened");
+      expect(readFileSync(dockerLog, "utf8")).toContain("escaped.txt");
+      expect(call).toBeGreaterThanOrEqual(3);
+    } finally {
+      process.env.PATH = path;
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+      rmSync(bin, { recursive: true, force: true });
+    }
+  }, 60000);
 });

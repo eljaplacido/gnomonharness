@@ -92,8 +92,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2583 TypeScript tests (2062 core, 496 cli, 18
-> natives, 7 tui) and 61 Rust tests — **2644 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2691 TypeScript tests (2169 core, 497 cli, 18
+> natives, 7 tui) and 63 Rust tests — **2754 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1702,6 +1702,112 @@ shown at all. Second: nothing checks for a docker daemon before a turn starts; a
 missing one surfaces as a failing command mid-turn. The reasoning, and what it
 would take to make a rejected backend refuse, is in
 [docs/SANDBOX-DESIGN.md](docs/SANDBOX-DESIGN.md).
+
+**Security note.** In v0.4.3 and earlier, `exec = "docker"` contained what
+the model's commands did to the host directly, but not what gnomon itself then
+did on the host with files those commands had written: a hostile model could
+plant a symlink, a git config entry or a surface edit in the mounted project
+and have gnomon's own host-side writes, git calls or next session act on it,
+up to running code on the host. This release fixes that. If you relied on
+`exec = "docker"` to contain an untrusted model, upgrade.
+
+**What the container cannot write.** gnomon's own state and git's control
+files are mounted read-only inside the container: `.gnomon/` (the surface),
+`.gnomon-audit/`, `.gnomon-sessions/`, `.gnomon-loops/`, and `.git/config`,
+`.git/hooks/`, `.git/info/`, `.git/commondir` and `.git/config.worktree` (or
+a `.git` file, where present). `.git` itself is mounted on itself, so it
+cannot be renamed away from those mounts (`mv .git .git-old` fails with
+"device or resource busy"). The container runs as your uid with
+`--cap-drop ALL --security-opt no-new-privileges`. The model
+still edits code and can `git add` and `git commit`; it can no longer edit
+`.gnomon/*.toml` from bash under docker, so configuration changes are yours to
+make. gnomon creates `.gnomon-audit/`, `.gnomon-sessions/`, `.git/hooks/` and
+`.git/info/` if they are missing so there is something to mount, and refuses
+to start a container when one of these paths is a symlink. Every write gnomon
+makes into the project refuses to follow a symlink or a hard link; prompt
+history and gnomon's per-repository state (`gnomon guard` and `gnomon check`
+bases, rule caches, restore journals) live in gnomon's data directory, not in
+the project or `.git/`. Each container carries a `gnomon.root` label, so any
+gnomon process (the dashboard, `gnomon check`, `gnomon guard`, a second
+session) runs no git in a project while a container for it is running, and
+refuses when docker cannot be asked. `image` must be a plain image reference.
+
+**Your own git, and what it is protected from.** When `.git/commondir` or
+`.git/config.worktree` is missing, gnomon creates it (`commondir` holding `.`,
+which git reads as "this directory"; `config.worktree` empty, read only when
+`extensions.worktreeConfig` is set in the read-only config) so that the
+container cannot create one pointing your git at a config it wrote. With
+that, the git you run yourself in the project root — a shell prompt, an IDE
+polling `git status` — reads only config, hooks and redirects the container
+could not write (unless your `.git/config` itself `[include]`s a file
+elsewhere in the project). The same holds for your linked worktrees (each
+`.git/worktrees/<name>/` is read-only, so the container cannot redirect a
+worktree you keep outside the project) and for the submodules that exist
+when a command starts (each `.git/modules/**` git dir has its config, hooks,
+info, commondir and config.worktree read-only, recursively, and the
+submodule's `.git` file too; the directories holding them are mounted on
+themselves so they cannot be renamed away). It is **not** protected from: a
+nested repository the container creates (a `.git` directory in a
+subdirectory, or a submodule added during the session), which your git
+enters when you `cd` into it or when `git status` recurses into it — treat
+any repository below the root that you did not create as hostile; a
+corrupted `.git/HEAD` beside a bare repository planted in the root, which
+your git, run in the root, would then discover instead (mounting `HEAD`
+read-only breaks `git checkout` in the container, so it is not done — set
+`git config --global safe.bareRepository explicit`); and a
+`.gitattributes` filter or diff driver, which names a program only through
+config the container cannot write but is itself repository content.
+
+**What else refuses to start.** A contained role in a project whose root
+contains your home directory or gnomon's data directory (`cd ~ && gnomon`)
+is refused: the container would write `~/.bashrc` and the exec floors. So is
+one whose root contains gnomon's own code (a checkout of gnomon, or gnomon
+installed in the project's `node_modules`), because the container could
+rewrite the gnomon that runs next; install gnomon outside the project. To
+work on gnomon itself with a contained role, `GNOMON_ALLOW_SELF_IN_ROOT=1`
+accepts that risk. Host reads and writes of files the model names (`read`,
+`write`, `edit`, `grep`, the must-fail-first re-run) take only regular files
+whose real path is in the root — never a FIFO, a device or a symlink out —
+and write by replacing the file, never through a symlink or a hard link.
+`gnomon check` takes only the rules under judgement from `--base` (roles,
+write_allow, bash_allow/deny, `[verify]`); `[audit]`, where `[verify]` runs,
+its network and `extra_roots` come from the surface in your working tree and
+this machine's exec floor for the project, read as its strictest entry (a
+base ref moved to a commit whose policy says `exec = "off"`, `network =
+true`, or names a role of its own does not move `[verify]` onto the host or
+the network, and a base's `[audit.attest] sign` is never run). It copies the
+base's `.gnomon/` out of git entry by entry, refusing a tree with `..` or
+`.git` in a name. It prints the commit the rules came from, and warns when
+that ref moved after a contained session started.
+
+**Code the host still runs from the project.** MCP servers start in an
+empty directory outside the project while any role runs contained (so `npx`
+does not resolve `node_modules/.bin` and Python does not import from the
+project); a server whose arguments name project files must name them by
+absolute path then, and a server command that itself lives in the project
+still runs what the container wrote. Loop guard and act commands
+(`.gnomon/loops.toml`) and declared anchor/attest signer commands run on
+the host as written; if they invoke scripts or packages from the project,
+those are the container's to change. Keep such commands pointing outside
+the project.
+
+**The surface cannot loosen the container across sessions either.**
+`.gnomon/` is inside the mounted repository, read-only to bash but still
+yours to edit. A session pins each
+role's `exec`, `image`, `network`, `level` and `extra_roots` when it starts; a
+reload of the surface mid-session may tighten them and never loosens them (it
+says `sandbox NOT loosened … restart gnomon to apply`). Across sessions, this
+machine records where each role's bash ran in the project
+(`exec-floors.json`, beside the trust store): a role that ran in docker and now
+resolves to `exec = "off"`, or any role whose image changed, is a trust grant,
+asked about on a terminal and clamped back into the container when nobody is
+there (`gnomon trust grant`, or `--trust-exec-downgrade` for one run, accept
+it). A `.gnomon/` that appears below a recorded project is held to that
+project's record. If the trust store or that record cannot be read, gnomon
+does not treat it as empty: it warns, sets the file aside, and runs every
+project's bash contained until `gnomon trust grant` is run in it. gnomon's own git on the host — the per-turn tree measurement,
+the anchor delivery — runs with every hook, fsmonitor and filter/diff driver
+the repository's config names switched off.
 
 ### `bash_allow` — why `tools` alone is not enough
 

@@ -18,6 +18,7 @@ import { resolveCheckRole } from "./guard.js";
 import { verifyTrail, recordHash, type AuditRecord } from "./audit.js";
 import { loadConfig } from "./config.js";
 import { replay } from "./replay.js";
+import { repoStateDir } from "./root_fs.js";
 
 let repo: string;
 const sh = (args: string[]) =>
@@ -347,16 +348,38 @@ describe("gnomon check — an interrupted re-run", () => {
     // What a killed must-fail-first leaves: the operator's file at its base
     // content, and the journal holding the real bytes.
     const gitDir = sh(["rev-parse", "--absolute-git-dir"]);
+    const journal = join(repoStateDir(gitDir), "check-restore.json");
+    mkdirSync(dirname(journal), { recursive: true });
     writeFileSync(
-      join(gitDir, "gnomon-check-restore.json"),
+      journal,
       JSON.stringify({ files: [{ path: join(repo, "src/pay.txt"), b64: Buffer.from("2\n").toString("base64") }] })
     );
     put("src/pay.txt", "1\n");
     const v = await runCheck({ dir: repo, base, role: "implement" });
     expect(v.recovered).toEqual([join(repo, "src/pay.txt")]);
     expect(readFileSync(join(repo, "src/pay.txt"), "utf-8")).toBe("2\n");
-    expect(existsSync(join(gitDir, "gnomon-check-restore.json"))).toBe(false);
+    expect(existsSync(journal)).toBe(false);
     expect(byId(v, "write_allow")?.inspected).toBe(1);
+  });
+
+  it("a journal inside .git is not gnomon's, and one naming a path outside the worktree restores nothing there (fifth review)", async () => {
+    // A contained command can write .git/. The journal used to live there,
+    // and the next `check` restored whatever it named -- ~/.bashrc included.
+    surface();
+    const base = commit("base");
+    const outside = join(dirname(repo), `outside-${Date.now()}.txt`);
+    const gitDir = sh(["rev-parse", "--absolute-git-dir"]);
+    const planted = JSON.stringify({ files: [{ path: outside, b64: Buffer.from("echo PWNED\n").toString("base64") }] });
+    writeFileSync(join(gitDir, "gnomon-check-restore.json"), planted);
+    let v = await runCheck({ dir: repo, base, role: "implement" });
+    expect(existsSync(outside)).toBe(false);
+    expect(v.recovered).toBeUndefined();
+    // And even gnomon's own journal never writes outside the worktree.
+    const journal = join(repoStateDir(gitDir), "check-restore.json");
+    mkdirSync(dirname(journal), { recursive: true });
+    writeFileSync(journal, planted);
+    v = await runCheck({ dir: repo, base, role: "implement" });
+    expect(existsSync(outside)).toBe(false);
   });
 });
 

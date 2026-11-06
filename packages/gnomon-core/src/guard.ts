@@ -34,7 +34,12 @@
  */
 
 import { resolvePackageIndex } from "./sweep_knobs.js";
-import { spawnSync } from "node:child_process";
+import { safeGitBuffer } from "./git_safe.js";
+import { checkSessionFile, createExclusiveIn, ensureDirIn, repoStateDir } from "./root_fs.js";
+import { hostSurface } from "./host_surface.js";
+import { parseSurfaceTree, readSurfaceBlobs, SurfaceTreeError, writeSurfaceTree, type SurfaceEntry } from "./surface_tree.js";
+/** For `gnomon guard install`, which writes hook files into the project. */
+export { writeFileIn } from "./root_fs.js";
 import {
   closeSync,
   existsSync,
@@ -284,7 +289,7 @@ function locate(cwd: string): Located | null {
 }
 
 function git(cwd: string, args: string[], input?: string): Buffer {
-  const r = spawnSync("git", args, { cwd, input, maxBuffer: 64 * 1024 * 1024 });
+  const r = safeGitBuffer(args, { cwd, input, maxBuffer: 64 * 1024 * 1024 });
   if (r.error) throw new GuardCannotDecide(`git ${args[0]} could not start: ${r.error.message}`);
   if (r.status !== 0) {
     const err = r.stderr.toString("utf-8").trim().split("\n")[0] ?? "";
@@ -300,8 +305,8 @@ function git(cwd: string, args: string[], input?: string): Buffer {
  * later commit to `.gnomon/` does not loosen the rules mid-session.
  */
 function sessionBase(where: Located, session: string): string | null {
-  const recorded = join(where.gitDir, "gnomon-check", "sessions", `${session}.json`);
-  for (const f of [recorded, join(where.gitDir, "gnomon-guard", "sessions", `${session}.json`)]) {
+  const recorded = checkSessionFile(where.gitDir, session);
+  for (const f of [recorded, join(repoStateDir(where.gitDir), "guard", "sessions", `${session}.json`)]) {
     try {
       const head = (JSON.parse(readFileSync(f, "utf-8")) as { head?: unknown }).head;
       if (typeof head === "string" && /^[0-9a-f]{40,64}$/.test(head)) return head;
@@ -313,7 +318,7 @@ function sessionBase(where: Located, session: string): string | null {
 }
 
 function recordSessionBase(where: Located, session: string, head: string): void {
-  const f = join(where.gitDir, "gnomon-guard", "sessions", `${session}.json`);
+  const f = join(repoStateDir(where.gitDir), "guard", "sessions", `${session}.json`);
   if (existsSync(f)) return;
   try {
     mkdirSync(dirname(f), { recursive: true });
@@ -350,7 +355,7 @@ function rulesAt(where: Located, rev: string): Rules {
         .split("\n");
   } catch {
     // Say which half failed: no such revision, or no surface in it.
-    const commit = spawnSync("git", ["rev-parse", "--verify", "--quiet", `${rev}^{commit}`], { cwd: where.toplevel });
+    const commit = safeGitBuffer(["rev-parse", "--verify", "--quiet", `${rev}^{commit}`], { cwd: where.toplevel });
     if (commit.status !== 0) throw new GuardCannotDecide(`the base revision "${rev}" does not exist in this repository`);
     throw new GuardCannotDecide(
       `the base revision ${commit.stdout.toString().trim().slice(0, 12)} has no ${where.surfaceRel}/ — ` +
@@ -359,7 +364,7 @@ function rulesAt(where: Located, rev: string): Rules {
   }
   const [base, tree] = out as [string, string];
   if (!resolved) rememberTree(where, base, tree);
-  const cacheRoot = join(where.gitDir, "gnomon-guard", "rules");
+  const cacheRoot = join(repoStateDir(where.gitDir), "guard", "rules");
   const dir = join(cacheRoot, tree);
   const metaFile = join(dir, "meta.json");
   if (!existsSync(metaFile)) materialise(where, tree, cacheRoot, dir);
@@ -381,7 +386,7 @@ function rulesAt(where: Located, rev: string): Rules {
 // `git rev-parse`, never to a guess.
 
 const treeMemo = (where: Located, commit: string) =>
-  join(where.gitDir, "gnomon-guard", "commits", `${commit}-${createHash("sha256").update(where.surfaceRel).digest("hex").slice(0, 12)}`);
+  join(repoStateDir(where.gitDir), "guard", "commits", `${commit}-${createHash("sha256").update(where.surfaceRel).digest("hex").slice(0, 12)}`);
 
 function rememberTree(where: Located, commit: string, tree: string): void {
   try {
@@ -435,31 +440,26 @@ function resolveFromCache(where: Located, rev: string): [string, string] | null 
 
 function materialise(where: Located, tree: string, cacheRoot: string, dir: string): void {
   // ls-tree for the paths and blob ids, one cat-file --batch for every blob:
-  // two spawns whatever the size of the surface.
-  const entries = git(where.toplevel, ["ls-tree", "-r", "-z", tree])
-    .toString("utf-8")
-    .split("\0")
-    .filter(Boolean)
-    .map((line) => {
-      const tab = line.indexOf("\t");
-      const [, type, sha] = line.slice(0, tab).split(" ");
-      return { type: type!, sha: sha!, path: line.slice(tab + 1) };
-    })
-    .filter((e) => e.type === "blob");
-  const batch = git(where.toplevel, ["cat-file", "--batch"], entries.map((e) => e.sha).join("\n") + "\n");
-  const tmp = `${dir}.tmp-${process.pid}-${Date.now()}`;
-  let at = 0;
-  for (const e of entries) {
-    const nl = batch.indexOf(0x0a, at);
-    const header = batch.subarray(at, nl).toString("utf-8").split(" ");
-    const size = Number(header[2]);
-    const body = batch.subarray(nl + 1, nl + 1 + size);
-    at = nl + 1 + size + 1; // the content, then a newline
-    const dest = join(tmp, ".gnomon", e.path);
-    mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(dest, body);
+  // two spawns whatever the size of the surface. Every entry is checked
+  // before anything is written (surface_tree.ts, seventh review): a tree the
+  // model built with a `..` entry wrote outside the cache.
+  let entries: SurfaceEntry[];
+  let bodies: Buffer[];
+  try {
+    entries = parseSurfaceTree(git(where.toplevel, ["ls-tree", "-r", "-z", tree]), "");
+    bodies = readSurfaceBlobs((args, input) => git(where.toplevel, args, input), entries);
+  } catch (err) {
+    if (err instanceof SurfaceTreeError) throw new GuardCannotDecide(err.message);
+    throw err;
   }
+  const tmp = `${dir}.tmp-${process.pid}-${Date.now()}`;
   mkdirSync(join(tmp, ".gnomon"), { recursive: true });
+  try {
+    writeSurfaceTree(join(tmp, ".gnomon"), entries, bodies);
+  } catch (err) {
+    rmSync(tmp, { recursive: true, force: true });
+    throw new GuardCannotDecide(err instanceof Error ? err.message : String(err));
+  }
   const surface_hash = recomputeManifest(join(tmp, ".gnomon")).surface_hash;
   writeFileSync(join(tmp, "meta.json"), JSON.stringify({ surface_hash, tree }));
   mkdirSync(cacheRoot, { recursive: true });
@@ -534,7 +534,7 @@ export async function guardToolCall(req: GuardRequest): Promise<GuardVerdict> {
     v.rule = policy.rule;
     v.reason = policy.reason;
     if (policy.pattern) v.pattern = policy.pattern;
-    appendDecision(v, rules.config, where, req, session);
+    appendDecision(v, where, req, session);
     return done();
   } catch (err) {
     v.decision = "ask";
@@ -647,17 +647,18 @@ export function guardTarget(call: GuardCall): string {
  */
 function appendDecision(
   v: GuardVerdict,
-  config: GnomonConfig,
   where: Located,
   req: GuardRequest,
   session: string | null
 ): void {
-  const settings = resolveAudit({ ...config, gnomonDir: join(where.project, ".gnomon") });
+  // The live surface's [audit], never the revision's (seventh review, B2):
+  // a committed `[audit.attest] sign` is a command the host runs.
+  const settings = resolveAudit(hostSurface(join(where.project, ".gnomon")).config);
   if (!settings.enabled) return;
   const id = `guard-${session ?? new Date().toISOString().slice(0, 10)}`;
-  mkdirSync(settings.dir, { recursive: true });
+  ensureDirIn(where.project, settings.dir);
   const lock = join(settings.dir, `${id}.lock`);
-  if (!acquire(lock)) {
+  if (!acquire(where.project, lock)) {
     // Recording is part of the contract when audit is on; a decision that
     // could not be recorded is not silently returned as if it were.
     throw new GuardCannotDecide(`the audit trail ${id}.jsonl stayed locked; the decision was not recorded`);
@@ -695,6 +696,7 @@ function appendDecision(
       exit: guardExit(v.decision, v.error !== undefined),
     });
     trail.write("session_end", {});
+    trail.close();
     if (record && trail.path) v.audit = { trail: trail.path, seq: record.seq, hash: record.hash ?? null };
   } finally {
     try {
@@ -706,12 +708,12 @@ function appendDecision(
 }
 
 /** An exclusive lock file, waited on for up to 2s; one older than 10s is stale. */
-function acquire(lock: string): boolean {
+function acquire(root: string, lock: string): boolean {
   const until = Date.now() + 2000;
   const nap = new Int32Array(new SharedArrayBuffer(4));
   for (;;) {
     try {
-      closeSync(openSync(lock, "wx"));
+      createExclusiveIn(root, lock);
       return true;
     } catch {
       try {

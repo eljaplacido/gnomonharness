@@ -2175,9 +2175,12 @@ describe("runTask — the non-interactive contract", () => {
     promptLoop.appendHistory(cfg, "   ");
     expect(promptLoop.loadHistory(cfg)).toHaveLength(2);
 
-    // and it lives OUTSIDE .gnomon/, so the surface hash cannot see it
-    expect(promptLoop.historyPath(cfg)).toContain(".gnomon-sessions");
-    expect(promptLoop.historyPath(cfg)).not.toMatch(/\.gnomon[/\\]history/);
+    // and it lives OUTSIDE the project -- in gnomon's data dir -- so neither
+    // the surface hash nor a contained command can reach it (fifth review,
+    // finding 1: a symlink at .gnomon-sessions/history made this write land
+    // in the trust store).
+    expect(promptLoop.historyPath(cfg).startsWith(dir)).toBe(false);
+    expect(promptLoop.historyPath(cfg)).not.toMatch(/\.gnomon/);
 
     rmSync(dir, { recursive: true, force: true });
   });
