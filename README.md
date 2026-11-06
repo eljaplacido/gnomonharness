@@ -93,8 +93,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2706 TypeScript tests (2181 core, 500 cli, 18
-> natives, 7 tui) and 63 Rust tests — **2769 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2773 TypeScript tests (2248 core, 500 cli, 18
+> natives, 7 tui) and 63 Rust tests — **2836 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -879,6 +879,16 @@ role), `sampling = "provider"` (or a role's `temperature`/`top_p =
 declared at their defaults, a turn sends the request bytes it sent before
 them. See [docs/GUIDE.md §8](docs/GUIDE.md) and
 [CONTRACTS.md §32](docs/CONTRACTS.md).
+
+One more for long tasks: `[verify] finish_gate = "v2"` hands the first "done"
+of a turn that changed files back once, with the task verbatim, open todos, a
+caveat audit quoting every sentence where the answer admits a deviation
+("judgement call", "infeasible", "`route_feasible: false`", …), the claims no
+check after the last write supports, and targeted checks. It accepts the next
+answer after a tool call, holds at most 2 rounds, and never fires with less
+than 15% of the step budget or the `--deadline` left. On, it supersedes
+`completion_gate` and `todo_gate`. Off, the request bytes are unchanged. See [docs/GUIDE.md §8](docs/GUIDE.md) and
+[CONTRACTS.md §33](docs/CONTRACTS.md).
 
 #### `[turn]` — when a turn stops, is nudged, or converges
 

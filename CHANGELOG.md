@@ -28,6 +28,26 @@
 
 ### Added
 
+- **An opt-in finish gate for long tasks: `[verify] finish_gate = "v2"`.**
+  The 2026-11-06 near-miss analysis found 6 cells whose final answer named
+  the defect the hidden test checks ("one judgement call worth flagging",
+  "`route_feasible: false`", "necessarily carries lateness") and shipped, and
+  5 whose own tests never exercised the hidden property. The first "done" of
+  a turn that changed files is handed back once, as a user-role `[gnomon]`
+  message, with the task verbatim, the turn's open todos, a deterministic
+  caveat audit of the answer (19 phrase classes, each sentence quoted back
+  with a demand for the strict reading), claims without evidence (after
+  clnkr: "wrote X" with no read of X after the last write, "works" with
+  nothing run), and Codex-style targeted checks. The next answer is accepted
+  after one tool call; at most 2 rounds; never fired with less than 15% of
+  the step budget or the `--deadline` left. Supersedes `completion_gate` and
+  `todo_gate`: with v2 on they do not run, and the surface audit names them.
+  The end-of-turn checks (`[verify]`, todo gate, completion gate, finish gate)
+  now run as one ordered pipeline in the loop, with no change in what any of
+  them sends. `counters.finish_gate`, audit kind `finish_gate`
+  (docs/CONTRACTS.md §33, `conformance/finish_gate.json`). Off by default:
+  request bodies are byte-identical (`finish_gate_loop.test.ts`). Not yet
+  benchmarked.
 - **Unknown keys in `[turn]`, `[verify]`, `[sandbox]`, `[resilience]` and
   `[approval]` are warned about**, with a "did you mean" suggestion (a
   misspelt `[turn] todo_gat` or `[verify] completion_gat` was silently

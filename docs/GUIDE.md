@@ -1486,6 +1486,32 @@ completion_min_remaining = 0.2    # skip with less than a fifth of the budget le
 completion_reviewer = "verifier"  # a read-only role (no write/edit; a bash_allow)
 ```
 
+**Opt-in: the finish gate (`finish_gate = "v2"`).** Built for long tasks,
+and it supersedes the completion gate and the todo gate: with it on, they do
+not run (the surface audit says so), because its hand-back already carries the
+task, the checks and the open todos. The first time a
+turn that changed files answers "done", gnomon hands it back once, as a
+user-role `[gnomon]` message (local chat templates drop late system messages),
+with: the task verbatim; this turn's open todos; a caveat audit that quotes
+back every sentence of the answer admitting a deviation ("judgement call",
+"infeasible", "skipped", "approximately", "`route_feasible: false`", "over
+the limit", "assumed", "partial", …) and asks for the strict reading or the
+task text that allows the other; claims the answer makes that no call after
+the last write supports ("wrote X" with nothing reading X, "it works" with
+nothing run); and targeted checks (outputs exist, requirements mapped to
+evidence, tests count only once they cover the requirement, no narrower
+substitute, scratch files gone). The next answer is accepted once a tool call
+has run since; at most 2 rounds; never fired with less than 15% of the step
+budget, or of a `--deadline`, left. Each judged end is in
+`counters.finish_gate` and the `finish_gate` audit record, with the caveat
+ids found ([CONTRACTS.md §33](CONTRACTS.md)).
+
+```toml
+# policy.toml: inside the existing [verify] block
+[verify]
+finish_gate = "v2"                # "off" (default) or "v2"
+```
+
 **Opt-in: the sweep knobs.** Six settings, each off (or the old behaviour)
 unless declared, so a benchmark sweep can test one long-task hypothesis per
 arm as a surface change ([CONTRACTS.md §32](CONTRACTS.md)). Undeclared, or
