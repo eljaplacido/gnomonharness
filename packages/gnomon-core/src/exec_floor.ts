@@ -29,6 +29,8 @@ export interface ExecFloor {
   root: string;
   roles: Record<string, { mode: string; image: string }>;
   at: string;
+  /** When a session here last started with a role contained. */
+  last?: string;
 }
 
 export interface FloorStore {

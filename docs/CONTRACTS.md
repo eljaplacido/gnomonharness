@@ -472,7 +472,10 @@ pass alone is not a verdict: it records the work, it does not inspect it.
 Top-level keys: `schema`, `base` (merge-base, full sha), `head` (full sha or
 `"worktree"`), `role`, `surface_hash` (the **base** surface — the rules the
 change was judged by), `checks`, `exit`; optionally `audit` (`trail`, `seq`,
-`hash`, `surface_audit_enabled`), `error`, `recovered`. Each check: `id`,
+`hash`, `surface_audit_enabled`), `error`, `recovered`, `rules_rev` (the
+commit `--base` resolved to, whose `.gnomon/` the rules were read from), `exec`
+(`mode`, `image`, `network`: where `[verify]` ran, after this machine's exec
+floor), `warnings` (strings). Each check: `id`,
 `status`; optionally `findings`, `reason`, `inspected`.
 
 **Fixture**: `conformance/check_verdict.json`. `packages/gnomon-cli/src/check.test.ts`

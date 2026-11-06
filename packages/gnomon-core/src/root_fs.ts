@@ -33,8 +33,10 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readFileSync,
   readlinkSync,
   realpathSync,
+  statSync,
   renameSync,
   unlinkSync,
   writeFileSync,
@@ -276,14 +278,17 @@ export function checkSessionFile(gitDir: string, session: string): string {
  * gets them read-only: the configuration (the surface, which names how the
  * next session is contained), the audit trail and the saved sessions.
  */
-export const CONTAINED_READONLY_DIRS = [".gnomon", ".gnomon-audit", ".gnomon-sessions"] as const;
+// `.gnomon-loops/` too (sixth review): loop state the host reads to decide
+// whether a loop is tripped -- the container resetting it un-tripped a loop.
+export const CONTAINED_READONLY_DIRS = [".gnomon", ".gnomon-audit", ".gnomon-sessions", ".gnomon-loops"] as const;
 
 /**
  * The host paths under `root` a contained command must not write, made ready
  * to be mounted (docker) or denied (the OS sandbox) read-only:
  *
- *   .gnomon/ .gnomon-audit/ .gnomon-sessions/
- *   .git/config .git/hooks/ .git/info/ .git/commondir   (a .git directory)
+ *   .gnomon/ .gnomon-audit/ .gnomon-sessions/ .gnomon-loops/
+ *   .git/config .git/hooks/ .git/info/ .git/commondir .git/config.worktree
+ *                                                        (a .git directory)
  *   .git                                                 (a .git file)
  *
  * WHY (fifth review). Host gnomon reads, writes and runs git inside the root.
@@ -332,9 +337,254 @@ export function containedReadonlyPaths(root: string): string[] {
   else if (g?.isFile()) out.push(git);
   else if (g?.isDirectory()) {
     want(join(git, "config"), "file", false);
+    // Absent, each of these was the container's to create (sixth review):
+    // `.git/commondir` naming a directory with a config of its own, or
+    // `.git/config.worktree`, and the user's own git -- a shell prompt, an
+    // IDE polling `git status` -- read the planted config and ran its
+    // fsmonitor. So each is made, by gnomon as the user, with a content git
+    // reads as "nothing changes" (verified: `.` as commondir is the git dir
+    // itself; an empty config.worktree sets nothing, and is read only under
+    // extensions.worktreeConfig, which lives in the read-only config), and
+    // mounted read-only like the rest. An empty commondir is NOT that: git
+    // refuses the repository ("failed to read .git/commondir").
+    placeholder(join(git, "commondir"), ".\n");
     want(join(git, "commondir"), "file", false);
+    placeholder(join(git, "config.worktree"), "");
+    want(join(git, "config.worktree"), "file", false);
     want(join(git, "hooks"), "dir", true);
     want(join(git, "info"), "dir", true);
   }
   return out;
+}
+
+/** Create `file` with `data` unless something is there already; a failure leaves it absent. */
+function placeholder(file: string, data: string): void {
+  if (lstatOrNull(file)) return;
+  try {
+    const fd = openSync(file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | NOFOLLOW, 0o644);
+    try {
+      if (data) writeFileSync(fd, data);
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    /* read-only checkout, a race: whatever is there is checked by want() */
+  }
+}
+
+/**
+ * Directories under `root` mounted read-write ON THEMSELVES before the
+ * read-only children (sixth review): `.git` when it is a directory. Nested
+ * read-only mounts do not stop the parent from being renamed --
+ * `mv .git .git-old && mkdir .git` left every protection on the old
+ * directory and handed the user's git a fresh one the container wrote. A
+ * mount point cannot be renamed or removed (EBUSY).
+ */
+export function containedMountPoints(root: string): string[] {
+  const git = join(resolve(root), ".git");
+  const st = lstatOrNull(git);
+  return st && st.isDirectory() && !st.isSymbolicLink() ? [git] : [];
+}
+
+// ---------------------------------------------------------------------------
+// Host reads and writes of files the model names (sixth review)
+// ---------------------------------------------------------------------------
+
+const NONBLOCK = constants.O_NONBLOCK ?? 0;
+
+/** The real path of `p`, resolving whatever part of it exists; the rest re-attached. */
+function realNearest(p: string): string {
+  const parts: string[] = [];
+  let cur = resolve(p);
+  for (let i = 0; i < 256; i++) {
+    try {
+      return parts.length ? join(realpathSync(cur), ...parts) : realpathSync(cur);
+    } catch {
+      const parent = dirname(cur);
+      if (parent === cur) return resolve(p);
+      parts.unshift(basename(cur));
+      cur = parent;
+    }
+  }
+  return resolve(p);
+}
+
+/** The first of `roots` whose real path contains `real`, spelled real; null when none does. */
+function rootOf(roots: string[], real: string): string | null {
+  for (const r of roots) {
+    const rr = realOr(resolve(r));
+    if (within(rr, real)) return rr;
+  }
+  return null;
+}
+
+function kindOf(st: Stats): string {
+  if (st.isFIFO()) return "a FIFO";
+  if (st.isSocket()) return "a socket";
+  if (st.isCharacterDevice()) return "a character device";
+  if (st.isBlockDevice()) return "a block device";
+  if (st.isDirectory()) return "a directory";
+  if (st.isSymbolicLink()) return "a symlink";
+  return "not a regular file";
+}
+
+/** The descriptor's real path (Linux /proc), or null when it cannot be read. */
+function fdPath(fd: number): string | null {
+  if (process.platform !== "linux") return null;
+  try {
+    return readlinkSync(`/proc/self/fd/${fd}`);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read a file the model named, as host gnomon.
+ *
+ * WHY (sixth review). Under exec = "docker" (and "os") the model shapes the
+ * tree between its tool calls, and host gnomon reads with the user's
+ * authority. A FIFO hung the read; a device node read the device; a file
+ * swapped for a symlink after the path was checked read whatever it pointed
+ * at. So: stat first (never open a device), open O_NONBLOCK (a FIFO cannot
+ * block), fstat the descriptor (what was opened is a regular file), and on
+ * Linux check the descriptor's real path lies under one of `roots`.
+ *
+ * `roots` empty means unconfined (sandbox = "off"): only the kind is checked.
+ * Hard links are allowed for reading (pnpm's node_modules is made of them).
+ */
+export function readRegular(roots: string[], file: string): Buffer {
+  const st = statSync(file);
+  if (!st.isFile()) throw new RootWriteError(`${file} is ${kindOf(st)}; gnomon reads only regular files`);
+  const fd = openSync(file, constants.O_RDONLY | NONBLOCK);
+  try {
+    const fst = fstatSync(fd);
+    if (!fst.isFile()) throw new RootWriteError(`${file} is ${kindOf(fst)}; gnomon reads only regular files`);
+    if (roots.length > 0) {
+      const real = fdPath(fd) ?? realOr(file);
+      if (!rootOf(roots, real)) throw new RootWriteError(`${file} resolved outside the project root (${real}); not reading it`);
+    }
+    return readFileSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Write a file the model named, whole, as host gnomon: never through a
+ * symlink, a hard link or into anything but a regular file.
+ *
+ * The real path is resolved (an in-root symlink to another in-root file is
+ * honoured), must lie under one of `roots`, and the write goes through
+ * writeFileIn there: directories lstat-walked from the real root, a fresh
+ * temp file renamed into place -- so a symlink swapped in after the check is
+ * replaced, not written through. An existing target must be a regular file
+ * with one link and no setuid/setgid bit; its permission bits are kept.
+ *
+ * `roots` empty means unconfined (sandbox = "off"): a plain write.
+ */
+export function writeRegular(roots: string[], file: string, data: string | Uint8Array): void {
+  if (roots.length === 0) {
+    mkdirSync(dirname(resolve(file)), { recursive: true });
+    writeFileSync(file, data);
+    return;
+  }
+  const real = realNearest(file);
+  const root = rootOf(roots, real);
+  if (!root) throw new RootWriteError(`${file} resolves outside the project root (${real}); not writing it`);
+  let mode = 0o644;
+  const st = lstatOrNull(real);
+  if (st) {
+    if (!st.isFile()) throw new RootWriteError(`${file} is ${kindOf(st)}; gnomon writes only regular files`);
+    if (st.nlink > 1) throw new RootWriteError(`${file} has ${st.nlink} hard links; not writing to it`);
+    if (st.mode & 0o6000) throw new RootWriteError(`${file} is setuid/setgid; not writing to it`);
+    mode = st.mode & 0o777;
+  }
+  writeFileIn(root, real, data, mode);
+}
+
+/**
+ * What a path was, for noticing that something else replaced it: device,
+ * inode, type and ctime in nanoseconds. dev/ino alone is not enough -- an
+ * unlinked file's inode is handed straight to the next file (or symlink)
+ * created, so a swap reads as "the same" (seen in CI).
+ */
+export interface FileIdentity {
+  dev: number;
+  ino: number;
+  mode?: number;
+  ctimeNs?: string;
+}
+
+/** lstat identity, or null when nothing is there. */
+export function identityOf(p: string): FileIdentity | null {
+  try {
+    const st = lstatSync(p, { bigint: true });
+    return { dev: Number(st.dev), ino: Number(st.ino), mode: Number(st.mode), ctimeNs: st.ctimeNs.toString() };
+  } catch {
+    return null;
+  }
+}
+
+/** Whether two identities name the same, unchanged file (both null: both absent). */
+export function sameIdentity(a: FileIdentity | null, b: FileIdentity | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.dev === b.dev && a.ino === b.ino && a.mode === b.mode && a.ctimeNs === b.ctimeNs;
+}
+
+/**
+ * Read `file` under `root` without following anything: every directory from
+ * the real root down lstat'd as a plain directory, the file itself opened
+ * O_NOFOLLOW | O_NONBLOCK and required to be a regular file with one link.
+ * Returns null when it does not exist; throws RootWriteError when it is
+ * anything else. For restoring files the model's code may have replaced
+ * (must_fail_first).
+ */
+export function readExactIn(root: string, file: string): { data: Buffer; mode: number; id: FileIdentity } | null {
+  const b = below(root, file);
+  if (!b) throw new RootWriteError(`${file} is not under the project root; not reading it`);
+  let cur = b.realRoot;
+  for (const part of b.parts.slice(0, -1)) {
+    cur = join(cur, part);
+    const st = lstatOrNull(cur);
+    if (!st) return null;
+    if (st.isSymbolicLink() || !st.isDirectory()) throw new RootWriteError(`${cur} is not a plain directory; not reading through it`);
+  }
+  const target = join(b.realRoot, ...b.parts);
+  const pre = lstatOrNull(target);
+  if (!pre) return null;
+  if (!pre.isFile()) throw new RootWriteError(`${target} is ${kindOf(pre)}; not a regular file`);
+  if (pre.nlink > 1) throw new RootWriteError(`${target} has ${pre.nlink} hard links`);
+  const fd = openSync(target, constants.O_RDONLY | NOFOLLOW | NONBLOCK);
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) throw new RootWriteError(`${target} is ${kindOf(st)}; not a regular file`);
+    if (st.nlink > 1) throw new RootWriteError(`${target} has ${st.nlink} hard links`);
+    if (st.dev !== pre.dev || st.ino !== pre.ino) throw new RootWriteError(`${target} changed while it was being read`);
+    const real = fdPath(fd);
+    if (real !== null && !within(b.realRoot, real)) throw new RootWriteError(`${target} resolved outside the project root (${real})`);
+    return { data: readFileSync(fd), mode: st.mode & 0o777, id: { dev: st.dev, ino: st.ino } };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Remove `file` under `root`: its directories lstat-walked (never through a
+ * symlink), then unlink, which removes a symlink itself and never its target.
+ */
+export function removeIn(root: string, file: string): void {
+  const b = below(root, file);
+  if (!b) throw new RootWriteError(`${file} is not under the project root; not removing it`);
+  let cur = b.realRoot;
+  for (const part of b.parts.slice(0, -1)) {
+    cur = join(cur, part);
+    const st = lstatOrNull(cur);
+    if (!st) return;
+    if (st.isSymbolicLink() || !st.isDirectory()) throw new RootWriteError(`${cur} is not a plain directory; not removing through it`);
+  }
+  const target = join(b.realRoot, ...b.parts);
+  const st = lstatOrNull(target);
+  if (!st) return;
+  if (st.isDirectory()) throw new RootWriteError(`${target} is a directory; not removing it`);
+  unlinkSync(target);
 }

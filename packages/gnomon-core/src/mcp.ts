@@ -115,7 +115,8 @@ class McpConnection {
 
   constructor(
     public readonly name: string,
-    private readonly def: McpServerDef
+    private readonly def: McpServerDef,
+    private readonly cwd?: string
   ) {}
 
   /** Spawn, initialize, and list tools. Throws on any failure; caller skips. */
@@ -158,6 +159,7 @@ class McpConnection {
     const proc = spawn(plan.file, plan.args, {
       stdio: ["pipe", "pipe", "pipe"],
       env,
+      ...(this.cwd ? { cwd: this.cwd } : {}),
       windowsVerbatimArguments: plan.verbatim,
     }) as ChildProcessWithoutNullStreams;
     this.proc = proc;
@@ -350,13 +352,21 @@ export async function connectMcp(
    * that does not connect costs the session every tool it declares, and on the
    * scripted path `report` is gated on --json. Defaults to `report`.
    */
-  warn?: (line: string) => void
+  warn?: (line: string) => void,
+  /**
+   * The servers' working directory. Default: this process's. Under a
+   * contained role the caller passes one outside the project (trust.ts
+   * mcpSpawnDir): `npx` resolves `node_modules/.bin` and `python -m` puts the
+   * cwd on sys.path, so a server started in the root ran code the container
+   * wrote, on the host (sixth review).
+   */
+  opts: { cwd?: string } = {}
 ): Promise<McpRegistry> {
   const conns: McpConnection[] = [];
   const byTool = new Map<string, McpConnection>();
 
   for (const [name, def] of Object.entries(defs ?? {})) {
-    const conn = new McpConnection(name, def);
+    const conn = new McpConnection(name, def, opts.cwd);
     try {
       await conn.connect();
       conns.push(conn);

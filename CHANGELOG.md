@@ -65,6 +65,25 @@
   - per-URL and per-remote programs (`credential.<url>.helper`,
     `gpg.<format>.program`, `remote.<name>.uploadpack`/`receivepack`/`vcs`/
     `proxy`) are blanked for gnomon's own git.
+  - (sixth review) the `test_must_fail_first` re-run reads and restores
+    source files without following anything (a symlink there wrote the
+    pre-image into `~/.bashrc`, or copied a credentials file into `src/`),
+    and skips with a warning any file the re-run replaced; `read`, `write`,
+    `edit` and `grep` take only regular files under the root (never a FIFO,
+    a device, or a hard link out) and write by rename.
+  - (sixth review) `gnomon check` holds `[verify]` to this machine's exec
+    floor: a `--base` ref moved to a commit with `exec = "off"` no longer runs
+    the verify command on the host. The verdict carries `rules_rev`, `exec`
+    and `warnings`; the banner prints the commit the rules came from.
+  - (sixth review) `.git` is mounted on itself so it cannot be renamed away
+    from its read-only children; `.git/commondir` (`.`) and
+    `.git/config.worktree` (empty) are created when absent and mounted
+    read-only; `.gnomon-loops/` is read-only; containers run with
+    `--cap-drop ALL --security-opt no-new-privileges`.
+  - (sixth review) a contained role refuses to start in a root that contains
+    the home directory, gnomon's data dir, or gnomon's own code
+    (`GNOMON_ALLOW_SELF_IN_ROOT=1` for working on gnomon itself); MCP servers
+    start outside the project while a role is contained.
 v0.4.4 candidate: long hosted-model tasks, from the P2G41 root causes
 (2026-11-05). **One default changes: reasoning replay is on for a hosted
 endpoint that returns reasoning**, adopted by H3's pre-registered decision

@@ -189,7 +189,7 @@ import {
 import { resolveContextWindow, type ContextSource } from "./context_window.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
 import { applyCredentials } from "./credentials.js";
-import { clampToDefaults, recordExecFloor, pinSessionRepository, type TrustOutcome } from "./trust.js";
+import { assertContainableRoot, mcpSpawnDir, clampToDefaults, recordExecFloor, pinSessionRepository, type TrustOutcome } from "./trust.js";
 import {
   resolveSessionStore,
   saveSession,
@@ -6184,6 +6184,10 @@ export async function runAgenticTurn(
               new Set(["bash"])
             )
           );
+          for (const w of mff.warnings ?? []) say(paint(deps.ui, "yellow", `  ⚠ test_must_fail_first: ${w}`));
+          if (!mff.ran && mff.reason?.startsWith("not re-run:")) {
+            say(paint(deps.ui, "yellow", `  ⚠ test_must_fail_first ${mff.reason}`));
+          }
           if (mff.pinsNothing) {
             pinsNothing = true;
             say(
@@ -7872,6 +7876,9 @@ export async function runTask(
   const state: PromptState = { config, exchanges: [], currentRole: role };
   // Where this task's bash runs, recorded for the next session (trust.ts
   // exec floor): a role that ran contained here may not leave it unasked.
+  // First: a root holding gnomon's own code, its data dir or the home
+  // directory cannot be contained at all (sixth review).
+  assertContainableRoot(config);
   recordExecFloor(config);
   // The repository every gnomon git of this task names (git_safe.ts).
   pinSessionRepository(config);
@@ -8058,7 +8065,7 @@ export async function runTask(
   // Failure to connect is reported and skipped, never fatal -- an unreachable
   // MCP server should cost its own tools, not the whole run.
   if (config.tools.mcp_servers && Object.keys(config.tools.mcp_servers).length > 0) {
-      state.mcp = await connectMcp(config.tools.mcp_servers, note, auditForTurn, warn);
+      state.mcp = await connectMcp(config.tools.mcp_servers, note, auditForTurn, warn, { cwd: mcpSpawnDir(config) });
   }
 
   // What each server offered, against this machine's pin for it (GV10). One
@@ -10629,7 +10636,9 @@ export async function runPromptLoop(
     state.mcp = await connectMcp(
       config.tools.mcp_servers,
       (l) => console.log(paint(uiOf(state), "gray", l)),
-      audit
+      audit,
+      undefined,
+      { cwd: mcpSpawnDir(config) }
     );
   }
 
@@ -10653,6 +10662,7 @@ export async function runPromptLoop(
   // The sandbox this session is held to from here on (sandbox_pin.ts), and
   // this machine's record of it for the next session (trust.ts exec floor).
   state.sandboxPin ??= pinSandbox(state.config);
+  assertContainableRoot(state.config);
   recordExecFloor(state.config);
   // The repository every gnomon git of this session names (git_safe.ts).
   pinSessionRepository(state.config);

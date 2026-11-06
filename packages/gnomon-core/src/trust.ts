@@ -40,7 +40,9 @@ import {
   renameSync,
   realpathSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import {
   type GnomonConfig,
@@ -867,12 +869,20 @@ export function recordExecFloor(config: GnomonConfig, path = trustPath(), opts: 
     // entry is what says this project was decided, by a person.
     const keep = any || (opts.lower === true && st.lost !== undefined);
     if (!keep && !exact) return;
-    if (exact && JSON.stringify(exact.roles) === JSON.stringify(roles)) return;
+    const nowIso = new Date().toISOString();
+    // `last`: when a session here last started contained (sixth review: `gnomon
+    // check` warns about a base ref that moved after it). `at` stays the
+    // time the roles were last recorded.
+    if (exact && JSON.stringify(exact.roles) === JSON.stringify(roles)) {
+      if (opts.lower || !any) return;
+      roles = exact.roles;
+    }
     const rest = floors.filter((f) => f.root !== root);
+    const at = exact && JSON.stringify(exact.roles) === JSON.stringify(roles) ? exact.at : nowIso;
     writeFloors(
       {
         v: 1,
-        floors: keep ? [...rest, { root, roles, at: new Date().toISOString() }] : rest,
+        floors: keep ? [...rest, { root, roles, at, ...(any && !opts.lower ? { last: nowIso } : exact?.last ? { last: exact.last } : {}) }] : rest,
         ...(st.lost ? { lost: st.lost } : {}),
       },
       floorsPathFor(path)
@@ -1358,4 +1368,116 @@ export async function settleTrust(config: GnomonConfig, opts: SettleOptions): Pr
     evaluation,
     outcome: outcomeOf(evaluation, "clamped", "default:no-operator"),
   };
+}
+
+/** Refused at session start: a root a container could not be kept inside of. */
+export class UncontainableRootError extends Error {
+  readonly code = "EGNOMONROOT";
+  constructor(message: string) {
+    super(message);
+    this.name = "UncontainableRootError";
+  }
+}
+
+/** The escape hatch for working on gnomon itself with a contained role (documented in README). */
+export const SELF_IN_ROOT_ENV = "GNOMON_ALLOW_SELF_IN_ROOT";
+
+function isWithin(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+function realOrResolved(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
+
+/**
+ * Why `config`'s project cannot run a role contained, or null when it can
+ * (sixth review, findings 4 and 5).
+ *
+ * A contained role writes the whole root. That is only containment when
+ * nothing the HOST later runs or trusts lives in it:
+ *
+ *   - gnomon's own code (this module's package, the launcher in argv[1], the
+ *     node binary): the container rewrites gnomon's JS and the next session,
+ *     or the detached anchor flush this one spawns, runs it as the user.
+ *     Escape hatch for developing gnomon in its own checkout:
+ *     GNOMON_ALLOW_SELF_IN_ROOT=1 (the container can then rewrite the
+ *     gnomon you run next -- only for a model you trust with that).
+ *   - gnomon's data dir (trust store, exec floors, keys) or the home
+ *     directory (`cd ~ && gnomon`): ~/.bashrc, ~/.ssh, every other
+ *     project's floor. No escape hatch.
+ *
+ * `code` is for tests; by default it is gnomon's own install.
+ */
+export function uncontainableRoot(config: GnomonConfig, code?: string[]): string | null {
+  const roles = [resolveExec(config), ...listRoles(config).map((r) => resolveExec(config, r))];
+  if (!roles.some((e) => e.mode !== "off")) return null;
+  return uncontainableRootAt(projectRootOf(config), code);
+}
+
+/** uncontainableRoot's path checks, for a root known to run something contained. */
+export function uncontainableRootAt(root: string, code?: string[]): string | null {
+  const named: Array<[string, string]> = [
+    [gnomonDataDir(), "gnomon's data directory (trust store, exec floors, keys)"],
+    [homedir(), "your home directory"],
+  ];
+  for (const [p, what] of named) {
+    const real = realOrResolved(p);
+    if (isWithin(root, real)) {
+      return (
+        `the project root ${root} contains ${what} (${real}), and a role here runs contained: ` +
+        `the container would write it. Start gnomon in the project's own directory, not above it.`
+      );
+    }
+  }
+  if (process.env[SELF_IN_ROOT_ENV] === "1") return null;
+  const own =
+    code ??
+    [
+      resolve(dirname(fileURLToPath(import.meta.url)), ".."),
+      ...(process.argv[1] ? [process.argv[1]] : []),
+      process.execPath,
+    ];
+  for (const p of own) {
+    const real = realOrResolved(p);
+    if (isWithin(root, real)) {
+      return (
+        `gnomon's own code (${real}) is inside the project root ${root}, and a role here runs contained: ` +
+        `the container could rewrite the gnomon this machine runs next. Run a gnomon installed outside the ` +
+        `project (npm i -g, or a checkout elsewhere). Working on gnomon itself: ${SELF_IN_ROOT_ENV}=1 accepts that risk.`
+      );
+    }
+  }
+  return null;
+}
+
+/** Throw UncontainableRootError when uncontainableRoot has a reason. */
+export function assertContainableRoot(config: GnomonConfig): void {
+  const why = uncontainableRoot(config);
+  if (why) throw new UncontainableRootError(`gnomon: refusing to start — ${why}`);
+}
+
+/**
+ * Where MCP servers start when any role here runs contained: an empty,
+ * owner-only directory in gnomon's data dir, outside every project. Undefined
+ * (this process's cwd, as before) when nothing is contained. A server whose
+ * `args` name project files must then name them absolutely.
+ */
+export function mcpSpawnDir(config: GnomonConfig): string | undefined {
+  const roles = [resolveExec(config), ...listRoles(config).map((r) => resolveExec(config, r))];
+  if (!roles.some((e) => e.mode !== "off")) return undefined;
+  const dir = join(gnomonDataDir(), "mcp-cwd");
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    return dir;
+  } catch {
+    // Never back to the project: the home directory, which a contained root
+    // may not contain (uncontainableRoot).
+    return homedir();
+  }
 }
