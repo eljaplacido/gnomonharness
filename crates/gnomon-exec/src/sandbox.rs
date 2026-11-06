@@ -548,7 +548,7 @@ pub mod fs_nofollow {
 
     fn remove_dir_at(fd: i32, name: &CStr, depth: usize) -> io::Result<()> {
         if depth >= MAX_DEPTH {
-            return Err(io::Error::new(io::ErrorKind::Other, "directory tree too deep"));
+            return Err(io::Error::other("directory tree too deep"));
         }
         // O_NOFOLLOW: if the entry became a symlink since the stat, this fails
         // (ELOOP / ENOTDIR) instead of opening wherever it points.
@@ -1805,6 +1805,8 @@ pub mod linux {
             return Peer::Unknown;
         }
         let n = (len as usize).saturating_sub(2).min(sa.sun_path.len());
+        // c_char is i8 on x86_64 and u8 on aarch64: the cast is needed on one.
+        #[allow(clippy::unnecessary_cast)]
         let raw: Vec<u8> = sa.sun_path[..n].iter().map(|c| *c as u8).collect();
         match raw.first() {
             None => Peer::Unknown,
