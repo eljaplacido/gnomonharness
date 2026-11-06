@@ -69,6 +69,22 @@ import {
   type WriteTarget,
 } from "./shell.js";
 import { containedMountPoints, containedReadonlyPaths, ensureDirIn, readRegular, RootWriteError, writeFileIn, writeRegular } from "./root_fs.js";
+import {
+  HANDLE_BASH_PARAMETERS,
+  JOB_DESCRIPTION,
+  JOB_LIMITS,
+  JOB_ACTIONS,
+  JOB_KEYS,
+  JOB_PARAMETERS,
+  JOB_TOOL,
+  countLines,
+  frameHeader,
+  resolveSoftTimeout,
+  runningHint,
+  type JobEvent,
+  type JobKillReason,
+} from "./soft_shell.js";
+import type { ChildProcess } from "node:child_process";
 
 /**
  * The roots host reads and writes of model-named files must stay under (sixth
@@ -353,7 +369,17 @@ export function readParameters(window?: number): Record<string, unknown> {
  * default variant is IMPLEMENTED.edit itself, the same object, so a surface
  * that declares none offers the same bytes as before.
  */
-function parametersFor(name: string, readWindow?: number, editVariant?: EditVariant): Record<string, unknown> | undefined {
+function parametersFor(
+  name: string,
+  readWindow?: number,
+  editVariant?: EditVariant,
+  /** bash soft_timeout = "handle": bash takes `interactive`, and `job` exists. */
+  softShell?: boolean
+): Record<string, unknown> | undefined {
+  // `job` is never declared: buildToolSet offers it beside bash under
+  // soft_timeout = "handle" (soft_shell.ts). Known here for the schema repair.
+  if (name === JOB_TOOL) return JOB_PARAMETERS;
+  if (name === "bash" && softShell) return HANDLE_BASH_PARAMETERS;
   if (!Object.prototype.hasOwnProperty.call(IMPLEMENTED, name)) return undefined;
   if (name === "edit" && editVariant === "compat") return COMPAT_EDIT_PARAMETERS;
   return name === "read" ? readParameters(readWindow) : IMPLEMENTED[name];
@@ -402,8 +428,15 @@ export function buildToolSet(
   const roleLimited = Array.isArray(allowed);
   const readWindow = toolMaxLines(config, "read");
   const editVariant = resolveEditVariant(config);
+  const handle = resolveSoftTimeout(config) === "handle";
 
   for (const tool of declaredTools(config)) {
+    // Not a declarable tool (soft_shell.ts). Unimplemented, as on master,
+    // unless bash's soft_timeout offers it below.
+    if (tool.name === JOB_TOOL) {
+      if (!handle) unimplemented.push(tool.name);
+      continue;
+    }
     if (roleLimited && !allowed!.includes(tool.name)) {
       withheld.push(tool.name);
       continue;
@@ -412,7 +445,7 @@ export function buildToolSet(
       disabled.push(tool.name);
       continue;
     }
-    const parameters = parametersFor(tool.name, readWindow, editVariant);
+    const parameters = parametersFor(tool.name, readWindow, editVariant, handle);
     if (!parameters) {
       unimplemented.push(tool.name);
       continue;
@@ -425,6 +458,16 @@ export function buildToolSet(
         parameters,
       },
     });
+  }
+
+  // soft_timeout = "handle" (soft_shell.ts): `job` beside an offered bash, in
+  // its sorted place, for every role offered bash -- a role that may run a
+  // command may wait on it. Nothing is added otherwise, so the schemas are
+  // master's.
+  if (handle && schemas.some((t) => t.function.name === "bash")) {
+    const at = schemas.findIndex((t) => t.function.name > JOB_TOOL);
+    const job: ToolSchema = { type: "function", function: { name: JOB_TOOL, description: JOB_DESCRIPTION, parameters: JOB_PARAMETERS } };
+    schemas.splice(at === -1 ? schemas.length : at, 0, job);
   }
 
   // MCP tools discovered from connected servers. Gated like any other tool: a
@@ -1181,6 +1224,13 @@ export interface ToolContext {
    * without one still behaves identically, it just cannot write to the trail.
    */
   audit?: DegradationSink;
+  /**
+   * This turn's running commands, under tools.toml bash `soft_timeout =
+   * "handle"` (soft_shell.ts, CONTRACTS.md §34). Supplied by the loop, which
+   * kills every one at the end of the turn. Absent -- the default -- a
+   * command is killed at the timeout, as before.
+   */
+  jobs?: JobTable;
 }
 
 /** One thing the run learned about itself, written by the model as it worked. */
@@ -1806,7 +1856,9 @@ export function shq(value: string): string {
 export function sandboxCommand(
   command: string,
   ctx: { root: string; exec?: { mode: "off" | "docker"; image: string; network: boolean }; agentSession?: string },
-  name: string
+  name: string,
+  /** A job's stdin reaches the container (`-i`): soft_timeout = "handle" only. */
+  opts: { interactive?: boolean } = {}
 ): string {
   const ex = ctx.exec;
   if (!ex || ex.mode === "off") return command;
@@ -1846,6 +1898,7 @@ export function sandboxCommand(
   const gid = typeof process.getgid === "function" ? process.getgid() : 0;
   return [
     "docker run --rm",
+    opts.interactive ? "-i" : "",
     `--name ${name}`,
     ex.network ? "" : "--network none",
     `--user ${uid}:${gid}`,
@@ -2796,6 +2849,27 @@ async function bashTool(
   const pre = bashPrecheck(args, ctx);
   if (pre) return outcomeOf(pre);
   const command = args.command as string;
+  // soft_timeout = "handle" only: stdin stays a live pipe for `job send`.
+  // Otherwise -- and always in kill mode -- it is closed, and a command that
+  // reads it gets end of input at once rather than waiting for the yield.
+  const interactive = ctx.jobs !== undefined && args.interactive === true;
+
+  // soft_timeout = "handle": at most JOB_LIMITS.max_jobs commands run at once.
+  // Refused before anything is stamped or spawned, and named.
+  if (ctx.jobs && ctx.jobs.running().length >= JOB_LIMITS.max_jobs) {
+    const ids = ctx.jobs.running().map((j) => j.id);
+    // A result, not a failure: the model's own usage, which says nothing
+    // about the apparatus (code 11 is apparatus_failure) and is not a policy
+    // refusal either. The turn carries on and is judged on its answer.
+    return {
+      code: TOOL_OK_EMPTY,
+      content:
+        `Refused: ${ids.length} jobs are already running (${ids.join(", ")}), the most one turn may have. ` +
+        `Nothing ran. Wait for one with job {"action":"wait","id":"${ids[0]}"}, or stop one with ` +
+        `job {"action":"kill","id":"${ids[0]}"}, then run this again.`,
+      summary: `bash — refused (${ids.length} jobs running)`,
+    };
+  }
 
   // Repository-defined code (npm test, make, pip install -e .) is named in the
   // preview, and asked about whatever the gate says under repo_code = true.
@@ -2836,6 +2910,7 @@ async function bashTool(
       summary: `bash — refused (already timed out this turn)`,
     };
   }
+
 
   // Pinned before the command runs so drift can be attributed to it. See
   // surfaceHashOf: bash is arbitrary shell, so the surface is detected moving
@@ -2894,7 +2969,7 @@ async function bashTool(
   const sandboxName = `gnomon-${process.pid}-${startedAt.toString(36)}`;
   let spawned: string;
   try {
-    spawned = sandboxCommand(command, ctx, sandboxName);
+    spawned = sandboxCommand(command, ctx, sandboxName, interactive ? { interactive: true } : {});
   } catch (e) {
     if (!(e instanceof RootWriteError)) throw e;
     return {
@@ -2918,6 +2993,24 @@ async function bashTool(
   // From here until docker run has returned -- or the container is confirmed
   // removed -- gnomon runs no git on the host (git_safe liveContainer).
   if (sandboxed) containerStarted(sandboxName, () => dockerContainerGone(sandboxName));
+
+  // soft_timeout = "handle": not killed at the limit, handed back as a job.
+  if (ctx.jobs) {
+    return ctx.jobs.run({
+      command,
+      spawned,
+      shellBin,
+      sandboxName: sandboxed ? sandboxName : undefined,
+      limitMs,
+      clamped,
+      startedAt,
+      ctx,
+      surfaceBefore,
+      worktreeBefore,
+      shellCwd,
+      interactive,
+    });
+  }
 
   return new Promise<ToolOutcome>((done) => {
     const proc = spawn(shellBin, ["-c", spawned], {
@@ -3065,80 +3158,682 @@ async function bashTool(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      // `docker run --rm` returned with the container's status: it has exited,
-      // and with it every process in it. A docker run that died on a signal,
-      // or failed itself (125: it may have lost the daemon with the container
-      // running), says nothing of the kind; the container stays registered
-      // until docker reports it gone.
-      if (sandboxed) {
-        if (exit !== null && exit !== 125) {
-          containerGone(sandboxName);
-        } else {
-          try {
-            spawn("docker", ["rm", "-f", sandboxName], { stdio: "ignore", detached: true }).unref();
-          } catch {
-            /* the lazy check in git_safe still asks */
-          }
-        }
-      }
-      // stderr BEFORE stdout when the command failed, and both ends kept.
-      //
-      // The old order put stderr last and clamped head-only, so a chatty build
-      // that failed returned 32KB of "Compiling crate-1..3999" and dropped the
-      // compiler error entirely -- the model was told the build failed and shown
-      // nothing about why, with a footer advising it to "narrow it with grep",
-      // which cannot be done for a build. Measured: 4000 progress lines plus one
-      // E0308 on stderr came back with the error absent.
-      //
-      // The timeout path already reasons this way ("the reason it was still
-      // running is usually the last thing it printed"); a non-zero exit deserves
-      // the same treatment, and its diagnostics are the point of the call.
-      const failed = exit !== 0;
-      const body = failed
-        ? [
-            `exit: ${exit}`,
-            stderr ? `stderr:\n${stderr}` : "stderr: (empty)",
-            stdout ? `stdout:\n${stdout}` : "stdout: (empty)",
-          ]
-            .filter(Boolean)
-            .join("\n")
-        : [
-            `exit: ${exit}`,
-            stdout ? `stdout:\n${stdout}` : "stdout: (empty)",
-            stderr ? `stderr:\n${stderr}` : "",
-          ]
-            .filter(Boolean)
-            .join("\n");
-      const drift = surfaceDrift(ctx, surfaceBefore);
-      const movedTree = worktreeMoved(ctx, worktreeBefore, shellCwd);
-      // Opt-in line cap (CX3), before the byte cap; unchanged text and context
-      // when none is declared.
-      const capped = capLines(body, ctx.maxLines?.bash, ctx, `bash-exit`);
-      done({
-        code: TOOL_OK,
-        worktree_changed: movedTree,
-        // null when the child died on a signal: left undefined rather than
-        // coerced, because "killed" is not an exit status.
-        shell_exit: typeof exit === "number" ? exit : undefined,
-        content:
-          (failed
-            ? clampEnds(capped.text, capped.ctx, `bash-exit`)
-            : clamp(capped.text, capped.ctx, `bash-exit`)) +
-          pipelineStatusNote(command) +
-          (drift ? `\n\n${drift.notice}` : ""),
-        // `exit` is null when the child died on a signal, and "exit null" then
-        // failed the verify gate's /exit (-?\d+)/ and fell through to its
-        // `code === 0 ? 0 : 1` default -- reporting a segfaulted or OOM-killed
-        // check as PASSED. Name the signal instead, so nothing can read it as a
-        // clean zero.
-        summary:
-          (exit === null && signal
-            ? `bash — killed by ${signal}`
-            : `bash — exit ${exit}`) + (drift ? " · surface changed" : ""),
-        surface_drift: drift ?? undefined,
-      });
+      if (sandboxed) containerAfterExit(sandboxName, exit);
+      done(exitOutcome({ command, exit, signal, stdout, stderr, ctx, surfaceBefore, worktreeBefore, shellCwd }));
     };
   });
+}
+
+/**
+ * `docker run --rm` returned with the container's status: it has exited,
+ * and with it every process in it. A docker run that died on a signal, or
+ * failed itself (125: it may have lost the daemon with the container
+ * running), says nothing of the kind; the container stays registered until
+ * docker reports it gone.
+ */
+function containerAfterExit(sandboxName: string, exit: number | null): void {
+  if (exit !== null && exit !== 125) {
+    containerGone(sandboxName);
+  } else {
+    try {
+      spawn("docker", ["rm", "-f", sandboxName], { stdio: "ignore", detached: true }).unref();
+    } catch {
+      /* the lazy check in git_safe still asks */
+    }
+  }
+}
+
+/** What a command that exited is reported as: the bash result, kill mode's bytes. */
+function exitOutcome(o: {
+  command: string;
+  exit: number | null;
+  signal?: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+  ctx: ToolContext;
+  surfaceBefore: string | null;
+  worktreeBefore: string | null;
+  shellCwd?: string;
+}): ToolOutcome {
+  const { command, exit, signal, stdout, stderr, ctx, surfaceBefore, worktreeBefore, shellCwd } = o;
+  // stderr BEFORE stdout when the command failed, and both ends kept.
+  //
+  // The old order put stderr last and clamped head-only, so a chatty build
+  // that failed returned 32KB of "Compiling crate-1..3999" and dropped the
+  // compiler error entirely -- the model was told the build failed and shown
+  // nothing about why, with a footer advising it to "narrow it with grep",
+  // which cannot be done for a build. Measured: 4000 progress lines plus one
+  // E0308 on stderr came back with the error absent.
+  //
+  // The timeout path already reasons this way ("the reason it was still
+  // running is usually the last thing it printed"); a non-zero exit deserves
+  // the same treatment, and its diagnostics are the point of the call.
+  const failed = exit !== 0;
+  const body = failed
+    ? [
+        `exit: ${exit}`,
+        stderr ? `stderr:\n${stderr}` : "stderr: (empty)",
+        stdout ? `stdout:\n${stdout}` : "stdout: (empty)",
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : [
+        `exit: ${exit}`,
+        stdout ? `stdout:\n${stdout}` : "stdout: (empty)",
+        stderr ? `stderr:\n${stderr}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+  const drift = surfaceDrift(ctx, surfaceBefore);
+  const movedTree = worktreeMoved(ctx, worktreeBefore, shellCwd);
+  // Opt-in line cap (CX3), before the byte cap; unchanged text and context
+  // when none is declared.
+  const capped = capLines(body, ctx.maxLines?.bash, ctx, `bash-exit`);
+  return {
+    code: TOOL_OK,
+    worktree_changed: movedTree,
+    // null when the child died on a signal: left undefined rather than
+    // coerced, because "killed" is not an exit status.
+    shell_exit: typeof exit === "number" ? exit : undefined,
+    content:
+      (failed
+        ? clampEnds(capped.text, capped.ctx, `bash-exit`)
+        : clamp(capped.text, capped.ctx, `bash-exit`)) +
+      pipelineStatusNote(command) +
+      (drift ? `\n\n${drift.notice}` : ""),
+    // `exit` is null when the child died on a signal, and "exit null" then
+    // failed the verify gate's /exit (-?\d+)/ and fell through to its
+    // `code === 0 ? 0 : 1` default -- reporting a segfaulted or OOM-killed
+    // check as PASSED. Name the signal instead, so nothing can read it as a
+    // clean zero.
+    summary:
+      (exit === null && signal
+        ? `bash — killed by ${signal}`
+        : `bash — exit ${exit}`) + (drift ? " · surface changed" : ""),
+    surface_drift: drift ?? undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Jobs: soft_timeout = "handle" (soft_shell.ts, docs/CONTRACTS.md §34)
+// ---------------------------------------------------------------------------
+
+/** One `job` audit record's fields (the loop adds `role` and redacts `command`). */
+export interface JobRecord {
+  event: JobEvent;
+  id: string;
+  command?: string;
+  reason?: JobKillReason;
+  exit?: number | null;
+  signal?: string | null;
+  wall_ms: number;
+  lines: number;
+  /** send: bytes written to stdin (the text itself is in the tool_call record). */
+  bytes?: number;
+  key?: string;
+  /** Under exec = "docker": whether the container was confirmed removed. */
+  container_gone?: boolean;
+}
+
+/** What bashTool hands the table: the command, prepared exactly as kill mode prepares it. */
+interface JobStart {
+  command: string;
+  /** The line `sh -c` runs: the command, or the docker run around it. */
+  spawned: string;
+  shellBin: string;
+  /** Set under exec = "docker": the container, registered with git_safe until it is gone. */
+  sandboxName?: string;
+  limitMs: number;
+  clamped: boolean;
+  startedAt: number;
+  ctx: ToolContext;
+  surfaceBefore: string | null;
+  worktreeBefore: string | null;
+  shellCwd?: string;
+  /** bash `interactive: true`: stdin a live pipe for `job send`; else closed, as in kill mode. */
+  interactive: boolean;
+}
+
+/** One running (or finished, not yet reported) command. */
+class Job {
+  id = "";
+  out = "";
+  err = "";
+  outSeen = 0;
+  errSeen = 0;
+  /** Bytes nobody had read yet, dropped at the buffer cap. */
+  dropped = 0;
+  private newlines = 0;
+  private outOpen = false;
+  private errOpen = false;
+  done = false;
+  exit: number | null = null;
+  signal: NodeJS.Signals | null = null;
+  endedAt = 0;
+  spawnError?: string;
+  stdinOpen: boolean;
+  killedBy?: JobKillReason;
+  readonly exited: Promise<void>;
+  private listeners = new Set<() => void>();
+
+  constructor(
+    readonly start: JobStart,
+    readonly proc: ChildProcess,
+    private readonly onFinish: (job: Job) => void
+  ) {
+    this.stdinOpen = start.interactive;
+    this.exited = new Promise<void>((ok) => {
+      if (proc.exitCode !== null || proc.signalCode !== null) ok();
+      else proc.once("exit", () => ok());
+    });
+    proc.stdout?.on("data", (d: Buffer) => this.append(d.toString(), "out"));
+    proc.stderr?.on("data", (d: Buffer) => this.append(d.toString(), "err"));
+    // A job that exits while the model is writing to it: EPIPE is not an error
+    // anybody can act on, and unhandled it would take the process down.
+    proc.stdin?.on("error", () => {
+      this.stdinOpen = false;
+    });
+    proc.on("error", (e) => {
+      if (this.done) return;
+      this.spawnError = e.message;
+      // The shell never started, so neither did a container.
+      if (start.sandboxName) containerGone(start.sandboxName);
+      this.settle(null, null);
+    });
+    // `exit` plus a short drain, or `close`, whichever is first: the same
+    // reasoning as bashTool's (a backgrounded grandchild can hold the pipes).
+    proc.on("exit", (code, sig) => {
+      if (!this.done) setTimeout(() => this.settle(code, sig), 40);
+    });
+    proc.on("close", (code, sig) => this.settle(code, sig));
+  }
+
+  get lines(): number {
+    return this.newlines + (this.outOpen ? 1 : 0) + (this.errOpen ? 1 : 0);
+  }
+
+  private append(chunk: string, which: "out" | "err"): void {
+    let n = 0;
+    for (let i = chunk.indexOf("\n"); i !== -1; i = chunk.indexOf("\n", i + 1)) n++;
+    this.newlines += n;
+    if (chunk.length > 0) {
+      const open = !chunk.endsWith("\n");
+      if (which === "out") this.outOpen = open;
+      else this.errOpen = open;
+    }
+    let buf = (which === "out" ? this.out : this.err) + chunk;
+    let seen = which === "out" ? this.outSeen : this.errSeen;
+    if (buf.length > JOB_LIMITS.buffer_bytes) {
+      const cut = buf.length - JOB_LIMITS.buffer_bytes;
+      this.dropped += Math.max(0, cut - seen);
+      buf = buf.slice(cut);
+      seen = Math.max(0, seen - cut);
+    }
+    if (which === "out") {
+      this.out = buf;
+      this.outSeen = seen;
+    } else {
+      this.err = buf;
+      this.errSeen = seen;
+    }
+  }
+
+  private settle(code: number | null, sig: NodeJS.Signals | null): void {
+    if (this.done) return;
+    this.done = true;
+    this.exit = code;
+    this.signal = sig;
+    this.endedAt = Date.now();
+    this.stdinOpen = false;
+    if (this.start.sandboxName && this.spawnError === undefined) containerAfterExit(this.start.sandboxName, code);
+    this.onFinish(this);
+    for (const l of [...this.listeners]) l();
+  }
+
+  /** Resolves when the job has finished, `ms` have passed, or the signal aborts. */
+  waitFor(ms: number, signal?: AbortSignal): Promise<"done" | "time" | "abort"> {
+    if (this.done) return Promise.resolve("done");
+    if (signal?.aborted) return Promise.resolve("abort");
+    return new Promise((res) => {
+      let timer: NodeJS.Timeout | undefined;
+      const finish = (v: "done" | "time" | "abort") => {
+        if (timer) clearTimeout(timer);
+        this.listeners.delete(onDone);
+        signal?.removeEventListener("abort", onAbort);
+        res(v);
+      };
+      const onDone = () => finish("done");
+      const onAbort = () => finish("abort");
+      this.listeners.add(onDone);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      timer = setTimeout(() => finish("time"), Math.max(0, ms));
+    });
+  }
+
+  /** What it printed since the last look, and the look recorded. */
+  take(): { out: string; err: string; dropped: number } {
+    const r = { out: this.out.slice(this.outSeen), err: this.err.slice(this.errSeen), dropped: this.dropped };
+    this.outSeen = this.out.length;
+    this.errSeen = this.err.length;
+    this.dropped = 0;
+    return r;
+  }
+
+  wallMs(): number {
+    return (this.done ? this.endedAt : Date.now()) - this.start.startedAt;
+  }
+}
+
+/**
+ * A turn's jobs. Created by the loop when the surface declares `soft_timeout
+ * = "handle"` and `job` is offered; every job still running is killed at the
+ * end of the turn (`closeAll`), on Esc and at `--deadline` (the turn's
+ * signal), through the same kill as a timed-out command: the process group,
+ * and under exec = "docker" the container, removed and waited for. A job's
+ * container is registered with git_safe from start to confirmed removal, so
+ * no host git runs while it may be writing.
+ */
+export class JobTable {
+  private readonly jobs = new Map<string, Job>();
+  private seq = 0;
+  private closing?: Promise<void>;
+  private readonly onAbort = () => void this.closeAll("cancelled");
+
+  constructor(
+    private readonly opts: {
+      /** The turn's cancellation: Esc, and `--deadline`. */
+      signal?: AbortSignal;
+      /** Where `job` audit records go. */
+      record?: (r: JobRecord) => void;
+    } = {}
+  ) {
+    opts.signal?.addEventListener("abort", this.onAbort, { once: true });
+  }
+
+  /** Jobs still running, in the order they started. */
+  running(): Array<{ id: string; command: string }> {
+    return [...this.jobs.values()].filter((j) => !j.done).map((j) => ({ id: j.id, command: j.start.command }));
+  }
+
+  /** Every job the table holds: running, and finished but not yet reported. */
+  list(): Array<{ id: string; running: boolean }> {
+    return [...this.jobs.values()].map((j) => ({ id: j.id, running: !j.done }));
+  }
+
+  get(id: string): Job | undefined {
+    return this.jobs.get(id);
+  }
+
+  record(r: JobRecord): void {
+    try {
+      this.opts.record?.(r);
+    } catch {
+      /* a trail that cannot be written must not take the command down */
+    }
+  }
+
+  /** Run a prepared command; past the limit it becomes a job instead of being killed. */
+  async run(s: JobStart): Promise<ToolOutcome> {
+    const { ctx } = s;
+    if (this.closing) {
+      if (s.sandboxName) containerGone(s.sandboxName);
+      return { code: TOOL_FAILED, content: "Refused: this turn is ending, and its jobs have been stopped. Nothing ran.", summary: "bash — refused (turn ending)" };
+    }
+    const proc = spawn(s.shellBin, ["-c", s.spawned], {
+      cwd: ctx.root,
+      env: agentEnv(ctx.agentSession),
+      // stdin closed, as in kill mode, unless the call asked for
+      // `interactive: true`: then a pipe `job send` writes to.
+      stdio: [s.interactive ? "pipe" : "ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32",
+    });
+    const job = new Job(s, proc, (j) => this.finished(j));
+    const how = await job.waitFor(s.limitMs, ctx.signal);
+
+    if (how === "abort") {
+      job.killedBy = "cancelled";
+      const containerLeft = !(await this.stop(job));
+      const { out, err } = job.take();
+      const atDeadline = ctx.signal?.reason === DEADLINE_ABORT;
+      return {
+        code: TOOL_FAILED,
+        content:
+          (atDeadline
+            ? `Stopped at this task's deadline after ${Date.now() - s.startedAt}ms. Output captured before the stop:\n`
+            : `Cancelled by the operator after ${Date.now() - s.startedAt}ms. Output captured before the stop:\n`) +
+          clampEnds([out ? `stdout:\n${out}` : "stdout: (empty)", err ? `stderr:\n${err}` : ""].filter(Boolean).join("\n"), ctx, `bash-cancelled`) +
+          (containerLeft ? CONTAINER_NOT_GONE : ""),
+        summary: atDeadline ? `bash — stopped at the deadline` : `bash — cancelled`,
+      };
+    }
+
+    if (job.done) {
+      releasePipes(proc);
+      if (job.spawnError !== undefined) {
+        return { code: TOOL_FAILED, content: `Could not run command: ${job.spawnError}`, summary: `bash — failed to spawn` };
+      }
+      const o = exitOutcome({
+        command: s.command,
+        exit: job.exit,
+        signal: job.signal,
+        stdout: job.out,
+        stderr: job.err,
+        ctx,
+        surfaceBefore: s.surfaceBefore,
+        worktreeBefore: s.worktreeBefore,
+        shellCwd: s.shellCwd,
+      });
+      return { ...o, content: frameHeader({ exit: job.exit, signal: job.signal, wallMs: job.wallMs(), lines: job.lines }) + o.content };
+    }
+
+    // Past the limit and still running: a job, not a kill.
+    job.id = `j${++this.seq}`;
+    this.jobs.set(job.id, job);
+    const wallMs = job.wallMs();
+    this.record({ event: "yield", id: job.id, command: s.command, wall_ms: wallMs, lines: job.lines });
+    const { out, err, dropped } = job.take();
+    const captured = [out ? `stdout:\n${out}` : "stdout: (empty)", err ? `stderr:\n${err}` : ""].filter(Boolean).join("\n");
+    const capped = capLines(captured, ctx.maxLines?.bash, ctx, `bash-job`);
+    const drift = surfaceDrift(ctx, s.surfaceBefore);
+    const movedTree = worktreeMoved(ctx, s.worktreeBefore, s.shellCwd);
+    return {
+      code: TOOL_OK,
+      worktree_changed: movedTree,
+      content:
+        frameHeader({ running: job.id, wallMs, lines: job.lines }) +
+        (s.clamped
+          ? `It reached ${s.limitMs}ms, the time left before this task's deadline, and is killed at the deadline. Output so far:\n`
+          : `It ran past the ${s.limitMs}ms tool timeout and was NOT killed. Output so far:\n`) +
+        droppedNote(dropped) +
+        clampEnds(capped.text, capped.ctx, `bash-job`) +
+        runningHint(job.id, job.start.interactive) +
+        (drift ? `\n\n${drift.notice}` : ""),
+      summary: `bash — running as job ${job.id} after ${Math.round(wallMs / 1000)}s${drift ? " · surface changed" : ""}`,
+      surface_drift: drift ?? undefined,
+    };
+  }
+
+  /** A registered job finished by itself: recorded. A kill is recorded by `stop`. */
+  private finished(job: Job): void {
+    if (!job.id || job.killedBy) return;
+    this.record({ event: "exit", id: job.id, exit: job.exit, signal: job.signal, wall_ms: job.wallMs(), lines: job.lines });
+  }
+
+  /**
+   * Kill a job as a timed-out command is killed: the process group (taskkill
+   * /T on Windows), and under exec = "docker" the container, removed and
+   * waited for. Returns whether the container is confirmed gone (true when
+   * there is none).
+   */
+  async stop(job: Job, quiet = false): Promise<boolean> {
+    let gone = true;
+    const wasRunning = !job.done;
+    if (wasRunning) {
+      // TODO(#156, exec = "os"): when the kernel sandbox lands, a job started
+      // under it has a supervisor, and this must call killSupervisedTree on
+      // it (first, as bashTool's timeout path does there), or a setsid'd
+      // descendant outlives the turn. This is the one job kill site.
+      const killed = killTree(job.proc, job.start.sandboxName);
+      await settleKill(killed, job.exited);
+      if (job.start.sandboxName) gone = await removeContainer(job.start.sandboxName);
+    }
+    // The shell is dead; its close follows. Bounded, so a grandchild holding
+    // the pipes cannot hold the turn.
+    if (!job.done) await job.waitFor(2000);
+    releasePipes(job.proc);
+    (job.proc.stdin as { destroy?: () => void } | null)?.destroy?.();
+    if (!quiet) this.recordKill(job, gone);
+    return gone;
+  }
+
+  private recordKill(job: Job, gone: boolean): void {
+    if (job.id && job.killedBy) {
+      this.record({
+        event: "kill",
+        id: job.id,
+        reason: job.killedBy,
+        exit: job.exit,
+        signal: job.signal,
+        wall_ms: job.wallMs(),
+        lines: job.lines,
+        ...(job.start.sandboxName ? { container_gone: gone } : {}),
+      });
+    }
+  }
+
+  /** Forget a job whose end has been reported. */
+  drop(id: string): void {
+    this.jobs.delete(id);
+  }
+
+  /**
+   * Kill every job still running: the end of the turn, Esc, or the deadline.
+   * Idempotent; the first reason is the one recorded.
+   */
+  closeAll(reason: JobKillReason): Promise<void> {
+    this.closing ??= (async () => {
+      this.opts.signal?.removeEventListener("abort", this.onAbort);
+      const live = [...this.jobs.values()].filter((j) => !j.done);
+      for (const j of live) j.killedBy ??= reason;
+      // Stopped together (each container removal may wait), recorded in the
+      // order the jobs started, so the trail does not depend on which died first.
+      const gone = await Promise.all(live.map((j) => this.stop(j, true)));
+      live.forEach((j, i) => this.recordKill(j, gone[i]!));
+      for (const j of this.jobs.values()) releasePipes(j.proc);
+      this.jobs.clear();
+    })();
+    return this.closing;
+  }
+}
+
+/** Output nobody read that was dropped at the per-job buffer cap, said. */
+function droppedNote(dropped: number): string {
+  return dropped > 0 ? `[${dropped} bytes of earlier output were dropped at the ${JOB_LIMITS.buffer_bytes}-byte job buffer]\n` : "";
+}
+
+/** A job's state, framed as a bash result is under `handle`. */
+function jobReport(job: Job, table: JobTable, ctx: ToolContext, lead = ""): ToolOutcome {
+  const { out, err, dropped } = job.take();
+  const fresh = [out ? `stdout:\n${out}` : "stdout: (no new output)", err ? `stderr:\n${err}` : ""].filter(Boolean).join("\n");
+  const capped = capLines(fresh, ctx.maxLines?.bash, ctx, `job-${job.id}`);
+  const body = clampEnds(capped.text, capped.ctx, `job-${job.id}`);
+  if (!job.done) {
+    return {
+      code: TOOL_OK,
+      content:
+        frameHeader({ running: job.id, wallMs: job.wallMs(), lines: job.lines }) +
+        lead +
+        `Output since you last looked:\n` +
+        droppedNote(dropped) +
+        body +
+        runningHint(job.id, job.start.interactive),
+      summary: `job ${job.id} — still running (${Math.round(job.wallMs() / 1000)}s)`,
+    };
+  }
+  // Finished, and now reported: the table lets it go.
+  table.drop(job.id);
+  const s = job.start;
+  const drift = surfaceDrift(ctx, s.surfaceBefore);
+  const movedTree = worktreeMoved(ctx, s.worktreeBefore, s.shellCwd);
+  return {
+    code: TOOL_OK,
+    worktree_changed: movedTree,
+    shell_exit: typeof job.exit === "number" ? job.exit : undefined,
+    content:
+      frameHeader({ exit: job.exit, signal: job.signal, wallMs: job.wallMs(), lines: job.lines }) +
+      lead +
+      `Output since you last looked:\n` +
+      droppedNote(dropped) +
+      body +
+      (typeof job.exit === "number" ? pipelineStatusNote(s.command) : "") +
+      (drift ? `\n\n${drift.notice}` : ""),
+    summary:
+      (job.exit === null && job.signal ? `job ${job.id} — killed by ${job.signal}` : `job ${job.id} — exit ${job.exit}`) +
+      (drift ? " · surface changed" : ""),
+    surface_drift: drift ?? undefined,
+  };
+}
+
+/** Send SIGINT to a job: its process group, or under docker its container. */
+async function interruptJob(job: Job): Promise<string | null> {
+  if (process.platform === "win32") {
+    return "ctrl-c is not supported on Windows, which has no process group to interrupt; use kill.";
+  }
+  const name = job.start.sandboxName;
+  if (name) {
+    await new Promise<void>((ok) => {
+      try {
+        const k = spawn("docker", ["kill", "--signal", "INT", name], { stdio: "ignore", windowsHide: true });
+        const t = setTimeout(() => {
+          try {
+            k.kill("SIGKILL");
+          } catch {
+            /* gone */
+          }
+          ok();
+        }, 5000);
+        k.once("exit", () => (clearTimeout(t), ok()));
+        k.once("error", () => (clearTimeout(t), ok()));
+      } catch {
+        ok();
+      }
+    });
+    return null;
+  }
+  try {
+    if (typeof job.proc.pid === "number") process.kill(-job.proc.pid, "SIGINT");
+    else job.proc.kill("SIGINT");
+  } catch {
+    try {
+      job.proc.kill("SIGINT");
+    } catch {
+      /* already gone */
+    }
+  }
+  return null;
+}
+
+/**
+ * `job`: wait on, write to, or kill a command bash handed back as a job.
+ * Offered only under soft_timeout = "handle" (soft_shell.ts).
+ */
+async function jobTool(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome> {
+  const table = ctx.jobs;
+  if (!table) {
+    return {
+      code: TOOL_NOT_DECLARED,
+      content: `Refused: there are no jobs here. A command becomes a job only under bash soft_timeout = "handle", when it is still running at the tool timeout.`,
+      summary: "job — no jobs",
+    };
+  }
+  const action = args.action;
+  if (typeof action !== "string" || !(JOB_ACTIONS as readonly string[]).includes(action)) {
+    return {
+      code: TOOL_OK_EMPTY,
+      content: `job needs an \`action\`: one of ${JOB_ACTIONS.join(", ")}. Got ${JSON.stringify(action)}. Nothing was done.`,
+      summary: "job — no action",
+    };
+  }
+  const id = typeof args.id === "string" ? args.id.trim() : "";
+  const job = id ? table.get(id) : undefined;
+  if (!job) {
+    const known = table.list();
+    return {
+      code: TOOL_OK_EMPTY,
+      content:
+        `No job ${JSON.stringify(id)} in this turn. ` +
+        (known.length > 0
+          ? `Jobs: ${known.map((j) => `${j.id} (${j.running ? "running" : "finished, not yet reported"})`).join(", ")}.`
+          : `None is running: a job's end is reported once, and every job is killed when the turn that started it ends.`),
+      summary: `job ${id || "?"} — no such job`,
+    };
+  }
+
+  const defSeconds = action === "send" ? JOB_LIMITS.send_default_seconds : JOB_LIMITS.wait_default_seconds;
+  const seconds =
+    typeof args.seconds === "number" && Number.isFinite(args.seconds)
+      ? Math.min(JOB_LIMITS.wait_max_seconds, Math.max(0, Math.floor(args.seconds)))
+      : defSeconds;
+  // Never past the deadline's margin: the model keeps the time to act on it.
+  const waitMs = ctx.deadlineAt === undefined ? seconds * 1000 : Math.max(0, Math.min(seconds * 1000, ctx.deadlineAt - Date.now()));
+
+  // `send` is a command by another door -- text into a shell or an
+  // interpreter the job runs -- so it is asked about as bash is. `wait` and
+  // `kill` act only on what this turn already started.
+  if (needsApproval(action === "send" ? "bash" : JOB_TOOL, ctx.gate)) {
+    const what = action === "send" ? (typeof args.key === "string" ? args.key : JSON.stringify(String(args.input ?? ""))) : "";
+    const ok = await ctx.approve({
+      tool: JOB_TOOL,
+      summary: `job ${action} ${job.id}${what ? `: ${what}` : ""}`,
+      preview: [`  $ ${job.start.command}`, ...(action === "send" ? [`  > ${what}`] : [])],
+    });
+    if (!ok) return { code: TOOL_DENIED, content: `Refused: the user declined job ${action} ${job.id}.`, summary: `job — denied` };
+  }
+
+  if (action === "kill") {
+    if (job.done) return jobReport(job, table, ctx, `It had already finished; nothing was killed.\n`);
+    job.killedBy = "model";
+    const gone = await table.stop(job);
+    const r = jobReport(job, table, ctx, `Killed at your request.\n`);
+    return { ...r, content: r.content + (gone ? "" : CONTAINER_NOT_GONE), summary: `job ${job.id} — killed` };
+  }
+
+  if (action === "send") {
+    if (job.done) return jobReport(job, table, ctx, `It had already finished; nothing was sent.\n`);
+    const key = args.key;
+    const input = args.input;
+    if (key !== undefined && !(JOB_KEYS as readonly unknown[]).includes(key)) {
+      return { code: TOOL_OK_EMPTY, content: `job send's \`key\` is one of ${JOB_KEYS.join(", ")}; got ${JSON.stringify(key)}. Nothing was sent.`, summary: "job — unknown key" };
+    }
+    if (key === undefined && (typeof input !== "string" || input === "")) {
+      return { code: TOOL_OK_EMPTY, content: "job send needs `input` (text for the job's stdin) or `key` (ctrl-c or ctrl-d). Nothing was sent.", summary: "job — nothing to send" };
+    }
+    if (typeof input === "string" && input !== "") {
+      // The same intent filters as a command: bash_deny, bash_allow, the
+      // network filter and the write refusals read the text as they would read
+      // it typed as a bash command. An interpreter's input is code, and they
+      // see what they see of `python -c` -- no more, and no less.
+      const pre = bashPrecheck({ command: input }, ctx);
+      if (pre) {
+        const o = outcomeOf(pre);
+        return { ...o, content: `Not sent to ${job.id}: ${o.content}`, summary: `job ${job.id} — send refused` };
+      }
+      if (!job.start.interactive) {
+        return {
+          code: TOOL_OK_EMPTY,
+          content:
+            `Not sent: ${job.id} was not started with \`interactive: true\`, so its stdin is closed (it read end of input). ` +
+            `It is still running; wait for it or kill it, and run a command that needs input with bash {"command": ..., "interactive": true}.`,
+          summary: `job ${job.id} — not interactive`,
+        };
+      }
+      if (!job.stdinOpen || !job.proc.stdin || job.proc.stdin.destroyed) {
+        return { code: TOOL_OK_EMPTY, content: `Not sent: ${job.id}'s stdin is closed (ctrl-d was sent, or it closed it). It is still running; wait or kill it.`, summary: `job ${job.id} — stdin closed` };
+      }
+      job.proc.stdin.write(input);
+    }
+    if (key === "ctrl-d") {
+      job.proc.stdin?.end();
+      job.stdinOpen = false;
+    } else if (key === "ctrl-c") {
+      const why = await interruptJob(job);
+      if (why) return { code: TOOL_OK_EMPTY, content: `Not sent: ${why}`, summary: `job ${job.id} — ctrl-c unsupported` };
+    }
+    table.record({
+      event: "send",
+      id: job.id,
+      wall_ms: job.wallMs(),
+      lines: job.lines,
+      ...(typeof input === "string" && input !== "" ? { bytes: Buffer.byteLength(input) } : {}),
+      ...(typeof key === "string" ? { key } : {}),
+    });
+    await job.waitFor(waitMs, ctx.signal);
+    return jobReport(job, table, ctx);
+  }
+
+  // wait
+  await job.waitFor(waitMs, ctx.signal);
+  return jobReport(job, table, ctx);
 }
 
 /**
@@ -5595,8 +6290,8 @@ function typeText(spec: unknown): string {
  * `path (string, required), old_text (string, required), …` -- or null for a
  * name with no schema in this build.
  */
-export function toolParamsText(name: string, readWindow?: number, editVariant?: EditVariant): string | null {
-  const params = parametersFor(name, readWindow, editVariant);
+export function toolParamsText(name: string, readWindow?: number, editVariant?: EditVariant, softShell?: boolean): string | null {
+  const params = parametersFor(name, readWindow, editVariant, softShell);
   const props = (params?.properties ?? undefined) as Record<string, unknown> | undefined;
   if (!props) return null;
   const req = new Set(Array.isArray(params!.required) ? (params!.required as string[]) : []);
@@ -5632,9 +6327,10 @@ export function argProblems(
   name: string,
   args: Record<string, unknown>,
   readWindow?: number,
-  editVariant?: EditVariant
+  editVariant?: EditVariant,
+  softShell?: boolean
 ): ArgProblems | null {
-  const params = parametersFor(name, readWindow, editVariant);
+  const params = parametersFor(name, readWindow, editVariant, softShell);
   const props = (params?.properties ?? undefined) as Record<string, Record<string, unknown>> | undefined;
   if (!props) return null;
   const required = Array.isArray(params!.required) ? (params!.required as string[]) : [];
@@ -5669,9 +6365,10 @@ export function schemaRepairText(
   name: string,
   args: Record<string, unknown>,
   readWindow?: number,
-  editVariant?: EditVariant
+  editVariant?: EditVariant,
+  softShell?: boolean
 ): string {
-  const p = argProblems(name, args, readWindow, editVariant);
+  const p = argProblems(name, args, readWindow, editVariant, softShell);
   if (!p || (p.missing.length === 0 && p.wrongType.length === 0)) return "";
   const parts: string[] = [];
   if (p.missing.length > 0) parts.push(`missing ${ticked(p.missing)}`);
@@ -5683,7 +6380,7 @@ export function schemaRepairText(
   }
   return (
     `\n\nYour ${name} call does not match its parameters: ${parts.join("; ")}. ` +
-    `${name} takes one JSON object: ${toolParamsText(name, readWindow, editVariant)}.`
+    `${name} takes one JSON object: ${toolParamsText(name, readWindow, editVariant, softShell)}.`
   );
 }
 
@@ -5697,10 +6394,11 @@ function withSchemaRepair(
   args: Record<string, unknown>,
   outcome: ToolOutcome,
   readWindow?: number,
-  editVariant?: EditVariant
+  editVariant?: EditVariant,
+  softShell?: boolean
 ): ToolOutcome {
   if (outcome.code === TOOL_OK || outcome.code === TOOL_OK_EMPTY) return outcome;
-  const text = schemaRepairText(name, args, readWindow, editVariant);
+  const text = schemaRepairText(name, args, readWindow, editVariant, softShell);
   return text ? { ...outcome, content: outcome.content + text } : outcome;
 }
 
@@ -5848,7 +6546,7 @@ export async function executeTool(
     const error = String(malformed.error ?? "not a JSON object");
     // "Whose keys are this tool's parameters" told the model there was a list
     // without giving it. Named here, so the corrected call can use them.
-    const params = toolParamsText(name, ctx.maxLines?.read, ctx.editVariant);
+    const params = toolParamsText(name, ctx.maxLines?.read, ctx.editVariant, ctx.jobs !== undefined && offered.has(JOB_TOOL));
     return {
       code: TOOL_DENIED,
       content:
@@ -5867,7 +6565,11 @@ export async function executeTool(
   // A broken tool is an apparatus_failure the model can be told about.
   let outcome: ToolOutcome;
   try {
-    outcome = await dispatch(name, args, ctx);
+    // A command runs as a job only where the caller offered `job` to wait on
+    // it: the model's own calls. The declared [verify] check, the bootstrap
+    // and the must-fail-first re-run offer bash alone, and are killed at the
+    // timeout as they always were.
+    outcome = await dispatch(name, args, ctx.jobs && !offered.has(JOB_TOOL) ? { ...ctx, jobs: undefined } : ctx);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     outcome = {
@@ -5879,7 +6581,7 @@ export async function executeTool(
   // Error path only: a call that failed with arguments the schema does not
   // accept is told which parameters the tool takes. Anything else is returned
   // untouched.
-  return withSchemaRepair(name, args, outcome, ctx.maxLines?.read, ctx.editVariant);
+  return withSchemaRepair(name, args, outcome, ctx.maxLines?.read, ctx.editVariant, ctx.jobs !== undefined && offered.has(JOB_TOOL));
 }
 
 async function dispatch(
@@ -5926,6 +6628,8 @@ async function dispatch(
       return readTool(args, ctx);
     case "bash":
       return withPackageIndex(await bashTool(args, ctx), args, ctx);
+    case JOB_TOOL:
+      return jobTool(args, ctx);
     case "task":
       return taskTool(args, ctx);
     case "webfetch":

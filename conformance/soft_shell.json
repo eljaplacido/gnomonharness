@@ -1,0 +1,39 @@
+{
+  "version": "0.1.0",
+  "_comment": [
+    "Soft-timeout shell, docs/CONTRACTS.md section 34: one opt-in key on the bash",
+    "declaration. Under \"handle\" a command still running at the tool timeout is",
+    "handed back as a job (j1, j2, ...) instead of being killed, and a `job` tool",
+    "is offered beside bash. Absent, or \"kill\", every request body is",
+    "byte-identical to master's at ae17a1ae (soft_shell.test.ts holds the hashes",
+    "sweep_knobs.test.ts pinned before either existed).",
+    "",
+    "soft_shell.test.ts holds the code's lists and limits (soft_shell.ts) to this",
+    "file, and CONTRACTS.md section 34 to its keys, values and record fields."
+  ],
+  "master": "ae17a1ae",
+  "key": "tools.toml [[tools]] name = \"bash\" soft_timeout",
+  "values": ["kill", "handle"],
+  "default": "kill",
+  "bash_parameters": ["command", "interactive"],
+  "stdin": "closed (end of input), as in kill mode, unless the bash call passes interactive: true",
+  "yield": "tools.toml [[tools]] name = \"bash\" timeout_seconds (default 120), clamped by --deadline",
+  "tool": "job",
+  "actions": ["wait", "send", "kill"],
+  "keys": ["ctrl-c", "ctrl-d"],
+  "parameters": ["action", "id", "seconds", "input", "key"],
+  "limits": {
+    "max_jobs": 3,
+    "wait_max_seconds": 300,
+    "wait_default_seconds": 30,
+    "send_default_seconds": 2,
+    "buffer_bytes": 1000000
+  },
+  "framing": ["Exit code", "Wall time", "Total output lines"],
+  "audit": {
+    "kind": "job",
+    "events": ["yield", "send", "exit", "kill"],
+    "kill_reasons": ["model", "turn_end", "cancelled"],
+    "fields": ["event", "id", "role", "command", "reason", "exit", "signal", "wall_ms", "lines", "bytes", "key", "container_gone"]
+  }
+}

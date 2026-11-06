@@ -93,8 +93,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2773 TypeScript tests (2248 core, 500 cli, 18
-> natives, 7 tui) and 63 Rust tests — **2836 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2806 TypeScript tests (2281 core, 500 cli, 18
+> natives, 7 tui) and 63 Rust tests — **2869 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1198,6 +1198,27 @@ output keeps its first and last lines and says how many were omitted. `read`
 shows that many lines at a time and offers `offset` and `limit`. It is off by
 default until an A/B on gnomon's own lanes says otherwise
 ([GUIDE §8](docs/GUIDE.md#8-configuration-essentials)).
+
+**`soft_timeout = "handle"` on `bash` keeps a long command running instead
+of killing it** (opt-in; the default `"kill"` is unchanged). Past
+`timeout_seconds` the command becomes a job (`j1`, …) and the model gets its
+output so far plus a `job` tool to `wait` on it (≤300 s per call), `send` it
+`ctrl-c` / `ctrl-d` (or stdin text, when bash was called with
+`interactive: true`; otherwise stdin is closed as in kill mode), or `kill` it — the shape of Codex's
+`exec_command`/`write_stdin` and opencode's background shell. At most three
+run at once; all are killed when the turn ends, by the same kill a timeout
+uses (under `exec = "docker"`, the container is removed and host git stays
+refused while it lives). `send` is held to `bash_allow` / `bash_deny` and
+approval like a command. Results are framed `Exit code` / `Wall time` /
+`Total output lines`. A value other than `kill` or `handle` stops the session.
+[CONTRACTS §34](docs/CONTRACTS.md).
+
+```toml
+[[tools]]
+name = "bash"
+timeout_seconds = 30          # the yield
+soft_timeout = "handle"       # kill (default) | handle
+```
 
 **`glob` and `grep` are read-only, so they are never gated.** That is the point
 of having them. `bash` counts as mutating under `approval = "on_write"` — a

@@ -2825,3 +2825,110 @@ acceptance after a tool call, the `no_tool` round and the bound, the skip on
 the step budget and on the deadline, precedence over the completion and todo
 gates, and
 that every record carries only the fixture's keys.
+
+## 34. Soft-timeout shell — bash `soft_timeout`, the `job` tool, audit kind `job`, `v: 1`
+
+**Why.** The long-task research notes (reverse-engineering 01 and 02,
+2026-11-05) found that the peers which do well on long tasks never cut a long
+command short: Codex returns a session handle after a 10 s yield and lets the
+model poll up to 300 s at a time, opencode backgrounds the command and wakes
+the session, and OpenHands returns after 30 s without output while the process
+keeps running. gnomon kills at the tool timeout (120 s by default) and refuses
+an identical re-run. This key lets that difference be measured as a surface
+change.
+
+| key | values | absent |
+|---|---|---|
+| tools.toml `[[tools]] name = "bash"`, `soft_timeout` | `kill`, `handle` | `kill`: killed at the timeout, as before |
+
+The yield is the bash `timeout_seconds` (default 120), clamped by `--deadline`
+as a kill is (§31). There is no separate yield key: a Codex-like arm sets
+`timeout_seconds = 10` beside `soft_timeout = "handle"`.
+
+**Validation is strict.** A value other than `kill` or `handle` (`"handel"`,
+`"Handle"`, `3`), or `soft_timeout` on any declaration but bash, is a fatal
+surface finding: a session does not start, and `gnomon task` ends as an
+apparatus failure before any request. A `[[tools]] name = "job"` declaration is
+a warning (it does nothing; on master it was unimplemented, which it still is
+under `kill`).
+
+**What must not change.** With the key absent, and with `soft_timeout =
+"kill"`, a scripted `gnomon task` turn sends request bodies byte-identical to
+master's at `ae17a1ae` on an OpenAI-shaped and an Ollama endpoint (the hashes
+§32 pinned, held again in `soft_shell.test.ts`), no `job` tool is offered, no
+result is framed and no `job` record is written.
+
+**Under `handle`.**
+
+- A `job` tool is offered beside bash, in its sorted place, to every role
+  offered bash and to no other. The completion gate's reviewer (§30) is not
+  offered it. It moves `wire.tools_hash` (§26).
+- A model's bash command still running at the yield is **not killed**. The
+  result (code `0`, no `shell_exit`) carries the output so far and the job id
+  (`j1`, `j2`, … per turn), and says how to wait, send and kill.
+- bash takes one more parameter, `interactive` (boolean, default false).
+  Without it stdin is closed exactly as in kill mode, so a command that reads
+  stdin (`npm init`, an `apt` prompt, `python` reading `sys.stdin`) gets end
+  of input at once instead of blocking until the yield. With `interactive:
+  true` stdin is a live pipe for `job send` (under `exec = "docker"` the
+  container runs with `-i`, and only then). Kill mode's bash schema is
+  master's `{command}`, the same object.
+- Only the model's own calls become jobs: the declared `[verify]` check, the
+  bootstrap and the must-fail-first re-run do not offer `job` and are killed at
+  the timeout exactly as before.
+- Every bash and job result is framed, Codex-style, with three header lines:
+  `Exit code` (or `Job: jN (still running, not killed)`, or `none (killed by
+  SIG…)`), `Wall time` (seconds since the command started, one decimal) and
+  `Total output lines` (both streams, the whole run). A command that finished
+  inside the limit keeps kill mode's body below the header.
+- At most `max_jobs` (3) run at once; a fourth command is refused before it is
+  stamped or run, naming the running jobs.
+- The model's own usage mistakes -- the fourth command, an unknown job id or
+  action, a `send` with nothing to send or to a closed stdin, an unknown key
+  -- are code `1` (`result`, the negative answer a missing path gets), never
+  `11`: they say nothing about the apparatus, and a turn that makes one and
+  then answers ends `answered` with code `0`.
+
+**The `job` tool.** Parameters `action` (required), `id` (required),
+`seconds`, `input`, `key`.
+
+| action | does |
+|---|---|
+| `wait` | block up to `seconds` (default `wait_default_seconds` 30, at most `wait_max_seconds` 300, never past the deadline's margin) until the job ends; returns the output since the last look, and once ended its exit code (`shell_exit`), the worktree and surface stamps against the command's start, and the job is forgotten |
+| `send` | write `input` verbatim to stdin (a job started with `interactive: true`; otherwise refused, named), or `key`: `ctrl-c` (SIGINT to the process group; under docker `docker kill --signal INT`; refused on Windows) or `ctrl-d` (close stdin); then wait `seconds` (default `send_default_seconds` 2) and report |
+| `kill` | kill it as a timed-out command is killed, and report |
+
+`send` is a command by another door, so it is held to what a bash command is
+held to: its `input` goes through bash's precheck (`bash_deny`, `bash_allow`,
+the network intent filter, the write refusals) and, under `on_write` or
+`always`, is put to the person as bash is. `wait` and `kill` ask only under
+`always`. A `job wait` on a running job is not counted toward `[loop]
+stall_repeats` or the alternation window. Output is kept per stream up to
+`buffer_bytes` (1 000 000); unread output past it is dropped from the oldest
+end and the next report says how many bytes.
+
+**Cleanup and isolation.** Every job still running is killed when its turn
+ends, however it ends: before the turn's own tree measurement on an answer,
+on Esc and at `--deadline` (the turn's signal), and finally on any other exit
+(stall, refusal, throw). A kill is the timed-out command's: the process group
+(taskkill `/T` on Windows), and under `exec = "docker"` the container, removed
+and waited for. A job's container is registered with git_safe from start to
+confirmed removal, so while a job may still be writing, gnomon runs no git on
+the host (the PR #158 rule); host-side measurements taken meanwhile report
+unknown. Jobs never outlive the turn, so nothing crosses into the next
+turn or session. When `exec = "os"` (#156) lands, a job's kill must also call
+its `killSupervisedTree` (marked TODO at `JobTable.stop`, the one job kill
+site).
+
+**Audit kind `job`**, one record per event: `event` (`yield`, `send`, `exit`,
+`kill`), `id`, `role`, `wall_ms`, `lines`; on `yield` the `command` (redacted
+as a bash `tool_call` target is); on `exit` and `kill` `exit` and `signal`; on
+`kill` `reason` (`model`, `turn_end`, `cancelled`) and, under docker,
+`container_gone`; on `send` `bytes` (the text itself is in the `tool_call`
+record's args) or `key`. Every `job` call also has its ordinary `tool_call`
+record.
+
+**Fixture**: `conformance/soft_shell.json`. `soft_shell.test.ts` holds the
+code's lists and limits to it, this section to its keys, values and fields,
+the byte-identity above, and the tool against real processes, a stub docker
+and a scripted model.
