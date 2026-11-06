@@ -8,6 +8,7 @@
 
 import { describe, it, expect } from "vitest";
 import {
+  gitIndexOps,
   parseShell,
   readShellCommand,
   shellSpellings,
@@ -623,5 +624,27 @@ describe("repoCodeRuns: calls that run code the repository defines (INJ-2026-11 
     for (const cmd of ["npm --version", "npm view react", "npm install --ignore-scripts", "pip install requests", "pnpm why x", "yarn info x", "make --version", "pytest -q", "cargo --version", "ls"]) {
       expect(runs(cmd), cmd).toEqual([]);
     }
+  });
+});
+
+describe("git rm, git mv and what a commit takes (GBS-LAYER uncommit-policy)", () => {
+  it("git rm and git mv are write targets; a cached removal is marked as one", () => {
+    const t = (c: string) => shellWriteTargets(c).targets.map((x) => [x.path, x.how, !!x.recursive]);
+    expect(t("git rm -rq --cached .gnomon")).toEqual([[".gnomon", "git rm --cached", true]]);
+    expect(t("git rm -- a.txt")).toEqual([["a.txt", "git rm", false]]);
+    expect(t("git -C sub rm x")).toEqual([["sub/x", "git rm", false]]);
+    expect(t("git mv .gnomon old")).toEqual([[".gnomon", "git mv (source)", true], ["old", "git mv", false]]);
+  });
+
+  it("gitIndexOps reads -a, add -A/-u and pathspecs, skipping option values", () => {
+    expect(gitIndexOps("git commit -qam wip")).toEqual([{ sub: "commit", at: "", all: true, pathspecs: [] }]);
+    expect(gitIndexOps("git commit -m 'a b' -- src/a.ts")).toEqual([{ sub: "commit", at: "", all: false, pathspecs: ["src/a.ts"] }]);
+    expect(gitIndexOps("git commit -m all src")).toEqual([{ sub: "commit", at: "", all: false, pathspecs: ["src"] }]);
+    expect(gitIndexOps("git add -A && git commit -m x")).toEqual([
+      { sub: "add", at: "", all: true, pathspecs: [] },
+      { sub: "commit", at: "", all: false, pathspecs: [] },
+    ]);
+    expect(gitIndexOps("git -C w stage -u .gnomon")).toEqual([{ sub: "add", at: "w", all: false, pathspecs: [".gnomon"] }]);
+    expect(gitIndexOps("git status && echo commit")).toEqual([]);
   });
 });

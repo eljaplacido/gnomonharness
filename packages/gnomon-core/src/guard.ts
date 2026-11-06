@@ -54,6 +54,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   loadConfig,
@@ -103,6 +104,7 @@ export const GUARD_RULES = [
   "surface",
   "record",
   "git_hooks",
+  "host_hooks",
   "write_allow",
   "network",
   "url",
@@ -114,12 +116,14 @@ export const GUARD_RULES = [
 export type GuardRule = (typeof GUARD_RULES)[number];
 
 /**
- * The tool kinds a call is decided as: gnomon's own tool names, plus
- * `execute`, code a harness runs itself (opencode V2's Code Mode). gnomon has
- * no such tool; an `execute` call is decided as the `node -e` one-liner it is
- * equivalent to (see decide).
+ * The tool kinds a call is decided as: gnomon's own tool names, plus `grep`
+ * and `glob`, which read what they search and are decided as a read of where
+ * they search (GBS-LAYER pilot: opencode's grep read `~/.ssh/id_rsa`, which
+ * the guard denies to read), plus `execute`, code a harness runs itself
+ * (opencode V2's Code Mode). gnomon has no such tool; an `execute` call is
+ * decided as the `node -e` one-liner it is equivalent to (see decide).
  */
-export const GUARD_TOOLS = [...POLICY_TOOLS, "execute"] as const;
+export const GUARD_TOOLS = [...POLICY_TOOLS, "grep", "glob", "execute"] as const;
 
 export interface GuardVerdict {
   schema: typeof GUARD_SCHEMA;
@@ -176,6 +180,21 @@ export interface GuardRequest {
   session?: string;
   /** Which adapter asked: claude-code, opencode, cursor, generic. Recorded only. */
   harness?: string;
+  /**
+   * The base the calling harness saw its session start at (the opencode
+   * plugin reads HEAD when it is loaded). Used, and recorded, only when the
+   * session has no recorded base yet: the first call of a session the
+   * harness started before it, so a commit in between does not move it.
+   */
+  sessionBase?: string;
+  /**
+   * Set when the host cannot put an `ask` to a person and would run the call
+   * instead (Claude Code under bypassPermissions): why. An ask becomes a deny
+   * with this said first.
+   */
+  askUnanswerable?: string;
+  /** The host's own permission mode, as its payload named it. Recorded only. */
+  hostMode?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -471,6 +490,23 @@ function materialise(where: Located, tree: string, cacheRoot: string, dir: strin
   }
 }
 
+/**
+ * For `gnomon guard status` and `install`: where this repository's surface,
+ * toplevel and gnomon state are, from the filesystem alone. Null when no
+ * `.gnomon/` governs `cwd`.
+ */
+export function guardRepo(cwd: string): { project: string; toplevel: string; stateDir: string } | null {
+  const where = locate(cwd);
+  if (!where) return null;
+  return { project: where.project, toplevel: where.toplevel, stateDir: join(repoStateDir(where.gitDir), "guard") };
+}
+
+/** A file as committed at HEAD (path relative to the toplevel), or null when HEAD has none. */
+export function committedAtHead(toplevel: string, rel: string): Buffer | null {
+  const r = safeGitBuffer(["cat-file", "blob", `HEAD:${rel.split(sep).join("/")}`], { cwd: toplevel, maxBuffer: 16 * 1024 * 1024 });
+  return r.status === 0 && !r.error ? r.stdout : null;
+}
+
 // ---------------------------------------------------------------------------
 // The decision
 // ---------------------------------------------------------------------------
@@ -519,7 +555,8 @@ export async function guardToolCall(req: GuardRequest): Promise<GuardVerdict> {
       return done();
     }
     const session = req.session ? safeSessionId(req.session) : null;
-    const rev = req.base ?? (session ? sessionBase(where, session) : null) ?? "HEAD";
+    const hinted = typeof req.sessionBase === "string" && /^[0-9a-f]{40,64}$/.test(req.sessionBase) ? req.sessionBase : null;
+    const rev = req.base ?? (session ? sessionBase(where, session) : null) ?? hinted ?? "HEAD";
     const rules = rulesAt(where, rev);
     v.base = rules.base;
     v.surface_hash = rules.surfaceHash;
@@ -534,6 +571,7 @@ export async function guardToolCall(req: GuardRequest): Promise<GuardVerdict> {
     v.rule = policy.rule;
     v.reason = policy.reason;
     if (policy.pattern) v.pattern = policy.pattern;
+    unanswerable(v, req);
     appendDecision(v, where, req, session);
     return done();
   } catch (err) {
@@ -541,8 +579,16 @@ export async function guardToolCall(req: GuardRequest): Promise<GuardVerdict> {
     v.rule = "error";
     v.error = err instanceof Error ? err.message : String(err);
     v.reason = `gnomon could not decide this call, so a person should: ${v.error}`;
+    unanswerable(v, req);
     return done();
   }
+}
+
+/** An ask the host would run unasked is a deny (GuardRequest.askUnanswerable). */
+function unanswerable(v: GuardVerdict, req: GuardRequest): void {
+  if (v.decision !== "ask" || !req.askUnanswerable) return;
+  v.decision = "deny";
+  v.reason = `${req.askUnanswerable} What a person would have been asked: ${v.reason}`;
 }
 
 /**
@@ -582,7 +628,37 @@ export async function decide(
   };
   const offered = new Set(buildToolSet(config, role).schemas.map((s) => s.function.name));
   if (call.tool === "execute") return decideExecute(call, ctx, offered);
+  if (call.tool === "grep" || call.tool === "glob") return decideSearch(call, ctx, offered);
   return toolCallPolicy(call.tool, call.input, ctx, offered);
+}
+
+/**
+ * `grep` and `glob` read what they search, so where they search is put to
+ * read's rules: the same sandbox, the same gate. gnomon's own grep and glob
+ * refuse a path outside the root the way read does (tools.ts searchScope).
+ * Another harness's search may also name its directory in the pattern
+ * (`/home/u/.ssh/*`, `../other/**`): that directory is put to read too, and
+ * the strictest answer stands. A role that holds neither the tool nor read
+ * may not search.
+ */
+async function decideSearch(call: GuardCall, ctx: ToolContext, offered: Set<string>): Promise<PolicyDecision> {
+  if (!offered.has(call.tool) && !offered.has("read")) return toolCallPolicy(call.tool, call.input, ctx, offered);
+  const home = (p: string) => (p === "~" || p.startsWith("~/") ? join(homedir(), p.slice(1)) : p);
+  const where = typeof call.input.path === "string" && call.input.path.trim() ? home(call.input.path.trim()) : ".";
+  const scopes = [where];
+  const pattern = typeof call.input.pattern === "string" ? call.input.pattern : "";
+  if (call.tool === "glob" && (isAbsolute(pattern) || pattern.startsWith("~") || /(^|\/)\.\.(\/|$)/.test(pattern))) {
+    const literal = home(pattern).split(/[*?[{]/)[0]!;
+    const dir = literal.endsWith("/") ? literal : dirname(literal);
+    scopes.push(isAbsolute(dir) ? dir : join(where, dir));
+  }
+  const reads = new Set([...offered, "read"]);
+  let worst: PolicyDecision | null = null;
+  for (const scope of scopes) {
+    const p = await toolCallPolicy("read", { path: scope }, ctx, reads);
+    if (!worst || SEVERITY[p.decision] > SEVERITY[worst.decision]) worst = { ...p, reason: `${call.tool} reads what it searches, decided as a read of "${scope}". ${p.reason}` };
+  }
+  return worst!;
 }
 
 /**
@@ -691,6 +767,7 @@ function appendDecision(
       role: v.role,
       agent: req.agent,
       via: req.harness,
+      ...(req.hostMode ? { host_mode: req.hostMode } : {}),
       base: v.base,
       surface_hash: v.surface_hash,
       exit: guardExit(v.decision, v.error !== undefined),
@@ -747,6 +824,8 @@ export interface HarnessRequest {
   session?: string;
   /** Cursor's event name: its answer's shape depends on it. */
   event?: string;
+  /** Claude Code's `permission_mode` (default, acceptEdits, plan, bypassPermissions, dontAsk, auto). */
+  permissionMode?: string;
 }
 
 const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
@@ -765,12 +844,15 @@ export function patchPaths(patch: string): string[] {
 
 /**
  * Claude Code's PreToolUse input: `tool_name`, `tool_input`, `cwd`,
- * `session_id`. Its tools are named and argued differently from gnomon's.
+ * `session_id`, and `permission_mode` (in every hook's input since 2.x; read
+ * from 2.1.319's hook input schema: `permission_mode: string, optional`). Its
+ * tools are named and argued differently from gnomon's.
  */
 export function fromClaudeCode(raw: Record<string, unknown>): HarnessRequest {
   const name = str(raw.tool_name) ?? "";
   const input = obj(raw.tool_input);
-  const base = { harnessTool: name, cwd: str(raw.cwd), session: str(raw.session_id) };
+  const mode = str(raw.permission_mode);
+  const base = { harnessTool: name, cwd: str(raw.cwd), session: str(raw.session_id), ...(mode ? { permissionMode: mode } : {}) };
   switch (name) {
     case "Bash":
       return { ...base, calls: [{ tool: "bash", input: { command: input.command } }] };
@@ -785,6 +867,10 @@ export function fromClaudeCode(raw: Record<string, unknown>): HarnessRequest {
       return { ...base, calls: [{ tool: "read", input: { path: input.file_path } }] };
     case "WebFetch":
       return { ...base, calls: [{ tool: "webfetch", input: { url: input.url } }] };
+    case "Grep":
+      return { ...base, calls: [{ tool: "grep", input: { pattern: input.pattern, path: input.path } }] };
+    case "Glob":
+      return { ...base, calls: [{ tool: "glob", input: { pattern: input.pattern, path: input.path } }] };
     default:
       return { ...base, calls: [] };
   }
@@ -827,6 +913,12 @@ export function fromOpencode(raw: Record<string, unknown>): HarnessRequest {
       return { ...base, calls: [{ tool: "read", input: { path: input.path ?? input.filePath } }] };
     case "webfetch":
       return { ...base, calls: [{ tool: "webfetch", input: { url: input.url } }] };
+    case "grep":
+      // `{ pattern, path?, include? }`: include filters file names below path
+      // and cannot leave it, so path is where it reads.
+      return { ...base, calls: [{ tool: "grep", input: { pattern: input.pattern, path: input.path } }] };
+    case "glob":
+      return { ...base, calls: [{ tool: "glob", input: { pattern: input.pattern, path: input.path } }] };
     case "execute":
       // Code Mode: `{ code }`, JavaScript with fetch (opencode 2.2.5).
       return { ...base, calls: [{ tool: "execute", input: { code: input.code } }] };
@@ -886,6 +978,9 @@ export function readHarness(harness: GuardHarness, raw: Record<string, unknown>)
 
 const SEVERITY: Record<GuardDecisionValue, number> = { allow: 0, ask: 1, deny: 2 };
 
+/** Host permission modes in which an ask is not put to anyone and the call runs. */
+export const BYPASS_MODES = new Set(["bypassPermissions"]);
+
 /**
  * Decide every call a payload proposes; the strictest decision stands. A
  * payload with no call gnomon decides is `allow` with rule "ungoverned".
@@ -896,6 +991,18 @@ export async function guardHarnessRequest(
 ): Promise<GuardVerdict> {
   const cwd = opts.cwd ?? hr.cwd ?? process.cwd();
   const session = opts.session ?? hr.session;
+  if (hr.permissionMode) {
+    opts = { ...opts, hostMode: hr.permissionMode };
+    // Claude Code 2.1.319 under --dangerously-skip-permissions RAN calls a
+    // PreToolUse hook answered "ask" (GBS-LAYER pilot, apparatus/probe_ask.sh:
+    // `rm -f .claude/settings.json`, `>> ~/.bashrc`). Nobody is asked in that
+    // mode, so an ask is answered for the person: no.
+    if (BYPASS_MODES.has(hr.permissionMode) && !opts.askUnanswerable) {
+      opts.askUnanswerable =
+        `Claude Code is running with permission_mode "${hr.permissionMode}", where nobody is asked ` +
+        `and an "ask" would run unseen, so gnomon denies what it would have put to a person.`;
+    }
+  }
   if (hr.calls.length === 0) {
     return guardToolCall({ ...opts, cwd, session, call: { tool: hr.harnessTool || "(none)", input: {} } });
   }

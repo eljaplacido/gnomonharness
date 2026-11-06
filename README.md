@@ -93,8 +93,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2806 TypeScript tests (2281 core, 500 cli, 18
-> natives, 7 tui) and 63 Rust tests — **2869 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2845 TypeScript tests (2316 core, 504 cli, 18
+> natives, 7 tui) and 63 Rust tests — **2908 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2452,10 +2452,25 @@ both the guard and the real turn loop in the test suite, which fails if they
 decide differently.
 
 **The rules are committed ones**, as in `check`: the HEAD the session started
-at (recorded by the Claude Code SessionStart hook, or by the guard at a
+at (recorded by the Claude Code SessionStart hook, read by the opencode plugin
+when opencode loads it and handed over with the session's first call — a
+subagent's session takes its parent's — or recorded by the guard at a
 session's first call), else HEAD — never the working tree. An agent cannot
-loosen the policy it is held to by editing `.gnomon/`, or by committing an edit
-mid-session. The role is `--role`, else `--agent <name>` through
+loosen the policy it is held to by editing `.gnomon/`, by committing an edit
+mid-session, or by committing `.gnomon/` away: a `git rm` of it, or a commit
+that would record a change to it, is denied (rule `surface`).
+
+**The layer defends its own attachment.** The hook configuration that puts
+`gnomon guard` in front of a harness is protected surface, rule `host_hooks`:
+a write, edit, removal or overwrite of `.claude/settings.json`,
+`settings.local.json` or `.claude/hooks/`, `.opencode/plugins/`,
+`opencode.json`, `.cursor/hooks.json`, their user-level copies (`~/.claude`,
+`~/.config/opencode`, `~/.cursor`) and gnomon's own per-repository state is
+**denied** under every gate, in the guard and in gnomon's own loop alike. The
+GBS-LAYER pilot (2026-11-06) removed the hook and switched hooks off in the
+user settings when these were only asked. `gnomon guard status` reports a hook
+that is missing, changed (from HEAD, or from what `install --write` wrote) or
+switched off (`disableAllHooks`): exit 0 none, 2 a finding. The role is `--role`, else `--agent <name>` through
 `[check.roles]`, as for `check`. With `[audit] enabled = true` every decision
 is appended to `.gnomon-audit/guard-<session>.jsonl`, one sealed hash chain per
 session that `gnomon audit verify` reads.
@@ -2465,8 +2480,8 @@ session that `gnomon audit verify` reads.
 
 | Harness | What is installed | deny | ask | allow |
 |---|---|---|---|---|
-| Claude Code | a `PreToolUse` hook on Bash, Write, Edit, MultiEdit, NotebookEdit, Read and WebFetch, added beside the `check` SessionStart and Stop hooks (`.claude/settings.json`) | `permissionDecision: "deny"` — Claude reads the reason | `"ask"` — Claude Code prompts | nothing printed: Claude Code's own permission flow decides |
-| opencode 2.2 | a plugin, `.opencode/plugins/gnomon-guard.js`, on `tool.hook("execute.before")` for shell, write, edit, patch, read, webfetch | the call fails with gnomon's reason, which the model reads | opencode's own permission prompt (`permission.hook("evaluate")`). A non-interactive `opencode run` rejects it; `--auto` approves it, as it does every ask | nothing |
+| Claude Code | a `PreToolUse` hook on Bash, Write, Edit, MultiEdit, NotebookEdit, Read, WebFetch, Grep and Glob, added beside the `check` SessionStart and Stop hooks (`.claude/settings.json`) | `permissionDecision: "deny"` — Claude reads the reason | `"ask"` — Claude Code prompts. Under `permission_mode: "bypassPermissions"` (`--dangerously-skip-permissions`) nobody is asked, and Claude Code 2.1.319 was seen to run an ask, so it is answered `"deny"` | nothing printed: Claude Code's own permission flow decides |
+| opencode 2.2 | a plugin, `.opencode/plugins/gnomon-guard.js`, on `tool.hook("execute.before")` for shell, write, edit, patch, read, grep, glob, webfetch, execute | the call fails with gnomon's reason, which the model reads | opencode's own permission prompt (`permission.hook("evaluate")`). A non-interactive `opencode run` rejects it; `--auto` approves it, as it does every ask | nothing |
 | Cursor | `.cursor/hooks.json`: `beforeShellExecution` and `beforeReadFile` | `permission: "deny"` with `user_message` / `agent_message` | `permission: "ask"` (a read that would be asked is denied: `beforeReadFile` cannot ask) | `{}` |
 | anything else with a pre-tool hook | `gnomon guard` with the call on stdin: `{"tool": "bash", "input": {"command": "…"}, "cwd": "…", "session_id": "…"}` in gnomon's own tool and argument names | exit 2 | exit 3 | exit 0 |
 
@@ -2486,9 +2501,10 @@ of the hook's matcher.
 
 **Not done.** Cursor file **writes**: its documented hooks give none before a
 write happens (`afterFileEdit` is after; `preToolUse` does not document Write's
-input), so writes in Cursor are left to `gnomon check`. MCP tools and any tool
-gnomon has no rule of its own for (Glob, Grep, Task…) are `allow` with rule
-`ungoverned` — the harness's own permissions apply.
+input), so writes in Cursor are left to `gnomon check`. Grep and Glob are
+decided as a read of where they search. MCP tools and any tool gnomon has no
+rule of its own for (Task, TodoWrite…) are `allow` with rule `ungoverned` — the
+harness's own permissions apply.
 
 **Latency**, measured on the gx10 (aarch64) under a load average of ~14:
 the decision itself takes 3–5 ms (p50; the test suite holds it under 50 ms),
@@ -2663,7 +2679,7 @@ Contract: [CONTRACTS §17](docs/CONTRACTS.md).
 | `gnomon endpoint [add\|test\|list]` | Declare an endpoint end to end — provider, key, model, roles — and prove it runs one token before writing anything. Presets: `opencode-go`, `opencode-zen`, `openrouter`, `ollama`. |
 | `gnomon audit [show\|verify\|tamper\|resolve <trail>:<seq> --reason <text>]` | Audit trails. `tamper` lists `record_tamper` events and exits 3 while any is unresolved; `resolve` is a person's recorded acknowledgement of one. |
 | `gnomon check --base <rev> [--head <rev>] [--role <r> \| --agent <name>] [--transcript <file> --format <fmt>] [--json]` | Judge a change another harness made by this surface's rules as of `<rev>`. Exit 0 held, 2 failed, 10 no verdict. See [Governing other harnesses](#governing-other-harnesses). |
-| `gnomon guard [--from claude-code\|opencode\|cursor] [--tool <kind> --input <json>] [--role <r> \| --agent <name>]` | Decide one tool call another harness is about to make, by the committed rules: allow (0), deny (2), ask (3), no decision (10). `gnomon guard install claude-code\|opencode\|cursor [--write]` installs the hook. See [Before the call](#before-the-call-gnomon-guard). |
+| `gnomon guard [--from claude-code\|opencode\|cursor] [--tool <kind> --input <json>] [--role <r> \| --agent <name>]` | Decide one tool call another harness is about to make, by the committed rules: allow (0), deny (2), ask (3), no decision (10). `gnomon guard install claude-code\|opencode\|cursor [--write]` installs the hook; `gnomon guard status` reports one missing, changed or switched off (0 none, 2 a finding). See [Before the call](#before-the-call-gnomon-guard). |
 | `gnomon dashboard [--port <n>] [--no-open] [--dir <path>]` | A command center in the browser, on 127.0.0.1 only: projects, sessions as a timeline, what the policy refused, audit-chain verification, contracts, token measurements; setup, check, trust and endpoint test as buttons that run those commands, asking first before anything that writes, downloads or spends. Alias: `ui`. See [The command center](#the-command-center--gnomon-dashboard). |
 | `gnomon chaos [--json] [--seed <n>] [--faults <id,...>] [--schedules <s,...>] [--out <file>]` | The fault-injection suite: a scripted model behind a loopback endpoint injects one fault per case into the fixed task set, and each fault is scored announced or silent for `task --json`. Exit 0 every fault announced, 1 one or more silent, 2 the run is void. `chaos list` prints the taxonomy; `chaos serve` runs the endpoint for another harness. See [docs/benchmarks/CHAOS.md](docs/benchmarks/CHAOS.md). |
 | `gnomon surface [hash\|manifest\|paths]` | Inspect the surface. |

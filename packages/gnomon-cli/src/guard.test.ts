@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { GUARD_DECISIONS, GUARD_RULES, GUARD_SCHEMA, GUARD_TOOLS, guardExit, type GuardVerdict } from "gnomon-core/guard";
-import { claudeCodeHooks, cmdGuard, cursorHooks, opencodePlugin, CLAUDE_CODE_MATCHER } from "./guard.js";
+import { claudeCodeHooks, cmdGuard, cursorHooks, opencodePlugin, CLAUDE_CODE_MATCHER, type GuardStatus } from "./guard.js";
 
 const LIVE = process.env.GNOMON_LIVE_ADAPTERS === "1";
 
@@ -174,9 +174,9 @@ describe("gnomon guard — Claude Code", () => {
         }
       }
     }
-    // The matcher selects exactly the tools gnomon decides, not Glob, Task, ...
+    // The matcher selects exactly the tools gnomon decides, not Task, TodoWrite, ...
     const m = new RegExp(`^(?:${CLAUDE_CODE_MATCHER})$`);
-    expect(CLAUDE_TOOLS.filter((t) => m.test(t))).toEqual(["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "WebFetch"]);
+    expect(CLAUDE_TOOLS.filter((t) => m.test(t))).toEqual(["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "WebFetch", "Glob", "Grep"]);
   });
 
   it("it extends the check hooks rather than duplicating them: one SessionStart, one Stop", async () => {
@@ -220,8 +220,95 @@ describe("gnomon guard — Claude Code", () => {
     const allow = run(payload("Read", { file_path: join(repo, "src/a.ts") }));
     expect(allow).toEqual({ code: 0, stdout: "" });
     // A tool gnomon does not decide is left alone too.
+    expect(run(payload("TodoWrite", { todos: [] }))).toEqual({ code: 0, stdout: "" });
+    // A search inside the repository is a read; one outside it is denied, as Read is.
     expect(run(payload("Glob", { pattern: "**/*" }))).toEqual({ code: 0, stdout: "" });
+    expect(JSON.parse(run(payload("Grep", { pattern: "x", path: "/etc" })).stdout).hookSpecificOutput.permissionDecision).toBe("deny");
     rmSync(repo, { recursive: true, force: true });
+  });
+
+  // GBS-LAYER pilot: Claude Code 2.1.319 under --dangerously-skip-permissions
+  // ran calls this hook answered "ask". Its hook input carries
+  // `permission_mode` (2.1.319's hook input schema).
+  it("under permission_mode bypassPermissions an ask is answered deny, and says why", () => {
+    governedRepo("on_write", `\n[check.roles]\nclaude-code = "implement"\n`);
+    const payload = (permission_mode: string) =>
+      JSON.stringify({ session_id: `cc-${permission_mode}`, cwd: repo, permission_mode, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "touch src/x.ts" } });
+    const run = (p: string) => JSON.parse(guardBin(["--from", "claude-code", "--agent", "claude-code"], p).stdout).hookSpecificOutput;
+    const bypass = run(payload("bypassPermissions"));
+    expect(bypass.permissionDecision).toBe("deny");
+    expect(bypass.permissionDecisionReason).toMatch(/bypassPermissions/);
+    expect(run(payload("default")).permissionDecision).toBe("ask");
+    rmSync(repo, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// gnomon guard status
+// ---------------------------------------------------------------------------
+
+describe("gnomon guard status — a missing, changed or switched-off hook is a finding", () => {
+  const status = (dir: string, extra: string[] = []) => {
+    const lines: string[] = [];
+    return cmdGuard(["status", "--dir", dir, "--json", ...extra], (s) => lines.push(s)).then((code) => ({ code, st: JSON.parse(lines.join("")) as GuardStatus }));
+  };
+  const stateOf = (st: GuardStatus, host: string) => st.hosts.find((h) => h.host === host)!.state;
+
+  it("ok after install; missing, modified and disabled after each detachment; not governed is 10", async () => {
+    const r = governedRepo("never");
+    expect((await status(r)).st.hosts.map((h) => h.state)).toEqual(["not_installed", "not_installed", "not_installed"]);
+    expect((await status(r)).code).toBe(0);
+    for (const h of ["claude-code", "opencode", "cursor"]) expect(await cmdGuard(["install", h, "--write", "--dir", r])).toBe(0);
+    git("add", "-A");
+    git("commit", "-qm", "hooks");
+    let s = await status(r);
+    expect(s).toMatchObject({ code: 0, st: { governed: true, findings: [] } });
+    expect(s.st.hosts.map((h) => h.state)).toEqual(["ok", "ok", "ok"]);
+
+    rmSync(join(r, ".opencode/plugins/gnomon-guard.js"));
+    writeFileSync(join(r, ".claude/settings.json"), "{}\n");
+    s = await status(r);
+    expect(s.code).toBe(2);
+    expect([stateOf(s.st, "claude-code"), stateOf(s.st, "opencode"), stateOf(s.st, "cursor")]).toEqual(["modified", "missing", "ok"]);
+    expect(s.st.findings).toHaveLength(2);
+
+    git("checkout", "--", ".");
+    writeFileSync(join(r, ".claude/settings.local.json"), JSON.stringify({ disableAllHooks: true }));
+    s = await status(r);
+    expect(stateOf(s.st, "claude-code")).toBe("disabled");
+    expect(s.code).toBe(2);
+    rmSync(join(r, ".claude/settings.local.json"));
+
+    // The user-level settings (HOME is a temp directory under vitest.setup.ts).
+    const home = process.env.HOME!;
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    writeFileSync(join(home, ".claude/settings.json"), JSON.stringify({ disableAllHooks: true }));
+    try {
+      expect(stateOf((await status(r)).st, "claude-code")).toBe("disabled");
+    } finally {
+      rmSync(join(home, ".claude/settings.json"));
+    }
+    expect((await status(r)).code).toBe(0);
+
+    const plain = realpathSync.native(mkdtempSync(join(tmpdir(), "gnomon-guard-plain-")));
+    expect((await status(plain)).code).toBe(10);
+    rmSync(plain, { recursive: true, force: true });
+    rmSync(r, { recursive: true, force: true });
+  });
+
+  it("a hook never committed is still expected once install --write recorded it, or when --expect names it", async () => {
+    const r = governedRepo("never");
+    expect(await cmdGuard(["install", "opencode", "--write", "--dir", r])).toBe(0);
+    expect(stateOf((await status(r)).st, "opencode")).toBe("ok");
+    writeFileSync(join(r, ".opencode/plugins/gnomon-guard.js"), opencodePlugin().replace("throw new Error(why);", "return;"));
+    expect(stateOf((await status(r)).st, "opencode")).toBe("modified");
+    rmSync(join(r, ".opencode/plugins/gnomon-guard.js"));
+    expect(stateOf((await status(r)).st, "opencode")).toBe("missing");
+    expect(stateOf((await status(r)).st, "cursor")).toBe("not_installed");
+    const expected = await status(r, ["--expect", "cursor"]);
+    expect(stateOf(expected.st, "cursor")).toBe("missing");
+    expect(expected.code).toBe(2);
+    rmSync(r, { recursive: true, force: true });
   });
 });
 
@@ -300,6 +387,48 @@ describe("gnomon guard — opencode V2 plugin", () => {
       permission: { hook: (name: string) => hooked.permission!.push(name), assert: async () => {} },
     });
     expect(hooked).toEqual({ tool: ["execute.before"], permission: ["evaluate"] });
+  });
+
+  /**
+   * The plugin's session start: HEAD when opencode loads it, handed to every
+   * call as --session-base; a subagent's session takes its parent's. Run with
+   * a stand-in for gnomon that records its arguments.
+   */
+  it("hands each session's start commit to gnomon guard as --session-base; a subagent inherits its parent's", async () => {
+    const r = governedRepo("never");
+    const start = git("rev-parse", "HEAD");
+    const log = join(dir, "args.log");
+    const fake = join(dir, "fake-gnomon.sh");
+    writeFileSync(fake, `#!/bin/sh\necho "$*" >> ${log}\ncat >/dev/null\necho '{"decision":"allow"}'\n`, { mode: 0o755 });
+    writeFileSync(join(dir, "gnomon-guard-sb.mjs"), opencodePlugin());
+    process.env.GNOMON_GUARD_BIN = fake;
+    try {
+      const mod = await import(pathToFileURL(join(dir, "gnomon-guard-sb.mjs")).href);
+      let before: ((e: Record<string, unknown>) => Promise<void>) | undefined;
+      const parents: Record<string, string> = { "ses_child": "ses_root" };
+      mod.default.setup({
+        location: { directory: r },
+        tool: { hook: (_: string, fn: typeof before) => (before = fn) },
+        permission: { hook: () => {}, assert: async () => {} },
+        session: { get: async ({ sessionID }: { sessionID: string }) => ({ id: sessionID, parentID: parents[sessionID] }) },
+      });
+      const call = (sessionID: string) => before!({ tool: "shell", sessionID, agent: "build", input: { command: "ls" } });
+      await call("ses_root");
+      // A commit lands after opencode started: the running session and its
+      // subagent keep the start; a new top-level session takes HEAD.
+      writeFileSync(join(r, "src/b.ts"), "x\n");
+      git("add", "-A");
+      git("commit", "-qm", "later");
+      const later = git("rev-parse", "HEAD");
+      await call("ses_root");
+      await call("ses_child");
+      await call("ses_new");
+      const seen = readFileSync(log, "utf-8").trim().split("\n").map((l) => /--session-base (\S+)/.exec(l)?.[1]);
+      expect(seen).toEqual([start, start, start, later]);
+    } finally {
+      delete process.env.GNOMON_GUARD_BIN;
+      rmSync(r, { recursive: true, force: true });
+    }
   });
 
   it("install --write puts it where opencode looks, and will not overwrite a file it did not write", async () => {

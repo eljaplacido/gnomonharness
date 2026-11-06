@@ -237,6 +237,8 @@ describe("gnomon skill mine", () => {
       { tool: "write", target: ".gnomon-audit/a.jsonl", pre: refusalOf(writePrecheck("write", { path: ".gnomon-audit/a.jsonl", content: "" }, ctx())) },
       { tool: "write", target: ".git/hooks/pre-commit", pre: refusalOf(writePrecheck("write", { path: ".git/hooks/pre-commit", content: "" }, ctx())) },
       { tool: "bash", target: "echo x > .git/hooks/pre-commit", pre: bashPrecheck({ command: "echo x > .git/hooks/pre-commit" }, ctx()) },
+      { tool: "write", target: ".claude/settings.json", pre: refusalOf(writePrecheck("write", { path: ".claude/settings.json", content: "{}" }, ctx())) },
+      { tool: "bash", target: "rm -f .opencode/plugins/gnomon-guard.js", pre: bashPrecheck({ command: "rm -f .opencode/plugins/gnomon-guard.js" }, ctx()) },
     ];
     // Two refusals come from executeTool itself rather than a precheck: a tool
     // the role was not given, and arguments that are not one JSON object.
