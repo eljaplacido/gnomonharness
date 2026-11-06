@@ -566,6 +566,15 @@ extra produces none of the records below.
 **Task record** — `gnomon task --json` carries the same object, without `root`,
 as `trust`. Absent when the surface grants nothing extra.
 
+Optional keys, in both: `tools_changed` (on a clamp for MCP tools that changed,
+below) and `floor_held` — present only on `decision: "trusted"` when the run
+was held to this machine's exec floor (`--trust`, `GNOMON_TRUST` or the store
+trusted a surface that moves a role out of the container it ran in, or to
+another image). It lists the sorted grant keys held back (`exec:<role>:off`,
+`exec:<role>:image`), so the record says that bash ran somewhere other than
+`surface_hash` declares ([THREAT-MODEL-EXEC.md](THREAT-MODEL-EXEC.md), row 9).
+`--trust-exec-downgrade` runs as declared and writes no `floor_held`.
+
 | `decision` | Meaning |
 |---|---|
 | `trusted` | Already trusted; `by` says how |
