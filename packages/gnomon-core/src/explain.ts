@@ -15,10 +15,11 @@
  */
 
 import { GnomonConfig, resolveContext, resolveRouting, resolveEndpoint, listEndpoints, endpointClass, listRoles, recomputeManifest, resolveVerify, resolveExtraRoots, resolveApprovalGate, resolveSandboxLevel, endpointKind, resolveExec } from "./config.js";
+import { resolve as resolvePath } from "node:path";
 import { resolveAudit } from "./audit.js";
 import { resolveSessionStore } from "./session_store.js";
 import { loadSkills, loadProposedSkills } from "./skills.js";
-import { buildToolSet, MUTATING, osSandboxSummary } from "./tools.js";
+import { buildToolSet, MUTATING, osSandboxSummary, osSandboxForbid } from "./tools.js";
 import { resolveAfterRefusal } from "./after_refusal.js";
 
 export interface Explanation {
@@ -157,7 +158,9 @@ const TOPICS: Record<ExplainTopic, Builder> = {
     const ex = resolveExec(config, role);
     const execLine =
       ex.mode === "os"
-        ? `os — ${osSandboxSummary(policy.sandbox?.network === true, undefined, ex.reads).line.replace(/^sandbox: exec = "os" /, "")}`
+        ? `os — ${osSandboxSummary(policy.sandbox?.network === true, undefined, ex.reads, osSandboxForbid(resolvePath(config.gnomonDir, ".."), extra)).line.replace(/^sandbox: exec = "os" /, "")}`
+        : ex.invalid !== undefined
+          ? `${JSON.stringify(ex.invalid)} — not a value this build knows: bash REFUSES every command until it is "off", "docker" or "os"`
         : ex.mode === "docker"
           ? `docker (${ex.image}), network ${ex.network ? "on" : "none"}`
           : "off — bash runs on the host, bounded by the rules above only";

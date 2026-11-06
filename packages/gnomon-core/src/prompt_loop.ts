@@ -92,9 +92,11 @@ import {
   type SpillSink,
   DIFF_ELIDED,
   osSandboxSummary,
+  osSandboxForbid,
   loadOsSandboxProbe,
 } from "./tools.js";
 import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
+import { pinSandbox, applySandboxPin, describeLoosening, type SandboxPin } from "./sandbox_pin.js";
 import { StallSignals, type StallSignalCounters } from "./stall_signals.js";
 import {
   resolveCompletionGate,
@@ -290,6 +292,11 @@ export interface PromptState {
    */
   network?: boolean;
   sandbox?: SandboxLevel;
+  /**
+   * The sandbox the session started under (sandbox_pin.ts): a later reload
+   * of the surface may tighten it, never loosen it. Set on the first turn.
+   */
+  sandboxPin?: SandboxPin;
   /** Connected MCP servers, if the surface declares any. Set once at startup. */
   mcp?: McpRegistry;
   /**
@@ -4499,10 +4506,14 @@ export async function runAgenticTurn(
   // One resolver each, shared with `gnomon guard`, so another harness's call
   // is gated by the same reading of the surface this loop makes.
   const gate: ApprovalGate = resolveApprovalGate(config);
-  const sandbox: SandboxLevel = state.sandbox ?? resolveSandboxLevel(config);
+  // The sandbox as the session started it, tightened by any reload since and
+  // never loosened (sandbox_pin.ts): policy.toml is inside the root a
+  // sandboxed bash can write.
+  const pinned = applySandboxPin((state.sandboxPin ??= pinSandbox(config)), config, role);
+  const sandbox: SandboxLevel = state.sandbox ?? pinned.level;
 
   // Session grant wins over the declared default; the surface is unchanged.
-  const declaredNetwork = (policy.sandbox as { network?: boolean } | undefined)?.network;
+  const declaredNetwork = pinned.network;
   const network = state.network ?? declaredNetwork;
   const packageIndex = resolvePackageIndex(config);
   const editVariant = resolveEditVariant(config);
@@ -4537,11 +4548,11 @@ export async function runAgenticTurn(
     sandbox,
     // Declared in policy.toml, hashed with the surface. A grant that does not
     // move the surface hash would be a grant nobody could audit.
-    extraRoots: resolveExtraRoots(config),
+    extraRoots: pinned.extraRoots,
     taskAllow: config.roles[role]?.task_allow,
     // Where bash runs. "off" by default, so nothing moves unless a surface
-    // asks for it.
-    exec: resolveExec(config, role),
+    // asks for it -- and, once the session has started, only ever tighter.
+    exec: pinned.exec,
     gate,
     approve,
     timeoutMs: toolTimeoutMs(config),
@@ -9939,6 +9950,15 @@ export async function runSessionTurn(
       // and through the front end's trust decision.
       const reloaded = (deps.reconfigure ?? ((fresh: GnomonConfig) => fresh))(reloadConfig(state.config));
       state.config = reloaded;
+      // A loosened sandbox is not applied (sandbox_pin.ts). Said, not hidden.
+      const kept = state.sandboxPin ? describeLoosening(state.sandboxPin, reloaded) : [];
+      if (kept.length > 0) {
+        print(
+          paint(ui, "yellow",
+            `  sandbox NOT loosened: the surface now asks for ${kept.join("; ")}. ` +
+            `This session keeps the sandbox it started with; restart gnomon to apply a looser one.`)
+        );
+      }
       const short = recomputeManifest(reloaded.gnomonDir).surface_hash.slice(0, 16);
       print(
         paint(ui, "green", `  ✓ surface reloaded — now ${short}… · this session runs under it from the next turn`)
@@ -10993,8 +11013,17 @@ export async function runPromptLoop(
     if (listRoles(config).some((r) => resolveExec(config, r).mode === "os") || execHere.mode === "os") {
       await loadOsSandboxProbe();
     }
+    // The sandbox this session is held to from here on (sandbox_pin.ts).
+    state.sandboxPin ??= pinSandbox(config);
     const osSummary =
-      execHere.mode === "os" ? osSandboxSummary((state.network ?? networkDeclared) === true, undefined, execHere.reads) : undefined;
+      execHere.mode === "os"
+        ? osSandboxSummary(
+            (state.network ?? networkDeclared) === true,
+            undefined,
+            execHere.reads,
+            osSandboxForbid(resolve(config.gnomonDir, ".."), resolveExtraRoots(config))
+          )
+        : undefined;
     if (osSummary) console.log(paint(ui, osSummary.ok ? "gray" : "red", `  ${osSummary.line}`));
     if (sandboxLevel !== "off" && networkDeclared === false && !(osSummary?.ok)) {
       // One line. It printed four on every launch, which is a wall nobody
@@ -11351,6 +11380,14 @@ export async function runPromptLoop(
           // (see reloadConfig), and through the session's trust decision.
           const fresh = reconfigure(reloadConfig(config));
           state.config = fresh;
+          const kept = state.sandboxPin ? describeLoosening(state.sandboxPin, fresh) : [];
+          if (kept.length > 0) {
+            console.log(
+              paint(ui0, "yellow",
+                `  sandbox NOT loosened: the surface now asks for ${kept.join("; ")}. ` +
+                `This session keeps the sandbox it started with; restart gnomon to apply a looser one.`)
+            );
+          }
           console.log(
             `\n  ${paint(ui0, "green", "✓")} ${paint(ui0, "bold", pickedRole)} → ` +
               `${modelTag} @${pickedEndpoint}`

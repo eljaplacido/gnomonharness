@@ -25,7 +25,8 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { PassThrough, Writable } from "node:stream";
-import { mkdtempSync, cpSync, rmSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, cpSync, rmSync, readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
+import { osSandbox } from "gnomon-natives";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadConfig, routeRole } from "./config.js";
@@ -683,4 +684,74 @@ describe("a surface written mid-session takes effect", () => {
       rmSync(root, { recursive: true, force: true });
     }
   }, 30000);
+});
+
+// PR #156 review, finding 3. policy.toml is inside the root, and the root is
+// what a sandboxed bash may write. A command that set exec = "off" there was
+// picked up by the drift reload, and the NEXT turn's bash ran unsandboxed.
+describe("a sandboxed command cannot loosen its own sandbox through the surface", () => {
+  const probe = osSandbox();
+  const why =
+    process.platform === "win32"
+      ? "no OS sandbox on Windows"
+      : "error" in probe
+        ? `gnomon-exec unavailable: ${probe.error.split("\n")[0]}`
+        : !probe.probe.supported || !probe.probe.network_supported
+          ? `kernel cannot sandbox: ${probe.probe.reason}`
+          : "";
+  let restoreKeys: () => void;
+  beforeAll(() => {
+    restoreKeys = stubDeclaredKeys(loadConfig(resolve(process.cwd(), "..", "..")));
+  });
+  afterAll(() => restoreKeys());
+
+  it.skipIf(!!why)(`exec = "off" written by bash is not applied; the next command is still confined${why ? ` [SKIPPED: ${why}]` : ""}`, async () => {
+    const root = makeProject();
+    const outside = mkdtempSync(join(tmpdir(), "gnomon-pin-outside-"));
+    const policyPath = join(root, ".gnomon", "policy.toml");
+    // exec = "os", and no [verify] (its check would recurse into this suite).
+    writeFileSync(
+      policyPath,
+      readFileSync(policyPath, "utf8")
+        .replace(/^\[verify\][\s\S]*?(?=^\[)/m, "")
+        .replace(/^level = "confined".*$/m, 'level = "confined"\nexec = "os"')
+        // Nobody to ask in this script: the point is the sandbox, not the gate.
+        .replace(/^gate = "on_write".*$/m, 'gate = "never"')
+    );
+    expect(readFileSync(policyPath, "utf8")).toMatch(/^exec = "os"$/m);
+    try {
+      let call = 0;
+      const bashCall = (command: string) => ({
+        message: { content: "", tool_calls: [{ function: { name: "bash", arguments: { command } } }] },
+      });
+      const seen = await drive(root, ["loosen it", "now escape", "/quit"], {
+        initialRole: "implement",
+        onExit: (_c, stop) => stop(),
+        budgetMs: 40000,
+        reply: () => {
+          call++;
+          // Through python, with the path assembled at run time: the bash
+          // text rules refuse a command that names the surface, and no
+          // reading of text sees this one. The kernel lets it through, since
+          // .gnomon/ is inside the root.
+          if (call === 1) {
+            const py = `p = ".gno" + "mon/policy.toml"; s = open(p).read(); open(p, "w").write(s.replace('exec = "os"', 'exec = "off"'))`;
+            return bashCall(`python3 -c '${py.replace(/'/g, `'\\''`)}'`);
+          }
+          if (call === 3) return bashCall(`echo escaped > '${outside}/escaped.txt'`);
+          return { message: { content: "done" } };
+        },
+      });
+      // The command did rewrite the file -- it is inside the root...
+      expect(readFileSync(policyPath, "utf8")).toMatch(/^exec = "off"$/m);
+      // ...the loop said it would not apply it...
+      expect(seen.seen).toContain("sandbox NOT loosened");
+      // ...and the next command was still confined.
+      expect(existsSync(join(outside, "escaped.txt")), seen.seen.slice(-3000)).toBe(false);
+      expect(call).toBeGreaterThanOrEqual(3);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  }, 60000);
 });

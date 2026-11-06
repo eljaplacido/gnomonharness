@@ -7,8 +7,9 @@
 
 import { spawnSync } from "node:child_process";
 import { execSync } from "node:child_process";
-import { readFileSync, existsSync, statSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { readFileSync, existsSync, statSync, realpathSync } from "node:fs";
+import { join, resolve, dirname, sep } from "node:path";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 
@@ -128,6 +129,21 @@ export function installedBinDir(): string {
 }
 
 export function findBinary(name: string): string {
+  const first = binaryCandidates(name, true)[0];
+  if (first !== undefined) return first;
+  throw notFound(name);
+}
+
+/**
+ * Every place `name` is found, in findBinary's order of preference: the
+ * override, the checkout's target/ (newest first), the installers' directory,
+ * PATH. findBinary takes the first; osSandbox takes the first it may trust.
+ */
+export function binaryCandidates(name: string, firstOnly = false): string[] {
+  const out: string[] = [];
+  const add = (p: string | undefined) => {
+    if (p && !out.includes(p)) out.push(p);
+  };
   // 1. Check GNOMON_BIN_OVERRIDE env var (for testing)
   //    Can be a full path to the binary OR a directory containing it
   const override = process.env.GNOMON_BIN_OVERRIDE;
@@ -135,21 +151,23 @@ export function findBinary(name: string): string {
     const resolved = resolve(override);
     // If it looks like a directory (ends without .exe or known extension), append name
     const candidate = join(resolved, exeName(name));
-    if (existsSync(candidate)) return candidate;
+    const bare = join(resolved, name);
+    if (existsSync(candidate)) add(candidate);
     // The bare name too: an override directory populated by hand, or a
     // cross-built artefact, may not carry the platform suffix.
-    const bare = join(resolved, name);
-    if (existsSync(bare)) return bare;
+    else if (existsSync(bare)) add(bare);
     // Otherwise use the override as-is — but only if it is a file. It used to
     // be returned whenever it existed, so an override pointing at a directory
     // that lacked this particular binary returned the directory, and spawning
     // it failed with EACCES. The diagnosis then blamed permissions instead of
     // the missing build, which is exactly what happened in CI when the
     // workflow built two of the four binaries.
-    try {
-      if (statSync(resolved).isFile()) return resolved;
-    } catch {
-      // fall through to the search below
+    else {
+      try {
+        if (statSync(resolved).isFile()) add(resolved);
+      } catch {
+        // fall through to the search below
+      }
     }
   }
 
@@ -175,7 +193,7 @@ export function findBinary(name: string): string {
     })
     .filter((c): c is { path: string; mtime: number } => c !== null)
     .sort((a, b) => b.mtime - a.mtime);
-  if (candidates.length > 0) return candidates[0]!.path;
+  for (const c of candidates) add(c.path);
 
   // 4. The per-user directory the installers write to. After a checkout's own
   //    build, because a developer's fresh `cargo build` must win; before PATH,
@@ -184,12 +202,16 @@ export function findBinary(name: string): string {
   for (const file of [exeName(name), name]) {
     const candidate = join(installedBinDir(), file);
     try {
-      if (statSync(candidate).isFile()) return candidate;
+      if (statSync(candidate).isFile()) {
+        add(candidate);
+        break;
+      }
     } catch {
       // not installed here
     }
   }
 
+  if (firstOnly && out.length > 0) return out;
   // 5. Check PATH (system install)
   try {
     // `where` on Windows, `which` everywhere else -- and `where` prints one
@@ -199,12 +221,15 @@ export function findBinary(name: string): string {
       `${lookup} ${exeName(name)}`,
       { encoding: "utf-8", stdio: ["pipe", "pipe", "ignore"] }
     ).trim().split(/\r?\n/)[0]?.trim();
-    if (found) return found;
+    if (found) add(found);
   } catch {
     // not in PATH
   }
+  return out;
+}
 
-  throw new Error(
+function notFound(name: string): Error {
+  return new Error(
     `gnomon native binary not found: "${name}".\n\n` +
     // Two audiences, and this message only ever addressed one of them. An npm
     // install has no crates and no checkout to build them from, so "cargo build
@@ -556,26 +581,126 @@ export interface SandboxProbe {
 /** The binary to run commands through, and what it reported -- or why not. */
 export type OsSandbox = { bin: string; probe: SandboxProbe } | { error: string };
 
-let osSandboxCache: { bin: string; probe: SandboxProbe } | undefined;
+/**
+ * The gnomon-exec this process sandboxes through: resolved ONCE, by real
+ * path, with its SHA-256 and its stat identity at that moment.
+ */
+interface PinnedExec {
+  bin: string;
+  probe: SandboxProbe;
+  sha256: string;
+  /** dev:ino:size:mtime:ctime. ctime cannot be set from user space. */
+  stamp: string;
+}
+
+let osSandboxCache: PinnedExec | undefined;
+
+function stampOf(path: string): string {
+  const st = statSync(path, { bigint: true });
+  return `${st.dev}:${st.ino}:${st.size}:${st.mtimeNs}:${st.ctimeNs}`;
+}
+
+function sha256Of(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+/** Is `p` (a real path) `dir` or beneath it? `dir` is resolved to its real path when it exists. */
+function beneath(p: string, dir: string): boolean {
+  let d: string;
+  try {
+    d = realpathSync(dir);
+  } catch {
+    d = resolve(dir);
+  }
+  return p === d || p.startsWith(d.endsWith(sep) ? d : d + sep);
+}
 
 /**
  * Locate gnomon-exec and ask it what this kernel can enforce.
  *
- * Probed once per process and memoised: the answer is a property of the
- * kernel, and the bash tool asks before every command. A FAILURE is not
+ * `forbid` names the trees a sandboxed command can write: the root,
+ * extra_roots, the temp dir. A gnomon-exec whose REAL path lies beneath one
+ * of them is never used. findBinary prefers the checkout's
+ * target/{debug,release}/gnomon-exec (newest wins), and a session whose root
+ * is that checkout let a sandboxed command overwrite target/release/gnomon-exec
+ * -- and the NEXT call ran whatever it wrote, unsandboxed. Such a candidate is
+ * skipped, and the next one (the installers' directory, PATH) is tried.
+ *
+ * Resolved once per process and memoised: the answer is a property of the
+ * kernel, and the bash tool asks before every command. The binary is pinned
+ * by real path and SHA-256 at that moment; every later call checks it is
+ * still the same file (its stat identity, and the hash again if that moved)
+ * and REFUSES if not, rather than run something else. A FAILURE is not
  * memoised, so building the binary mid-session is picked up on the next call.
  *
  * Never throws. Every path that cannot produce a working sandbox returns an
  * error the caller refuses with -- the caller must never fall back to running
  * the command unsandboxed.
  */
-export function osSandbox(): OsSandbox {
-  if (osSandboxCache) return osSandboxCache;
-  let bin: string;
+export function osSandbox(forbid: readonly string[] = []): OsSandbox {
+  if (osSandboxCache) {
+    const c = osSandboxCache;
+    const under = forbid.find((d) => beneath(c.bin, d));
+    if (under) {
+      return {
+        error:
+          `${c.bin} lies beneath ${under}, which a sandboxed command can write, so it could be replaced ` +
+          `between calls. Install gnomon-exec outside the project (scripts/install.sh puts it in ${installedBinDir()}).`,
+      };
+    }
+    try {
+      const now = stampOf(c.bin);
+      if (now !== c.stamp) {
+        if (sha256Of(c.bin) !== c.sha256) {
+          return {
+            error:
+              `${c.bin} has changed since this session started (SHA-256 no longer ${c.sha256.slice(0, 16)}…). ` +
+              `gnomon will not run a sandbox binary it did not start with; restart gnomon to pick up a rebuilt one.`,
+          };
+        }
+        c.stamp = now;
+      }
+    } catch (e) {
+      return { error: `${c.bin}, pinned at session start, cannot be read now: ${(e as Error).message}` };
+    }
+    return { bin: c.bin, probe: c.probe };
+  }
+  const found = binaryCandidates("gnomon-exec");
+  if (found.length === 0) {
+    return { error: notFound("gnomon-exec").message };
+  }
+  const skipped: string[] = [];
+  let bin: string | undefined;
+  for (const candidate of found) {
+    let real: string;
+    try {
+      real = realpathSync(candidate);
+    } catch {
+      continue;
+    }
+    const under = forbid.find((d) => beneath(real, d));
+    if (under) {
+      skipped.push(`${real} (beneath ${under})`);
+      continue;
+    }
+    bin = real;
+    break;
+  }
+  if (!bin) {
+    return {
+      error:
+        `every gnomon-exec found lies where a sandboxed command can write, so none can be trusted to apply ` +
+        `the sandbox: ${skipped.join(", ")}. Install it outside the project -- scripts/install.sh puts it in ` +
+        `${installedBinDir()} -- or point GNOMON_BIN_OVERRIDE at a directory outside the root.`,
+    };
+  }
+  let sha256: string;
+  let stamp: string;
   try {
-    bin = findBinary("gnomon-exec");
+    stamp = stampOf(bin);
+    sha256 = sha256Of(bin);
   } catch (e) {
-    return { error: (e as Error).message };
+    return { error: `${bin} cannot be read: ${(e as Error).message}` };
   }
   const r = spawnSync(bin, ["sandbox-probe"], { encoding: "utf-8", timeout: 10_000 });
   if (r.status !== 0) {
@@ -590,7 +715,11 @@ export function osSandbox(): OsSandbox {
   try {
     const probe = JSON.parse(r.stdout) as SandboxProbe;
     if (typeof probe.supported !== "boolean") throw new Error("no `supported` field");
-    return (osSandboxCache = { bin, probe });
+    // Hashed before the probe ran and checked again after: the pin is the
+    // file that answered.
+    if (stampOf(bin) !== stamp) throw new Error("the binary changed while it was being probed");
+    osSandboxCache = { bin, probe, sha256, stamp };
+    return { bin, probe };
   } catch (e) {
     return { error: `${bin} sandbox-probe printed something that is not a probe: ${(e as Error).message}` };
   }

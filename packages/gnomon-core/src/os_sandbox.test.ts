@@ -19,13 +19,14 @@
  *    say why rather than read as a pass.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync, readdirSync, symlinkSync, copyFileSync, chmodSync, appendFileSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, type Server } from "node:http";
 import { execFileSync } from "node:child_process";
 import { osSandbox, _resetOsSandbox, type OsSandbox } from "gnomon-natives";
-import { executeTool, osSandboxPlan, gnomonInstallReadRoots, packageIndexOf, type ToolContext } from "./tools.js";
+import { executeTool, osSandboxPlan, gnomonInstallReadRoots, packageIndexOf, osSandboxEnv, cleanOsSandboxTmp, type ToolContext } from "./tools.js";
+import { pinSandbox, applySandboxPin, describeLoosening } from "./sandbox_pin.js";
 import { EXEC_VALUES, auditSurface, resolveExec, type GnomonConfig } from "./config.js";
 import { homedir } from "node:os";
 import { resolve, parse } from "node:path";
@@ -492,5 +493,232 @@ describe("bash under exec = \"os\", reads = \"scoped\" — credentials stay unre
       const out = await bash(cmd, ctx());
       expect(out.shell_exit, `${name}: ${out.content}`).toBe(0);
     }
+  });
+});
+
+// ── Review of PR #156: the findings, each with the test that failed before its fix ──
+
+const surfaceOf = (sandbox: Record<string, unknown>, roles: Record<string, unknown> = {}, extra: Record<string, unknown> = {}) =>
+  ({ config: {}, policy: { sandbox }, roles, tools: { tools: [] }, gnomonDir: join(tmpdir(), "none", ".gnomon"), ...extra }) as unknown as GnomonConfig;
+
+const bashCtx = (root: string, exec: ToolContext["exec"], over: Partial<ToolContext> = {}): ToolContext => ({
+  root,
+  sandbox: "confined",
+  gate: "never",
+  approve: async () => true,
+  timeoutMs: 20_000,
+  maxOutputBytes: 32_000,
+  bashAllow: undefined,
+  bashDeny: [],
+  exec,
+  ...over,
+});
+
+describe("finding 1 — the per-call temp dir is cleaned without following a link out of it", () => {
+  const why = skipWhy || (has("python3") ? "" : "no python3");
+
+  it.skipIf(!!why)(
+    label("a background job swapping a directory for a symlink to a victim deletes nothing outside", why),
+    async () => {
+      // The PoC: the command backgrounds a racer that RENAME_EXCHANGEs a full
+      // directory in $TMPDIR with a symlink to a victim directory OUTSIDE the
+      // root, then returns at once. The cleanup that followed (an unsandboxed
+      // rmSync) descended into the victim: hundreds of files per run.
+      const scratch = mkdtempSync(join(tmpdir(), "gnomon-os-clean-"));
+      const root = join(scratch, "root");
+      const victim = join(scratch, "victim");
+      mkdirSync(root);
+      const racer = join(scratch, "racer.py");
+      writeFileSync(
+        racer,
+        [
+          "import os, sys, ctypes, time",
+          "tmp, victim = sys.argv[1], sys.argv[2]",
+          "libc = ctypes.CDLL(None, use_errno=True)",
+          "os.chdir(tmp)",
+          "os.mkdir('d')",
+          "for i in range(200): open(f'd/f{i}', 'w').close()",
+          "os.symlink(victim, 's')",
+          "end = time.time() + 1.5",
+          "while time.time() < end:",
+          "    libc.renameat2(-100, b'd', -100, b's', 2)",
+        ].join("\n")
+      );
+      try {
+        let lost = 0;
+        for (let round = 0; round < 6; round++) {
+          mkdirSync(victim, { recursive: true });
+          for (let i = 0; i < 200; i++) writeFileSync(join(victim, `f${i}`), "v");
+          const out = await executeTool(
+            "bash",
+            // The sleep lets the racer get going before the call returns; an
+            // attacker would wait the same way.
+            { command: `python3 '${racer}' "$TMPDIR" '${victim}' >/dev/null 2>&1 & sleep 0.4` },
+            bashCtx(root, { mode: "os", image: "unused", network: true }),
+            new Set(["bash"])
+          );
+          expect(out.shell_exit, out.content).toBe(0);
+          lost += 200 - readdirSync(victim).length;
+          // Let the racer finish before the next round.
+          await new Promise((ok) => setTimeout(ok, 1700));
+        }
+        expect(lost, "files deleted outside the root by gnomon's own cleanup").toBe(0);
+      } finally {
+        rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+      }
+    },
+    60_000
+  );
+
+  it.skipIf(!!skipWhy)(label("cleanOsSandboxTmp removes the dir and unlinks, never follows, a symlink", skipWhy), () => {
+    const scratch = mkdtempSync(join(tmpdir(), "gnomon-os-clean-"));
+    try {
+      const outside = join(scratch, "outside");
+      mkdirSync(outside);
+      writeFileSync(join(outside, "keep.txt"), "keep");
+      const tmp = join(scratch, "call");
+      mkdirSync(join(tmp, "d", "e"), { recursive: true });
+      writeFileSync(join(tmp, "d", "e", "f"), "x");
+      symlinkSync(outside, join(tmp, "link"));
+      symlinkSync(outside, join(tmp, "d", "link"));
+      expect(cleanOsSandboxTmp((real as { bin: string }).bin, tmp)).toBe(true);
+      expect(existsSync(tmp)).toBe(false);
+      expect(readFileSync(join(outside, "keep.txt"), "utf8")).toBe("keep");
+    } finally {
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("finding 2 — gnomon-exec is never taken from a tree the command can write, and is pinned", () => {
+  const prior = process.env.GNOMON_BIN_OVERRIDE;
+  afterEach(() => {
+    if (prior === undefined) delete process.env.GNOMON_BIN_OVERRIDE;
+    else process.env.GNOMON_BIN_OVERRIDE = prior;
+    _resetOsSandbox();
+  });
+
+  it.skipIf(!!skipWhy)(label("a gnomon-exec inside the root is skipped, never run", skipWhy), () => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-os-pin-"));
+    try {
+      // A copy planted in the root -- where a sandboxed command could have
+      // written it -- and pointed at as the first candidate.
+      mkdirSync(join(root, "bin"));
+      copyFileSync((real as { bin: string }).bin, join(root, "bin", "gnomon-exec"));
+      chmodSync(join(root, "bin", "gnomon-exec"), 0o755);
+      process.env.GNOMON_BIN_OVERRIDE = join(root, "bin");
+      _resetOsSandbox();
+      const got = osSandbox([root]);
+      if ("bin" in got) {
+        expect(got.bin.startsWith(realpathSync(root)), got.bin).toBe(false);
+      } else {
+        expect(got.error).toContain("beneath");
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(!!skipWhy)(label("a pinned gnomon-exec that changes mid-session is refused", skipWhy), () => {
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-os-pin-"));
+    try {
+      const bin = join(dir, "gnomon-exec");
+      copyFileSync((real as { bin: string }).bin, bin);
+      chmodSync(bin, 0o755);
+      process.env.GNOMON_BIN_OVERRIDE = dir;
+      _resetOsSandbox();
+      const first = osSandbox(["/nonexistent-root"]);
+      expect("bin" in first && first.bin).toBe(realpathSync(bin));
+      appendFileSync(bin, "replaced");
+      const second = osSandbox(["/nonexistent-root"]);
+      expect("error" in second && second.error).toContain("has changed since this session started");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("finding 3 — a reload may tighten the pinned sandbox, never loosen it", () => {
+  const start = surfaceOf({ exec: "os", reads: "scoped", read_roots: ["/opt/a"], network: false, level: "confined", extra_roots: ["/x"] });
+
+  it("exec = off, reads = all, network = true, wider roots, level off: none applied, each named", () => {
+    const pin = pinSandbox(start);
+    const loose = surfaceOf({ exec: "off", reads: "all", read_roots: ["/opt/a", "/opt/b"], network: true, level: "off", extra_roots: ["/x", "/y"] });
+    const got = applySandboxPin(pin, loose, "implement");
+    expect(got.exec).toMatchObject({ mode: "os", reads: "scoped", network: false });
+    expect(got.level).toBe("confined");
+    expect(got.network).toBe(false);
+    expect(got.extraRoots).toEqual([resolve("/x")]);
+    expect(got.loosened.join("\n")).toMatch(/exec = "off"[\s\S]*level = "off"|level = "off"[\s\S]*exec = "off"/);
+    expect(describeLoosening(pin, loose).length).toBeGreaterThan(0);
+    // A role that sets its own exec = "off" is held the same way.
+    expect(applySandboxPin(pin, surfaceOf({ exec: "os" }, { r: { exec: "off" } }), "r").exec.mode).toBe("os");
+  });
+
+  it("tightening applies at once and ratchets: off -> os cannot go back to off", () => {
+    const pin = pinSandbox(surfaceOf({}));
+    expect(applySandboxPin(pin, surfaceOf({ exec: "os" }), "implement").exec.mode).toBe("os");
+    expect(applySandboxPin(pin, surfaceOf({}), "implement").exec.mode).toBe("os");
+    // A typo refuses bash: tighter than anything, so it applies.
+    expect(applySandboxPin(pin, surfaceOf({ exec: "OS" }), "implement").exec.invalid).toBe("OS");
+  });
+});
+
+describe("finding 5 / 4 — bash's environment under exec = \"os\"", () => {
+  it("drops bus/agent/multiplexer sockets and the credentials gnomon supplied or the surface declares", () => {
+    const cfg = surfaceOf({}, {}, { config: { endpoints: { cloud: { api_key_env: "FAKE_PROVIDER_KEY" } } } });
+    const env = osSandboxEnv(
+      {
+        PATH: "/usr/bin",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/run/user/1/bus",
+        SSH_AUTH_SOCK: "/tmp/a",
+        TMUX: "/tmp/tmux-1/default,1,0",
+        XDG_RUNTIME_DIR: "/run/user/1",
+        FAKE_PROVIDER_KEY: "fake-secret",
+        FROM_STORE: "fake-stored-secret",
+      },
+      cfg,
+      ["FROM_STORE"]
+    );
+    expect(Object.keys(env).sort()).toEqual(["PATH"]);
+  });
+
+  it.skipIf(process.platform === "win32")("the plan carries that environment", () => {
+    const prev = process.env.DBUS_SESSION_BUS_ADDRESS;
+    process.env.DBUS_SESSION_BUS_ADDRESS = "unix:path=/run/user/1/bus";
+    try {
+      const r = osSandboxPlan("ls", { root: "/repo", exec: { network: true } }, "/bin/sh", okProbe(), () => []);
+      if (!("file" in r)) throw new Error("expected a plan");
+      expect(r.env.DBUS_SESSION_BUS_ADDRESS).toBeUndefined();
+      rmSync(r.tmp, { recursive: true, force: true });
+    } finally {
+      if (prev === undefined) delete process.env.DBUS_SESSION_BUS_ADDRESS;
+      else process.env.DBUS_SESSION_BUS_ADDRESS = prev;
+    }
+  });
+});
+
+describe("finding 6 — an unknown exec value refuses bash instead of running it on the host", () => {
+  it("resolveExec keeps the value; bash refuses and runs nothing; the audit says it refuses", async () => {
+    for (const v of ["OS", "landlock", "os "]) {
+      expect(resolveExec(surfaceOf({ exec: v })).invalid).toBe(v);
+      expect(resolveExec(surfaceOf({}, { r: { exec: v } }), "r").invalid).toBe(v);
+    }
+    expect(resolveExec(surfaceOf({})).invalid).toBeUndefined();
+    const root = mkdtempSync(join(tmpdir(), "gnomon-os-invalid-"));
+    try {
+      const out = await executeTool(
+        "bash",
+        { command: "echo ran > ran.txt" },
+        bashCtx(root, resolveExec(surfaceOf({ exec: "landlock" }))),
+        new Set(["bash"])
+      );
+      expect(out.content).toContain("NOT run");
+      expect(existsSync(join(root, "ran.txt"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+    const audit = auditSurface({ ...surfaceOf({ exec: "landlock" }) } as GnomonConfig).map((p) => p.problem).join("\n");
+    expect(audit).not.toMatch(/exec = "landlock"[^\n]*silently falls back/);
   });
 });

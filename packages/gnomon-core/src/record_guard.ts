@@ -27,8 +27,10 @@
  * What it cannot see, said plainly: a change made and undone within one tool
  * call (the snapshot compares the ends of the call), and anything that rewrites
  * a file while preserving size, mtime, ctime and inode -- which needs root, a
- * clock change, or a raw device. The kernel sandbox (`exec os`) is what keeps
- * the agent away from the records in the first place.
+ * clock change, or a raw device. The kernel sandbox (`exec = "os"`) does NOT
+ * keep the agent away from the records: they live under the project root,
+ * which a sandboxed bash may write. It keeps writes inside the root; this
+ * guard is what notices a write to the records within it.
  */
 
 import { readdirSync, lstatSync, readFileSync, readlinkSync, existsSync, statSync, type Stats } from "node:fs";

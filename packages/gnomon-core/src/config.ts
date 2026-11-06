@@ -2277,6 +2277,11 @@ interface EnumSpec {
   key: string;
   values: readonly string[];
   falls_back_to: string;
+  /**
+   * What an unknown value does instead of falling back, when it does not:
+   * said in the audit in place of "silently falls back to ...".
+   */
+  refuses?: string;
 }
 
 const ENUM_KEYS: EnumSpec[] = [
@@ -2286,8 +2291,15 @@ const ENUM_KEYS: EnumSpec[] = [
   // tools.ts; after_refusal.test.ts holds the two lists equal.
   { block: "approval", key: "after_refusal", values: ["off", "ask"], falls_back_to: "off" },
   { block: "sandbox", key: "level", values: ["off", "confined", "strict"], falls_back_to: "confined" },
-  // resolveExec: anything that is not exactly "docker" or "os" resolves to "off".
-  { block: "sandbox", key: "exec", values: EXEC_VALUES, falls_back_to: "off" },
+  // resolveExec: an unknown value does NOT fall back to "off" -- bash refuses
+  // every command until it is fixed (ResolvedExec.invalid). An absent key is "off".
+  {
+    block: "sandbox",
+    key: "exec",
+    values: EXEC_VALUES,
+    falls_back_to: "off",
+    refuses: "bash refuses every command until it is fixed (it does not fall back to running unsandboxed)",
+  },
   { block: "verify", key: "after", values: ["write", "change", "always"], falls_back_to: "write" },
   // resolveCompletionGate (completion_gate.ts): anything else is "off", so a
   // misspelt "reveiw" would silently turn the gate off.
@@ -2635,8 +2647,8 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
         problems.push({
           where: `.gnomon/${file} [${block}]`,
           problem:
-            `${spec.key} = "${value}" is not one of ${spec.values.join(" | ")}, so this ` +
-            `silently falls back to "${spec.falls_back_to}".`,
+            `${spec.key} = "${value}" is not one of ${spec.values.join(" | ")}, so ` +
+            (spec.refuses ? `${spec.refuses}.` : `this silently falls back to "${spec.falls_back_to}".`),
           fix: `Use one of: ${spec.values.join(", ")}. \`gnomon enumerations\` lists them.`,
           fatal: false,
         });
@@ -2854,8 +2866,8 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
         problems.push({
           where,
           problem:
-            `exec = "${value}" is not one of ${EXEC_VALUES.join(" | ")}, so this role ` +
-            `silently falls back to "off" — no sandbox, and no warning.`,
+            `exec = "${value}" is not one of ${EXEC_VALUES.join(" | ")}, so bash refuses every ` +
+            `command in this role until it is fixed (it does not fall back to "off").`,
           fix: `Use one of: ${EXEC_VALUES.join(", ")}.`,
           fatal: false,
         });
@@ -4251,6 +4263,13 @@ export interface ResolvedExec {
   reads: string;
   /** `[sandbox] read_roots`, absolute. Read only under reads = "scoped". */
   readRoots: string[];
+  /**
+   * Set when `exec` is declared but is not one of EXEC_VALUES ("OS",
+   * "landlock", "os " ...): the value as written. `mode` is then "off", and
+   * bash REFUSES rather than run under it -- a typo in an isolation request
+   * must not run the command on the host in silence.
+   */
+  invalid?: string;
 }
 
 /**
@@ -4306,13 +4325,27 @@ export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
   const roleDef = role ? (config.roles?.[role] as RoleDef | undefined) : undefined;
   const raw = (roleDef?.exec ?? sandbox.exec) as unknown;
   const mode: ExecMode = raw === "docker" ? "docker" : raw === "os" ? "os" : "off";
+  // Absent is "off" on purpose. Present and unknown is a refusal, not "off".
+  const invalid =
+    raw !== undefined && !(EXEC_VALUES as readonly unknown[]).includes(raw)
+      ? typeof raw === "string"
+        ? raw
+        : JSON.stringify(raw)
+      : undefined;
   const image =
     (typeof roleDef?.image === "string" && roleDef.image) ||
     (typeof sandbox.image === "string" && sandbox.image) ||
     "debian:stable-slim";
   const readsRaw = (config.policy?.sandbox as { reads?: unknown } | undefined)?.reads;
   const reads = readsRaw === undefined ? "all" : typeof readsRaw === "string" ? readsRaw : JSON.stringify(readsRaw);
-  return { mode, image, network: sandbox.network === true, reads, readRoots: resolveReadRoots(config) };
+  return {
+    mode,
+    image,
+    network: sandbox.network === true,
+    reads,
+    readRoots: resolveReadRoots(config),
+    ...(invalid !== undefined ? { invalid } : {}),
+  };
 }
 
 /**
