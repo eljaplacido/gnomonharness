@@ -1147,7 +1147,9 @@ The record `record_tamper_resolved` has keys `tamper` (`{trail, seq, hash}`),
 `person_present_signer`), `user` and `host`. A resolution counts only when its
 trail verifies and it was authorised the way it says.
 
-**Threat model, stated once.**
+**Threat model, stated once** (for the record guard; the threat model for
+`[sandbox] exec`, its invariant and which layer enforces what, is
+[THREAT-MODEL-EXEC.md](THREAT-MODEL-EXEC.md)).
 - **Against a careless or accidental agent**, these protections both guard and
   make tampering visible: the `record` rule's patterns, this guard, the
   checkpoints, and the records it writes.

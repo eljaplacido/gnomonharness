@@ -1220,10 +1220,16 @@ repo_code = true      # ask before npm test, make, pip install -e . — whatever
 ```
 
 `exec` can be set per role, and is refused on native Windows. Nothing checks
-for a docker daemon before a turn. Docker raises the cost of an accident or an
-injected instruction; it is not a jail for hostile code
-([SANDBOX-DESIGN.md](SANDBOX-DESIGN.md)). The control that binds everyone is
-branch protection on the remote.
+for a docker daemon before a turn. Since 0.4.5 the container cannot edit
+`.gnomon/*.toml`, `.git/config` or git hooks (they are mounted read-only;
+configuration changes are yours to make), and a contained role refuses a
+project root that contains your home directory, gnomon's data directory or
+gnomon's own code (`GNOMON_ALLOW_SELF_IN_ROOT=1` for working on gnomon
+itself). What docker does and does not defend against, layer by layer, with
+its accepted limits and the recommended `git config --global
+safe.bareRepository explicit`, is [THREAT-MODEL-EXEC.md](THREAT-MODEL-EXEC.md);
+kernel and docker-runtime escapes are outside it. The control that binds
+everyone is branch protection on the remote.
 
 ### 7.7 Team use
 

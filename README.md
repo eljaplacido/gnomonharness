@@ -1697,7 +1697,9 @@ this silently falls back to "off"` — as a **warning, not a refusal**, and
 shown at all. Second: nothing checks for a docker daemon before a turn starts; a
 missing one surfaces as a failing command mid-turn. The reasoning, and what it
 would take to make a rejected backend refuse, is in
-[docs/SANDBOX-DESIGN.md](docs/SANDBOX-DESIGN.md).
+[docs/SANDBOX-DESIGN.md](docs/SANDBOX-DESIGN.md). The threat model (one
+invariant, the layer that enforces each part, accepted limits and recommended
+settings) is [docs/THREAT-MODEL-EXEC.md](docs/THREAT-MODEL-EXEC.md).
 
 **Security note.** In v0.4.4 and earlier, `exec = "docker"` contained what
 the model's commands did to the host directly, but not what gnomon itself then
