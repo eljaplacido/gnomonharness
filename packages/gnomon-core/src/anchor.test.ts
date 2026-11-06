@@ -19,6 +19,7 @@ import { createHash, generateKeyPairSync, sign, type KeyObject } from "node:cryp
 import { AuditTrail, recordHash, resolveAudit, verifyTrail, canonicalJson, type AuditRecord } from "./audit.js";
 import {
   announceAnchorBacklog,
+  assertAnchorRepoConfig,
   collectAnchors,
   enqueueAnchor,
   flushAnchors,
@@ -299,6 +300,38 @@ describe("at seal: queued, and nothing else", () => {
 // ---------------------------------------------------------------------------
 
 describe("git backend", () => {
+  // PR #156 second review, A: the local anchor repository is inside the
+  // project root, which a sandboxed bash may write. Its hooks dir was too
+  // (core.hooksPath pointed into it), and `update-ref` runs
+  // reference-transaction -- on the host, at session end.
+  it("runs no hook a command planted in the local anchor repository, and refuses a changed config", async () => {
+    const remote = bareRemote();
+    const c = cfg({ backend: "git", remote });
+    sealTrail(c, "s1");
+    await flushAnchors(anchorOf(c));
+    const repo = join(anchorOf(c).dir, "git");
+    const marker = join(root, "hook-ran");
+    for (const d of ["no-hooks", "hooks"]) {
+      mkdirSync(join(repo, d), { recursive: true });
+      writeFileSync(join(repo, d, "reference-transaction"), `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+    }
+    sealTrail(c, "s2");
+    const r = await flushAnchors(anchorOf(c));
+    expect(r).toMatchObject({ delivered: 1, pending: 0 });
+    expect(existsSync(marker), "a planted hook ran from gnomon's anchor git").toBe(false);
+    // CONTROL: the hooks dir the anchor git used before is live for a git that uses it.
+    git(["--git-dir", repo, "-c", `core.hooksPath=${join(repo, "no-hooks")}`, "update-ref", "refs/x", git(["--git-dir", repo, "rev-parse", "refs/heads/gnomon-anchors"])]);
+    expect(existsSync(marker), "control: the planted hook did not run").toBe(true);
+
+    // A key `git init --bare` never writes: nothing is run there, nothing anchored.
+    writeFileSync(join(repo, "config"), readFileSync(join(repo, "config"), "utf-8") + `[core]\n\tsshCommand = touch '${marker}2'\n`);
+    sealTrail(c, "s3");
+    const refused = await flushAnchors(anchorOf(c));
+    expect(refused.pending).toBeGreaterThan(0);
+    expect(JSON.stringify(refused)).toContain("config was changed");
+    expect(() => assertAnchorRepoConfig(repo)).toThrow(/core\.sshcommand/);
+  });
+
   it("delivers queued heads as one fast-forward commit, and reads them back from the remote", async () => {
     const remote = bareRemote();
     const c = cfg({ backend: "git", remote });

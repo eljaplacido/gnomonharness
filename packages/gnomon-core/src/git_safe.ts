@@ -57,7 +57,7 @@ export const GIT_HARDENING: readonly string[] = [
   "-c", "status.submoduleSummary=false",
   "-c", "core.askPass=",
   "-c", "credential.helper=",
-  "-c", "protocol.allow=never",
+  "-c", "protocol.ext.allow=never",
   "-c", "log.showSignature=false",
 ];
 
