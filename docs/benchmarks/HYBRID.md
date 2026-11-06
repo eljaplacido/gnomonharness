@@ -29,6 +29,11 @@ priced, and without a hidden regression in latency, reliability or governance?
   solved 18 vs R1H's 25 (8 tasks R1H-only, 1 R3R-only; McNemar p = 0.04) while L and C were unchanged. Host load does
   not explain it. The cause is open; see [FINDINGS-2026-11-04](FINDINGS-2026-11-04.md)
   ([R3R summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/r3r-2026-11/summary-r3r.txt)).
+  **The build is not the cause (R4H).** R1H's PC arm on its own build and on v0.4.1, run together and paired by
+  (task, attempt): 20 vs 19 solved on 30 pairs, McNemar p = 1.0
+  ([R4H summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/r4h-2026-11/summary-r4h.txt)).
+  On an NVIDIA GB10 the hybrid still leads: PC 22/32 against L 16/31, McNemar p = 0.07
+  ([M2 summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/m2-2026-11/summary-m2.txt)).
   The same file also shows:
   - **Quality is not settled.** PC against C: 2 discordant tasks to 1, McNemar
     p = 1.0. That is no evidence of a difference, which is not the same as
