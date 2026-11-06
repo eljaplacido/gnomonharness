@@ -25,7 +25,7 @@ import {
   RootWriteError,
   type FileIdentity,
 } from "./root_fs.js";
-import { unsafeTreePath } from "./surface_tree.js";
+import { foldTreeName, unsafeTreePath } from "./surface_tree.js";
 import type { ResolvedVerify } from "./config.js";
 import { globToRegExp, type ToolOutcome } from "./tools.js";
 
@@ -102,13 +102,27 @@ const OWN_DIRS = new Set<string>([...CONTAINED_READONLY_DIRS, ".gnomon-jobs", ".
  * `..` or absolute (surface_tree.ts), and nothing under the surface or a
  * gnomon state dir. A change to those is judged by the other checks; it is
  * never something the re-run needs to undo.
+ *
+ * Components are compared folded (case, trailing dots and spaces,
+ * HFS-ignorable code points), and a Windows short name (`GNOMON~1`) is
+ * refused outright, as it can name any of them. `ownDirs` names the live
+ * `[audit] dir` (relative, `/`-separated) when it is not a default one
+ * (ninth review).
  */
-export function unwritablePreImage(rel: string): string | null {
+export function unwritablePreImage(rel: string, ownDirs: readonly string[] = []): string | null {
   const bad = unsafeTreePath(rel);
   if (bad) return bad;
-  for (const part of rel.split("/")) {
-    const folded = part.toLowerCase().replace(/[. ]+$/, "");
-    if (OWN_DIRS.has(folded)) return `a path under gnomon's own ${part}/`;
+  const parts = rel.split("/").map(foldTreeName);
+  for (const [i, folded] of parts.entries()) {
+    if (OWN_DIRS.has(folded)) return `a path under gnomon's own ${rel.split("/")[i]}/`;
+  }
+  // The live [audit] dir by its configured name (ninth review): compared
+  // folded, so a case or trailing-dot variant of it is refused as well.
+  for (const own of ownDirs) {
+    const want = own.split("/").filter(Boolean).map(foldTreeName);
+    if (want.length > 0 && want.length <= parts.length && want.every((w, i) => parts[i] === w)) {
+      return `a path under gnomon's own ${own}/`;
+    }
   }
   return null;
 }

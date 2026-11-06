@@ -182,6 +182,20 @@ export function openAppendIn(root: string, file: string, mode = 0o644): number {
   return fd;
 }
 
+/**
+ * The root a write into `dir` is checked against: `projectRoot` when `dir`
+ * is inside the project, or -- for a place configured outside it, such as an
+ * absolute `[audit] dir` -- `dir` itself (made here, as before), since
+ * writeFileIn refuses a target outside the root it is given (eighth review).
+ * Every writer into the audit directory goes through this (ninth review).
+ */
+export function writeRootFor(projectRoot: string, dir: string): string {
+  const rel = relative(resolve(projectRoot), resolve(dir));
+  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) return projectRoot;
+  mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
 /** Append `data` to `file` under `root`, safely. */
 export function appendFileIn(root: string, file: string, data: string | Uint8Array, mode = 0o644): void {
   const fd = openAppendIn(root, file, mode);

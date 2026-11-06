@@ -91,7 +91,7 @@ import { parseTimeStampResponse, timeStampRequest, verifyTimeStampToken } from "
 import { posixShell, NO_POSIX_SHELL } from "./tools.js";
 import { gnomonDataDir } from "./credentials.js";
 import { safeGit } from "./git_safe.js";
-import { appendFileIn, createExclusiveIn, ensureDirIn, writeFileIn } from "./root_fs.js";
+import { appendFileIn, createExclusiveIn, ensureDirIn, writeFileIn, writeRootFor } from "./root_fs.js";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -380,13 +380,7 @@ const stateFile = (s: ResolvedAnchor) => join(s.dir, "state.json");
  * absolute [audit] dir outside it -- that dir itself. writeFileIn refuses a
  * target outside the root it is given (eighth review).
  */
-const writeRoot = (s: ResolvedAnchor): string => {
-  const rel = relative(resolve(s.root), resolve(s.dir));
-  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) return s.root;
-  // Outside the project, where a contained command cannot reach: made as before.
-  mkdirSync(s.dir, { recursive: true });
-  return s.dir;
-};
+const writeRoot = (s: ResolvedAnchor): string => writeRootFor(s.root, s.dir);
 
 /**
  * Queue a sealed head. The only anchoring work on the seal path: one small
@@ -1188,7 +1182,7 @@ async function flushRound(settings: ResolvedAnchor, backend: AnchorBackend, deps
       const receipt = delivered.get(q.entry.digest);
       if (!receipt) continue;
       appendFileIn(
-        settings.root,
+        writeRoot(settings),
         receiptsFile(settings),
         `${JSON.stringify({ digest: q.entry.digest, backend, statement: q.entry.statement, queued_at: q.entry.queued_at, delivered_at: at, receipt })}\n`
       );
