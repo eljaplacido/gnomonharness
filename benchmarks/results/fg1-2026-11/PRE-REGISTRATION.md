@@ -403,3 +403,38 @@ relays. A limit would show as `status_4xx` and invalid cells (re-run per §6), n
 decisions kept), `apparatus/test_fg1.py` (+5 tests: boundaries, look-1 efficacy/futility/stop, guard blocks early
 efficacy, look 2 uses attempts 1–2 and keeps decisions, the runner stops before attempt 2's first wave),
 `OFFLINE-TESTS.txt` (30 passed), `INTERIM-SIM.txt`.
+
+## Addendum 1 — host power-off, 2026-11-07 (written before resuming; no change to the analysis)
+
+- **What happened.** The gx10 went down abruptly at **~2026-11-06T20:22Z** (last journal line 20:22:05Z, no shutdown
+  sequence; load 5–8 at the last wave start) and booted at **2026-11-07T05:40Z**. The runner (pid 2377361), its mirror
+  (2377364) and the six P2G slot relays died with it.
+- **Finished before the crash:** attempt 1 waves a1w00–a1w07 (8 waves, 24 cells, all with `cell.json` and outcome
+  rows; booked spend **$2.6229**). Kept as is (a1w06–a1w07's rows were on disk but not yet committed; they are
+  committed with this addendum).
+- **Interrupted:** wave **a1w08 data-anonymization** (started 19:59:17–19:59:57Z). SH had ended (20:21:03Z,
+  `cell.json`); C (in its verifier) and FG (agent phase) were in flight. No outcome row for any of the three.
+- **Handling — the wave is re-run as a whole (§6's re-run rule: all three arms, fresh cells; no arm keeps a cell its
+  partners lost).** All three cell dirs moved to `runs-aborted/<cell>-crash/` (reason file inside), the Harbor job
+  dirs to `jobs-aborted/<cell>-crash/`; the two surviving containers, networks and per-trial images removed by exact
+  name (`data-anonymization__azek7hv__verifier__trial`, `data-anonymization__s7zsauy__env`). SH's finished cell is
+  **not scored** (decided by this rule, not by its outcome). The runner runs a1w08 fresh in its planned position (same
+  id, attempt 1, PLAN.json's order FG, C, SH and slots unchanged), so pairing stays within the wave and attempt 1
+  stays 29 waves for look 1.
+- **Spend not booked.** Aborted cells' wire spend: SH $0.0847, C $0.1168, FG $0.1057 = **$0.3072**; not in the
+  runner's $50 budget (booked from outcomes), reported here and in the summary.
+- **Resume.** The same `run_fg1.py run --push` with `FG1_APPROVED=yes`: PLAN.json unchanged, build master-f8c8a39
+  (0.4.5) re-checked by `check` (SHA256SUMS + tarballs + wire-test hash), mirror on 172.17.0.1:4749, slots 3–5
+  (relays restarted with P2G's unchanged `relay-go.mjs`, Amendment 1's env names; counters restart at zero, per-cell
+  deltas do not depend on it), every host guard (load ≤ 30, ≥ 24 GB available, ≥ 50 GB on /, spend + $2 ≤ $50, Go 2×
+  windows). Amendment 2's interim looks are unchanged: look 1 runs automatically before a2's first wave (after 29
+  attempt-1 waves), look 2 before a3's.
+- **Upstream check before the first cell.** A tiny probe through all six slots at ~05:58Z returned 429
+  "[overloaded]" from the upstream on 3 of 6 (about half when repeated singly), against 0 4xx in AS1's and FG1's
+  3,580 requests so far. The runner is not started while the upstream sheds load (a transport handicap the first 8
+  waves did not have); the resume time and the clearing probe are in STATUS.txt.
+- **Time covariate.** Waves a1w00–a1w07 ran Fri 2026-11-06 17:02–19:59Z; a1w08 onward from Sat 2026-11-07 after a
+  **~10 h** gap. Within-wave pairing makes the gap hit all three arms of a wave equally; per-wave covariates
+  (`ledger/covariates.jsonl`) and STATUS times record it.
+- **Calendar (A2.7) moves by the gap:** see STATUS.txt for the resume time; ~22 min/wave as measured.
+- **Unchanged:** validity, endpoints, comparisons, interim boundaries, decision rule, seed, budget.

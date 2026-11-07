@@ -486,3 +486,42 @@ Nothing in AS1's design, allocation, stopping, promotion, guards, budget or stag
   $25 cap, or the screening end if the budget stops it, ~Sat 03:30Z); interaction end ~7 h later (~Sat 10:00–11:00Z).
 - **Concurrency note (FG1 Amendment 2, 2026-11-06).** FG1 stays on one lane (slots 3–5); no third lane was added, so
   AS1's host contention is as described in FG1 Amendment 1.
+
+## Addendum 1 — host power-off, 2026-11-07 (written before resuming; no change to the analysis)
+
+- **What happened.** The gx10 went down abruptly at **~2026-11-06T20:22Z** (last journal line 20:22:05Z, no shutdown
+  sequence; 1-min load had been 8–10 at the last wave start, so not the load halt of 2026-11-05) and booted at
+  **2026-11-07T05:40Z**. The chain (pid 627373), the screening runner (598027), its mirror, the round watcher and the six
+  P2G slot relays (0–5) died with it.
+- **Finished before the crash:** screening round 0 waves s00w00–s00w13 (14 waves, 42 cells, every one with `cell.json`
+  and an outcome row; booked screen spend **$4.7222**). Kept as is; their outcome rows (on disk, normally committed at
+  the round's end) are committed with this addendum so a second crash cannot lose them. Nothing reads them differently.
+- **Interrupted:** wave **s00w14 shadow-relay** (started 20:01:31–20:02:11Z). PKG had ended (20:10:38Z, `cell.json`),
+  CTL and EM were in flight (no `cell.json`; their Harbor containers were in the agent phase). No outcome row exists for
+  any of the three (outcomes are written at the wave's end).
+- **Handling — the whole wave is re-run fresh.** A pair is an arm cell and **its own wave's concurrent control** (§4;
+  "a lost pair is never recovered against another wave's control", §4.5). With CTL lost, both arm cells of s00w14 lost
+  their pair, so §4.5's re-run unit (a fresh control plus the lost arms) is the whole wave. All three cell dirs moved to
+  `runs-aborted/<cell>-crash/` (reason file inside), their Harbor job dirs to `jobs-aborted/<cell>-crash/`; the two
+  surviving task containers, their compose networks and per-trial images were removed by exact name
+  (`shadow-relay__9hnbedm__env`, `shadow-relay__egdxbqy__env`). The finished PKG cell is **not scored** (decided by this
+  rule, not by its outcome; it is kept in `runs-aborted/` for the record). The runner re-runs s00w14 under its own id
+  with the registered arms, slots and start order: `execute()` skips waves whose cells all have outcomes and
+  `run_cell()` skips cells with `cell.json`, so nothing else is repeated.
+- **Spend not booked.** The aborted cells' wire spend: PKG $0.0886, CTL $0.2099, EM $0.1707 = **$0.4693** (CTL's and EM's
+  wire logs each end in one line truncated by the crash, so a slight undercount). It is not in the runner's budget
+  (spend is booked from outcomes), as for H3's crash addendum; it is reported here and in the final summary.
+- **Resume.** The same `chain_as1.sh` (screen, then interaction) with `AS1_APPROVED=yes`, `run_as1.py run --stage screen
+  --push`, the same build pin (v0.4.4 6b7f821, mirror on 4739), arms, slots, seed, lean caps and host guards (load ≤ 30,
+  ≥ 24 GB available, ≥ 50 GB free on /, Go 2× windows, slots idle 15 s), and Amendment 2's read-only watcher. The six
+  slot relays are restarted with P2G's `relay-go.mjs` unchanged (same env names; counters restart at zero, which the
+  per-cell counter deltas do not depend on). The previous `run-screen.log` is kept as `run-screen.pre-crash.log`.
+- **Upstream check before the first cell.** A tiny probe through all six slots at ~05:58Z returned 200 on 3 and
+  **429 "Upstream request failed: [overloaded]"** on 3 (repeated singly: about half overloaded), against 0 4xx in
+  the 3,580 requests of AS1 and FG1 so far. The operator does not start the runners while the upstream sheds load
+  (that would be a transport handicap the earlier waves did not have); the resume time and the probe that cleared
+  are in STATUS.txt. 4xx counts are recorded per cell in `delta` as before; validity is unchanged.
+- **Time covariate.** Waves s00w00–s00w13 ran Fri 2026-11-06 14:44–20:01Z; the rest run from Sat 2026-11-07 after a
+  **~10 h** gap. Every wave pairs within itself, so the gap hits a wave's control and arms equally; wave start times
+  are in STATUS.txt and `t_end` per outcome.
+- **Unchanged:** validity, scoring, allocation rule and seed, round sizes, caps, stages, decision rules.
