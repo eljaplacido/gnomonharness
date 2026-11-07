@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { resolveLevels, resolveProtectedPaths } from "./governance.js";
 import { shellWriteTargets } from "./shell.js";
 import { RULE_FAMILY, bashPrecheck, ruleFamily, toolCallPolicy, writePrecheck, type ToolContext } from "./tools.js";
@@ -72,6 +72,8 @@ function ctxFor(governance?: Record<string, unknown>, extra: Partial<ToolContext
   } as ToolContext;
 }
 
+/** A path as a shell command spells it: forward slashes (Git Bash on Windows reads `C:/…`). */
+const sh = (p: string) => p.split(sep).join("/");
 const rule = (command: string, ctx: ToolContext) => bashPrecheck({ command }, ctx)?.rule ?? null;
 
 /** The pilot's ten out-of-root G-4 leaks that were still open after #168, as the corpus writes them. */
@@ -164,7 +166,7 @@ describe("outside_root: what is judged", () => {
       "chmod -w ../sibling/keep.txt",
       "echo x > $HOME/.bashrc",
       "echo x > ${HOME}/.bashrc",
-      `echo x > ${base}/sibling/keep.txt`,
+      `echo x > ${sh(base)}/sibling/keep.txt`,
       `node -e "require('fs').writeFileSync('../ESCAPED.txt', 'x')"`,
       "curl -s -o ../sibling/x http://127.0.0.1:1/x",
     ]) {
@@ -194,19 +196,19 @@ describe("outside_root: what is judged", () => {
     const ctx = ctxFor({ level: "prevent" });
     expect(rule("find .. -name '*.txt' -delete", ctx)).toBe("outside_root");
     // A removal above the records is the record rule's, as it always was.
-    expect(rule(`rm -rf ${base}`, ctx)).toBe("record");
+    expect(rule(`rm -rf ${sh(base)}`, ctx)).toBe("record");
     expect(rule("rm -rf ..", ctx)).toBe("record");
   });
 
   it("the project in temp space: scratch is temp space minus the project's neighbours and what holds them", () => {
     const ctx = ctxFor({ level: "prevent" });
     // base is under the temp directory, so base/* are the project's neighbours.
-    expect(rule(`echo x > ${base}/notes.txt`, ctx)).toBe("outside_root");
-    expect(rule(`rm -rf ${dirname(base)}/*`, ctx)).not.toBeNull();
+    expect(rule(`echo x > ${sh(base)}/notes.txt`, ctx)).toBe("outside_root");
+    expect(rule(`rm -rf ${sh(dirname(base))}/*`, ctx)).not.toBeNull();
     // elsewhere in temp space is scratch
     const scratch = realpathSync.native(mkdtempSync(join(tmpdir(), "gnomon-outside-scratch-")));
     try {
-      expect(rule(`echo x > ${scratch}/notes.txt && rm -rf ${scratch}`, ctx)).toBeNull();
+      expect(rule(`echo x > ${sh(scratch)}/notes.txt && rm -rf ${sh(scratch)}`, ctx)).toBeNull();
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }
@@ -250,7 +252,7 @@ describe("outside_root: what the operator grants", () => {
     const homeGrant = ctxFor({ level: "prevent" }, { writeAllow: ["~/notes/**"] });
     expect(rule("echo x > ~/notes/a.md", homeGrant)).toBeNull();
     expect(rule("echo x > ~/.bashrc", homeGrant)).toBe("outside_root");
-    const absGrant = ctxFor({ level: "prevent" }, { writeAllow: [`${base}/sibling/**`] });
+    const absGrant = ctxFor({ level: "prevent" }, { writeAllow: [`${sh(base)}/sibling/**`] });
     expect(rule("rm -f ../sibling/keep.txt", absGrant)).toBeNull();
     const everything = ctxFor({ level: "prevent" }, { writeAllow: ["**"] });
     expect(rule("rm -rf ../sibling", everything)).toBe("outside_root");

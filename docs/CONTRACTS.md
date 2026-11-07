@@ -3283,7 +3283,8 @@ names a place outside the root (`../shared/**`, `/srv/out/**`, `~/notes/**`)
 grants it; a pattern of the repository's own (`**`) does not reach out.
 
 **Scratch space.** The system temp directories (`os.tmpdir()`, and `/tmp` and
-`/var/tmp` off Windows) are not refused — a scratch file, a build in
+`/var/tmp` off Windows; on Windows a `/tmp/…` target, which Git Bash maps to
+the user's temp directory) are not refused — a scratch file, a build in
 `/tmp/out`, a venv in `/tmp/venv` — **except** when the project itself lives
 in temp space: then the directory that holds it, and everything below it, are
 its neighbours (a checkout in `/tmp/x/ws` may write `/tmp/notes`, never

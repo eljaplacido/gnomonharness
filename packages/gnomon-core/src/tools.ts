@@ -2822,6 +2822,9 @@ const REMOVES_THE_NAME = new Set(["rm", "unlink", "rmdir", "mv (source)", "find 
  */
 function outsideRootRefusal(ctx: ToolContext, path: string, abs: string, how: string, recursive: boolean): Precheck | null {
   if (!ctx.protectedPaths || ctx.sandbox === "off") return null;
+  // Git Bash on Windows: `/tmp` is the user's temp directory, not `\\tmp` on
+  // the current drive, which is where Node would resolve it.
+  if (process.platform === "win32" && /^\/tmp(\/|$)/.test(path)) return null;
   // A removal of a symlink removes the link (`rm -rf vendor_link`); a write
   // through one writes where it points (`echo >> link_to_bashrc`), and so does
   // a removal spelled through it (`rm -rf link/`, `rm link/x`).
