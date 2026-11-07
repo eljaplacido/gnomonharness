@@ -129,6 +129,17 @@ const FIRST_WINDOW = 14;
 const NEXT_WINDOW = 6;
 
 const VERBS = new Set(DELIVERABLE_VERBS);
+/** "the command `x` should write …": a named command whose outputs the task requires. */
+const COMMAND_NOUNS = new Set(["command", "script"]);
+/**
+ * An object that makes the path a dependency manifest, not an output: "Write
+ * any Python dependencies to `/app/requirements.txt` (may be empty)", "Write
+ * any apt packages needed … to `/app/apt-packages.txt`". On cargo-flight-
+ * dispatch and interleaved-vigenere these legitimately empty files were the
+ * only names, or one of two (research note 13, finding 3).
+ */
+export const DEPENDENCY_WORDS: readonly string[] = ["dependencies", "dependency", "packages"];
+const DEPENDENCY = new Set(DEPENDENCY_WORDS);
 
 /** A token of a sentence: a code span, a double-quoted string, or a bare word. */
 interface Tok {
@@ -193,11 +204,16 @@ function addressed(toks: Tok[], i: number): boolean {
   }
   // The nearest modal before the verb, in this sentence: "you must write" is
   // an instruction; "it should … write", "leads should write" describe a
-  // program.
+  // program. One exception (v0.4.6): "the command `x.sh` should … write
+  // `/out/y`" names the outputs the run must leave, through a command the
+  // task names -- risk-scorer-replay's three outputs, which the extractor
+  // named nothing for (research note 13, finding 3).
   for (let k = i - 1; k >= 0; k--) {
     if (MODALS.has(toks[k]!.word)) {
       const subject = toks[k - 1]?.word ?? "";
-      return subject === "you" || subject === "please";
+      if (subject === "you" || subject === "please") return true;
+      const named = toks[k - 1];
+      return Boolean(named?.quoted && COMMAND_NOUNS.has(toks[k - 2]?.word ?? ""));
     }
   }
   return true;
@@ -266,20 +282,36 @@ export function extractDeliverables(task: string): string[] {
       if (!VERBS.has(toks[i]!.word) || !addressed(toks, i)) continue;
       instructed = true;
       let budget = FIRST_WINDOW;
+      let found = false;
       for (let j = i + 1; j < toks.length && budget >= 0; j++) {
         const t = toks[j]!;
         if (t.word && STOPS.has(t.word)) break;
+        // A dependency manifest: the object before the first path says so.
+        if (!found && DEPENDENCY.has(t.word)) break;
         if (/[;]$/.test(t.raw)) budget = Math.min(budget, 0);
         const p = pathOf(t);
         if (!p) {
           budget--;
           continue;
         }
+        found = true;
         const named = ["named", "called"].includes(toks[j - 1]?.word ?? "");
         if (p.kind === "dir") dirs.push(p.path);
         else if (!(named && p.relative)) out.push(p.path);
         budget = NEXT_WINDOW;
       }
+    }
+    // "Fix the tool so that running `python dispatch.py --output /o/plan.json`
+    // produces a correct plan": the file an output flag of a command the task
+    // tells the agent to make work names (cargo-flight-dispatch, research
+    // note 13, finding 3). Only a code span right after "running"/"run", and
+    // only the value of an output flag.
+    for (let j = 1; j < toks.length; j++) {
+      const t = toks[j]!;
+      if (!t.raw.startsWith("`") || !["running", "run"].includes(toks[j - 1]!.word)) continue;
+      const m = /(?:^|\s)(?:--output|--out|-o)(?:=|\s+)(\S+)/.exec(t.raw.slice(1, -1));
+      const p = m ? pathOf({ raw: `\`${m[1]}\``, word: "", quoted: true }) : undefined;
+      if (p?.kind === "file" && !p.relative) out.push(p.path);
     }
     if (instructed) {
       // "a CSV file named `answers.csv` … save it inside `/results/`": joined
@@ -314,12 +346,21 @@ export function missingDeliverables(paths: readonly string[], root: string): str
   });
 }
 
-/** The sentence a time note carries when deliverables are missing. */
-export function deliverableNote(missing: readonly string[]): string {
+/**
+ * The sentence a time note carries when deliverables are missing. `plan`, the
+ * default, is the text §35 always sent. Under `[turn] deadline_note =
+ * "continue"` (long_task_profile.ts) the note says to keep improving, so the
+ * deliverable note does not carry the stop cue either: on CF1 BEST the 0.4
+ * note went out after "Plan the rest of the work, and checking it, to finish
+ * inside that" (research note 13, finding 2).
+ */
+export function deliverableNote(missing: readonly string[], style: "plan" | "continue" = "plan"): string {
   const shown = missing.slice(0, DELIVERABLE_FIRST_MAX_NAMED);
   const more = missing.length - shown.length;
   return (
     `These required outputs do not exist yet: ${shown.join(", ")}${more > 0 ? ` (and ${more} more)` : ""}. ` +
-    `Write a first complete version now, then improve it.`
+    (style === "continue"
+      ? `Write a first complete version now, then keep improving it.`
+      : `Write a first complete version now, then improve it.`)
   );
 }

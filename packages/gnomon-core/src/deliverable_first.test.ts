@@ -34,11 +34,13 @@ import {
   DELIVERABLE_FIRST_EVENTS,
   DELIVERABLE_FIRST_MAX_NAMED,
   DELIVERABLE_VERBS,
+  DEPENDENCY_WORDS,
   deliverableNote,
   extractDeliverables,
   missingDeliverables,
   resolveDeliverableFirst,
 } from "./deliverable_first.js";
+import { withMasterRefusal } from "./test_support.js";
 
 const REPO = join(__dirname, "../../..");
 const FIXTURE = JSON.parse(readFileSync(join(REPO, "conformance/deliverable_first.json"), "utf-8"));
@@ -65,6 +67,9 @@ describe("conformance/deliverable_first.json", () => {
     expect([...DELIVERABLE_VERBS]).toEqual(FIXTURE.verbs);
     expect([...DELIVERABLE_FIRST_EVENTS]).toEqual(FIXTURE.audit.events);
     expect(deliverableNote(["a", "b"])).toBe(FIXTURE.note.replace("{paths}", "a, b"));
+    expect(deliverableNote(["a", "b"], "plan")).toBe(FIXTURE.note.replace("{paths}", "a, b"));
+    expect(deliverableNote(["a", "b"], "continue")).toBe(FIXTURE.continue_note.replace("{paths}", "a, b"));
+    expect([...DEPENDENCY_WORDS]).toEqual(FIXTURE.dependency_words);
     expect(resolveResilience({ config: {} } as never).first_token_timeout_ms).toBe(FIXTURE.first_token.default);
     const known = (block: string) => BLOCK_KEYS.find(([, b]) => b === block)![2];
     expect(known("turn")).toContain("deliverable_first");
@@ -117,6 +122,10 @@ describe("extractDeliverables", () => {
     ["Save the report as C:\\Users\\RUNNER~1\\out\\report.json.", ["C:\\Users\\RUNNER~1\\out\\report.json"]],
     ["Provide a CSV file named `Answers.csv` and save it inside `C:\\results\\`.", ["C:\\results\\Answers.csv"]],
     ["Write the summary to `.\\out\\summary.md`.", [".\\out\\summary.md"]],
+    // The outputs a named command must leave (v0.4.6, research note 13 finding 3).
+    ["The command `/app/rebuild.sh` should rebuild the packet and write `/app/output/scores.csv`.", ["/app/output/scores.csv"]],
+    ["Fix the planning tool so that running `python /app/dispatch.py --output /output/flight_plan.json` produces a correct flight plan.", ["/output/flight_plan.json"]],
+    ["Build `/app/cracker.py`. Write any Python dependencies to `/app/requirements.txt` (may be empty).", ["/app/cracker.py"]],
   ])("names the deliverable: %s", (task, expected) => {
     expect(extractDeliverables(task)).toEqual(expected);
   });
@@ -126,7 +135,13 @@ describe("extractDeliverables", () => {
     "The harness at `/app/pretrain.py` writes a loss trace to `/app/output/loss.pt`.",
     "Accepted leads should write `/app/output/submission.json` and `/app/output/crm.json`.",
     "For each directory, it should read the files and write the generated `unified.ttl` into it.",
-    "The command `/app/rebuild.sh` should rebuild the packet and write `/app/output/scores.csv`.",
+    // Dependency manifests are not outputs (v0.4.6, research note 13 finding 3).
+    "Write any Python dependencies needed to run your code to `/app/requirements.txt`.",
+    "Write any apt packages needed to run your code to `/app/apt-packages.txt`, one per line.",
+    "Add any extra Python packages to `/app/src/worker/requirements.txt`.",
+    // A command line run without "running"/"run" before it, or a flag that is not an output.
+    "Use `python /app/x.py --output /o/a.json` as a reference.",
+    "Fix it so running `python /app/x.py --input /o/a.json` works.",
     // A verb used as a noun or an adjective.
     "The output config, rendered through the provided `/app/render.py`, must match.",
     "Repair it from the output contract in `/app/docs/ticket.md`.",
@@ -319,7 +334,10 @@ function reply(kind: Kind, n: number): unknown {
 
 function hashOf(raw: string): string {
   const note = JSON.stringify(platformBlock()).slice(1, -1);
-  return createHash("sha256").update(note ? raw.split(note).join("") : raw).digest("hex").slice(0, 12);
+  // The network refusal was reworded on purpose (CONTRACTS §38): master's
+  // text goes back in, so every other byte is still checked against master.
+  const body = withMasterRefusal(raw);
+  return createHash("sha256").update(note ? body.split(note).join("") : body).digest("hex").slice(0, 12);
 }
 
 function trail(root: string): Array<Record<string, any>> {
@@ -537,7 +555,9 @@ async function deliverableRun(turn: string, endpoint = "") {
 
 describe("--deadline with deliverable_first = true", () => {
   it("at 40% names both missing outputs; at 70% only the one still missing; the trail records both checks", async () => {
-    const r = await deliverableRun("deliverable_first = true\ndeadline_notes = []\ndeadline_margin_ms = 200\nnudge_after_idle = 0");
+    // steer_role = "system" declared: the fake is on 127.0.0.1, a local lane,
+    // whose undeclared channel is the user role (CONTRACTS §38, tested below).
+    const r = await deliverableRun("deliverable_first = true\ndeadline_notes = []\ndeadline_margin_ms = 200\nnudge_after_idle = 0", 'steer_role = "system"\n');
     expect(r.rec.stop_reason).toBe("answered");
     // The notes, as they went out: system messages on the steering channel.
     const notes = [...new Set(r.raws.flatMap(texts).filter((t) => MISSING.test(t)))];
@@ -566,14 +586,19 @@ describe("--deadline with deliverable_first = true", () => {
     expect(existsSync(join(r.root, "result.txt"))).toBe(true);
   }, 20_000);
 
-  it("steer_role = \"user\": the note goes out as a user message marked [gnomon]", async () => {
-    const r = await deliverableRun("deliverable_first = true\ndeadline_notes = []\ndeadline_margin_ms = 200\nnudge_after_idle = 0", 'steer_role = "user"\n');
-    const notes = [...new Set(r.raws.flatMap(texts).filter((t) => MISSING.test(t)))];
-    expect(notes.length).toBe(2);
-    // gnomon's messages in a row share one user message, so the note may follow
-    // another of them; it is the steering channel either way.
-    for (const n of notes) expect(n).toMatch(/^user:\[gnomon\] [\s\S]*Time check: about /);
-  }, 20_000);
+  for (const [label, endpoint] of [
+    ['steer_role = "user"', 'steer_role = "user"\n'],
+    ["undeclared on a local lane", ""],
+  ] as const) {
+    it(`${label}: the note goes out as a user message marked [gnomon]`, async () => {
+      const r = await deliverableRun("deliverable_first = true\ndeadline_notes = []\ndeadline_margin_ms = 200\nnudge_after_idle = 0", endpoint);
+      const notes = [...new Set(r.raws.flatMap(texts).filter((t) => MISSING.test(t)))];
+      expect(notes.length).toBe(2);
+      // gnomon's messages in a row share one user message, so the note may follow
+      // another of them; it is the steering channel either way.
+      for (const n of notes) expect(n).toMatch(/^user:\[gnomon\] [\s\S]*Time check: about /);
+    }, 20_000);
+  }
 
   it("off under the same deadline: the notes are the plain time notes, nothing named, no record", async () => {
     // Reads past 70% of the script clock, then answers; never told what is missing.

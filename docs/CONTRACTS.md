@@ -2287,6 +2287,7 @@ the surface, so it is outside `volatile`.
 | `steered_calls` | `{nudge, converge, other}`: requests carrying at least one steering message of that kind |
 | `trims` | `{leg, overflow, dropped}`: trims by reason, and the messages they dropped |
 | `first` | `i` of `calls[0]`, present only when older entries were let go |
+| `steer_messages` | each of gnomon's mid-turn messages once, on the first request that carried it: `{i, kind, via, delivered}` (§38). Present once there is one; the last 512 |
 | `calls` | the last 512 requests, one entry each (below) |
 
 One entry per request:
@@ -2298,7 +2299,8 @@ One entry per request:
 | `est_body` | the same estimate over the whole request body: tool schemas, tool calls, replayed reasoning and JSON included |
 | `replayed` | assistant messages whose reasoning went out as `reasoning_content` (only an OpenAI-shaped endpoint with replay on is sent any: declared, DeepSeek's API, or by default once it answered a tool call with reasoning, §31) |
 | `steer` | gnomon's own system messages after the leading ones, present in the request, by kind: `nudge` (the idle nudge), `converge` (the convergence push), `other` (a trim's ledger, a failed check, the wrap-up, a context notice) |
-| `via` | `system`, or `user` under `steer_role = "user"`: the role they went out in. Present with `steer` |
+| `via` | `system`, or `user` under `steer_role = "user"` (declared, learned, or undeclared on a local lane, §38): the role they went out in. Present with `steer` |
+| `delivered` | beside `via`, always: `true` when that channel is known to reach the model (user content; a late system message to a remote endpoint), `false` for a late system message to a local lane, whose chat templates dropped every one on the M2 lanes (§38) |
 | `trim` | a trim since the request before: `why` (`leg`: the leg checkpoint; `overflow`: the provider refused the request as too long, code 13, and gnomon trimmed to 50% to send it again), `dropped` messages, the working context's estimate `before` and `after`, the `budget` it was trimmed to, and the `ratio` it was divided by under `calibrated` |
 | `leg` | the turn's leg, from 2 on |
 | `depth` | `1` for a request a delegated sub-turn (the `task` tool) made; its requests are its parent's |
@@ -2514,7 +2516,7 @@ and a 60 s provider grace outlasted by 503s.
 
 | key | before | now | to restore |
 |---|---|---|---|
-| `[endpoints.<name>] replay_reasoning` | off unless declared (or `api.deepseek.com`) | undeclared on a **hosted** endpoint: on from the request after it first answers a tool call with reasoning content (`reasoning_content` or `reasoning`), for the session. Undeclared on a **local lane** (a loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local, CGNAT/Tailscale (100.64/10), `*.local` or `host.docker.internal` host, a single-label name, or Ollama's `/api/chat`; `isLocalLaneUrl`; a fallback by its own URL): off, as before | `replay_reasoning = false` |
+| `[endpoints.<name>] replay_reasoning` | off unless declared (or `api.deepseek.com`) | undeclared on a **hosted** endpoint: on from the request after it first answers a tool call with reasoning content (`reasoning_content` or `reasoning`), for the session. Undeclared on a **local lane** (`isLocalLaneUrl`): off, as before. **Since v0.4.6 (§38) the hosted rule holds on every OpenAI-shaped endpoint, local lanes and private relays included; Ollama's `/api/chat` stays off** | `replay_reasoning = false` |
 | `[turn] nudge_after_idle` | `12` | `12`, unchanged; a declared `0` is now off (it was floored to 1) | — |
 
 Replay is H3's verdict (pre-registered; hosted DeepSeek V4.1 Flash, 30-minute
@@ -2541,7 +2543,7 @@ turn record's `wire` carries, beside `replay_reasoning: true`,
 | value | when |
 |---|---|
 | `declared` | `replay_reasoning = true` |
-| `default` | gnomon turned it on: `api.deepseek.com`, or an undeclared hosted endpoint that answered a tool call with reasoning |
+| `default` | gnomon turned it on: `api.deepseek.com`, or an undeclared endpoint that answered a tool call with reasoning (hosted only until v0.4.6; any OpenAI-shaped endpoint since, §38) |
 
 **`gnomon task --deadline <seconds|ISO 8601 time with a zone>`**, else
 `GNOMON_DEADLINE`. Opt-in; absent, nothing below happens. A value that is not
@@ -2583,7 +2585,8 @@ for being blank or markup. Two cuts in a row still end the turn (§1).
 **What must not change.** With `replay_reasoning = false` declared, every
 request body of a scripted turn is byte-identical to master's (0.4.2 + #151),
 with and without a far `--deadline`; an undeclared endpoint that sends no
-reasoning, or any local lane, gets master's bytes with nothing declared. The tool timing, the task
+reasoning gets master's bytes with nothing declared (a local lane that does
+send reasoning is replayed since v0.4.6, §38). The tool timing, the task
 grace and the read-only fallback change no request.
 
 **Fixture**: `conformance/long_tasks.json`; `packages/gnomon-core/src/long_tasks.test.ts`
@@ -3012,26 +3015,41 @@ hashes §32 pinned, held again in `deliverable_first.test.ts`). The same with
   item's leading path. `named \`x.csv\`` beside a directory the same sentence
   asks for is joined to it. Fenced code and HTML comments are not read;
   directories are never named. Each path once, in order.
-- On the 29 P2G41 task instructions the extractor names 33 paths, all 33 of
-  the files labelled by hand as instructed deliverables (precision 1.0, recall
-  1.0). Left out on purpose: `/app/src` (a directory), and outputs the program
-  is said to write (`release-manifest.json`, `flight_plan.json`, `audit.log`,
-  the risk scorer's and the lead form's outputs, `loss_trace.pt`,
-  `unified.ttl`). The fixture lists them.
+- Since v0.4.6 (research note 13, finding 3): a verb whose object names
+  `dependencies`, `dependency` or `packages` before its first path is a
+  dependency manifest ("Write any Python dependencies … to
+  `/app/requirements.txt`"), not an output, and names nothing; a modal whose
+  subject is a quoted command after `command`/`script` ("the command `x.sh`
+  should … write `/out/y`") names the outputs the run must leave; and a code
+  span right after `running`/`run` names the file its `--output`, `--out` or
+  `-o` flag gives. A named path that exists when the run starts is not
+  checked; the `named` event lists it under `present`.
+- On the 29 P2G41 task instructions, against the labels as revised for v0.4.6
+  (dependency manifests out; `flight_plan.json` and the risk scorer's three
+  outputs in), the extractor names 34 paths, all 34 labelled (precision 1.0,
+  recall 1.0). Before v0.4.6 it named 33, 30 of them right, and 11 of the 29
+  tasks were wrong or empty; the 8 still empty name no output file. Left out on
+  purpose: `/app/src` (a directory), and outputs a program is said to write
+  without a command the task names (`release-manifest.json`, `audit.log`, the
+  lead form's conditional outputs, `loss_trace.pt`, `unified.ttl`). The
+  fixture lists them.
 - At each fraction in `DELIVERABLE_FIRST_AT` = `[0.4, 0.7]` of the budget, at
   depth 0, the named paths are checked on the filesystem gnomon runs on
   (relative ones against the working root). If any does not exist, the next
   request's time note (§31's `Time check: about … remain …`) ends with
   `These required outputs do not exist yet: <paths>. Write a first complete
-  version now, then improve it.` (at most 12 paths, then `(and N more)`). It
+  version now, then improve it.` (at most 12 paths, then `(and N more)`;
+  under `[turn] deadline_note = "continue"`, §38, the time note's own sentence
+  is the continue wording and this one ends `then keep improving it.`). It
   goes on the steering channel: a mid-turn system message, a user message
   marked `[gnomon]` under `steer_role = "user"`. A deliverable fraction and a
   `deadline_notes` fraction crossed together send one note. Nothing missing,
   no note is added for that fraction, and `deadline_notes` fire as before.
 - `counters.deliverable_first_notes` counts the notes that named a path.
 - Audit kind `deliverable_first`, `event`:
-  - `named`, once, after `session_start`: `named` (the paths, possibly `[]`),
-    `at` (the fractions);
+  - `named`, once, after `session_start`: `named` (the paths checked,
+    possibly `[]`), `present` (named paths that already existed, not
+    checked; since v0.4.6), `at` (the fractions);
   - `check`, at each fraction when something was named: `at`, `step`, `used`
     (the budget fraction used), `named`, `missing`, `noted` (whether the note
     named them).
@@ -3257,3 +3275,131 @@ no governance); `conformance/protected_paths.json` (the default lists, pinned
 against `DEFAULT_SECRET_PATHS` / `DEFAULT_CI_PATHS`); `guard_decision.json`
 and `skill_candidate.json` list the two rules.
 
+## 38. Long-task tier (a) — one locality rule, replay wherever reasoning comes back, steering delivery, the network refusal, `[turn] deadline_note`, `[turn] prompt_profile`, `v: 1`
+
+**Why.** The long-task convergence synthesis of 2026-11-07 (research notes,
+§5a items a2, a3, a5, a6, a7) found five defects or missing switches that
+every later study needs fixed first: one surface replayed reasoning on a
+hosted URL and not behind a private relay; steering sent to local lanes as
+late system messages never reached the model; the network refusal carried a
+stop cue; and the SW1 sweep needs the time note's wording and an unattended
+prompt as declared variables.
+
+**The one locality rule.** `endpointLocality(url)` answers `loopback` (this
+machine: localhost, 127/8, ::1), `private` (`*.localhost`, 0.0.0.0, `::`,
+10/8, 172.16/12, 192.168/16, fc00::/7, link-local, CGNAT and Tailscale
+100.64/10, `*.local`, `host.docker.internal`, a single-label name) or
+`remote` (everything else, and a URL that does not parse). Its readers take
+tiers of it: `isLoopbackEndpoint` (`loopback`) for trust and key grants,
+`isLocalEndpoint` (`loopback` or `private`) for listings, a skill trial's
+billed check and the steering default. Reasoning replay reads none of them.
+Until v0.4.6 three predicates with three host sets decided these
+(`isLocalEndpoint`, `isLocalLaneUrl`, `isLoopbackEndpoint`; audit 2026-11-06
+#11); merging widened `isLocalEndpoint` by 127/8 beyond 127.0.0.1,
+`*.localhost`, 0/8, link-local, IPv6 private ranges, `host.docker.internal`
+and single-label names. `isLocalLaneUrl` is gone.
+
+**Default changes (v0.4.6), and how to restore each.**
+
+| key | before | now | to restore |
+|---|---|---|---|
+| `[endpoints.<name>] replay_reasoning` | undeclared: on after the first reasoning answer on a **remote** host, off on a local lane or private relay | undeclared: on after the first tool call answered with reasoning, on **every** OpenAI-shaped endpoint; Ollama's `/api/chat` off (gnomon reads no reasoning there) | `replay_reasoning = false` |
+| `[endpoints.<name>] steer_role` | undeclared: `system` | undeclared: `user` on a local lane (`isLocalEndpoint`), `system` on a remote host | `steer_role = "system"` |
+| bash network refusal under `network = false` | ended "Do not look for another route to the network -- the policy is that this session has none. If the task needs it, say so plainly: …" | ends with what is refused and why (tools.ts `NETWORK_REFUSAL_TAIL`) and who can grant network | — |
+
+**Evidence for each.** Replay: H3 (pre-registered, hosted DeepSeek V4.1
+Flash) +0.160 hidden-test fraction [+0.042, +0.293], capped 14 vs 19; the
+harness leaderboard's per-call logs (research note 07) show the harness that
+dropped reasoning on 91% of big calls timing out with a >8k-reasoning call 15
+times to mini-swe-agent's once. **Replay on a local lane is not measured:**
+LG1's local lane returned no reasoning field, so the default never fired
+there. Extending it is a declared choice of this build, recorded per session
+below. Steering: on the three M2 local lanes every request carrying a late
+system message had it dropped by the chat template (1,754 of 1,754, 1,111 of
+1,111, 1,857 of 1,857; research note 04 §0.6), so the surface declared
+steering the model never received. Hosted endpoints keep `system`: S1
+(hosted) measured user-role notes at 15 vs 19 solved for +35% tokens. LG1's
+nudge-off result (1.43× local tokens) was measured with a nudge that, by the
+same evidence, may never have arrived; with this change it does, which is a
+behaviour change on local lanes that no study has measured yet. **A relay on
+a private or loopback address in front of a hosted model is a local lane by
+this rule; declare `steer_role = "system"` there to keep the hosted channel.**
+The refusal: 4–6 network refusals per arm, and R2's vpp `curl` at 45 s,
+received "do not look for another route", while `pip download` passed the
+same filter (research notes 07, 12).
+
+**What the record says.**
+- `session_start.resolved` (task and interactive sessions): `routes`, per
+  role, `target` and (when there is one) `fallback`, each `{endpoint, model,
+  local, replay, replay_source, steer_role, steer_role_source}`. `replay` is
+  `on` (from the first request), `on_reasoning` (from the request after the
+  first tool call answered with reasoning) or `off`; `replay_source` is
+  `declared`, `default` or `ollama_route`; `steer_role_source` is `declared`,
+  `local_lane` or `default`. `prompt_profile: {name, dropped}` when a profile
+  other than `default` is declared.
+- Per request (§29): `via` and `delivered` beside `steer`;
+  `counters.model_calls.steer_messages` lists each mid-turn message once,
+  `{i, kind, via, delivered}`. `delivered` is `true` for user content and for
+  a late system message to a remote host, `false` for a late system message to
+  a local lane. gnomon cannot see a template: `false` means "not known to
+  arrive", not "proved dropped".
+- The turn record's `wire` keeps `replay_reasoning`/`replay_reasoning_source`
+  and `steer_role` as §31 and §32 define them.
+
+**`[turn] deadline_note = "plan" | "continue"`** — **temporary**: it exists
+so SW1 can test one wording against the other on one build, and the losing
+value is deleted after SW1. Read only under `--deadline`.
+
+| value | notes | text |
+|---|---|---|
+| `plan` (default) | `[turn] deadline_notes` (default `[0.5, 0.8]`) | `Time check: about … of this task's … remain before it is stopped. Plan the rest of the work, and checking it, to finish inside that.` — §31's bytes |
+| `continue` | one, at `0.8`; a declared `deadline_notes` is not read (said, not fatal) | `Time check: about … of this task's … remain before it is stopped. There is enough time left for substantial work; keep going and make sure the required outputs exist.` |
+
+Under `continue` the deliverable-first note (§35) ends `then keep improving
+it.` instead of `then improve it.`, and is appended to the continue sentence,
+never to the plan one. `session_start.deadline` carries `note: "continue"`
+only under `continue`. Why: on FG1 the half-time `plan` note was followed by
+an answer 30–250 s later with 9–13 minutes unused in 12 cells of the three
+never-solved tasks, while the three opencode solves of those tasks landed at
+1597–1800 s (research note 12 §1); on CF1 the deliverable note carried the
+same sentence (research note 13, finding 2). Unmeasured as a change: SW1's P
+arm measures it.
+
+**`[turn] prompt_profile = "default" | "unattended"`.** Declared only, never
+inferred from a TTY, the environment or the command that started gnomon
+(Rule 1). `default` is system.md as written. `unattended`:
+- drops the scaffold's "Verify in proportion to the task: do not build test
+  suites, helper scripts or extra checks nobody asked for, and do not re-check
+  what already passed." and "Once it works and the task's requirements are
+  met, stop." (matched across line wrapping and CRLF; text that is not the
+  scaffold's is left alone, and a system.md with neither is said, not fatal);
+- appends, after the "This session" block, `## Unattended run` with three
+  lines: "Test edge cases, then submit. Your reply with no tool call is the
+  submission."; a timed gate is reproduced literally (fresh objects, one cold
+  call each, the stated cases and statistic) with at least a 2x margin; for
+  black-box parity, exact output strings over many random probes and fitted
+  constants rounded to the exact values they stand for;
+- makes `nudge_after_idle` 0 unless it is declared.
+
+Why: the daily-dev sentences were validated on short tasks (lean-2026-11, 37
+vs 34/48) and stay there; on long tasks every winning harness has no stop cue
+and mini-swe-agent's only quality line is "Test edge cases" (0 of its 14
+contested losses were early answers vs OpenCode's 11 of 51, research note
+07); note 12 F3 traces vf2 and risk-scorer near-misses to measurements unlike
+the verifier's. H2 (a stronger verify rule, 2 vs 2 of 12) is the
+counter-evidence: this is a hypothesis for SW1's U arm, hence opt-in.
+
+Both keys are in `BLOCK_KEYS`; a value outside either enumeration is fatal.
+
+**What must not change.** With neither key declared, or both declared at
+their defaults, every request body of the scripted turn is master's
+(ae17a1ae), except the network refusal's closing text, which the tests put
+back to master's before hashing (`test_support.ts` `withMasterRefusal`), so
+nothing else in that request may differ. On a remote endpoint nothing
+declared is master's bytes; on a local lane requests differ exactly where a
+mid-turn message goes out (as user content) and, for an endpoint that returns
+reasoning, from the request after its first reasoning answer.
+
+**Fixture**: `conformance/long_task_profile.json`;
+`packages/gnomon-core/src/long_task_profile.test.ts` asserts the code equals
+it and that this section names its keys, values and fields.

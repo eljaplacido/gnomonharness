@@ -184,6 +184,42 @@ as the shared-governance design's §7 asks:
   change** keeps it undeclared, and so unchanged, until a person adds
   `[governance]` — the hash moves when the behaviour does.
 
+### Long-task tier (a) against the rules (added 2026-11-07)
+
+One locality rule, replay wherever reasoning comes back, steering delivery on
+local lanes, the factual network refusal, `[turn] deadline_note`,
+`[turn] prompt_profile` (CONTRACTS.md §38):
+
+| Rule | Kept? | Note |
+|---|---|---|
+| 1 No machine-scoped configuration | Kept | Both keys live in `.gnomon/`. The unattended profile is **declared, never inferred** from a TTY, the environment or the command line; the synthesis's rejected alternative (an auto-detected unattended mode) is not built. No new machine-local state, so no new carve-out |
+| 2 Manifest | Kept | Both keys are hashed with the surface |
+| 3 Tools | Kept | No tool is added, removed or reworded except the network refusal's text, which is a tool *result*, not a schema |
+| 4 Buckets | Kept | A refusal is still a refusal (`rule: network`) |
+| 5 Exit contract | Kept | No exit changes |
+| 6 Enumerations | Extended | `endpointLocality` tiers, `deadline_note` and `prompt_profile` values, `session_start.resolved` values (`conformance/long_task_profile.json`) |
+| Behaviour changed ⇒ hash changed | **Drift, declared and recorded** | Two defaults move under an unchanged surface hash: replay on local lanes and private relays, and the steering channel on local lanes. Same shape as v0.4.4's hosted replay default: a build default, not a surface value. Mitigation: the harness build is on every record, and every session now records the resolved value and its reason per route (`session_start.resolved`: `replay`/`replay_source`, `steer_role`/`steer_role_source`, `local`), every request records `via`/`delivered`, and each default is restored by one declared line (`replay_reasoning = false`, `steer_role = "system"`). The network refusal's wording is a default text change of the same kind (pinned tests put master's text back and hold every other byte) |
+
+**Why the two defaults move instead of waiting for a measurement.**
+- *Steering on local lanes* is a defect fix: the surface declared steering
+  that the measured local templates dropped on 100% of requests (research
+  note 04 §0.6), so behaviour and declaration had already diverged silently.
+  The fix makes the declared behaviour happen and records whether it can.
+  What it changes is unmeasured: LG1's local nudge result may have been
+  measured with a nudge that never arrived.
+- *Replay on local lanes* removes an inconsistency the constitution cannot
+  accept: the same surface replayed against a hosted URL and not when the
+  same model sat behind a relay on 10.0.0.5. The evidence for replay (H3 +0.160,
+  HLB 91% vs 0% dropped) is hosted; on a local lane it is untested and said so.
+  An endpoint that returns no reasoning is unaffected, which is every lane LG1
+  measured.
+
+**Not done, on purpose.** A per-endpoint `local = true|false` override key:
+`steer_role` and `replay_reasoning` already override each default where the
+URL misleads (a relay), so a third key would add surface without adding a
+choice. The audit's #11 merge is done as tiers of one function rather than a
+new key.
+
 ---
 
 ## 3. The two principles that do not follow — and cost the most

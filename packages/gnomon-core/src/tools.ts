@@ -2359,6 +2359,20 @@ export function bashPolicy(
  * what it returns. An outcome with no `rule` is not a refusal -- the empty
  * command fails, nothing refuses it.
  */
+/**
+ * The end of the bash network refusal under `[sandbox] network = false`:
+ * what is refused and why, and who can change it. Factual by design since
+ * v0.4.6 (CONTRACTS §38); before, it said "Do not look for another route to
+ * the network -- the policy is that this session has none. If the task needs
+ * it, say so plainly: ...", a stop cue that also misdescribed what the
+ * filter enforces.
+ */
+export const NETWORK_REFUSAL_TAIL =
+  `Under that setting gnomon refuses a command line that is itself a network call: ` +
+  `a network client such as curl, wget, nc or ssh, scp or rsync to a remote host, ` +
+  `inline interpreter code that opens a connection, or /dev/tcp. ` +
+  `The operator can grant network access with /network on, or network = true in policy.toml.`;
+
 export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): Precheck | null {
   // String({}) is "[object Object]", which the shell dutifully tried to run
   // and reported as exit 127. A malformed call should be refused, not executed.
@@ -2396,8 +2410,12 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
   // An intent filter over the command's words, and the startup note, /network
   // and the README say so: a script, a package manager or a build tool
   // reaches the network without naming curl, and that is not refused. The
-  // message to the model says only what the policy is, and not to route
-  // around it. With exec = "docker" the container
+  // message to the model states what was refused and why, and nothing else.
+  // Until v0.4.6 it also said "Do not look for another route to the
+  // network": a stop cue that misdescribed the enforcement (`pip download`
+  // passes this filter) and ended work on tasks whose container had network
+  // (research note 07: 4-6 such refusals per arm; R2's vpp curl at 45 s).
+  // With exec = "docker" the container
   // also gets --network none, which is isolation; this check runs there too,
   // so the same command gets the same answer on either side of that switch.
   if (ctx.network === false) {
@@ -2421,9 +2439,7 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
               `([sandbox] allow_package_index): pip, uv or npm install or download, or a plain curl or wget GET, ` +
               `naming only those hosts.\n\n`
             : "") +
-          `Do not look for another route to the network -- the policy is that this ` +
-          `session has none. If the task needs it, say so plainly: the operator can ` +
-          `grant it with /network on, or network = true in policy.toml.`,
+          NETWORK_REFUSAL_TAIL,
         summary: "bash — refused (network = false)",
       };
     if (refusal && applies(ctx, "bash", refusal)) return refusal;

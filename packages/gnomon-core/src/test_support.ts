@@ -20,6 +20,7 @@
  * variable it declares.
  */
 import { declaredKeyVars, type GnomonConfig } from "./config.js";
+import { NETWORK_REFUSAL_TAIL } from "./tools.js";
 
 /** Value used for every stubbed credential. Never sent anywhere: the tests
  *  that use it stub `fetch`. Recognisable in a log if one ever escapes. */
@@ -48,4 +49,46 @@ export function stubDeclaredKeys(config: GnomonConfig): () => void {
       else process.env[name] = was;
     }
   };
+}
+
+/**
+ * The bash network refusal's closing text on master before v0.4.6. The
+ * refusal was reworded on purpose (CONTRACTS §38, tools.ts
+ * NETWORK_REFUSAL_TAIL); the byte-identity tests put this text back before
+ * hashing, so a pinned master hash still checks every other byte of a request
+ * that carries a refusal, and nothing but that sentence may differ.
+ */
+export const NETWORK_REFUSAL_TAIL_MASTER =
+  `Do not look for another route to the network -- the policy is that this ` +
+  `session has none. If the task needs it, say so plainly: the operator can ` +
+  `grant it with /network on, or network = true in policy.toml.`;
+
+/** A raw request body with the refusal's v0.4.6 wording replaced by master's. */
+export function withMasterRefusal(raw: string): string {
+  return raw.split(NETWORK_REFUSAL_TAIL).join(NETWORK_REFUSAL_TAIL_MASTER);
+}
+
+const realFetch = globalThis.fetch;
+
+/**
+ * A hosted-looking URL for a fake server on 127.0.0.1, so a test can exercise
+ * what a REMOTE endpoint gets: since v0.4.6 a loopback URL is a local lane,
+ * whose undeclared steering channel is the user role (resolveSteerRole).
+ * `fetch` is wrapped to send that host's requests to the local server; call
+ * restoreFetch after each test.
+ */
+export function hostedUrl(localUrl: string): string {
+  const local = new URL(localUrl);
+  const origin = `https://hosted-${local.port}.example.com`;
+  const prev = globalThis.fetch;
+  globalThis.fetch = ((input: any, init?: any) => {
+    const u: string = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    return u.startsWith(origin) ? prev(local.origin + u.slice(origin.length), init) : prev(input, init);
+  }) as typeof fetch;
+  return origin + local.pathname + local.search;
+}
+
+/** Undo every hostedUrl wrapper. */
+export function restoreFetch(): void {
+  globalThis.fetch = realFetch;
 }

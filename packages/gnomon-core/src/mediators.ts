@@ -23,7 +23,7 @@
  * bodies are byte-identical to the ones sent before this file existed
  * (mediator_record.test.ts pins them to a hash taken on master).
  */
-import type { RouteTarget, TokenEstimate } from "./config.js";
+import { isLocalEndpoint, type RouteTarget, type TokenEstimate } from "./config.js";
 
 /**
  * Which of gnomon's own mid-turn system messages a request carried. `nudge`:
@@ -73,6 +73,15 @@ export interface CallSent {
   steer?: Partial<Record<SteerKind, number>>;
   /** The role they went out in: `user` under steer_role = "user" */
   via?: "system" | "user";
+  /**
+   * Beside `via`: whether that channel is one the model is known to read.
+   * True for user content, and for a late system message to a remote
+   * endpoint; false for a late system message to a local lane, whose chat
+   * template dropped every one on the three M2 lanes (2026-11, research note
+   * 04 §0.6). gnomon cannot see the template, so false means "not known to
+   * arrive", not "proved dropped". See deliveredOn.
+   */
+  delivered?: boolean;
   /** A trim made since the request before */
   trim?: TrimRecord;
   /** The turn's leg, from 2 on */
@@ -105,6 +114,26 @@ export interface CallReceived {
   finish?: string;
 }
 
+/** One of gnomon's mid-turn messages, as it first went out. */
+export interface SteerMessageRecord {
+  /** The request that first carried it */
+  i: number;
+  kind: SteerKind;
+  via: "system" | "user";
+  delivered: boolean;
+}
+
+/**
+ * Whether a mid-turn message sent on `via` to `url` is known to reach the
+ * model: user content always; a late system message only off a local lane
+ * (endpointLocality). Hosted APIs read late system messages (the half-time
+ * deadline note changed answers on hosted DeepSeek, FG1); the M2 local
+ * templates dropped all of them.
+ */
+export function deliveredOn(via: "system" | "user", url: string): boolean {
+  return via === "user" || !isLocalEndpoint(url);
+}
+
 /** `counters.model_calls`: the requests a turn sent. */
 export interface ModelCallsRecord {
   v: 1;
@@ -121,6 +150,13 @@ export interface ModelCallsRecord {
   replayed_calls: number;
   /** Requests that carried at least one message of each steering kind */
   steered_calls: Record<SteerKind, number>;
+  /**
+   * Each of gnomon's mid-turn messages once, on the first request that
+   * carried it: its kind, the channel, and whether that channel is known to
+   * reach the model (CallSent.delivered). Present once there is one; the
+   * last MAX_CALL_ENTRIES are kept.
+   */
+  steer_messages?: SteerMessageRecord[];
   trims: { leg: number; overflow: number; dropped: number };
   /** `i` of `calls[0]`, when the oldest entries were let go */
   first?: number;
@@ -227,6 +263,8 @@ export class CallLedger {
   private readonly recv: ModelCallsMeasured;
   private readonly tags = new WeakMap<object, SteerKind>();
   private readonly pending = new WeakMap<object, TrimRecord>();
+  /** Mid-turn messages already listed in `steer_messages` */
+  private readonly steerSeen = new WeakSet<object>();
   private promptSum = 0;
   private estSum = 0;
   private readonly cap: number;
@@ -315,10 +353,19 @@ export class CallLedger {
     let lead = 0;
     while (lead < o.messages.length && o.messages[lead]!.role === "system") lead++;
     const steer: Record<SteerKind, number> = { nudge: 0, converge: 0, other: 0 };
+    const via = o.target.steerRole === "user" ? ("user" as const) : ("system" as const);
+    const delivered = deliveredOn(via, o.target.url);
     for (let k = 0; k < o.messages.length; k++) {
       const m = o.messages[k]!;
       if (carries && m.role === "assistant" && typeof m.reasoning_content === "string" && m.reasoning_content !== "") replayed++;
-      if (k >= lead && m.role === "system") steer[this.tags.get(m) ?? "other"]++;
+      if (k >= lead && m.role === "system") {
+        const kind = this.tags.get(m) ?? "other";
+        steer[kind]++;
+        if (!this.steerSeen.has(m)) {
+          this.steerSeen.add(m);
+          push((s.steer_messages ??= []), { i, kind, via, delivered }, this.cap);
+        }
+      }
     }
     const steered = steer.nudge + steer.converge + steer.other > 0;
     const trim = this.pending.get(o.messages);
@@ -333,7 +380,8 @@ export class CallLedger {
       ...(steered
         ? {
             steer: Object.fromEntries(Object.entries(steer).filter(([, n]) => n > 0)) as Partial<Record<SteerKind, number>>,
-            via: o.target.steerRole === "user" ? ("user" as const) : ("system" as const),
+            via,
+            delivered,
           }
         : {}),
       ...(trim ? { trim } : {}),

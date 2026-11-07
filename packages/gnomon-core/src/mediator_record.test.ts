@@ -88,7 +88,10 @@ function surface(url: string, o: { defaults?: string; turn?: string; endpoint?: 
       (o.context ? `[context]\n${o.context}\n\n` : "") +
       `[turn]\n${o.turn ?? ""}\n\n` +
       `[audit]\nenabled = true\n\n` +
-      `[endpoints.target]\nurl = "${url}"\nkind = "openai"\n${o.endpoint ?? ""}\n`
+      // steer_role = "system": the fake is on 127.0.0.1, a local lane, whose
+      // undeclared channel is the user role since v0.4.6 (CONTRACTS §38).
+      // Declared, these tests keep master's wire for the mechanism they test.
+      `[endpoints.target]\nurl = "${url}"\nkind = "openai"\nsteer_role = "system"\n${o.endpoint ?? ""}\n`
   );
   writeFileSync(
     join(root, ".gnomon", "roles.toml"),
@@ -643,6 +646,14 @@ describe("the contract: conformance/mediator_record.json and CONTRACTS.md", () =
         }
         if (c.steer) for (const k of Object.keys(c.steer)) expect(fixture.steer).toContain(k);
         if (c.via) expect(fixture.via).toContain(c.via);
+        // `delivered` goes with `via`, always (CONTRACTS §29, §38).
+        expect("delivered" in c, `call ${c.i} delivered`).toBe("via" in c);
+      }
+      for (const m of sent.steer_messages ?? []) {
+        expect(Object.keys(m).sort()).toEqual([...fixture.sent.steer_message].sort());
+        expect(fixture.steer).toContain(m.kind);
+        expect(fixture.via).toContain(m.via);
+        expect(typeof m.delivered).toBe("boolean");
       }
       const got = record.volatile.model_calls! as unknown as Record<string, any>;
       conforms(got, fixture.received, "volatile.model_calls");

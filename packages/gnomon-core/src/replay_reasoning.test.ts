@@ -21,9 +21,10 @@ import { auditSurface, loadConfig, replayFieldsOf, resolveReplayReasoning, resol
 import { Progress } from "./render.js";
 
 /**
- * A hosted-looking URL for a fake server on 127.0.0.1: the replay default
- * applies only to hosted (non-local) endpoints (isLocalLaneUrl), so a test of
- * the default needs a URL whose host is public. `fetch` is wrapped to send
+ * A hosted-looking URL for a fake server on 127.0.0.1. Since v0.4.6 the
+ * replay default no longer depends on where the endpoint is, but a remote
+ * host keeps the steering channel at `system` (resolveSteerRole), so these
+ * tests of the hosted wire use one. `fetch` is wrapped to send
  * that host's requests to the local server; restored after each test.
  */
 const realFetch = globalThis.fetch;
@@ -200,21 +201,22 @@ describe("on by default when the endpoint reasons (v0.4.3)", () => {
     expect(assistants(bodies[1]!)[0]!.reasoning_content).toBe("I should read x.txt first.");
   });
 
-  it("a local lane (llama.cpp-style, 127.0.0.1) that returns reasoning_content is not replayed by default; declared true, it is", async () => {
-    // H3 measured hosted endpoints only; on a local lane the default is off.
-    const off = await serve(false);
-    const root = audited(off.url, "stream = false");
+  it("a local lane (llama.cpp-style, 127.0.0.1) that returns reasoning_content is replayed by default (v0.4.6); declared false, it is not", async () => {
+    // One rule wherever the endpoint is: it returned reasoning, so it gets it
+    // back (CONTRACTS §38). Untested on local lanes by any study; recorded.
+    const on = await serve(false);
+    const root = audited(on.url, "stream = false");
     const rec = await runTask(loadConfig(root), "read x.txt", { role: "smol", yes: true });
     expect(rec.output).toContain("done");
-    expect(off.bodies).toHaveLength(2);
-    expect(JSON.stringify(off.bodies[1])).not.toContain("reasoning_content");
-    expect(turnRecord(root).wire.replay_reasoning).toBeUndefined();
-
-    const on = await serve(false);
-    const declared = audited(on.url, "stream = false\nreplay_reasoning = true");
-    await runTask(loadConfig(declared), "read x.txt", { role: "smol", yes: true });
+    expect(on.bodies).toHaveLength(2);
     expect(assistants(on.bodies[1]!)[0]!.reasoning_content).toBe("I should read x.txt first.");
-    expect(turnRecord(declared).wire).toMatchObject({ replay_reasoning: true, replay_reasoning_source: "declared" });
+    expect(turnRecord(root).wire).toMatchObject({ replay_reasoning: true, replay_reasoning_source: "default" });
+
+    const off = await serve(false);
+    const declared = audited(off.url, "stream = false\nreplay_reasoning = false");
+    await runTask(loadConfig(declared), "read x.txt", { role: "smol", yes: true });
+    expect(JSON.stringify(off.bodies[1])).not.toContain("reasoning_content");
+    expect(turnRecord(declared).wire.replay_reasoning).toBeUndefined();
   });
 
   it("an endpoint that never sends reasoning is sent none: the same bytes as replay_reasoning = false", async () => {
