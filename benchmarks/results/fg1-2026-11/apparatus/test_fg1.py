@@ -628,3 +628,83 @@ def test_transport_backfill_adds_fields_and_changes_nothing_else(tmp_path):
     cov = json.loads((led / "covariates.jsonl").read_text())
     assert cov["wire_429_by_arm"] == {"C": 1, "FG": 0} and cov["load1_max"] == 3.0
     assert T.backfill(led, runs, tmp_path / ".lock") == (0, 0)  # idempotent
+
+# ------------------------------------------------------------------------------------------------ Amendment 6: HTTP 402
+
+
+def _wire(d, rows):
+    """rows: (status, body) per call, written as the log relay writes them (calls.jsonl + resp-NNNN.sse.gz)."""
+    d.mkdir(parents=True, exist_ok=True)
+    with open(d / "calls.jsonl", "w", encoding="utf-8") as f:
+        for i, (st, body) in enumerate(rows, 1):
+            r = {"n": i, "t": f"2026-11-07T13:55:{i:02d}.000Z", "status": st, "resp": {}}
+            if st == 200:
+                r["resp"] = {"usage": {"opencode": {"billing_source": "go-plus", "list_cost": 0.001}}}
+            f.write(json.dumps(r) + "\n")
+            (d / f"resp-{i:04d}.sse.gz").write_bytes(gzip.compress(body.encode()))
+
+
+def _ga_sandbox(tmp_path, monkeypatch):
+    GA = R.GA
+    d = tmp_path / "go-accounts"
+    d.mkdir()
+    for k, v in {"DIR": d, "ACCOUNTS": d / "ACCOUNTS.json", "METER": d / "meter.json", "EVENTS": d / "events.jsonl",
+                 "FLAG": d / "EXHAUSTED.json", "SWITCHING": d / "SWITCHING", "INFLIGHT": d / "inflight",
+                 "LOCK": d / ".lock", "STATUS_FILES": []}.items():
+        monkeypatch.setattr(GA, k, v)
+    monkeypatch.setattr(GA, "_counters", lambda port: None)  # never read the live relays
+    (d / "ACCOUNTS.json").write_text(json.dumps({"current": "acct1", "accounts": {"acct1": {
+        "plan": "go-plus", "billing_label": "go-plus", "baseline": {"weekly_remaining_usd": 90.0}}}}))
+    return GA
+
+
+FUNDS = '{"error":{"type":"invalid_request_error","message":"Insufficient account funds"}}'
+OVERLOADED = '{"error":{"type":"server_error","message":"Upstream request failed: [overloaded] busy"}}'
+
+
+def test_http_402_is_exhaustion_and_pauses_every_runner_before_the_next_wave(tmp_path, monkeypatch):
+    GA = _ga_sandbox(tmp_path, monkeypatch)
+    # negative control first: ordinary calls and a 429 [overloaded] say nothing about the account
+    _wire(tmp_path / "ok", [(200, "data: {}"), (429, OVERLOADED), (200, "data: {}")])
+    s = GA.scan_cell(tmp_path / "ok")
+    assert s["exhausted"] is None and s["overloaded_429"] == 1
+    assert GA.blockers(2.0, "fg1") == []
+    # a cell that died part-way (a2w06/a2w07 shape) and one refused at call 1 (a2w08-a2w17 shape)
+    _wire(tmp_path / "part", [(200, "data: {}")] * 3 + [(402, FUNDS)])
+    _wire(tmp_path / "first", [(402, FUNDS)])
+    _wire(tmp_path / "bare", [(402, "")])  # a 402 whose body was not kept is still the account
+    assert GA.scan_cell(tmp_path / "part")["exhausted"] == "HTTP 402 Insufficient account funds at call 4"
+    assert GA.scan_cell(tmp_path / "first")["exhausted"] == "HTTP 402 Insufficient account funds at call 1"
+    assert GA.scan_cell(tmp_path / "bare")["exhausted"] == "HTTP 402 payment required at call 1"
+    # the FG1 scorer path: exhausted -> apparatus-invalid reason + the shared flag -> wave_gate blocks BOTH studies
+    GA.flag_exhausted(GA.scan_cell(tmp_path / "first")["exhausted"], "fg1-a2w08-C-x")
+    assert json.loads(GA.FLAG.read_text())["account"] == "acct1"
+    for study in ("fg1", "fg1-hub", "as1"):
+        why = GA.blockers(2.0, study)
+        assert why and "acct1 exhausted: HTTP 402 Insufficient account funds" in why[0], (study, why)
+    monkeypatch.setattr(GA, "POLL_S", 0)
+    calls = []
+    monkeypatch.setattr(GA.time, "sleep", lambda s: (calls.append(s), (_ for _ in ()).throw(KeyboardInterrupt)))
+    with pytest.raises(KeyboardInterrupt):
+        GA.wave_gate("as1", "s02w00", 2.0)  # blocks (would poll forever) instead of registering the wave
+    assert calls and not list(GA.INFLIGHT.glob("*.json"))
+    assert "PAUSED" in GA.EVENTS.read_text() and "EXHAUSTED" in GA.EVENTS.read_text()
+
+
+def test_fg1_score_marks_a_402_cell_apparatus_invalid(tmp_path, monkeypatch):
+    GA = _ga_sandbox(tmp_path, monkeypatch)
+    out, jobs = tmp_path / "runs", tmp_path / "jobs"
+    monkeypatch.setattr(R, "OUT", out)
+    monkeypatch.setattr(R, "JOBS", jobs)
+    cid = "fg1-a2w07-C-cargo-flight-dispatch"
+    _wire(out / cid / "wire", [(200, "data: {}")] * 5 + [(402, FUNDS)])
+    (out / cid / "cell.json").write_text(json.dumps({
+        "task": "cargo-flight-dispatch", "slot": 4, "delta": {"responses_with_usage": 5, "chat_requests": 6},
+        "trial": {"reward": {"reward": 0.0}, "agent_version": "gnomon v0.4.5 f8c8a396435127f7 x"}}))
+    monkeypatch.setattr(R.SP, "check_cell", lambda *a: [])
+    monkeypatch.setattr(R.FC, "cell_checks", lambda *a: [])
+    w = {"id": "a2w07", "attempt": 2, "order": ["SH", "C", "FG"]}
+    o = R.score(cid, "C", {"expects": []}, {"version": "0.4.5", "commit": "f8c8a396435127f7"}, w)
+    assert o["valid"] is False and o["solved"] is False
+    assert o["invalid_reason"] == "apparatus: Go allowance — HTTP 402 Insufficient account funds at call 6"
+    assert GA.FLAG.exists()

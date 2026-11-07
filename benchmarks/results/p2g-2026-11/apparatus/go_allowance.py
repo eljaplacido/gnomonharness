@@ -11,6 +11,9 @@ How Go reports an exhausted allowance (found in opencode 1.18.32's own client, n
   - with Extra Usage on (and a Console balance), Go does not refuse but bills the balance: the response's
     usage.opencode.billing_source becomes "balance" (and `cost` > 0) instead of the plan's label ("go" / "go-plus").
     That is real money, so it is treated exactly like exhaustion.
+  - (seen 2026-11-07 ~13:55Z, AS1 Amendment 4 / FG1 Amendment 6) an account out of money answers every call with
+    HTTP 402 {"error":{"type":"invalid_request_error","message":"Insufficient account funds"}}. scan_cell treats any
+    402 (and a funds/quota body on any status) as exhaustion, so the scorer's flag_exhausted() pauses every runner.
 Go exposes no remaining-allowance API (docs: track usage in the Console). The remaining allowance is therefore
 METERED here: a baseline the operator reads off the Console (ACCOUNTS.json) minus everything the relays have counted
 since (each relay's /counters `allowance`, summed with restart detection), plus a rolling 5-hour sum.
@@ -53,6 +56,8 @@ COUNTER_PORTS = range(4810, 4820)       # relay slots 0-9 (0-5 gx10 docker bridg
 POLL_S = 120
 # deepseek-v4.1-flash, opencode.ai/docs/go: monthly limit per plan; 5h = 20 %, weekly = 50 %
 LIMITS = {"go": {"monthly": 100.0}, "go-plus": {"monthly": 200.0}}
+# error bodies that name the account's money, whatever the status (HTTP 402 is matched by status as well)
+FUNDS_BODIES = ("Insufficient account funds", "insufficient_quota", "Insufficient balance", "insufficient funds")
 for _p in LIMITS.values():
     _p["5h"], _p["weekly"] = 0.2 * _p["monthly"], 0.5 * _p["monthly"]
 
@@ -297,6 +302,12 @@ def scan_cell(wire: Path) -> dict:
                 except Exception:
                     pass
                 out["exhausted"] = f"GoUsageLimitError ({name or 'limit'}) at call {r.get('n')}"
+            elif st == 402 or any(s in body for s in FUNDS_BODIES):
+                # 2026-11-07 ~13:55Z the account ran dry as HTTP 402 {"error": {"type": "invalid_request_error",
+                # "message": "Insufficient account funds"}}, not as GoUsageLimitError (AS1 Amendment 4, FG1
+                # Amendment 6). Any 402, or a funds/quota body on any status, is the account, never the model.
+                msg = next((s for s in FUNDS_BODIES if s in body), "payment required")
+                out["exhausted"] = out["exhausted"] or f"HTTP {st} {msg} at call {r.get('n')}"
             elif "overloaded" in body:
                 out["overloaded_429"] += 1
     if expect and out["billing"] and set(out["billing"]) - {expect}:

@@ -689,3 +689,92 @@ may be re-run at any time (idempotent, additive). The looks and the final analys
 section), `apparatus/test_fg1.py` (+3: the fields and seconds lost, the rule drops only an asymmetric wave and leaves the
 look's decision-bearing output byte-identical, the backfill is additive and idempotent), `OFFLINE-TESTS.txt`
 (39 passed), `ledger/` (backfilled).
+
+## Amendment 6 — 2026-11-07T14:20Z, both lanes stopped, before any resume: HTTP 402 "Insufficient account funds" is apparatus; waves a2w06–a2w17 re-run whole in PLAN order; no analysis change
+
+**A6.0 What happened, and what the author saw.** From **13:54:58Z** (first 402: a2w06-C, call 58) the OpenCode Go
+account behind every relay slot (acct1, go-plus) answered every request with
+`HTTP 402 {"error":{"type":"invalid_request_error","message":"Insufficient account funds"}}`. Amendment 4's guard
+recognised only `GoUsageLimitError` and `billing_source = "balance"`, so neither the scorer nor the wave gate saw it
+(the meter still showed $82 weekly headroom against the operator's 06:45Z baseline: the refusal is not visible to the
+meter, only on the wire). The lanes kept taking waves: a2w08–a2w16 and a2w17 ran ~35 s each at $0 (one request, 402);
+the hub's a2w10 cells refused at call 1 and ended at 599–660 s; a2w06 (hub) and a2w07 (gx10) had started before
+13:55Z and were cut off part-way. The operator stopped both lanes by SIGINT at ~14:09Z (gx10 pid 402888, hub pid
+403177); both exited (KeyboardInterrupt inside `run_wave`, mirrors closed), no Harbor process or container is left on
+the hub (`C:\dev\fg1-hub`, checked 14:11Z) or the gx10. a2w10's three hub cells finished (cell.json, job dirs copied
+back) but were never scored; a2w17's FG and C cells finished, SH never started; neither wave has outcome rows.
+The author saw STATUS.txt (END lines print rewards), the attempt-2 outcome rows and interim/look1.txt (committed
+before). In particular: a2w06 C reward 1.0, SH 0.0, FG 0.0; a2w07 all 0.0. The rule below is AS1 Amendment 4's
+(commit e74a66688, 14:09Z: any HTTP 402 is apparatus), fixed before and independently of these outcomes, and §6's
+whole-wave rule; neither depends on which arm solved. Stated so it is visible: superseding a2w06 removes one C-only
+solve (a discordant pair against FG and against SH) from attempt 2; the wave is re-run fresh, as every other.
+
+**A6.1 Detection (both studies, shared).** `p2g-2026-11/apparatus/go_allowance.scan_cell` now treats **any HTTP 402**,
+and any error body naming the account's money ("Insufficient account funds", "insufficient_quota", "Insufficient
+balance", "insufficient funds") on any status, as exhaustion: `exhausted = "HTTP 402 Insufficient account funds at
+call N"`. `run_fg1.score` (gx10 and hub cells alike) already turns `exhausted` into `invalid_reason = "apparatus: Go
+allowance — …"` and calls `flag_exhausted`, which writes `go-accounts-2026-11/EXHAUSTED.json` for the current account;
+`wave_gate` (FG1 gx10 lane `fg1`, hub lane `fg1-hub`, AS1 `as1`) then blocks **every** lane of both studies before its
+next wave (`PAUSED: Go allowance` in both STATUS files) until `switch_go_account.sh` moves to another account (the flag
+names acct1 only) or, after the operator has funded acct1 and checked the Console, `go_allowance.py clear-flag`. At
+most the wave in flight when the first 402 lands is lost (its cells fail within seconds) — re-run by this rule.
+AS1's own `funds_refused()` (its Amendment 4) stays; it is now redundant with scan_cell and agrees with it. Tests:
+`test_fg1.py` +2 (a 429 [overloaded] negative control is not exhaustion; a 402 mid-cell, at call 1, and with an empty
+body is; the flag then blocks `fg1`, `fg1-hub` and `as1` and `wave_gate` registers nothing; `run_fg1.score` marks a
+402 cell apparatus-invalid and sets the flag), `OFFLINE-TESTS.txt` (41 passed); AS1's suite unchanged (154 passed).
+
+**A6.2 Affected waves (from the wire, by the amended scan_cell over every cell in runs/; `apparatus/amend6.py`).**
+Twelve waves, all attempt 2: **a2w06** (hub; C 402 at call 58 and FG at call 30, both stop_reason endpoint_error;
+SH had finished at 13:52Z without a 402), **a2w07** (gx10; C call 6, FG call 8, SH call 4 — all three cut off at
+120–177 s, previously scored *valid*), **a2w08, a2w09, a2w11–a2w16** (gx10; every cell 402 at call 1, already invalid
+as "no model response with usage" but not recognised as the account), **a2w10** (hub; 402 at call 1, not scored),
+**a2w17** (gx10; FG 402 at call 1, C ended in NetworkConnectionError with no wire after the SIGINT, SH never started;
+not scored). No other non-2xx status than 429 ([overloaded], Amendment 5's transport covariate) and client aborts
+appears in any other cell's wire, aborted cells included; no 402 before 13:54:58Z.
+
+**A6.3 Handling — §6's "fix, don't fail", in place, as Addendum 1 (a1w08) and A3.7 (a1w17, a1w24).** Every cell of the
+twelve waves is apparatus-invalid (402 cells by A6.1; their partners by the whole-wave rule — no arm keeps a cell its
+partners lost). Archived, nothing deleted: original rows and re-scored rows → `ledger/outcomes-superseded-a6.jsonl`;
+the waves' covariates rows → `ledger/covariates-superseded-a6.jsonl`; cell dirs → `runs-aborted/<cell>-funds402`;
+job dirs → `jobs-aborted/<cell>-funds402`; claims → `claims/superseded-a6/`; on the hub, `jobs\<cell>` and
+`cells\<cell>` of a2w06/a2w10 renamed `<cell>-funds402` (so a fresh Harbor job of the same name starts clean). The
+twelve waves are then neither done nor claimed, so after the account is funded or switched each is **re-run whole —
+all three arms, fresh cells, same wave id and attempt (2), PLAN.json's arm order and slots — in PLAN order**, by
+whichever lane reaches it first (both lanes take the first not-done, not-claimed wave; a2w06 is now the first). This
+in-place re-run does not use up §6's single end-of-study re-run: a wave whose re-run is invalid again (for any
+reason) gets §6's `<wave>r` re-run after wave 87, as before. Spend on the superseded cells (wire allowance, not booked
+in the $50 budget, as Addendum 1): **$0.2697** (a2w06 $0.2405 — SH's complete cell $0.0812, C and FG cut off
+$0.1593; a2w07 $0.0292; all others $0). Booked spend after the correction: $7.7915.
+
+**A6.4 Interim look 2 and alpha (unchanged).** Look 2 still runs at A3.2's barrier: when every wave of attempts 1–2
+has all three outcome rows in `ledger/outcomes.jsonl`. The twelve waves now have none, so the barrier holds look 2
+(and every attempt-3 wave) until their in-place re-runs are scored. Look 2 reads only `outcomes.jsonl` rows with
+attempt ≤ 2; superseded rows live in a separate file that no look or analysis reads. Its information fraction is A2's:
+t_2 = valid pairs (attempts 1–2) / 87, the efficacy boundary recomputed from the Lan-DeMets O'Brien-Fleming spending
+function at that actual t_2 and the actual t_1 = 29/87, futility Z ≤ 0.75 as A2.3. If an in-place re-run is invalid
+again, that pair is simply absent at look 2 (t_2 smaller, boundary recomputed, alpha spent at look 2 smaller), and its
+`<wave>r` re-run enters only the final analysis (t_3 = 1). Why alpha is unchanged: the superseding criterion is a wire
+status set by the account before and regardless of any cell's outcome, applied to all three arms of a wave, so under
+H0 it cannot select on the arm contrast; the replacement cells are fresh draws of the same planned (task, attempt,
+arm order, slots); no look is added, moved or re-taken (look 1 stands as committed; no attempt-2 or -3 data existed
+at it); and Lan-DeMets spending at the realised fractions spends exactly one-sided 0.025 per comparison whatever t_2
+is, as long as t_2 is not chosen from outcomes — it is fixed by the barrier. Familywise ≤ 0.05 (Bonferroni, as §8,
+A2.2, A3.2). The "≤ 10 % invalid" guard counts the cells on `outcomes.jsonl`, i.e. the re-runs, as for a1w08.
+
+**A6.5 Counts at this amendment.** Attempt 1: 29 of 29 waves, 29 valid pairs per comparison (look 1 taken).
+Attempt 2: **6 of 29 waves valid and scored** (a2w00–a2w05, 6 valid pairs per comparison); 12 to re-run in place
+(a2w06–a2w17); 11 not yet run (a2w18–a2w28). Pairs valid now: **35 of 58** for look 2.
+
+**A6.6 Resume (operator, after funding or switching; not before).** Nothing is restarted by this amendment.
+(a) Switch: `p2g-2026-11/apparatus/switch_go_account.sh <auth-file> <label> <plan> [weekly]` (restarts relays 0–8,
+probes each must return 200 billed as the plan, cost 0) — the acct1 flag then no longer applies; or (b) fund acct1,
+confirm a probe, then `python3 p2g-2026-11/apparatus/go_allowance.py clear-flag "acct1 funded <when>"`. Then
+both lanes exactly as A3.10 (`run_fg1_lanes.py run --lane gx10|hub --push`, `FG1_APPROVED=yes`). The restarted lanes
+run the amended scorer (A6.1) and Amendment 5's scorer fields.
+
+**Unchanged:** PLAN.json, arms, build pin, tasks, seed, validity (§6; exhaustion was already apparatus, now detected),
+the re-run rule, endpoints, interim looks and boundaries, decision rule, transport sensitivity (A5), budget.
+
+**A6.7 Files.** `p2g-2026-11/apparatus/go_allowance.py` (402/funds detection), `apparatus/amend6.py` (the one-off
+correction, run once), `apparatus/test_fg1.py` (+2), `OFFLINE-TESTS.txt`, `ledger/` (rows moved, archives added),
+`claims/superseded-a6/`, `runs-aborted/`, `jobs-aborted/`, `go-accounts-2026-11/` (EXHAUSTED.json, events).
