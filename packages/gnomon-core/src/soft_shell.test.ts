@@ -563,24 +563,27 @@ describe.skipIf(!posix)(`exec = "docker": a job is a container git_safe knows ab
     table = new JobTable({ record: (r) => records.push(r) });
     // `run` logs its argv, records the container as running and runs the
     // command itself (stdin passed through, as `-i` does); `rm -f` kills it;
-    // `inspect` answers from the record; `kill --signal` signals it.
+    // `inspect` answers from the record; `kill --signal` signals it. Every
+    // call is appended to calls.log when it is done, and the record is
+    // replaced by rename, so a reader never sees it half-written.
     writeFileSync(
       join(fake, "docker"),
       `#!/bin/sh
 state='${fake}'
+trap 'echo "$1" >> "$state/calls.log"' EXIT
 case "$1" in
   run)
     name=""; prev=""; last=""
     for a in "$@"; do [ "$prev" = "--name" ] && name="$a"; prev="$a"; last="$a"; done
     printf '%s\\n' "$@" > "$state/$name.args"
-    echo running > "$state/$name"
+    echo running > "$state/$name.tmp" && mv "$state/$name.tmp" "$state/$name"
     echo $$ > "$state/$name.pid"
     exec sh -c "$last" ;;
   rm)
     for a in "$@"; do name="$a"; done
     pkill -KILL -P "$(cat "$state/$name.pid" 2>/dev/null)" 2>/dev/null
     kill -KILL "$(cat "$state/$name.pid" 2>/dev/null)" 2>/dev/null
-    [ -f "$state/$name" ] && echo gone > "$state/$name" ;;
+    [ -f "$state/$name" ] && echo gone > "$state/$name.tmp" && mv "$state/$name.tmp" "$state/$name" ;;
   kill)
     for a in "$@"; do name="$a"; done
     kill -INT "$(cat "$state/$name.pid" 2>/dev/null)" 2>/dev/null ;;
@@ -614,6 +617,7 @@ esac
   });
   const containers = () => readdirSync(fake).filter((n) => n.startsWith("gnomon-") && !n.includes("."));
   const state = (n: string) => readFileSync(join(fake, n), "utf-8").trim();
+  const calls = () => (existsSync(join(fake, "calls.log")) ? readFileSync(join(fake, "calls.log"), "utf-8").split("\n").filter(Boolean) : []);
 
   it("runs without -i unless interactive, stays registered while it runs (host git refused), and is removed by kill", async () => {
     const r = await executeTool("bash", { command: "echo in; sleep 30" }, ctx(), new Set(["bash", "job"]));
@@ -624,9 +628,19 @@ esac
     expect(state(name!)).toBe("running");
     expect(liveContainer()).toBe(name);
 
+    const pid = Number(state(`${name}.pid`));
+    const before = calls().length;
     const k = await executeTool("job", { action: "kill", id: "j1" }, ctx(), new Set(["bash", "job"]));
     expect(k.summary).toBe("job j1 — killed");
+    // The security property (#158): host git is allowed again only because
+    // docker was asked after the removal and said the container is gone --
+    // one removal, finished before the tool returned, and confirmed. Nothing
+    // the kill started is still running, so nothing is left to race.
     expect(state(name!)).toBe("gone");
+    expect(alive(pid)).toBe(false);
+    const during = calls().slice(before);
+    expect(during.filter((c) => c === "rm")).toEqual(["rm"]);
+    expect(during.lastIndexOf("inspect")).toBeGreaterThan(during.indexOf("rm"));
     expect(liveContainer()).toBeNull();
     expect(records.at(-1)).toMatchObject({ event: "kill", reason: "model", container_gone: true });
   }, 30_000);
