@@ -33,7 +33,8 @@
   `[roles.<name>.governance]` in roles.toml set how strongly each family's
   verdicts are applied: `write`, `bash`, `network`, `secrets`, `rules`, `ci`.
   Every existing rule is assigned to one (`RULE_FAMILY`; `tools` and
-  `malformed` stay structural). The effective level is the max along
+  `malformed` stay structural; `host_hooks` is `rules`; grep/glob searches
+  outside the root stay at prevent). The effective level is the max along
   org (a stub until `[extends]`) → repo → role, so a role only tightens; a
   family no layer names is `prevent`, and `rules` (the surface, the records,
   git hooks) never goes below it. The level is applied in one place,
@@ -103,6 +104,18 @@
   is made on first use, and `tui`, `setup`, `doctor` and `check` load their
   modules when run. `startup_budget.test.ts` pins what `--version` may load
   (no network stack) instead of a wall time.
+
+### Fixed
+
+- **Docker job kills leave no stray `docker rm`.** Killing a job or a timed-out
+  command under `exec = "docker"` ran three `docker rm -f`s: killTree's and the
+  `docker run` exit handler's, detached and never awaited, beside the awaited,
+  confirmed one. The strays could outlive the tool call (the soft-timeout
+  shell's docker test flaked on CI, 3 of the #164 runs). A removal now has one
+  owner, started before the kill and awaited; the git_safe rule (#158) was not
+  weakened by the strays, since only `docker inspect` reporting the container
+  gone unregisters it. The test now asserts that: one removal, confirmed by an
+  `inspect` after it, the container's process dead, before host git is allowed.
 
 ### Docs
 

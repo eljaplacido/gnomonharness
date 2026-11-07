@@ -2885,6 +2885,28 @@ function gitWrites(argv: string[]): Array<{ path: string; how: string; recursive
     case "apply":
     case "am":
       return paths(operands, "git apply (patch)");
+    case "rm": {
+      // `git rm` removes the file and its index entry; `--cached` the entry
+      // only, which the next commit records as a deletion -- the way the
+      // GBS-LAYER pilot committed `.gnomon/` away (`git rm -r --cached .gnomon
+      // && git commit`). Both are reported: a cached removal as a reach (it
+      // writes no file), put to the surface / record / hooks rules and not to
+      // write_allow.
+      const cached = rest.includes("--cached");
+      const recursive = rest.some((a) => /^-[a-zA-Z]*r/.test(a) && !a.startsWith("--"));
+      const list = (afterDashes ?? operands).filter((a) => a !== "--" && !a.startsWith("--pathspec"));
+      return list.map((p) => ({ path: under(p), how: cached ? "git rm --cached" : "git rm", recursive }));
+    }
+    case "mv": {
+      // Like mv: the sources go (with everything below them), the last
+      // operand is written.
+      const list = operands;
+      if (list.length < 2) return [];
+      return [
+        ...list.slice(0, -1).map((p) => ({ path: under(p), how: "git mv (source)", recursive: true })),
+        { path: under(list[list.length - 1]!), how: "git mv" },
+      ];
+    }
     case "clean": {
       const c = gitCleanOf(rest);
       return c ? [{ path: at || ".", how: "git clean", recursive: true, clean: c }] : [];
@@ -3005,6 +3027,72 @@ export function gitExecConfigs(command: string): GitExecConfig[] {
     const [key, value] = words;
     if (key === undefined || (value === undefined && !add)) continue;
     if (gitExecKey(key, value)) out.push({ key, command: describeInvocation(inv) });
+  }
+  return out;
+}
+
+/**
+ * The `git add` and `git commit` invocations a command makes, read for what
+ * they put into the next commit: whether the commit takes everything tracked
+ * (`-a`), which pathspecs it or the add names, and whether the add takes the
+ * whole tree (`-A`, `-u`). `gnomon guard` and the loop refuse a commit that
+ * would record a change to `.gnomon/` (tools.ts, surfaceCommitRefusal).
+ */
+export interface GitIndexOp {
+  sub: "add" | "commit";
+  /** `git -C <dir>`, as written; "" when none. */
+  at: string;
+  /** commit -a / --all; add -A / --all / -u / --update with no pathspec. */
+  all: boolean;
+  pathspecs: string[];
+}
+
+const GIT_COMMIT_VALUE = /^(-[mFCct]|--(message|file|reuse-message|reedit-message|template|author|date|cleanup|fixup|squash|trailer|gpg-sign))$/;
+
+export function gitIndexOps(command: string): GitIndexOp[] {
+  const out: GitIndexOp[] = [];
+  for (const inv of readShellCommand(command).invocations) {
+    if (inv.synthetic || programName(inv.argv[0] ?? "") !== "git") continue;
+    const argv = inv.argv;
+    let i = 1;
+    let at = "";
+    while (i < argv.length && argv[i]!.startsWith("-")) {
+      if (argv[i] === "-C" && argv[i + 1] !== undefined) at = argv[i + 1]!;
+      i += GIT_GLOBAL_ARG.has(argv[i]!) ? 2 : 1;
+    }
+    const sub = argv[i];
+    if (sub !== "add" && sub !== "stage" && sub !== "commit") continue;
+    const rest = argv.slice(i + 1);
+    const pathspecs: string[] = [];
+    let all = false;
+    let dashes = false;
+    for (let k = 0; k < rest.length; k++) {
+      const a = rest[k]!;
+      if (dashes) {
+        pathspecs.push(a);
+        continue;
+      }
+      if (a === "--") {
+        dashes = true;
+        continue;
+      }
+      if (sub === "commit") {
+        if (GIT_COMMIT_VALUE.test(a)) {
+          k++;
+          continue;
+        }
+        if (a === "--all" || (/^-[a-zA-Z]+$/.test(a) && a.slice(1).split("").includes("a") && !/[mFCct]./.test(a.slice(1)))) all = true;
+        // `-am msg`: the cluster ends in a flag that takes the next word.
+        if (/^-[a-zA-Z]+$/.test(a) && /[mFCct]$/.test(a)) k++;
+        if (a.startsWith("-")) continue;
+      } else {
+        if (a === "-A" || a === "--all" || a === "-u" || a === "--update" || (/^-[a-zA-Z]+$/.test(a) && /[Au]/.test(a))) all = true;
+        if (a === "--chmod" || a === "--pathspec-from-file") k++;
+        if (a.startsWith("-")) continue;
+      }
+      pathspecs.push(a);
+    }
+    out.push({ sub: sub === "stage" ? "add" : sub, at, all: all && (sub === "commit" || pathspecs.length === 0), pathspecs });
   }
   return out;
 }
