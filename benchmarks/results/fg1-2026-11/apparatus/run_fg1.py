@@ -53,6 +53,7 @@ P2G_APP = ROOT.parent / "p2g-2026-11" / "apparatus"
 sys.path[:0] = [str(HERE), str(P2G_APP)]
 import fg1_checks as FC  # noqa: E402
 import surface_patch as SP  # noqa: E402
+import go_allowance as GA  # noqa: E402  (Amendment 4: Go allowance guard, P2G apparatus dir)
 
 OUT, JOBS, LEDGER_DIR = ROOT / "runs", ROOT / "jobs", ROOT / "ledger"
 OUTCOMES = LEDGER_DIR / "outcomes.jsonl"
@@ -419,6 +420,10 @@ def score(cid: str, arm: str, spec: dict, build: dict, wave: dict) -> dict:
         invalid = "mechanism: " + "; ".join(f"{m['check']} {m['detail']}" for m in FC.failed(extra))
     elif not (tr.get("agent_version") or "").startswith(f"gnomon v{build['version']} {build['commit'][:16]}"):
         invalid = f"build pin: agent_version {tr.get('agent_version')!r}"
+    ga = GA.scan_cell(OUT / cid / "wire")  # Amendment 4: an exhausted allowance is apparatus, re-run with the wave
+    if ga["exhausted"]:
+        invalid = f"apparatus: Go allowance — {ga['exhausted']}"
+        GA.flag_exhausted(ga["exhausted"], cid)
     usage = (rec.get("delta") or {}).get("responses_with_usage", 0)
     if invalid is None and reward is None:
         invalid = f"no verifier reward ({tr.get('exception')})"
@@ -433,7 +438,8 @@ def score(cid: str, arm: str, spec: dict, build: dict, wave: dict) -> dict:
             "stop_reason": stop, "agent_s": agent_s, "usd": rec.get("wire_spend_usd", 0.0),
             "requests": (rec.get("delta") or {}).get("chat_requests"), "agent_version": tr.get("agent_version"),
             "spec_sha256": rec.get("spec_sha256"), "mechanism": mech, "fg1_checks": extra,
-            "finish_gate": FC.gate_stats(record),
+            "finish_gate": FC.gate_stats(record), "go_account": wave.get("go_account"), "go_billing": ga["billing"],
+            "list_usd": ga["list_usd"],
             "job_yields": sum(1 for a in aud if a.get("kind") == "job" and a.get("event") == "yield"),
             "t_end": utc()}
 
@@ -513,6 +519,7 @@ def execute(waves: list[dict], args, build, sp: dict, P, interim: bool = False) 
             say(f"BUDGET: spent ${spent:.4f} of ${BUDGET}; wave {w['id']} not started")
             return False
         wait_for_wave(args)
+        w = {**w, "go_account": GA.wave_gate("fg1", w["id"], RESERVE)}  # Amendment 4: blocks while 'PAUSED: Go allowance'
 
         def go(a):
             try:
@@ -536,6 +543,7 @@ def execute(waves: list[dict], args, build, sp: dict, P, interim: bool = False) 
             for a in w["order"]:
                 if (OUT / cells[a] / "cell.json").exists():
                     f.write(json.dumps(score(cells[a], a, sp[a], build, w)) + "\n")
+        GA.wave_done("fg1", w["id"])
         spent = sum(o["usd"] for o in load_outcomes())
         say(f"wave {w['id']} {w['task']} done; spent ${spent:.4f}")
         if n % 3 == 2:

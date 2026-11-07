@@ -43,6 +43,7 @@ P2G_APP = ROOT.parent / "p2g-2026-11" / "apparatus"
 sys.path[:0] = [str(HERE), str(P2G_APP)]
 import allocation as A  # noqa: E402
 import surface_patch as SP  # noqa: E402
+import go_allowance as GA  # noqa: E402  (Amendment 3: Go allowance guard, P2G apparatus dir)
 
 OUT, JOBS, LEDGER_DIR = ROOT / "runs", ROOT / "jobs", ROOT / "ledger"
 LEDGER, OUTCOMES = LEDGER_DIR / "LEDGER.jsonl", LEDGER_DIR / "outcomes.jsonl"
@@ -334,6 +335,10 @@ def score(cid: str, member: dict, build: dict | None, stage: str, wave: dict) ->
             invalid = "mechanism: " + "; ".join(f"{m['arm']} {m['on']} {m['path']} {m['detail']}" for m in SP.mechanism_failed(mech))
         elif build and not (tr.get("agent_version") or "").startswith(f"gnomon v{build['version']} {build['commit'][:16]}"):
             invalid = f"build pin: agent_version {tr.get('agent_version')!r}"
+    ga = GA.scan_cell(OUT / cid / "wire")  # Amendment 3: an exhausted allowance is apparatus, the pair is re-run
+    if ga["exhausted"]:
+        invalid = f"apparatus: Go allowance — {ga['exhausted']}"
+        GA.flag_exhausted(ga["exhausted"], cid)
     usage = (rec.get("delta") or {}).get("responses_with_usage", 0)
     if invalid is None and reward is None:
         invalid = f"no verifier reward ({tr.get('exception')})"
@@ -348,7 +353,8 @@ def score(cid: str, member: dict, build: dict | None, stage: str, wave: dict) ->
             "frac": frac, "passed": passed, "tests": tests, "capped": bool(valid and capped), "harbor_timeout": timeout,
             "stop_reason": stop, "ff": ff, "agent_s": agent_s, "usd": rec.get("wire_spend_usd", 0.0),
             "requests": (rec.get("delta") or {}).get("chat_requests"), "agent_version": tr.get("agent_version"),
-            "spec_sha256": rec.get("spec_sha256"), "mechanism": mech, "t_end": utc()}
+            "spec_sha256": rec.get("spec_sha256"), "mechanism": mech, "go_account": wave.get("go_account"),
+            "go_billing": ga["billing"], "list_usd": ga["list_usd"], "t_end": utc()}
 
 
 def load_outcomes(stage: str | None = None) -> list[dict]:
@@ -460,6 +466,7 @@ def execute(waves: list[dict], stage: str, membersf, args, build, P) -> bool:
             say(f"BUDGET {stage}: spent ${spent:.4f} of ${cap}; wave {w['id']} not started")
             return False
         wait_for_slot_window(args)
+        w = {**w, "go_account": GA.wave_gate("as1", w["id"], reserve)}  # Amendment 3: blocks while 'PAUSED: Go allowance'
         idx = int(w["id"].split("w")[-1].rstrip("r")) + (100 if w["id"].endswith("r") else 0)
         slots = [(j + idx) % 3 for j in range(len(members))]
         order = [(j + idx) % len(members) for j in range(len(members))]  # start order rotates per wave
@@ -484,6 +491,7 @@ def execute(waves: list[dict], stage: str, membersf, args, build, P) -> bool:
             for j, m in enumerate(members):
                 if (OUT / cells[j] / "cell.json").exists():
                     f.write(json.dumps(score(cells[j], m, build if m["kind"] == "gnomon" else None, stage, w)) + "\n")
+        GA.wave_done("as1", w["id"])
         say(f"wave {w['id']} {w['task']} done; {stage} spent ${sum(o['usd'] for o in load_outcomes(stage)):.4f}")
     return True
 

@@ -438,3 +438,59 @@ efficacy, look 2 uses attempts 1–2 and keeps decisions, the runner stops befor
   (`ledger/covariates.jsonl`) and STATUS times record it.
 - **Calendar (A2.7) moves by the gap:** see STATUS.txt for the resume time; ~22 min/wave as measured.
 - **Unchanged:** validity, endpoints, comparisons, interim boundaries, decision rule, seed, budget.
+
+## Amendment 4 (FG1; the hub lane's Amendment 3 inherits it) — Go allowance guard and account rotation (2026-11-07T06:18Z, before the post-power-off resume; no analysis change)
+
+**Why.** The OpenCode Go account behind every relay slot has ~8 % of its weekly allowance left (user, 2026-11-07:
+the relays bill as `go-plus`; Go Plus weekly for deepseek-v4.1-flash = 50 % of the $200 monthly = $100, so ~$8).
+AS1 needs ~$20 more and FG1 ~$36 (+ the hub lane, same cells). The user has further standard Go accounts. Without a
+guard, the account would run dry mid-wave and the remaining cells would fail on the transport, scored as capability.
+
+**How exhaustion shows up** (from opencode 1.18.32's own client code, `GoUsageLimitError` handling; the Go docs give
+no error format): an HTTP error whose body names `GoUsageLimitError` with `metadata.limitName` (the 5-hour, weekly
+or monthly window) and a `retry-after` header (seconds to the reset). It is distinct from
+`429 {"error":{"type":"server_error","message":"Upstream request failed: [overloaded] ..."}}` (provider busy, says
+nothing about the account). With Extra Usage on, Go does not refuse but bills the Console balance:
+`usage.opencode.billing_source` = `"balance"` and `cost` > 0 — treated as exhaustion. Go has no remaining-allowance
+API; per docs, 5-hour = 20 %, weekly = 50 % of the per-model monthly limit (deepseek-v4.1-flash: Go $100, Go Plus $200).
+
+**Guard** (`p2g-2026-11/apparatus/go_allowance.py`, records in `go-accounts-2026-11/`):
+- Before every wave, after the existing slot/window checks, the runner calls `wave_gate(study, wave, reserve)`. It
+  blocks — the runner stays alive, no wave starts — while any of these holds: the current account is flagged
+  exhausted; an account switch is in progress; the metered headroom of the 5-hour, weekly (or, if stated, monthly)
+  window is below this wave's reserve (the study's existing $2 per-wave reserve, = one wave's spend; dearest wave so
+  far $1.54) plus the reserves of the waves other lanes have in flight. Headroom = the operator's Console baseline
+  (`ACCOUNTS.json`) minus everything the relays' `allowance` counters have added since (restart-aware).
+  On blocking it writes `PAUSED: Go allowance — <reason>` to both STATUS.txt files; `RESUMED: Go allowance` when clear.
+- Every cell's wire is scanned at scoring: a `GoUsageLimitError` body, a `balance` billing source or a billing
+  label other than the account's makes the cell **apparatus-invalid** (`invalid_reason` "apparatus: Go allowance — …")
+  and flags the account, so the existing "fix, don't fail" re-run covers it (FG1: the wave re-runs whole; AS1: the
+  lost pair re-runs with a fresh control). relay-go.mjs additionally counts `go_usage_limit` and `billing_sources`
+  (counters only, active from the relays' next start), which the gate reads too.
+- Per cell, new covariates: `go_account` (non-secret label acct1, acct2, …), `go_billing` (billing_source tally),
+  `list_usd` (list price of the cell, plan-independent).
+
+**Account rotation** (`p2g-2026-11/apparatus/switch_go_account.sh <auth-file> [label] [plan] [weekly_remaining]`):
+the user logs each extra account into its own opencode data dir (`XDG_DATA_HOME=$HOME/.local/share/oc-acct2 opencode
+auth login` → `~/.local/share/oc-acct2/opencode/auth.json`; opencode 1.18.32 resolves its data dir from
+XDG_DATA_HOME, verified with `opencode auth list` on an empty dir). The script blocks new waves, waits until no wave
+is in flight and every slot is idle 60 s, restarts each relay on the old account's auth file (slots 0–5 and the hub
+lane's 6–8) by its pid exactly as started (cwd, argv, RELAY_* env, log) except RELAY_AUTH_FILE, probes every slot
+once (must be 200, billed as the plan's label, cost 0), and records the switch (switches.jsonl, STATUS, commit).
+Credentials never pass through the operator or the agent: only the relay process reads the auth file.
+
+**What may differ between accounts, and how it is handled.** Same model id (deepseek-v4.1-flash), same endpoint
+(opencode.ai/inference/go), same relay and client stack. Per the Go docs token prices are identical across Go, Go
+Plus and Go Teams and the model list is the same; plans differ in limits (Go Plus 2× for this model) and in the
+billing label (`go` vs `go-plus`). The allowance/list ratio seen on go-plus is 1.2; the switch probe measures it
+for each new account and records it in ACCOUNTS.json. Budgets and reserves stay in allowance dollars from the wire
+as pre-registered; if a new account's ratio differs, `list_usd` per cell gives the plan-independent spend, and
+reports state both. The docs do not say whether the serving route differs by plan or workspace; a standard Go
+workspace must have **Global** selected under Settings › Privacy › Regions for deepseek-v4.1-flash, otherwise the
+probe fails and nothing switches. The account is therefore recorded per cell as a covariate, and **a switch happens
+only between waves**, so every within-wave pairing (each comparison's unit) is on one account. A sensitivity check
+by account (estimate with and without the post-switch waves) will be reported as descriptive; the primary analyses
+are unchanged.
+
+**Unchanged:** arms, tasks, seeds, plans, validity rules (exhaustion was already apparatus failure; now it is
+detected and named), scoring, budgets, interim looks, allocation and decision rules.

@@ -35,6 +35,11 @@
 //   resolve under UPSTREAM's origin and path is refused with 403 and counted
 //   (`refused_off_upstream`); nothing is forwarded.
 // - RELAY_LABEL names the benchmark in a replaced user agent (default unchanged).
+// Go-accounts addition (2026-11-07, AS1 Amendment 3 / FG1 Amendment 4; counters only, no request is changed):
+// - `go_usage_limit` counts upstream errors whose body names GoUsageLimitError (Go's allowance-exhausted error,
+//   as opencode 1.18.32's client recognises it; distinct from 429 "[overloaded]"), `last_go_limit` keeps the last
+//   one's limitName and retry-after; `billing_sources` tallies usage.opencode.billing_source ("go", "go-plus",
+//   "balance" = Extra Usage billing real money). go_allowance.py pauses every runner on either signal.
 import http from "node:http";
 import https from "node:https";
 import { readFileSync } from "node:fs";
@@ -66,6 +71,7 @@ const totals = {
   include_usage_injected: 0, status_4xx: 0, status_5xx: 0, errors: 0,
   session_native: 0, session_injected: 0, ua_native: 0, ua_replaced: 0, responses_compressed: 0,
   refused_off_upstream: 0,
+  go_usage_limit: 0, last_go_limit: null, billing_sources: {},
 };
 let cell = { id: "no-cell", arm: "unknown", ua: "unknown-harness/0" };
 const seenAgents = {};
@@ -131,6 +137,8 @@ function account(bodyText, headers, streamed) {
     }
     const a = findAllowance(o);
     if (a !== null) allowance = a;
+    const bs = o?.usage?.opencode?.billing_source ?? o?.response?.usage?.opencode?.billing_source ?? o?.message?.usage?.opencode?.billing_source;
+    if (typeof bs === "string") totals.billing_sources[bs] = (totals.billing_sources[bs] ?? 0) + 1;
     lastObj = o;
   }
   const h = allowanceOf(null, headers);
@@ -211,6 +219,13 @@ http
         });
         upRes.on("end", () => {
           res.end();
+          if (s >= 400 && tail.includes("GoUsageLimitError")) {
+            totals.go_usage_limit++;
+            let name = null;
+            try { name = JSON.parse(tail)?.metadata?.limitName ?? null; } catch { /* not plain JSON */ }
+            totals.last_go_limit = { t: new Date().toISOString(), status: s, limitName: name,
+              retry_after: upRes.headers["retry-after"] ?? null };
+          }
           if (isModel && s < 400 && upRes.headers["content-encoding"] && upRes.headers["content-encoding"] !== "identity") {
             totals.responses_compressed++;  // upstream ignored identity: counted, never guessed
           } else if (isModel && s < 400) account(tail, upRes.headers, streamed || /event-stream/.test(String(upRes.headers["content-type"] ?? "")));
