@@ -11,13 +11,11 @@ A white paper and a how-to, for two readers:
 [README.md](../README.md) is the reference; this guide is the path through it.
 Its commands were run against gnomon 0.3.1 (`master` at `bc8f27a`) and every
 TOML snippet was loaded by that build (install pins below name the latest
-published release, 0.4.3; v0.4.4 and v0.4.5 are drafted but not yet
-published, so behaviour this guide marks as theirs is on `master` only:
-`gnomon task --deadline`, the completion gate, the sweep knobs and replay
-on by default for hosted endpoints (v0.4.4), the docker isolation fixes
-(v0.4.5), and the opt-in finish gate, deliverable-first notes, first-token
-watchdog, soft-timeout shell and governance levels (merged after v0.4.5, in
-no release yet);
+published release, 0.4.5, which added `gnomon task --deadline`, the
+completion gate, the sweep knobs, replay on by default for hosted endpoints,
+the docker isolation fixes, and the opt-in finish gate, deliverable-first
+notes, first-token watchdog, soft-timeout shell and governance levels;
+v0.4.4 was drafted and never published, its contents are in 0.4.5;
 sections added since say which version they describe);
 [Appendix A](#appendix-a-how-this-guide-was-verified) says how, and what was
 not exercised.
@@ -287,7 +285,7 @@ download is checked against the release's `SHA256SUMS`.
 
 | Variable | Effect |
 |---|---|
-| `GNOMON_VERSION=0.4.3` | Pin a published release (`curl … \| GNOMON_VERSION=0.4.3 sh`); a draft release cannot be installed |
+| `GNOMON_VERSION=0.4.5` | Pin a published release (`curl … \| GNOMON_VERSION=0.4.5 sh`); a draft release cannot be installed |
 | `GNOMON_NPM_PREFIX` | Where npm installs |
 | `GNOMON_NO_NATIVE=1` | Skip the native binaries |
 | `GITHUB_TOKEN` | Lift GitHub's anonymous API rate limit |
@@ -301,14 +299,14 @@ and `simulate` will not work unless you build from source; everything else does.
 The four packages are one program split up, so npm needs all four URLs:
 
 ```bash
-V=0.4.3
+V=0.4.5
 B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz \
          $B/gnomon-tui-$V.tgz  $B/gnomon-harness-$V.tgz
 ```
 
 ```powershell
-$V="0.4.3"
+$V="0.4.5"
 $B="https://github.com/eljaplacido/gnomonharness/releases/download/v$V"
 npm i -g "$B/gnomon-core-$V.tgz" "$B/gnomon-natives-$V.tgz" "$B/gnomon-tui-$V.tgz" "$B/gnomon-harness-$V.tgz"
 ```
@@ -335,7 +333,7 @@ global link, run `~/gnomon/gnomon <command>` from any project. Windows steps:
 ### 3.4 Verify the install
 
 ```bash
-gnomon --version        # gnomon/0.4.3+npm for a release install; +<commit> from a checkout
+gnomon --version        # gnomon/0.4.5+npm for a release install; +<commit> from a checkout
 gnomon enumerations     # prints the enumerations JSON: proves the native binaries are found
 ```
 
@@ -715,9 +713,8 @@ said on stderr, and replay stays off for it for the session
 (`counters.replay_reasoning_refused`). `replay_reasoning = false` in an
 `[endpoints.<name>]` block turns it off; `true` turns it on from the first
 request. The turn record's `wire` says `replay_reasoning: true` with
-`replay_reasoning_source: "declared"` or `"default"`. This default is on
-`master` and in v0.4.4 (drafted, not yet published); v0.4.3 and earlier
-replay only when declared. The default is H3's (2026-11-06, pre-registered, hosted
+`replay_reasoning_source: "declared"` or `"default"`. This default is
+new in v0.4.5; v0.4.3 and earlier replay only when declared. The default is H3's (2026-11-06, pre-registered, hosted
 DeepSeek V4.1 Flash under 30-minute caps): replay alone raised the hidden-test
 fraction by +0.160 [95% +0.042, +0.293] and cut capped runs from 19 to 14
 ([summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
@@ -989,7 +986,7 @@ esac
   each one is announced.
 - Switch on the **bucket** (0, 2, 10); that part of the
   [exit contract](CONTRACTS.md) is stable.
-- **`--deadline <seconds|ISO time>`** (`master`; v0.4.4, not yet published)
+- **`--deadline <seconds|ISO time>`** (v0.4.5)
   (or `GNOMON_DEADLINE`) gives the run a
   wall clock, opt-in. At `[turn] deadline_notes` (default 50% and 80% of the
   budget) the next request carries one short note of the time left, as a
@@ -1097,8 +1094,8 @@ prints it, or `--write` to add it to this project's config:
 | Cursor | `.cursor/hooks.json` for shell commands and file reads; writes are left to `check` |
 | anything with a pre-tool hook | `gnomon guard --from generic`, with `{"tool": "bash", "input": {"command": "…"}, "cwd": "…", "session_id": "…"}` on stdin |
 
-**Audit first, then gates: governance levels** (`master` only, in no
-release yet). To watch what the rules would
+**Audit first, then gates: governance levels** (new in
+v0.4.5). To watch what the rules would
 refuse before you let them refuse it, declare a level per family (CONTRACTS.md
 §36):
 
@@ -1278,8 +1275,8 @@ repo_code = true      # ask before npm test, make, pip install -e . — whatever
 ```
 
 `exec` can be set per role, and is refused on native Windows. Nothing checks
-for a docker daemon before a turn. On `master` (v0.4.5, drafted, not yet
-published; v0.4.3 does not have it) the container cannot edit
+for a docker daemon before a turn. Since v0.4.5 (v0.4.3 and earlier do not
+have it) the container cannot edit
 `.gnomon/*.toml`, `.git/config` or git hooks (they are mounted read-only;
 configuration changes are yours to make), and a contained role refuses a
 project root that contains your home directory, gnomon's data directory or
@@ -1506,7 +1503,7 @@ enabled = true
 max_lines = 200
 ```
 
-**Opt-in: the completion gate** (`master`; v0.4.4, not yet published). Off unless declared. When a turn that changed
+**Opt-in: the completion gate** (v0.4.5). Off unless declared. When a turn that changed
 the worktree first answers "done" with budget left, gnomon does not accept it:
 it hands the turn back with a checklist lifted from the task's own text (each
 stated requirement, path, command, value and format, edge cases, and the files
@@ -1547,7 +1544,7 @@ completion_reviewer = "verifier"  # a read-only role (no write/edit; a bash_allo
 
 **Opt-in, and not yet measured: the finish gate, deliverable-first notes,
 the first-token watchdog and the soft-timeout shell.** These four merged on
-2026-11-06/07 for long tasks and are in no release yet. None has a benchmark result yet: the FG1 and AS1
+2026-11-06/07 for long tasks and ship in v0.4.5. None has a benchmark result yet: the FG1 and AS1
 runs that test them are still in progress, so treat them as hypotheses to try,
 not as improvements, and leave them off unless you are measuring them.
 
@@ -1627,7 +1624,7 @@ name = "bash"
 soft_timeout = "handle"           # "kill" (default) or "handle"
 ```
 
-**Opt-in: the sweep knobs** (`master`; v0.4.4, not yet published). Six settings, each off (or the old behaviour)
+**Opt-in: the sweep knobs** (v0.4.5). Six settings, each off (or the old behaviour)
 unless declared, so a benchmark sweep can test one long-task hypothesis per
 arm as a surface change ([CONTRACTS.md §32](CONTRACTS.md)). Undeclared, or
 declared at their defaults, a turn sends the same request bytes as before.

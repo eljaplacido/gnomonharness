@@ -19,6 +19,11 @@
   v0.1.0 is kept in this file because it is what happened, not because anything
   should install it.
 
+  Updated 2026-11-07: the same happened to 0.4.4 and the first 0.4.5. Both
+  were tagged and drafted on 2026-11-06 and neither was published; the 0.4.5
+  that was published is master after #169, and its section carries what the
+  two drafts had. There is no 0.4.4 section because nothing installed it.
+
   The dates on release headings are the dates those sections were prepared. If
   a tag is pushed on a different day, change the heading to that day. The link
   definitions at the foot of this file resolve only once the tags exist.
@@ -26,12 +31,173 @@
 
 ## [Unreleased]
 
-Everything in this section is on master and in no release. The new keys below
-(`soft_timeout = "handle"`, `finish_gate = "v2"`, `deliverable_first`,
-`first_token_timeout_ms`, `[governance]` levels) are **opt-in and unmeasured**:
-the long-task arms that test them (FG1, AS1) were still running when they
-merged, and no result is claimed for any of them yet. With none declared,
-request bodies are master's.
+Nothing yet.
+
+## [0.4.5] — TBD
+
+<!-- RELEASE-PENDING: replace TBD with the tag date, fill the two verdict
+     lines below, then delete this comment. -->
+
+The first release since 0.4.3. It carries the two drafts that were tagged but
+**never published** — 0.4.4 (long hosted-model tasks) and the first 0.4.5
+(the `exec = "docker"` security fix, #158) — and everything merged after them
+(#161–#169: the soft-timeout shell, finish gate v2, deliverable-first time
+notes, the first-token watchdog, `gnomon guard` hardening, governance levels
+and protected paths). Nothing ever installed 0.4.4 (a draft cannot be
+installed), so there is no 0.4.4 entry: its contents are here.
+
+**Upgrade if you run a model you do not trust under `exec = "docker"`.** In
+0.4.3 and earlier the container held what the model's commands did to the
+host directly, but not what gnomon itself then did on the host with files
+those commands wrote. That is fixed in this release (Security, below).
+
+**Defaults that change** (everything else is opt-in, record-only or a fix):
+
+- **Reasoning replay is on for a hosted endpoint that returns reasoning**,
+  adopted under H3's pre-registered rule: hidden-test fraction +0.160 [95%
+  bootstrap +0.042, +0.293], capped runs 19 → 14
+  ([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+  Local lanes stay off unless they declare it.
+- **Under `exec = "docker"`**: the model cannot edit `.gnomon/*.toml`, leaving
+  docker needs `--trust-exec-downgrade`, and keys to non-loopback local
+  endpoints need a one-time grant (Changed (user-visible), below).
+- **`gnomon init` scaffolds `[governance] level = "prevent"`** in new
+  repositories, which turns on the `secrets` and `ci` protected-path defaults
+  there. Existing surfaces are not touched; without `[governance]` (or a
+  role's governance) the guard's decisions are unchanged.
+
+The idle nudge stays at 12 (LG1). Upgrading from 0.4.3 with none of the new
+keys declared and `exec = "off"`: request bodies are byte-identical on any
+local lane and on a hosted endpoint that returns no reasoning field
+(`long_tasks.test.ts`).
+
+**Long-task mechanisms, opt-in.** `[verify] finish_gate = "v2"`, the `bash`
+tool's `soft_timeout = "handle"` (tools.toml), `[turn] deliverable_first` and
+`[resilience] first_token_timeout_ms` are off by default. Their benchmarks:
+
+- **FG1 verdict: <pending>** — finish gate v2 / soft-timeout shell
+  (pre-registered; arms, solved counts, CI and the decision-rule outcome go
+  here, with a link to the summary on `bench/peers-2026-11`).
+- **AS1: <pending>** — soft-timeout shell on the long-task lane (result or
+  "still running; no claim").
+
+If FG1 adopts a mechanism as a default, move it from "Added" to "Changed
+(default)" below and say so in the defaults list above.
+
+### Security
+
+- **`exec = "docker"` now holds against a hostile model, including against
+  gnomon's own host-side actions.** In 0.4.3 and earlier the container
+  contained what the model's commands did to the host directly, but not what
+  gnomon itself did afterwards on the host with files those commands had
+  written in the mounted project. gnomon's bookkeeping git, its audit and
+  anchor writes, `gnomon check`, `gnomon guard`, the dashboard, the
+  must-fail-first restore, surface reloads and the trust store could be
+  steered from inside the container to run code on the host, send API keys
+  somewhere else, or switch the container off for the next session. Found by
+  independent review (nine rounds). Fixed at the cause:
+  - gnomon's state and git's control files are **read-only inside the
+    container** (`.gnomon/`, `.gnomon-audit/`, `.gnomon-sessions/`,
+    `.gnomon-loops/`, `.git/config`, hooks, info and the equivalents for
+    linked worktrees and submodules); `.git` cannot be renamed away from them.
+  - **every host write goes through one no-follow helper**: it never follows a
+    symlink or hard link, takes only regular files inside the root, and writes
+    by replacing the file. Prompt history and per-repository state (`gnomon
+    guard`/`check` bases, rule caches, restore journals) moved to gnomon's data
+    directory, out of the project.
+  - **gnomon's own git is pinned and hardened**: it names its repository,
+    runs no hook, fsmonitor, filter, diff driver or credential/remote program
+    the repository config names, and never runs while a container for that
+    project is live.
+  - **exec floors fail closed**: they live in their own file
+    (`exec-floors.json`, migrated from `trust.json` on first read); an
+    unreadable trust store or floor file runs every project contained until
+    `gnomon trust grant`. A reload or a later session can tighten isolation,
+    never loosen it, and `--trust` / `GNOMON_TRUST` no longer lower it.
+    `gnomon check --base` takes only the policy under judgement from the base;
+    everything that acts on the host comes from the live surface and the
+    floor.
+  - **containers are labelled, images validated, capabilities dropped**:
+    each container carries a `gnomon.root` label, `image` must be a plain
+    image reference (and any change is a grant), and containers run with
+    `--cap-drop ALL --security-opt no-new-privileges`.
+
+
+- **`gnomon guard` holds when the agent it guards tries to detach it** (#165,
+  from the GBS-LAYER pilot's detachment probes, 2026-11-06). New rule
+  `host_hooks`: writes, edits, removals and overwrites of the hook
+  installation (`.claude/settings*.json`, `.claude/hooks/`,
+  `.opencode/plugins/`, `opencode.json[c]`, `.cursor/hooks.json`, their
+  user-level copies, and gnomon's per-repository guard state) are denied under
+  every gate, in the guard and in gnomon's own loop. Under Claude Code's
+  `bypassPermissions` mode an ask becomes a deny (recorded with `host_mode`).
+  opencode: the plugin passes `--session-base`; `git rm`/`git mv` of
+  `.gnomon` and a commit that would record a change to `.gnomon/` are denied
+  (rule `surface`). `grep` and `glob` (opencode's and Claude Code's) are
+  decided as a `read` of where they search. `gnomon guard status` reports
+  each host's hook as ok, missing, modified, disabled or not installed (exit
+  0 / 2 / 10). `GUARD_RULES` gains `host_hooks`, `GUARD_TOOLS` `grep` and
+  `glob` (CONTRACTS.md §10, `conformance/guard_cases.json`).
+
+### Changed (default)
+
+- **Reasoning replay is on by default for hosted endpoints; local lanes
+  untested, off unless declared.** A hosted OpenAI-shaped endpoint that
+  declares no `replay_reasoning` and answers a
+  tool call with reasoning content (`reasoning_content` or `reasoning`) gets
+  that reasoning back on every assistant message from the next request on,
+  for the session. An endpoint that sends no reasoning is sent none. A local
+  lane — a loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local, CGNAT/Tailscale (100.64/10), `*.local` or `host.docker.internal` host, a single-label name, or Ollama's `/api/chat` — is not replayed unless it declares
+  `replay_reasoning = true` (`isLocalLaneUrl`); a fallback is judged by its
+  own URL. A 400 naming `reasoning_content` is
+  resent once without it and replay stays off for that endpoint
+  (`counters.replay_reasoning_refused`). `replay_reasoning = false` still turns
+  it off. The turn record's `wire` adds `replay_reasoning_source`:
+  `declared` or `default`.
+  Evidence: H3 (pre-registered, hosted DeepSeek V4.1 Flash, 30-minute caps,
+  2026-11-06): replay alone (R1) against the 0.4.2 defaults (R0) raised the
+  hidden-test fraction by +0.160 [95% bootstrap +0.042, +0.293] and cut
+  capped runs from 19 to 14; both arms of the decision rule met, verdict
+  ADOPT ([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+  The rest of H3's hosted recipe (a 1M window, nudge off) added +0.017
+  [−0.095, +0.138] on top of replay: not shown, so not a default.
+
+### Changed (user-visible)
+
+- Under `exec = "docker"` the model **can no longer edit `.gnomon/*.toml`**
+  from bash; the surface is yours to change. `git add`, `git commit`,
+  `git checkout` and `git worktree add` in the container still work.
+- **Leaving docker needs `--trust-exec-downgrade`** for one run (or `gnomon
+  trust grant`). A role that ran contained and now resolves to `exec = "off"`,
+  or whose image changed, is asked about on a terminal and kept contained
+  when nobody is there.
+- **Sending an API key (or shadow excerpts) to a non-loopback local endpoint**
+  — a LAN address, a `.local` name, a Tailscale host — now needs a one-time
+  grant. Only loopback counts as local for this.
+- A contained role **refuses to start when the project root contains your
+  home directory, gnomon's data directory or gnomon's own code** (a gnomon
+  checkout, or gnomon in the project's `node_modules`). To work on gnomon
+  itself, `GNOMON_ALLOW_SELF_IN_ROOT=1` accepts that risk. MCP servers start
+  outside the project while a role is contained.
+- Submodule directories can no longer be renamed from inside the container.
+- **Recommended:** `git config --global safe.bareRepository explicit` on any
+  machine that runs contained sessions. The remaining documented limits — a
+  repository the model creates below the root, a planted bare repository,
+  `.gitattributes` drivers, and host commands you point at project files — are
+  listed in the README under
+  [`exec` — where `bash` actually runs](README.md#exec--where-bash-actually-runs).
+
+### Unchanged: the idle nudge
+
+- **`[turn] nudge_after_idle` stays 12.** The 0.4.4 candidate first switched it
+  off by default; LG1 (pre-registered, local RTX lane, 2026-11-06) ran that
+  build against 0.4.2 and solved 18 vs 18 while spending 1.43× the local
+  tokens [95% 1.04, 2.15], past its 1.20 guard: verdict "regresses". The
+  mechanism was the nudge (0.4.2 sent 547 nudged requests, the candidate 0);
+  replay never fired, because that lane returns no reasoning field
+  ([summary-lg1.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/lg1-2026-11/summary-lg1.txt)).
+  New: a declared `nudge_after_idle = 0` turns the nudge off (it used to be
+  floored to 1, a nudge on every idle call).
 
 ### Added
 
@@ -155,197 +321,6 @@ request bodies are master's.
   `floor_held` lists the `exec:<role>:off` / `exec:<role>:image` grants that
   `--trust`, `GNOMON_TRUST` or the store did not cover (CONTRACTS §8).
 
-### Changed (performance)
-
-- **Faster start.** `gnomon --version` 58 → 44 ms and a one-request `gnomon
-  task` 100 → 94 ms (NVIDIA GB10, paired, median of 30–40 rounds): `node:http`
-  is loaded only when the dashboard or `gnomon chaos` makes a server (on Node 22
-  importing it loads tls, http2, zlib and undici), the TUI's grapheme segmenter
-  is made on first use, and `tui`, `setup`, `doctor` and `check` load their
-  modules when run. `startup_budget.test.ts` pins what `--version` may load
-  (no network stack) instead of a wall time.
-
-### Security
-
-- **`gnomon guard` holds when the agent it guards tries to detach it** (#165,
-  from the GBS-LAYER pilot's detachment probes, 2026-11-06). New rule
-  `host_hooks`: writes, edits, removals and overwrites of the hook
-  installation (`.claude/settings*.json`, `.claude/hooks/`,
-  `.opencode/plugins/`, `opencode.json[c]`, `.cursor/hooks.json`, their
-  user-level copies, and gnomon's per-repository guard state) are denied under
-  every gate, in the guard and in gnomon's own loop. Under Claude Code's
-  `bypassPermissions` mode an ask becomes a deny (recorded with `host_mode`).
-  opencode: the plugin passes `--session-base`; `git rm`/`git mv` of
-  `.gnomon` and a commit that would record a change to `.gnomon/` are denied
-  (rule `surface`). `grep` and `glob` (opencode's and Claude Code's) are
-  decided as a `read` of where they search. `gnomon guard status` reports
-  each host's hook as ok, missing, modified, disabled or not installed (exit
-  0 / 2 / 10). `GUARD_RULES` gains `host_hooks`, `GUARD_TOOLS` `grep` and
-  `glob` (CONTRACTS.md §10, `conformance/guard_cases.json`).
-
-### Fixed
-
-- **`gnomon guard status` no longer reports a CRLF checkout of a hook file as
-  modified, and the opencode plugin starts gnomon through a shell on
-  Windows** (#165).
-- **Docker job kills leave no stray `docker rm`.** Killing a job or a timed-out
-  command under `exec = "docker"` ran three `docker rm -f`s: killTree's and the
-  `docker run` exit handler's, detached and never awaited, beside the awaited,
-  confirmed one. The strays could outlive the tool call (the soft-timeout
-  shell's docker test flaked on CI, 3 of the #164 runs). A removal now has one
-  owner, started before the kill and awaited; the git_safe rule (#158) was not
-  weakened by the strays, since only `docker inspect` reporting the container
-  gone unregisters it. The test now asserts that: one removal, confirmed by an
-  `inspect` after it, the container's process dead, before host git is allowed.
-
-### Docs
-
-- **Truth pass (audit 2026-11-06).** `exec = "os"` (the kernel sandbox, #74/#156)
-  is marked as proposed and not merged everywhere it read as shipped (README,
-  CONTRACTS §10/§11/§14/§16, the `skill accept` signer message): master accepts
-  only `exec = "off"` or `"docker"`. GUIDE no longer cites the RTX 5090 hybrid
-  lead (87% vs 84%) that R3R/R4H did not reproduce, and now cautions against the
-  completion gate with its measurements (H4-lite: −0.10 hidden-test fraction on
-  hosted, caps 4 → 8; G1: no difference locally). POSITIONING adds P2G41 (v0.4.1
-  defaults 0/28 vs opencode 6/29). Stale versions fixed (GUIDE 0.3.3, README
-  v0.5.0) and the "24 of 32" figure given with its later re-runs.
-
-## [0.4.5] — 2026-11-06
-
-> **Not yet published.** This release is a GitHub draft; the latest published
-> release is [0.4.3], which is what the installer and `gnomon update` install
-> (npm's `gnomon-harness` is still 0.3.2). Until it is published, this section
-> describes master.
-
-Security release for `exec = "docker"` (PR #158). Upgrade if you run a model
-you do not trust in a container. Nothing changes for `exec = "off"`.
-
-### Security
-
-- **`exec = "docker"` now holds against a hostile model, including against
-  gnomon's own host-side actions.** In 0.4.4 and earlier the container
-  contained what the model's commands did to the host directly, but not what
-  gnomon itself did afterwards on the host with files those commands had
-  written in the mounted project. gnomon's bookkeeping git, its audit and
-  anchor writes, `gnomon check`, `gnomon guard`, the dashboard, the
-  must-fail-first restore, surface reloads and the trust store could be
-  steered from inside the container to run code on the host, send API keys
-  somewhere else, or switch the container off for the next session. Found by
-  independent review (nine rounds). Fixed at the cause:
-  - gnomon's state and git's control files are **read-only inside the
-    container** (`.gnomon/`, `.gnomon-audit/`, `.gnomon-sessions/`,
-    `.gnomon-loops/`, `.git/config`, hooks, info and the equivalents for
-    linked worktrees and submodules); `.git` cannot be renamed away from them.
-  - **every host write goes through one no-follow helper**: it never follows a
-    symlink or hard link, takes only regular files inside the root, and writes
-    by replacing the file. Prompt history and per-repository state (`gnomon
-    guard`/`check` bases, rule caches, restore journals) moved to gnomon's data
-    directory, out of the project.
-  - **gnomon's own git is pinned and hardened**: it names its repository,
-    runs no hook, fsmonitor, filter, diff driver or credential/remote program
-    the repository config names, and never runs while a container for that
-    project is live.
-  - **exec floors fail closed**: they live in their own file
-    (`exec-floors.json`, migrated from `trust.json` on first read); an
-    unreadable trust store or floor file runs every project contained until
-    `gnomon trust grant`. A reload or a later session can tighten isolation,
-    never loosen it, and `--trust` / `GNOMON_TRUST` no longer lower it.
-    `gnomon check --base` takes only the policy under judgement from the base;
-    everything that acts on the host comes from the live surface and the
-    floor.
-  - **containers are labelled, images validated, capabilities dropped**:
-    each container carries a `gnomon.root` label, `image` must be a plain
-    image reference (and any change is a grant), and containers run with
-    `--cap-drop ALL --security-opt no-new-privileges`.
-
-### Changed (user-visible)
-
-- Under `exec = "docker"` the model **can no longer edit `.gnomon/*.toml`**
-  from bash; the surface is yours to change. `git add`, `git commit`,
-  `git checkout` and `git worktree add` in the container still work.
-- **Leaving docker needs `--trust-exec-downgrade`** for one run (or `gnomon
-  trust grant`). A role that ran contained and now resolves to `exec = "off"`,
-  or whose image changed, is asked about on a terminal and kept contained
-  when nobody is there.
-- **Sending an API key (or shadow excerpts) to a non-loopback local endpoint**
-  — a LAN address, a `.local` name, a Tailscale host — now needs a one-time
-  grant. Only loopback counts as local for this.
-- A contained role **refuses to start when the project root contains your
-  home directory, gnomon's data directory or gnomon's own code** (a gnomon
-  checkout, or gnomon in the project's `node_modules`). To work on gnomon
-  itself, `GNOMON_ALLOW_SELF_IN_ROOT=1` accepts that risk. MCP servers start
-  outside the project while a role is contained.
-- Submodule directories can no longer be renamed from inside the container.
-- **Recommended:** `git config --global safe.bareRepository explicit` on any
-  machine that runs contained sessions. The remaining documented limits — a
-  repository the model creates below the root, a planted bare repository,
-  `.gitattributes` drivers, and host commands you point at project files — are
-  listed in the README under
-  [`exec` — where `bash` actually runs](README.md#exec--where-bash-actually-runs).
-
-## [0.4.4] — 2026-11-06
-
-> **Not yet published.** This release is a GitHub draft; the latest published
-> release is [0.4.3], which is what the installer and `gnomon update` install
-> (npm's `gnomon-harness` is still 0.3.2). Until it is published, this section
-> describes master.
-
-Long hosted-model tasks, from the P2G41 root causes (2026-11-05). **One default
-changes: reasoning replay is on for a hosted endpoint that returns reasoning**,
-adopted by H3's pre-registered decision rule: hidden-test fraction +0.160
-[95% bootstrap +0.042, +0.293], capped runs 19 → 14
-([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
-H3 measured hosted endpoints only, so local lanes stay off unless they declare
-it. The idle nudge stays at 12, as in 0.4.3: LG1 measured switching it off on
-the local lane and it cost tokens. New and opt-in: `gnomon task --deadline`.
-Everything else is record-only or robustness. Upgrading from 0.4.3: nothing to
-do. With `replay_reasoning = false` declared, request bodies are
-byte-identical to 0.4.3; with nothing declared they are byte-identical on any
-local lane (reasoning field or not) and on a hosted endpoint that returns no
-reasoning field (`long_tasks.test.ts` pins all three).
-
-**Security note.** `exec = "docker"` in 0.4.4 and earlier did not contain a
-deliberately hostile model against gnomon's own host-side actions (its
-bookkeeping git, audit writes, `gnomon check`). Fixed in [0.4.5](#045--2026-11-06);
-upgrade. The limits that remain are listed in the README under
-[`exec` — where `bash` actually runs](README.md#exec--where-bash-actually-runs).
-
-### Changed (default)
-
-- **Reasoning replay is on by default for hosted endpoints; local lanes
-  untested, off unless declared.** A hosted OpenAI-shaped endpoint that
-  declares no `replay_reasoning` and answers a
-  tool call with reasoning content (`reasoning_content` or `reasoning`) gets
-  that reasoning back on every assistant message from the next request on,
-  for the session. An endpoint that sends no reasoning is sent none. A local
-  lane — a loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local, CGNAT/Tailscale (100.64/10), `*.local` or `host.docker.internal` host, a single-label name, or Ollama's `/api/chat` — is not replayed unless it declares
-  `replay_reasoning = true` (`isLocalLaneUrl`); a fallback is judged by its
-  own URL. A 400 naming `reasoning_content` is
-  resent once without it and replay stays off for that endpoint
-  (`counters.replay_reasoning_refused`). `replay_reasoning = false` still turns
-  it off. The turn record's `wire` adds `replay_reasoning_source`:
-  `declared` or `default`.
-  Evidence: H3 (pre-registered, hosted DeepSeek V4.1 Flash, 30-minute caps,
-  2026-11-06): replay alone (R1) against the 0.4.2 defaults (R0) raised the
-  hidden-test fraction by +0.160 [95% bootstrap +0.042, +0.293] and cut
-  capped runs from 19 to 14; both arms of the decision rule met, verdict
-  ADOPT ([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
-  The rest of H3's hosted recipe (a 1M window, nudge off) added +0.017
-  [−0.095, +0.138] on top of replay: not shown, so not a default.
-
-### Unchanged: the idle nudge
-
-- **`[turn] nudge_after_idle` stays 12.** This candidate first switched it
-  off by default; LG1 (pre-registered, local RTX lane, 2026-11-06) ran that
-  build against 0.4.2 and solved 18 vs 18 while spending 1.43× the local
-  tokens [95% 1.04, 2.15], past its 1.20 guard: verdict "regresses". The
-  mechanism was the nudge (0.4.2 sent 547 nudged requests, the candidate 0);
-  replay never fired, because that lane returns no reasoning field
-  ([summary-lg1.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/lg1-2026-11/summary-lg1.txt)).
-  New: a declared `nudge_after_idle = 0` turns the nudge off (it used to be
-  floored to 1, a nudge on every idle call).
-
-### Added
 
 - **`gnomon task --deadline <seconds|ISO time>`** (or `GNOMON_DEADLINE`),
   opt-in. The turn is told the time left at `[turn] deadline_notes` (default
@@ -366,7 +341,31 @@ upgrade. The limits that remain are listed in the README under
   A declared `transport_grace_ms` with no task value is honoured in a task.
   P2G41 lost music-harmony to 503s that outlasted 60 s.
 
+### Changed (performance)
+
+- **Faster start.** `gnomon --version` 58 → 44 ms and a one-request `gnomon
+  task` 100 → 94 ms (NVIDIA GB10, paired, median of 30–40 rounds): `node:http`
+  is loaded only when the dashboard or `gnomon chaos` makes a server (on Node 22
+  importing it loads tls, http2, zlib and undici), the TUI's grapheme segmenter
+  is made on first use, and `tui`, `setup`, `doctor` and `check` load their
+  modules when run. `startup_budget.test.ts` pins what `--version` may load
+  (no network stack) instead of a wall time.
+
 ### Fixed
+
+- **`gnomon guard status` no longer reports a CRLF checkout of a hook file as
+  modified, and the opencode plugin starts gnomon through a shell on
+  Windows** (#165).
+- **Docker job kills leave no stray `docker rm`.** Killing a job or a timed-out
+  command under `exec = "docker"` ran three `docker rm -f`s: killTree's and the
+  `docker run` exit handler's, detached and never awaited, beside the awaited,
+  confirmed one. The strays could outlive the tool call (the soft-timeout
+  shell's docker test flaked on CI, 3 of the #164 runs). A removal now has one
+  owner, started before the kill and awaited; the git_safe rule (#158) was not
+  weakened by the strays, since only `docker inspect` reporting the container
+  gone unregisters it. The test now asserts that: one removal, confirmed by an
+  `inspect` after it, the container's process dead, before host git is allowed.
+
 
 - **A read-only working directory (TB7).** `gnomon init` in a directory it
   cannot write keeps the surface and gnomon's records in
@@ -386,6 +385,18 @@ upgrade. The limits that remain are listed in the README under
   says the RTX lane showed no measured advantage over cloud-only and, on
   unified memory, cites the GB10 result that stands (M2: 22/32 vs 16/31
   local-only, p = 0.07), as docs/benchmarks/HYBRID.md does.
+
+### Docs
+
+- **Truth pass (audit 2026-11-06).** `exec = "os"` (the kernel sandbox, #74/#156)
+  is marked as proposed and not merged everywhere it read as shipped (README,
+  CONTRACTS §10/§11/§14/§16, the `skill accept` signer message): master accepts
+  only `exec = "off"` or `"docker"`. GUIDE no longer cites the RTX 5090 hybrid
+  lead (87% vs 84%) that R3R/R4H did not reproduce, and now cautions against the
+  completion gate with its measurements (H4-lite: −0.10 hidden-test fraction on
+  hosted, caps 4 → 8; G1: no difference locally). POSITIONING adds P2G41 (v0.4.1
+  defaults 0/28 vs opencode 6/29). Stale versions fixed (GUIDE 0.3.3, README
+  v0.5.0) and the "24 of 32" figure given with its later re-runs.
 
 ## [0.4.3] — 2026-11-06
 
@@ -4389,7 +4400,6 @@ was written.
 
 [Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.4.5...HEAD
 [0.4.5]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.5
-[0.4.4]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.4
 [0.4.3]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.3
 [0.4.2]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.2
 [0.4.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.1

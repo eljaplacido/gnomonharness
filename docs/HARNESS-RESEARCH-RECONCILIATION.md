@@ -12,7 +12,7 @@ must refuse to stay itself. Written against
 > (`nudge_after_idle`, `stall_repeats`, `converge_refire` in `config.ts`);
 > unrecognised config keys are warned by the surface audit; a wall clock
 > arrived as the caller-supplied flag this plan asked for, `gnomon task
-> --deadline` (on `master`; in v0.4.4, drafted but not yet published), never
+> --deadline` (released in v0.4.5), never
 > a surface default. `gnomon experiment` (Tier 3) does not exist. Read the
 > tiers below as history, not as the current plan.
 

@@ -2510,7 +2510,7 @@ deadline, capped runs leaving only a partial record (TB1, 29 of 29), no tool
 timing (TB4), a read-only `/app` failing as "No .gnomon/ surface found" (TB7),
 and a 60 s provider grace outlasted by 503s.
 
-**The default that changes (v0.4.4), and the one that does not.**
+**The default that changes (v0.4.5; drafted as v0.4.4, never published), and the one that does not.**
 
 | key | before | now | to restore |
 |---|---|---|---|

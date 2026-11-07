@@ -43,9 +43,8 @@ replay alone: hidden-test fraction +0.160 (95% CI +0.042 to +0.293) and 5 fewer
 capped tasks, which met the pre-registered rule, while solves were 2 against 1
 (too few discordant tasks to tell)
 ([H3 summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
-Replay for hosted endpoints is on by default on `master` and in the v0.4.4
-release notes, which are a draft: the newest published release, v0.4.3, does
-not have it. No peer comparison has been run on that build.
+Replay for hosted endpoints is on by default since v0.4.5; v0.4.3 and
+earlier do not have it. No peer comparison has been run on that build.
 
 That is the finding, not a disappointment: at this model tier the harness is not
 the bottleneck on task completion, so the properties below — determinism,
