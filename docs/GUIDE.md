@@ -1145,6 +1145,22 @@ because it writes a secret file; ask the person to create it, or set
 script that opens `.env` itself is not refused by it (containment is
 `[sandbox] exec`).
 
+**Writes outside the project.** Under the same declaration a shell command
+that writes or removes something outside the repository root is refused as
+`outside_root` (CONTRACTS.md §38): `rm -rf ../sibling`, `cd .. && rm -rf x`,
+`echo … >> ~/.bashrc`, `cp build/app ../deploy/`, `sed -i … ../other/file`.
+Reading outside the root, and writing to the system temp directory, stay
+allowed. To let the agent write a neighbouring directory, grant it:
+
+```toml
+# .gnomon/policy.toml
+[sandbox]
+extra_roots = ["../shared-fixtures"]
+```
+
+or name it in the role's `write_allow` (`"../shared-fixtures/**"`). To watch
+before refusing, level the family: `[governance] write = "advise"`.
+
 `guard` stops only what a hook shows it; a harness without one is judged after
 the fact by `check`. The README section
 [Before the call: `gnomon guard`](../README.md#before-the-call-gnomon-guard)

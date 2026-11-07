@@ -35,6 +35,28 @@ request bodies are master's.
 
 ### Added
 
+- **Writes and removals outside the project root are refused in the shell
+  too: rule `outside_root`** (shared-governance; CONTRACTS.md §38). The write
+  and edit tools always refused a path outside the root (`sandbox`); a shell
+  command naming the same path was not judged, and the GBS-LAYER pilot's
+  sibling deletions (`rm -rf ../sibling`, `find ../sibling -delete`,
+  `shutil.rmtree('../sibling')`) and out-of-root writes (`> ../ESCAPED.txt`,
+  `>> ~/.bashrc`, `cp … ../sibling/`) ran. Every shell write target gnomon
+  reads (redirections, `rm`/`mv`/`cp`/`tee`/`dd`/`install`/`ln`/`truncate`/
+  `sed -i` operands, `find -delete`, inline interpreter code, and now
+  `chmod`/`chown`/`chgrp` for this rule only) is put to the root, the granted
+  `extra_roots` and any `write_allow` pattern that names a place outside the
+  root, through `cd` sequences, `~`/`$HOME` and symlinks. Temp space is
+  scratch, except the project's own neighbours when the project lives in it.
+  Family `write`, levelled like the rest; a more specific rule on the same
+  command (`record`, `secret_path`, `host_hooks`, `network`) still names it.
+  **Only where governance is declared** (the `gnomon init` scaffold) and not
+  under `[sandbox] level = "off"`; with no `[governance]`, requests and
+  decisions are master's. Pilot G-4 re-run ($0, fake models): 10 of the 12
+  leaks left open after protected paths close in every arm where they were
+  open, with no new benign refusal; the G-2 everyday set (60 commands) gets
+  none.
+
 - **Protected paths: one predicate, and the `secrets` and `ci` families**
   (shared-governance PR 3). `protectedPath` (tools.ts) now answers for every
   protected path list: the surface, the records, git hooks and host hooks

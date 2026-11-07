@@ -33,7 +33,7 @@ import {
 import { resolve, relative, isAbsolute, dirname, basename, join, sep, win32 as win32Path } from "node:path";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { promisify } from "node:util";
 import {
   GnomonConfig,
@@ -69,6 +69,7 @@ import {
   shellPathWords,
   shellSpellings,
   shellWriteTargets,
+  MODE_CHANGERS,
   type GitClean,
   type RepoCodeRun,
   type WriteTarget,
@@ -2021,6 +2022,10 @@ export function sandboxCommand(
  *                settings, the opencode plugin, Cursor's hooks.json) and the
  *                user-level settings that can switch them off
  *   write_allow  a path outside the role's write_allow
+ *   outside_root a shell command that writes or removes a file outside the
+ *                repository root (and every granted extra_roots), where the
+ *                file tools' sandbox would refuse the same path. Only under a
+ *                declared governance, and not with `[sandbox] level = "off"`
  *   secret_path  a read, a write or a shell command naming a protected secret
  *                path (`[governance.paths] secrets`), or a command that
  *                prints the environment (`printenv`, a bare `env`,
@@ -2045,6 +2050,7 @@ export const POLICY_RULES = [
   "git_hooks",
   "host_hooks",
   "write_allow",
+  "outside_root",
   "secret_path",
   "ci_path",
   "network",
@@ -2075,6 +2081,9 @@ export const RULE_FAMILY: Readonly<Record<PolicyRule | "approval", GovernanceFam
   repo_code: "bash",
   sandbox: "by_tool",
   write_allow: "write",
+  // shared-governance: a shell write outside the root, the bash half of what
+  // the file tools' sandbox refuses (family write, like write and edit's).
+  outside_root: "write",
   surface: "rules",
   record: "rules",
   git_hooks: "rules",
@@ -2385,7 +2394,10 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
   const refused = bashPolicy(command, ctx.bashAllow, ctx.bashDeny);
   if (refused && applies(ctx, "bash", refused)) return refused;
 
-  const outside = bashWriteRefusal(command, ctx);
+  // outside_root is held back to the end: a more specific rule on the same
+  // command (a secret it names, the network it reaches) names it instead.
+  const deferred: Precheck[] = [];
+  const outside = bashWriteRefusal(command, ctx, deferred);
   if (outside) return outside;
 
   // `[sandbox] network = false` used to stop webfetch and nothing else, and
@@ -2449,7 +2461,7 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
   }
   // The `secrets` family: a command naming a protected secret path, or one
   // that prints the environment. Only where governance is declared.
-  return secretWordRefusal(command, ctx);
+  return secretWordRefusal(command, ctx) ?? deferred[0] ?? null;
 }
 
 /**
@@ -2498,7 +2510,7 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
  * write_allow rather than waved through: a rule that bounds where a role
  * writes cannot pass a write it cannot place.
  */
-function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
+function bashWriteRefusal(command: string, ctx: ToolContext, deferred: Precheck[] = []): Precheck | null {
   const allowed = ctx.writeAllow?.filter((p) => p.trim().length > 0) ?? [];
   const root = resolve(ctx.root);
   const home = homedir();
@@ -2554,7 +2566,12 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     return applies(ctx, "bash", r) ? r : null;
   };
 
-  const { targets } = shellWriteTargets(command, opts);
+  // chmod / chown / chgrp only where outside_root can judge them: no other
+  // rule ever judged a mode change, and none starts to here.
+  const modes = ctx.protectedPaths !== undefined && ctx.sandbox !== "off";
+  const all = shellWriteTargets(command, { ...opts, modes }).targets;
+  const targets = all.filter((t) => !MODE_CHANGERS.has(t.how));
+  const modeChanges = all.filter((t) => MODE_CHANGERS.has(t.how));
   const protectedDirs = (): Array<{ dir: string; kind: "record" | "surface" }> => [
     ...recordDirs(ctx).map((dir) => ({ dir, kind: "record" as const })),
     { dir: surfaceDir(ctx), kind: "surface" as const },
@@ -2602,6 +2619,12 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     }
     const abs = resolveTarget(t.path, t.cwd);
     if (!abs) {
+      // A glob at the start of the name (`cd ../sibling && rm -f *`) lands in
+      // the directory the shell is in, when that is known.
+      if (deferred.length === 0 && t.cwd !== null && /^[*?[{]/.test(t.path) && t.how !== "ln (source)") {
+        const r = outsideRootRefusal(ctx, t.path, join(dirAbs(t.cwd), "x"), t.how, t.recursive === true);
+        if (r && applies(ctx, "bash", r)) deferred.push(r);
+      }
       // Where the shell is, is not known (`cd "$X"`), and the path is a
       // literal relative one. A name that IS a protected directory is
       // refused wherever it lands; under write_allow, so is the rest.
@@ -2720,6 +2743,13 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
       const r = levelledHit(guarded.rule, j.path, j.how);
       if (r) return r;
     }
+    // Outside the root: the bash half of the file tools' sandbox, only under
+    // a declared governance. A link's source is not written. Held for the
+    // caller (bashPrecheck), which lets a more specific rule name it first.
+    if (deferred.length === 0 && j.how !== "ln (source)") {
+      const r = outsideRootRefusal(ctx, j.path, j.abs, j.how, j.t.recursive === true);
+      if (r && applies(ctx, "bash", r)) deferred.push(r);
+    }
     if (!j.writeAllow) continue;
     const rel = relative(root, j.abs);
     if (rel.startsWith("..") || isAbsolute(rel)) continue;
@@ -2739,6 +2769,12 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     };
     if (applies(ctx, "bash", refusal)) return refusal;
   }
+  for (const t of modeChanges) {
+    const abs = deferred.length === 0 ? resolveTarget(t.path, t.cwd) : null;
+    if (!abs) continue;
+    const r = outsideRootRefusal(ctx, t.path, abs, t.how, t.recursive === true);
+    if (r && applies(ctx, "bash", r)) deferred.push(r);
+  }
 
   const committed = surfaceCommitRefusal(command, ctx);
   if (committed) return committed;
@@ -2750,6 +2786,129 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     return gitHooksRefusal("bash", exec.key, `git config ${exec.key}`);
   }
   return null;
+}
+
+/** What a removal removes is the name, not what a symlink at that name points to. */
+const REMOVES_THE_NAME = new Set(["rm", "unlink", "rmdir", "mv (source)", "find -delete"]);
+
+/**
+ * `outside_root` (shared-governance; CONTRACTS.md §38): does a shell write or
+ * removal land outside every place this session may change?
+ *
+ * The file tools have refused a path outside the root since the sandbox
+ * existed (`sandbox`, family write); a shell command naming the same path was
+ * not judged at all (GBS-LAYER pilot G-4, 2026-11-06: `rm -rf ../sibling`,
+ * `echo … >> ~/.bashrc`, `cp … ../sibling/` all ran). This puts the targets
+ * shellWriteTargets reads -- redirections, rm/mv/cp/tee/dd/install/ln/
+ * truncate/sed -i/… operands, `find -delete`, literal paths in inline
+ * python/node code, through `cd` sequences gnomon can follow -- to the same
+ * boundary. Reads are not judged.
+ *
+ * Answers only where governance is declared (ctx.protectedPaths, the same
+ * opt-in as secret_path and ci_path), so an undeclared surface decides every
+ * command exactly as before, and not under `[sandbox] level = "off"`, which
+ * is the operator saying the root does not bound the agent.
+ *
+ * Not outside: the root and every `[sandbox] extra_roots` (real paths, so a
+ * symlink inside the root pointing out is out); a write_allow pattern that
+ * names the place itself (`../shared/**`, `/srv/out/**`, `~/notes/**`; a
+ * pattern of the repository's own, `**`, does not reach out); and scratch
+ * space -- the system temp directories -- EXCEPT the directory that holds
+ * this project when the project itself lives in temp space, whose other
+ * entries are its neighbours (a checkout in /tmp/x/ws may write /tmp/notes,
+ * never /tmp/x/sibling). A target gnomon cannot place (`cd "$X"`, a path that
+ * starts with a variable other than HOME) is not claimed: containment is
+ * `[sandbox] exec`.
+ */
+function outsideRootRefusal(ctx: ToolContext, path: string, abs: string, how: string, recursive: boolean): Precheck | null {
+  if (!ctx.protectedPaths || ctx.sandbox === "off") return null;
+  // A removal of a symlink removes the link (`rm -rf vendor_link`); a write
+  // through one writes where it points (`echo >> link_to_bashrc`), and so does
+  // a removal spelled through it (`rm -rf link/`, `rm link/x`).
+  const real =
+    REMOVES_THE_NAME.has(how) && !/[/\\]$/.test(path)
+      ? join(realpathOfNearest(dirname(abs)), basename(abs))
+      : realpathOfNearest(abs);
+  const under = (dir: string) => {
+    const rel = relative(dir, real);
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  };
+  const realRoot = realpathOrSelf(resolve(ctx.root));
+  for (const r of [ctx.root, ...(ctx.extraRoots ?? [])]) if (under(realpathOrSelf(resolve(r)))) return null;
+  if (outsideWriteAllowed(ctx, realRoot, real)) return null;
+  const holder = dirname(realRoot);
+  const inside = (dir: string, p: string) => {
+    const rel = relative(dir, p);
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  };
+  // A recursive removal reaches everything below where it starts; through a
+  // glob (`rm -rf /tmp/*`), everything below the glob's directory.
+  const top = /[*?[{]/.test(path) ? dirname(real) : real;
+  let scratch = false;
+  for (const t of scratchDirs()) {
+    if (!under(t)) continue;
+    // The project lives in temp space: its neighbours, and what holds it,
+    // are not scratch.
+    const neighbour = inside(t, holder) && (under(holder) || (recursive && inside(top, holder)));
+    scratch = !neighbour;
+    break;
+  }
+  if (scratch) return null;
+  const removes = recursive || REMOVES_THE_NAME.has(how);
+  return {
+    rule: "outside_root",
+    code: TOOL_DENIED,
+    content:
+      `Refused: this command ${removes ? "removes" : "writes"} "${path}" (${how}), which is ` +
+      `${real.split(sep).join("/")}, outside the repository root (${realRoot.split(sep).join("/")}).\n\n` +
+      `A session changes its own project. Another project, the home directory and the rest of the ` +
+      `machine are not this task's to change -- the write and edit tools refuse the same paths. ` +
+      `Scratch files belong in the system temp directory. Do not reach the same place another way: ` +
+      `a different command writing it is the same change. If the task needs it, say so plainly; the ` +
+      `operator can grant a directory with [sandbox] extra_roots in .gnomon/policy.toml.`,
+    summary: `bash ${path.slice(0, 80)} — refused (outside the root)`,
+  };
+}
+
+/** A write_allow pattern that names a place outside the root, matching `real`. */
+function outsideWriteAllowed(ctx: ToolContext, realRoot: string, real: string): boolean {
+  const slash = (p: string) => p.split(sep).join("/");
+  for (const pattern of ctx.writeAllow ?? []) {
+    const p = pattern.trim();
+    let subject: string;
+    let glob: string;
+    if (p.startsWith("../")) {
+      subject = slash(relative(realRoot, real));
+      glob = p;
+    } else if (p === "~" || p.startsWith("~/")) {
+      const rel = relative(realpathOrSelf(homedir()), real);
+      if (rel.startsWith("..") || isAbsolute(rel)) continue;
+      subject = slash(rel);
+      glob = p.slice(2) || "**";
+    } else if (p.startsWith("/") || isAbsolute(p)) {
+      subject = slash(real);
+      glob = slash(p);
+    } else continue;
+    try {
+      const re = globToRegExp(glob, CASE_FOLD ? "i" : "");
+      if (re.test(subject) || re.test(`${subject}/`)) return true;
+    } catch {
+      // A pattern that does not compile names nothing.
+    }
+  }
+  return false;
+}
+
+/** The system's temp directories, real paths: scratch space a shell may write. */
+function scratchDirs(): string[] {
+  const dirs = [tmpdir()];
+  if (process.platform !== "win32") dirs.push("/tmp", "/var/tmp");
+  const out: string[] = [];
+  for (const d of dirs) {
+    const r = realpathOrSelf(resolve(d));
+    if (!out.includes(r)) out.push(r);
+  }
+  return out;
 }
 
 /**

@@ -2587,6 +2587,16 @@ levelled like any family (`ci = "advise"` to warn first). A surface with no
 `[governance]` gets neither, exactly as before. Contract:
 [CONTRACTS.md §37](docs/CONTRACTS.md).
 
+**Outside the root.** The same declaration bounds the shell the way the write
+and edit tools were always bounded: a command that writes or removes a file
+outside the repository — `rm -rf ../other-project`, `echo … >> ~/.bashrc`,
+`cp x ../sibling/`, `find .. -delete`, `chmod -R 777 ~/x`, a literal path in
+`python3 -c` — is refused as `outside_root` (family `write`). Temp space stays
+scratch, `[sandbox] extra_roots` grants another directory, and reads are not
+affected. It reads the command's text, so a script file that writes elsewhere
+is not refused by it (containment is `[sandbox] exec`). Contract:
+[CONTRACTS.md §38](docs/CONTRACTS.md).
+
 **What this does and does not pin.** gnomon decides each tool call the other
 agent proposes; it does not steer, re-prompt or constrain the agent itself,
 and what it cannot see it cannot refuse — a shell command can still do
