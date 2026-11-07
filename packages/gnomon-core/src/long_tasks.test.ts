@@ -20,7 +20,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { formatSpan, platformBlock, runTask, taskExitCode } from "./prompt_loop.js";
@@ -543,7 +543,9 @@ describe("a read-only working directory (TB7)", () => {
     // in it keeps a surface for exactly this directory, and `trust grant --dir`
     // finds that one. The walk from the cwd must find the same surface, not the
     // ancestor's, or the task runs another surface without the grant.
-    const project = mkdtempSync(join(tmpdir(), "gnomon-ro-parent-"));
+    // The real path: process.cwd() after chdir reports it (macOS /var -> /private/var, Windows 8.3 names), and the
+    // kept surface is keyed by the path the cwd reports.
+    const project = realpathSync.native(mkdtempSync(join(tmpdir(), "gnomon-ro-parent-")));
     roots.push(project);
     mkdirSync(join(project, ".gnomon"), { recursive: true });
     writeFileSync(join(project, ".gnomon", "config.toml"), "");
