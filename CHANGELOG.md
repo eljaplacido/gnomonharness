@@ -28,13 +28,39 @@
 
 ### Added
 
+- **Protected paths: one predicate, and the `secrets` and `ci` families**
+  (shared-governance PR 3). `protectedPath` (tools.ts) now answers for every
+  protected path list: the surface, the records, git hooks and host hooks
+  (unchanged, held to their old answers by test), and two new rules that exist
+  only where governance is declared. `secret_path` (family `secrets`): a read,
+  write or edit of a protected secret; a bash word, `--opt=` value, `@file` or
+  redirection naming one; a recursive reader (`grep -r`, `rg`, `tar`, `cp -r`,
+  `find -exec`) reaching one; the environment dumpers (`printenv`, `env` with
+  no command, a bare `export`/`set`, `/proc/<pid>/environ`); a grep/glob scope
+  that is one or holds one. gnomon's own grep skips protected files at
+  `prevent` and says how many. `ci_path` (family `ci`): a write, edit or shell
+  write target in a CI definition. Default lists (`conformance/protected_paths.json`):
+  dotenv files but not their templates, private keys, netrc/git/pg password
+  files, and `~/.ssh`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.gnupg`,
+  gh, docker, kube, npm and PyPI credentials; `.github/workflows`,
+  `.github/actions`, GitLab, CircleCI, Jenkins, Azure, Buildkite, Travis,
+  Bitbucket, Drone and Woodpecker. `[governance.paths] secrets = […]` /
+  `ci = […]` replaces a default (`!pattern` excepts, `[]` protects nothing); a
+  list of the wrong shape is fatal. They apply only when `[governance]` (or a
+  role's governance) is declared; with neither, requests (pinned hash, real
+  tools) and decisions (`guard_cases.json`) are master's. **`gnomon init` now
+  scaffolds `[governance] level = "prevent"`**, so new repositories get the
+  defaults through a hashed declaration. **`grep` and `glob` are levelled**
+  like read (family `secrets`) through one `searchPrecheck` shared by the loop
+  and the guard; PR 1 had held them at prevent. CONTRACTS.md §37; the
+  GBS-LAYER pilot's G-4 leaks re-run is on `bench/gbs-v02`.
 - **Governance levels: `observe < advise < prevent < enforce`, per family of
   rules** (shared-governance PR 1). `[governance]` in policy.toml and
   `[roles.<name>.governance]` in roles.toml set how strongly each family's
   verdicts are applied: `write`, `bash`, `network`, `secrets`, `rules`, `ci`.
   Every existing rule is assigned to one (`RULE_FAMILY`; `tools` and
   `malformed` stay structural; `host_hooks` is `rules`; grep/glob searches
-  outside the root stay at prevent). The effective level is the max along
+  outside the root were held at prevent until PR 3). The effective level is the max along
   org (a stub until `[extends]`) → repo → role, so a role only tightens; a
   family no layer names is `prevent`, and `rules` (the surface, the records,
   git hooks) never goes below it. The level is applied in one place,

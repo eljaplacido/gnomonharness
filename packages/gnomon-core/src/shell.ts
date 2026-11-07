@@ -2390,6 +2390,13 @@ export interface EnvDump {
  * An intent filter, like the network one: `echo $GITHUB_TOKEN`, a script, or
  * a program that prints its own environment is not refused by it.
  */
+/**
+ * Variables no credential is kept in: what `printenv NAME` may name and still
+ * not be a dump. An allow-list, because a secret's name does not say so.
+ */
+const PLAIN_ENV =
+  /^(PATH|HOME|USER|LOGNAME|SHELL|PWD|OLDPWD|LANG|LANGUAGE|LC_[A-Z]+|TERM|COLORTERM|TZ|TMPDIR|TMP|TEMP|HOSTNAME|EDITOR|VISUAL|PAGER|SHLVL|CI|NODE_ENV|VIRTUAL_ENV|CONDA_DEFAULT_ENV|PYTHONPATH|JAVA_HOME|GOPATH|GOROOT|CARGO_HOME|RUSTUP_HOME|XDG_[A-Z_]+)$/;
+
 export function bashEnvDump(command: string): EnvDump | null {
   const { invocations } = readShellCommand(command);
   for (const inv of invocations) {
@@ -2399,7 +2406,14 @@ export function bashEnvDump(command: string): EnvDump | null {
     const prog = programName(argv[0]!);
     const shown = describeInvocation(inv);
     const rest = argv.slice(1);
-    if (prog === "printenv") return { command: shown, why: "printenv prints the environment" };
+    if (prog === "printenv") {
+      // `printenv PATH` reads one variable no credential lives in (GBS-LAYER
+      // benign twin). Any other name, or none, is the leak: `printenv
+      // GITHUB_TOKEN`, and `DATABASE_URL` carries a password without looking like it.
+      const names = rest.filter((a) => !a.startsWith("-"));
+      if (names.length > 0 && names.every((n) => PLAIN_ENV.test(n))) continue;
+      return { command: shown, why: "printenv prints the environment" };
+    }
     if (prog === "env") {
       const w = wrapped(argv, WRAPPERS.env!);
       if (w && w.start >= argv.length && w.split === undefined) return { command: shown, why: "env with no command prints the environment" };

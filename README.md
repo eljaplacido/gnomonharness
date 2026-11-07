@@ -2548,6 +2548,19 @@ level = "prevent"
 bash  = "advise"
 ```
 
+**Protected paths: secrets and CI.** Declaring `[governance]` (which `gnomon
+init` does) also turns on two path families, in gnomon's loop and in `gnomon
+guard` alike. `secrets` refuses reading, naming in a shell command or
+overwriting a credential — `.env` (not `.env.example`), `*.pem`, `*.key`,
+`id_rsa`, `.netrc`, `~/.ssh`, `~/.aws`, `~/.config/gcloud`, … — and the
+commands that print the environment (`printenv`, a bare `env`,
+`/proc/<pid>/environ`); gnomon's own grep skips such files. `ci` refuses
+writes to CI definitions (`.github/workflows`, `.gitlab-ci.yml`, `.circleci`,
+`Jenkinsfile`, …). `[governance.paths]` replaces either list, and both are
+levelled like any family (`ci = "advise"` to warn first). A surface with no
+`[governance]` gets neither, exactly as before. Contract:
+[CONTRACTS.md §37](docs/CONTRACTS.md).
+
 **What this does and does not pin.** gnomon decides each tool call the other
 agent proposes; it does not steer, re-prompt or constrain the agent itself,
 and what it cannot see it cannot refuse — a shell command can still do

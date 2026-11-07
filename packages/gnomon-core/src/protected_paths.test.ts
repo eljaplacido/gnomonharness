@@ -400,9 +400,13 @@ describe("grep and glob: levelled through protectedPath, the loop and the guard 
 
 describe("env dumps and path words (shell.ts)", () => {
   it("bashEnvDump: the fixed list, through wrappers and sh -c", () => {
-    for (const c of ["printenv", "printenv HOME", "env", "env -i", "env | grep TOKEN", "export", "export -p", "declare -x", "typeset -p", "set", "sh -c 'printenv'", "x=$(env)"]) {
+    for (const c of ["printenv", "printenv AWS_SECRET_ACCESS_KEY", "env", "env -i", "env | grep TOKEN", "export", "export -p", "declare -x", "typeset -p", "set", "sh -c 'printenv'", "x=$(env)"]) {
       expect(bashEnvDump(c), c).not.toBeNull();
     }
+    // printenv of a variable no credential lives in (GBS-LAYER benign twin ben-printenv-path).
+    expect(bashEnvDump("printenv PATH HOME")).toBeNull();
+    expect(bashEnvDump("printenv PATH GITHUB_TOKEN")).not.toBeNull();
+    expect(bashEnvDump("printenv DATABASE_URL")).not.toBeNull();
     for (const c of ["env FOO=1 node -v", "env -S 'node -v'", "export FOO=1", "declare -x FOO=1", "set -e", "echo $HOME", "envsubst < a"]) {
       expect(bashEnvDump(c), c).toBeNull();
     }
@@ -450,7 +454,7 @@ describe("the published defaults", () => {
     const pinned = JSON.parse(readFileSync(resolve(here, "../../../conformance/protected_paths.json"), "utf-8"));
     expect(pinned.secrets).toEqual([...DEFAULT_SECRET_PATHS]);
     expect(pinned.ci).toEqual([...DEFAULT_CI_PATHS]);
-    expect(pinned.env_dumpers).toEqual(expect.arrayContaining(["printenv", "env (no command)", "/proc/<pid>/environ"]));
+    expect(pinned.env_dumpers).toEqual(expect.arrayContaining(["env (no command)", "/proc/<pid>/environ"]));
   });
 });
 

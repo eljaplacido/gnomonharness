@@ -3196,8 +3196,9 @@ the predicate to their old answers), then the two families this section adds:
 | `ci_path` | `ci` | `write`/`edit`; a bash write target (redirections, `rm`, `mv`, `cp`, `sed -i`, …), a recursive removal reaching one. Reads stay allowed | `.github/workflows/**`, `.github/actions/**`, `.gitlab-ci.yml`, `.circleci/**`, `Jenkinsfile`, `azure-pipelines.yml`, `.azure-pipelines/**`, `.buildkite/**`, `.travis.yml`, `bitbucket-pipelines.yml`, `.drone.yml`, `.woodpecker.yml`, `.woodpecker/**` |
 
 **Environment dumps** are in `secret_path` too, as a fixed list beside the
-network clients (shell.ts `bashEnvDump`, `ENV_DUMP_PATH`): `printenv` (with or
-without names), `env` running no command, a bare `export` / `export -p`,
+network clients (shell.ts `bashEnvDump`, `ENV_DUMP_PATH`): `printenv` (bare, or
+naming any variable outside a short list no credential lives in: `PATH`,
+`HOME`, `USER`, `LANG`, `TERM`, `NODE_ENV`, `XDG_*`, …), `env` running no command, a bare `export` / `export -p`,
 `declare`/`typeset` with `-x`/`-p` and no names, a bare `set`, and any path
 `/proc/<pid>/environ`. No list declares them away; a level does.
 
