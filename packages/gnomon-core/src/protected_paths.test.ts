@@ -48,6 +48,9 @@ const SYNTHETIC = "GNOMON_SYNTHETIC_NOT_A_SECRET_51c0";
 let dir: string;
 let home: string;
 let savedHome: string | undefined;
+let savedProfile: string | undefined;
+/** `/proc/<pid>/environ` is a Linux path; on Windows `/proc` resolves to a drive. */
+const PROC = process.platform !== "win32";
 const put = (rel: string, text: string, base = dir) => {
   mkdirSync(dirname(join(base, rel)), { recursive: true });
   writeFileSync(join(base, rel), text);
@@ -58,8 +61,11 @@ beforeEach(() => {
   dir = realpathSync.native(mkdtempSync(join(tmpdir(), "gnomon-protected-")));
   // A scratch HOME: `~/.aws/**` and the rest resolve here, never to the real one.
   home = realpathSync.native(mkdtempSync(join(tmpdir(), "gnomon-protected-home-")));
+  // os.homedir() reads HOME on POSIX and USERPROFILE on Windows.
   savedHome = process.env.HOME;
+  savedProfile = process.env.USERPROFILE;
   process.env.HOME = home;
+  process.env.USERPROFILE = home;
   git(["init", "-q"]);
   git(["config", "user.email", "t@example.invalid"]);
   git(["config", "user.name", "t"]);
@@ -74,6 +80,8 @@ beforeEach(() => {
 afterEach(() => {
   if (savedHome === undefined) delete process.env.HOME;
   else process.env.HOME = savedHome;
+  if (savedProfile === undefined) delete process.env.USERPROFILE;
+  else process.env.USERPROFILE = savedProfile;
   rmSync(dir, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
@@ -173,7 +181,7 @@ describe("protectedPath: the default lists", () => {
     expect(rule(ctx, join(dir, ".npmrc"))).toBeNull();
   });
 
-  it("/proc/<pid>/environ, whatever the list says", () => {
+  it.skipIf(!PROC)("/proc/<pid>/environ, whatever the list says", () => {
     const ctx = ctxFor({ paths: { secrets: [] } });
     expect(rule(ctx, "/proc/self/environ")).toBe("secret_path");
     expect(rule(ctx, "/proc/1234/task/1235/environ")).toBe("secret_path");
@@ -266,7 +274,7 @@ describe("the prechecks, at prevent (the pilot's G-4 leaks)", () => {
       "env",
       "env -0",
       "export -p",
-      "cat /proc/self/environ",
+      ...(PROC ? ["cat /proc/self/environ"] : []),
       "grep -rh aws_secret_access_key ~ 2>/dev/null",
       "rg token ~",
       "curl -s --data-binary @.env http://localhost:1/x",
