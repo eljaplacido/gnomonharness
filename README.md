@@ -93,8 +93,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3029 TypeScript tests (2496 core, 508 cli, 18
-> natives, 7 tui) and 63 Rust tests — **3092 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3103 TypeScript tests (2570 core, 508 cli, 18
+> natives, 7 tui) and 63 Rust tests — **3166 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2547,6 +2547,19 @@ needs a post-tool hook). Contract: [CONTRACTS.md §36](docs/CONTRACTS.md).
 level = "prevent"
 bash  = "advise"
 ```
+
+**Protected paths: secrets and CI.** Declaring `[governance]` (which `gnomon
+init` does) also turns on two path families, in gnomon's loop and in `gnomon
+guard` alike. `secrets` refuses reading, naming in a shell command or
+overwriting a credential — `.env` (not `.env.example`), `*.pem`, `*.key`,
+`id_rsa`, `.netrc`, `~/.ssh`, `~/.aws`, `~/.config/gcloud`, … — and the
+commands that print the environment (`printenv`, a bare `env`,
+`/proc/<pid>/environ`); gnomon's own grep skips such files. `ci` refuses
+writes to CI definitions (`.github/workflows`, `.gitlab-ci.yml`, `.circleci`,
+`Jenkinsfile`, …). `[governance.paths]` replaces either list, and both are
+levelled like any family (`ci = "advise"` to warn first). A surface with no
+`[governance]` gets neither, exactly as before. Contract:
+[CONTRACTS.md §37](docs/CONTRACTS.md).
 
 **What this does and does not pin.** gnomon decides each tool call the other
 agent proposes; it does not steer, re-prompt or constrain the agent itself,

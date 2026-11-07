@@ -1113,6 +1113,28 @@ sessions keep the trail; `gnomon guard` keeps its trail under a declared level
 regardless. A misspelt level stops the session rather than reading as
 "nothing declared".
 
+**Secrets and CI files.** A declared `[governance]` (the `gnomon init`
+scaffold has one) also protects two lists of paths (CONTRACTS.md §37). The
+`secrets` family refuses a read, write or edit of a credential, a shell
+command that names one (`cat ~/.aws/credentials`, `curl --data-binary @.env`,
+`grep -r key ~`) and the commands that print the environment (`printenv`, a
+bare `env`, `/proc/<pid>/environ`). The `ci` family refuses writes to CI
+definitions. Replace either default list, or except one file:
+
+```toml
+# .gnomon/policy.toml
+[governance.paths]
+secrets = [".env", ".env.*", "!.env.example", "config/*.secret", "~/.aws/**"]
+ci      = [".github/workflows/**"]   # [] protects nothing
+```
+
+`echo .env >> .gitignore`, `ls ~/.ssh` and `test -f .env` stay allowed: they
+read a name, not the file. `cp .env.example .env` is refused at `prevent`,
+because it writes a secret file; ask the person to create it, or set
+`secrets = "advise"`. Like every shell rule, this reads the command's text: a
+script that opens `.env` itself is not refused by it (containment is
+`[sandbox] exec`).
+
 `guard` stops only what a hook shows it; a harness without one is judged after
 the fact by `check`. The README section
 [Before the call: `gnomon guard`](../README.md#before-the-call-gnomon-guard)

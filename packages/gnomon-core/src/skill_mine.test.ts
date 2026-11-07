@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AuditTrail, type AuditRecord, type ResolvedAudit } from "./audit.js";
 import { recomputeManifest } from "./config.js";
+import { DEFAULT_CI_PATHS, DEFAULT_SECRET_PATHS } from "./governance.js";
 import {
   mineCandidates,
   writeCandidates,
@@ -212,6 +213,10 @@ describe("gnomon skill mine", () => {
       maxOutputBytes: 32_000,
     };
     const ctx = (over: Partial<ToolContext> = {}): ToolContext => ({ ...base, ...over });
+    const declared: Partial<ToolContext> = {
+      governance: { levels: { write: "prevent", bash: "prevent", network: "prevent", secrets: "prevent", rules: "prevent", ci: "prevent" }, layers: ["repo"] },
+      protectedPaths: { secrets: DEFAULT_SECRET_PATHS, ci: DEFAULT_CI_PATHS },
+    };
     // `git_hooks` guards the hooks and config of a repository that exists.
     mkdirSync(join(root, ".git", "hooks"), { recursive: true });
     type Case = { tool: string; target: string; pre: { rule?: string; summary: string } | null };
@@ -239,6 +244,11 @@ describe("gnomon skill mine", () => {
       { tool: "bash", target: "echo x > .git/hooks/pre-commit", pre: bashPrecheck({ command: "echo x > .git/hooks/pre-commit" }, ctx()) },
       { tool: "write", target: ".claude/settings.json", pre: refusalOf(writePrecheck("write", { path: ".claude/settings.json", content: "{}" }, ctx())) },
       { tool: "bash", target: "rm -f .opencode/plugins/gnomon-guard.js", pre: bashPrecheck({ command: "rm -f .opencode/plugins/gnomon-guard.js" }, ctx()) },
+      // The protected-path families exist where governance is declared (CONTRACTS.md §37).
+      { tool: "read", target: ".env", pre: refusalOf(readPrecheck({ path: ".env" }, ctx(declared))) },
+      { tool: "bash", target: "printenv TOKEN", pre: bashPrecheck({ command: "printenv TOKEN" }, ctx(declared)) },
+      { tool: "write", target: ".github/workflows/x.yml", pre: refusalOf(writePrecheck("write", { path: ".github/workflows/x.yml", content: "" }, ctx(declared))) },
+      { tool: "bash", target: "echo x >> .github/workflows/x.yml", pre: bashPrecheck({ command: "echo x >> .github/workflows/x.yml" }, ctx(declared)) },
     ];
     // Two refusals come from executeTool itself rather than a precheck: a tool
     // the role was not given, and arguments that are not one JSON object.

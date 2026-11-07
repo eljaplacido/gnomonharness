@@ -35,7 +35,16 @@ import {
   type ReasoningEffort,
   type SamplingParam,
 } from "./sweep_knobs.js";
-import { GOVERNANCE_FAMILIES, GOVERNANCE_KEYS, GOVERNANCE_LEVELS, GovernanceError, LEVEL_FLOOR, readGovernanceLayer } from "./governance.js";
+import {
+  GOVERNANCE_FAMILIES,
+  GOVERNANCE_KEYS,
+  GOVERNANCE_LEVELS,
+  GOVERNANCE_PATH_KEYS,
+  GovernanceError,
+  LEVEL_FLOOR,
+  readGovernanceLayer,
+  readGovernancePaths,
+} from "./governance.js";
 
 // ---------------------------------------------------------------------------
 // Types — mirror Rust structs from gnomon-surface
@@ -2667,7 +2676,9 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
   ["policy.toml", "approval", ["gate", "repo_code", "after_refusal", "after_refusal_calls", "modes", "default"]],
   // resolveLevels (governance.ts). A value outside the enumeration is fatal
   // (auditGovernance); an unknown key is warned here like any other.
-  ["policy.toml", "governance", GOVERNANCE_KEYS],
+  // `paths` is the `[governance.paths]` sub-table (secret / CI path lists),
+  // whose own keys auditGovernance checks.
+  ["policy.toml", "governance", [...GOVERNANCE_KEYS, "paths"]],
 ];
 
 const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "max_tokens", "model", "exec", "image", "profile", "reasoning_effort", "task_allow", "temperature", "tools", "top_p", "write_allow", "governance"]);
@@ -3929,9 +3940,37 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
  *  - observe/advise with `[audit] enabled` off: warned; gnomon's own session
  *    keeps no trail of what was recorded and not applied (`gnomon guard`
  *    writes its trail under [governance] regardless).
+ *  - `[governance.paths]`: a list that is not a list of strings is FATAL (it
+ *    would read as the default list); an unknown key is warned.
  */
 function auditGovernance(config: GnomonConfig): SurfaceProblem[] {
   const problems: SurfaceProblem[] = [];
+  const paths = (config.policy as { governance?: { paths?: unknown } } | undefined)?.governance?.paths;
+  if (paths !== undefined) {
+    const where = ".gnomon/policy.toml [governance.paths]";
+    try {
+      readGovernancePaths(where, paths);
+      for (const key of Object.keys(paths as Record<string, unknown>)) {
+        if ((GOVERNANCE_PATH_KEYS as readonly string[]).includes(key)) continue;
+        const near = GOVERNANCE_PATH_KEYS.map((k) => [k, editDistance(key, k)] as const)
+          .filter(([, d]) => d <= 2)
+          .sort((a, b) => a[1] - b[1])[0]?.[0];
+        problems.push({
+          where,
+          problem: `${key} is not a path list [governance.paths] reads; it does nothing` + (near ? `. Did you mean "${near}"?` : "."),
+          fix: `[governance.paths] reads: ${GOVERNANCE_PATH_KEYS.join(", ")}.`,
+          fatal: false,
+        });
+      }
+    } catch (err) {
+      problems.push({
+        where,
+        problem: err instanceof GovernanceError ? err.message : String(err),
+        fix: `Write each as a list of path patterns, e.g. secrets = [".env", "~/.aws/**"]; an empty list protects nothing.`,
+        fatal: true,
+      });
+    }
+  }
   const tables: Array<{ where: string; raw: unknown; role: boolean }> = [
     { where: ".gnomon/policy.toml [governance]", raw: (config.policy as { governance?: unknown } | undefined)?.governance, role: false },
     ...Object.entries(config.roles ?? {}).map(([name, def]) => ({

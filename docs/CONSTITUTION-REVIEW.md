@@ -154,6 +154,36 @@ as the shared-governance design's §7 asks:
   nothing. The detachment work's bypass→deny is where it starts to decide, and
   that is tightening-only.
 
+### Protected paths against the rules (added 2026-11-07, shared-governance PR 3)
+
+`protectedPath`, `secret_path`, `ci_path` and `[governance.paths]`
+(CONTRACTS.md §37):
+
+| Rule | Kept? | Note |
+|---|---|---|
+| 1 No machine-scoped configuration | Kept, with drift below | The lists live in `.gnomon/`; the defaults are published constants |
+| 2 Manifest | Kept | `[governance.paths]` is hashed with the surface |
+| 3 Tools | Kept | A protected call is refused, never removed from the schema list |
+| 4 Buckets | Kept | A refusal is a refusal; below `prevent` the call runs and the verdict is a record field |
+| 5 Exit contract | Kept | Two new values of the guard's `rule` (`secret_path`, `ci_path`); exits unchanged |
+| 6 Enumerations | Extended | Rule lists in `guard_decision.json` and `skill_candidate.json`; default lists in `protected_paths.json` |
+| Behaviour changed ⇒ hash changed | **Kept, by choice** | The default lists apply only where `[governance]` (or a role's) is declared, a hashed declaration; `gnomon init` scaffolds one. With neither, requests (pinned hash, real tools) and decisions (`guard_cases.json`) are master's. Rejected: defaults always on, which would change behaviour under an unchanged hash (#153-style) |
+
+**Drift, recorded rather than hidden:**
+
+- **`~` is the deciding process's home.** `~/.aws/**` names a different
+  directory on each machine, so the same surface hash protects each machine's
+  own credential stores. Bounded: the pattern, and so the rule, is the same;
+  only which files exist differs, as with `[sandbox] extra_roots`. A machine
+  without `~/.ssh` has nothing there to protect.
+- **What a recursive reader reaches depends on what exists.** `grep -r key ~`
+  is refused when a listed directory exists below `~`, as `rm -rf .claude` is
+  refused when a host hook file exists. The answer follows the filesystem,
+  not configuration, and is tightening-only.
+- **Upgrading a repository whose `.gnomon/` was scaffolded before this
+  change** keeps it undeclared, and so unchanged, until a person adds
+  `[governance]` — the hash moves when the behaviour does.
+
 ---
 
 ## 3. The two principles that do not follow — and cost the most

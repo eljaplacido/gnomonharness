@@ -253,7 +253,7 @@ describe("governance levels — gnomon guard and the loop decide alike (conforma
 
   it("the matrix covers every levelled family that has a rule, and every verdict", () => {
     const families = new Set(CASES.levels.cases.map((c) => c.family));
-    for (const f of ["write", "bash", "network", "secrets", "rules", null]) expect(families.has(f)).toBe(true);
+    for (const f of ["write", "bash", "network", "secrets", "rules", "ci", null]) expect(families.has(f)).toBe(true);
     expect(new Set(CASES.levels.cases.map((c) => c.verdict))).toEqual(new Set(GUARD_DECISIONS));
     expect(CASES.levels.levels).toEqual([...GOVERNANCE_LEVELS]);
   });
@@ -282,15 +282,24 @@ describe("governance levels — gnomon guard and the loop decide alike (conforma
     expect(push).toMatchObject({ decision: "deny", family: "bash", level: "prevent" });
   });
 
-  it("grep and glob outside the root stay refused at every level, in the guard as in the loop", async () => {
-    levelSurface("observe");
-    const call = { tool: "grep", input: { pattern: "PRIVATE", path: "/etc" } };
-    const v = await guardToolCall({ cwd: repo, call, role: "implement" });
-    expect(v).toMatchObject({ decision: "deny", verdict: "deny", rule: "sandbox", family: "secrets", level: "prevent" });
-    put(".gnomon/roles.toml", CASES.surface["roles.toml"]!.replace('tools = ["read", "write", "edit", "bash", "webfetch"]', 'tools = ["read", "write", "edit", "bash", "webfetch", "grep"]'));
-    put(".gnomon/tools.toml", CASES.surface["tools.toml"]! + '\n[[tools]]\nname = "grep"\nenabled = true\n');
-    commit("grep");
-    expect(await loopDecides("implement", "grep", call.input)).toBe("deny");
+  it("grep and glob outside the root are levelled like read, in the guard as in the loop (shared-governance PR 3)", async () => {
+    // PR 1 pinned them at prevent; protectedPath levels them in family
+    // secrets. The scope is a scratch directory outside the repository, so
+    // observe really walks it, and it holds nothing.
+    const outside = realpathSync.native(mkdtempSync(join(tmpdir(), "gnomon-guard-outside-")));
+    try {
+      writeFileSync(join(outside, "note.txt"), "nothing here\n");
+      const call = { tool: "grep", input: { pattern: "PRIVATE", path: outside } };
+      levelSurface("observe");
+      const v = await guardToolCall({ cwd: repo, call, role: "implement" });
+      expect(v).toMatchObject({ decision: "allow", verdict: "deny", rule: "sandbox", family: "secrets", level: "observe" });
+      expect(await loopDecides("implement", "grep", call.input)).toBe("allow");
+      levelSurface("prevent");
+      expect(await guardToolCall({ cwd: repo, call, role: "implement" })).toMatchObject({ decision: "deny", rule: "sandbox", level: "prevent" });
+      expect(await loopDecides("implement", "grep", call.input)).toBe("deny");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 
   it("rules has a floor of prevent, declared or not", async () => {

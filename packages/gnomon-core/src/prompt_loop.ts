@@ -164,7 +164,7 @@ import {
 } from "./live_record.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { AFTER_REFUSAL_REASON, AfterRefusalWindow, resolveAfterRefusal } from "./after_refusal.js";
-import { resolveLevels } from "./governance.js";
+import { resolveLevels, resolveProtectedPaths } from "./governance.js";
 import { settleMcpTools, toolsHash } from "./tools_hash.js";
 import {
   REASONING_EFFORT_FIELD,
@@ -4858,7 +4858,12 @@ async function agenticTurn(
     writeAllow: config.roles[role]?.write_allow,
     // `[governance]` levels (governance.ts). Absent unless declared, so an
     // undeclared surface builds the context it always did.
-    ...((governance) => (governance ? { governance } : {}))(resolveLevels(config, role)),
+    // The `secrets` / `ci` path lists come with it, and only with it.
+    ...((governance) => {
+      if (!governance) return {};
+      const protectedPaths = resolveProtectedPaths(config, governance);
+      return protectedPaths ? { governance, protectedPaths } : { governance };
+    })(resolveLevels(config, role)),
     root: workRootOf(config),
     sandbox,
     // Declared in policy.toml, hashed with the surface. A grant that does not

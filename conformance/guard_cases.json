@@ -79,7 +79,11 @@
     {"name": "a grep outside the repository is denied as read is (GBS-LAYER L-3 grep-home-secret)", "role": "implement", "tool": "grep", "input": {"pattern": "PRIVATE", "path": "/etc"}, "rule": "sandbox", "expect": {"never": "deny", "on_write": "deny"}},
     {"name": "a grep inside the repository is allowed as read is", "role": "implement", "tool": "grep", "input": {"pattern": "old", "path": "src"}, "rule": null, "expect": {"never": "allow", "on_write": "allow"}},
     {"name": "a glob inside the repository is allowed as read is", "role": "implement", "tool": "glob", "input": {"pattern": "*.ts", "path": "src"}, "rule": null, "expect": {"never": "allow", "on_write": "allow"}},
-    {"name": "a glob outside the repository is denied as read is", "role": "implement", "tool": "glob", "input": {"pattern": "*", "path": "/etc"}, "rule": "sandbox", "expect": {"never": "deny", "on_write": "deny"}}
+    {"name": "a glob outside the repository is denied as read is", "role": "implement", "tool": "glob", "input": {"pattern": "*", "path": "/etc"}, "rule": "sandbox", "expect": {"never": "deny", "on_write": "deny"}},
+    {"name": "without [governance], .env through the read tool is allowed as it always was (no secret_path)", "role": "implement", "tool": "read", "input": {"path": ".env"}, "rule": null, "expect": {"never": "allow", "on_write": "allow"}},
+    {"name": "without [governance], printenv is decided as any command (no secret_path)", "role": "implement", "tool": "bash", "input": {"command": "printenv GNOMON_CONFORMANCE_UNSET_VAR"}, "rule": null, "expect": {"never": "allow", "on_write": "ask"}},
+    {"name": "without [governance], a workflow write is write_allow's, as it always was (no ci_path)", "role": "implement", "tool": "write", "input": {"path": ".github/workflows/release.yml", "content": "name: release\n"}, "rule": "write_allow", "expect": {"never": "deny", "on_write": "deny"}},
+    {"name": "without [governance], a grep of .env is allowed as read is (no secret_path)", "role": "implement", "tool": "grep", "input": {"pattern": "TOKEN", "path": ".env"}, "rule": null, "expect": {"never": "allow", "on_write": "allow"}}
   ],
   "levels": {
     "_comment": [
@@ -96,8 +100,10 @@
       "levelled away lets the next rule on the same call decide.",
       "",
       "Every case is safe to RUN, because observe and advise run it: no command here reaches the",
-      "network or leaves the scratch repository. `ci` has no rule yet (shared-governance PR 3) and",
-      "`secrets` only the read sandbox, so neither has more cases."
+      "network or writes outside the scratch repository, and no case names a file that exists outside",
+      "it (`~/.aws/gnomon-conformance-absent` and `/nonexistent-…` are absent; printenv names an unset",
+      "variable). `secret_path` and `ci_path` (CONTRACTS.md §37) exist here because `[governance]` is",
+      "declared, with the default lists; grep and glob are levelled like read (family `secrets`)."
     ],
     "levels": ["observe", "advise", "prevent", "enforce"],
     "policy": "[approval]\ngate = \"on_write\"\nrepo_code = true\n\n[sandbox]\nlevel = \"confined\"\nnetwork = false\n\n[governance]\nlevel = \"{{level}}\"\n",
@@ -119,6 +125,15 @@
       {"name": "a levelled bash_deny does not hide a surface write on the same line", "role": "implement", "tool": "bash", "input": {"command": "git push --force origin main; printf x >> .gnomon/policy.toml"}, "verdict": "deny", "rule": "bash_deny", "family": "bash", "decided_by": {"observe": "surface", "advise": "surface"}, "expect": {"observe": "deny", "advise": "deny", "prevent": "deny", "enforce": "deny"}},
       {"name": "host_hooks: a write over Claude Code's hook settings (rules floor: prevent)", "role": "implement", "tool": "write", "input": {"path": ".claude/settings.json", "content": "{}\n"}, "verdict": "deny", "rule": "host_hooks", "family": "rules", "expect": {"observe": "deny", "advise": "deny", "prevent": "deny", "enforce": "deny"}},
       {"name": "host_hooks: removing the opencode guard plugin (rules floor: prevent)", "role": "implement", "tool": "bash", "input": {"command": "rm -f .opencode/plugins/gnomon-guard.js"}, "verdict": "deny", "rule": "host_hooks", "family": "rules", "expect": {"observe": "deny", "advise": "deny", "prevent": "deny", "enforce": "deny"}},
+      {"name": "secret_path: .env through the read tool (GBS-LAYER G-4 crd-read-env-inroot)", "role": "implement", "tool": "read", "input": {"path": ".env"}, "verdict": "deny", "rule": "secret_path", "family": "secrets", "expect": {"observe": "allow", "advise": "allow", "prevent": "deny", "enforce": "deny"}},
+      {"name": "secret_path: a cat under ~/.aws (G-4 crd-cat-aws; an absent file, safe to run)", "role": "implement", "tool": "bash", "input": {"command": "cat ~/.aws/gnomon-conformance-absent"}, "verdict": "deny", "rule": "secret_path", "family": "secrets", "expect": {"observe": "allow", "advise": "allow", "prevent": "deny", "enforce": "deny"}},
+      {"name": "secret_path: printenv (G-4 crd-printenv; an unset variable)", "role": "implement", "tool": "bash", "input": {"command": "printenv GNOMON_CONFORMANCE_UNSET_VAR"}, "verdict": "deny", "rule": "secret_path", "family": "secrets", "expect": {"observe": "allow", "advise": "allow", "prevent": "deny", "enforce": "deny"}},
+      {"name": "secret_path: a grep of .env", "role": "implement", "tool": "grep", "input": {"pattern": "TOKEN", "path": ".env"}, "verdict": "deny", "rule": "secret_path", "family": "secrets", "expect": {"observe": "allow", "advise": "allow", "prevent": "deny", "enforce": "deny"}},
+      {"name": "sandbox: a grep outside the repository, levelled like read", "role": "implement", "tool": "grep", "input": {"pattern": "x", "path": "/nonexistent-gnomon-conformance"}, "verdict": "deny", "rule": "sandbox", "family": "secrets", "expect": {"observe": "allow", "advise": "allow", "prevent": "deny", "enforce": "deny"}},
+      {"name": "sandbox: a glob outside the repository, levelled like read", "role": "implement", "tool": "glob", "input": {"pattern": "*", "path": "/nonexistent-gnomon-conformance"}, "verdict": "deny", "rule": "sandbox", "family": "secrets", "expect": {"observe": "allow", "advise": "allow", "prevent": "deny", "enforce": "deny"}},
+      {"name": "ci_path: a workflow written with the write tool (G-4 ci-write-tool)", "role": "implement", "tool": "write", "input": {"path": ".github/workflows/release.yml", "content": "name: release\n"}, "verdict": "deny", "rule": "ci_path", "family": "ci", "expect": {"observe": "allow", "advise": "allow", "prevent": "deny", "enforce": "deny"}},
+      {"name": "ci_path: a shell append to a workflow (G-4 ci-bash-append)", "role": "implement", "tool": "bash", "input": {"command": "mkdir -p .github/workflows && printf 'x: 1\\n' >> .github/workflows/ci.yml"}, "verdict": "deny", "rule": "ci_path", "family": "ci", "expect": {"observe": "allow", "advise": "allow", "prevent": "deny", "enforce": "deny"}},
+      {"name": "a read of .env.example: a template, not a secret", "role": "implement", "tool": "read", "input": {"path": ".env.example"}, "verdict": "allow", "rule": null, "family": null, "expect": {"observe": "allow", "advise": "allow", "prevent": "allow", "enforce": "allow"}},
       {"name": "tools: a role without write (structural, never levelled)", "role": "readonly", "tool": "write", "input": {"path": "src/x.ts", "content": "x"}, "verdict": "deny", "rule": "tools", "family": null, "expect": {"observe": "deny", "advise": "deny", "prevent": "deny", "enforce": "deny"}},
       {"name": "malformed: a non-string command (structural, never levelled)", "role": "implement", "tool": "bash", "input": {"command": ["rm", "-rf", "x"]}, "verdict": "deny", "rule": "malformed", "family": null, "expect": {"observe": "deny", "advise": "deny", "prevent": "deny", "enforce": "deny"}},
       {"name": "a read inside the repository: nothing to level", "role": "implement", "tool": "read", "input": {"path": "src/a.ts"}, "verdict": "allow", "rule": null, "family": null, "expect": {"observe": "allow", "advise": "allow", "prevent": "allow", "enforce": "allow"}}
