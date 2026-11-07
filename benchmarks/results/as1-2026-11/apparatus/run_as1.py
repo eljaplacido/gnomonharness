@@ -26,6 +26,7 @@ import gzip
 import json
 import os
 import random
+import re
 import shutil
 import socket
 import subprocess
@@ -101,6 +102,7 @@ P2G_TASKS_FILE = P2G_APP / "tasks-p2g.json"
 OPENCODE = ("p2_agents:OpencodeV2", "openai", "/openai/v1", None, ["OPENAI_API_KEY"], "opencode/2.2.5", [])
 GNOMON_AGENT = "gnomon_harbor_as1:GnomonAS1"
 PRM = A.P
+RERUN_RE = re.compile(r"r\d*$")  # a re-run wave id: <wave>r, <wave>r2, ... (Amendment 4)
 LOG_LOCK = threading.Lock()
 
 
@@ -336,6 +338,7 @@ def score(cid: str, member: dict, build: dict | None, stage: str, wave: dict) ->
         elif build and not (tr.get("agent_version") or "").startswith(f"gnomon v{build['version']} {build['commit'][:16]}"):
             invalid = f"build pin: agent_version {tr.get('agent_version')!r}"
     ga = GA.scan_cell(OUT / cid / "wire")  # Amendment 3: an exhausted allowance is apparatus, the pair is re-run
+    ga["exhausted"] = ga["exhausted"] or funds_refused(OUT / cid / "wire")  # Amendment 4
     if ga["exhausted"]:
         invalid = f"apparatus: Go allowance — {ga['exhausted']}"
         GA.flag_exhausted(ga["exhausted"], cid)
@@ -355,6 +358,28 @@ def score(cid: str, member: dict, build: dict | None, stage: str, wave: dict) ->
             "requests": (rec.get("delta") or {}).get("chat_requests"), "agent_version": tr.get("agent_version"),
             "spec_sha256": rec.get("spec_sha256"), "mechanism": mech, "go_account": wave.get("go_account"),
             "go_billing": ga["billing"], "list_usd": ga["list_usd"], "t_end": utc()}
+
+
+def funds_refused(wire: Path) -> str | None:
+    """Amendment 4: the account ran dry on 2026-11-07 as HTTP 402 {"error": {"message": "Insufficient account funds"}},
+    not the GoUsageLimitError body Amendment 3 expected, so go_allowance.scan_cell missed it. Any 402 is apparatus."""
+    f = wire / "calls.jsonl"
+    if not f.exists():
+        return None
+    for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            r = json.loads(line)
+        except Exception:
+            continue
+        if r.get("status") == 402:
+            p = wire / f"resp-{int(r.get('n', 0)):04d}.sse.gz"
+            try:
+                body = gzip.decompress(p.read_bytes()).decode("utf-8", "replace") if p.exists() else ""
+            except Exception:
+                body = ""
+            msg = "Insufficient account funds" if "Insufficient account funds" in body else "payment required"
+            return f"HTTP 402 {msg} at call {r.get('n')}"
+    return None
 
 
 def load_outcomes(stage: str | None = None) -> list[dict]:
@@ -387,11 +412,24 @@ def pairs_from(outs: list[dict], control_label: str = "CTL") -> list[A.Pair]:
 # ------------------------------------------------------------------------------------------------ ledger and git
 
 
-def ledger(stage: str | None = None) -> list[dict]:
+def ledger(stage: str | None = None, raw: bool = False) -> list[dict]:
+    """The effective ledger. Amendment 4: a line named (0-based line number of LEDGER.jsonl) in a later
+    {"kind": "supersede"} entry's 'supersedes_lines' is kept in the file but no longer drives the run or the replay;
+    raw=True returns every line."""
     if not LEDGER.exists():
         return []
     rows = [json.loads(l) for l in LEDGER.read_text(encoding="utf-8").splitlines() if l.strip()]
+    if not raw:
+        gone = {i for r in rows if r.get("kind") == "supersede" for i in r.get("supersedes_lines", [])}
+        rows = [r for i, r in enumerate(rows) if r.get("kind") != "supersede" and i not in gone]
     return [r for r in rows if stage is None or r["stage"] == stage]
+
+
+def round_running(last: dict) -> int:
+    """The round the last effective ledger entry hands to the runner. A 'plan' entry plans its own round; a 'round'
+    entry records round N's decisions and carries round N+1's plan (Amendment 4: the runner used to take N, so every
+    later decision was labelled round 0 and every later plan re-used round 1's wave ids)."""
+    return last["round"] + 1 if last["kind"] == "round" else last["round"]
 
 
 def ledger_append(entry: dict) -> None:
@@ -467,7 +505,7 @@ def execute(waves: list[dict], stage: str, membersf, args, build, P) -> bool:
             return False
         wait_for_slot_window(args)
         w = {**w, "go_account": GA.wave_gate("as1", w["id"], reserve)}  # Amendment 3: blocks while 'PAUSED: Go allowance'
-        idx = int(w["id"].split("w")[-1].rstrip("r")) + (100 if w["id"].endswith("r") else 0)
+        idx = int(re.match(r"\d+", w["id"].split("w")[-1]).group()) + (100 if RERUN_RE.search(w["id"]) else 0)
         slots = [(j + idx) % 3 for j in range(len(members))]
         order = [(j + idx) % len(members) for j in range(len(members))]  # start order rotates per wave
         recs: dict[int, dict] = {}
@@ -496,19 +534,35 @@ def execute(waves: list[dict], stage: str, membersf, args, build, P) -> bool:
     return True
 
 
+def lost_labels(cells: dict[str, dict], labels: list[str]) -> list[str]:
+    ctl_ok = cells.get("CTL", {}).get("valid", False)
+    return [a for a in labels if not ctl_ok or not cells.get(a, {}).get("valid", False)]
+
+
 def reruns(waves: list[dict], stage: str) -> list[dict]:
-    """'Fix, don't fail': each wave with a lost pair is re-run once, as a fresh control plus the lost arms."""
+    """'Fix, don't fail': each wave with a lost pair is re-run once, as a fresh control plus the lost arms.
+    Amendment 4: a re-run whose own loss was apparatus only (every invalid cell 'apparatus: ...', e.g. the Go account
+    out of funds) does not use up that once; the still-lost arms re-run again under a fresh id (<wave>r2, r3, ...),
+    each on its own fresh control, never paired across attempts."""
     outs = {o["cell"]: o for o in load_outcomes(stage)}
     out = []
     for w in waves:
-        if w["id"].endswith("r"):
+        if RERUN_RE.search(w["id"]):
             continue
-        cells = {o["label"]: o for o in outs.values() if o["wave"] == w["id"]}
-        ctl_ok = cells.get("CTL", {}).get("valid", False)
         labels = w.get("arms") or ["X" + "".join(map(str, c)) for c in w.get("combos", [])]
-        lost = [a for a in labels if not ctl_ok or not cells.get(a, {}).get("valid", False)]
-        if lost:
-            out.append({**w, "id": w["id"] + "r", "lost": lost})
+        lost = lost_labels({o["label"]: o for o in outs.values() if o["wave"] == w["id"]}, labels)
+        rid, k = w["id"] + "r", 1
+        while lost:
+            tried = {o["label"]: o for o in outs.values() if o["wave"] == rid}
+            if not tried:
+                out.append({**w, "id": rid, "lost": lost})
+                break
+            still = lost_labels(tried, lost)
+            bad = [c for c in tried.values() if not c["valid"]]
+            if not still or not all((c.get("invalid_reason") or "").startswith("apparatus:") for c in bad):
+                break  # recovered, or a non-apparatus second failure (investigated before the arm continues, §4.5)
+            lost, k = still, k + 1
+            rid = f"{w['id']}r{k}"
     return out
 
 
@@ -590,7 +644,7 @@ def stage_screen(args, build, P) -> None:
     membersf = lambda w: members_for(w, "screen", ctl, frags)  # noqa: E731
     while led[-1]["kind"] != "end":
         last = led[-1]
-        rnd = last["round"]
+        rnd = round_running(last)
         ok = execute(last["plan"], "screen", membersf, args, build, P)
         if ok:
             rr = reruns(last["plan"], "screen")
@@ -843,8 +897,7 @@ def replay(args) -> int:
     bad = 0
     for i, e in enumerate(led[1:], 1):
         waves_upto = {w["id"] for x in led[:i] for w in x.get("plan", [])}
-        waves_upto |= {w + "r" for w in waves_upto}
-        sub = [o for o in outs if o["wave"] in waves_upto]
+        sub = [o for o in outs if RERUN_RE.sub("", o["wave"]) in waves_upto]
         prev = statuses_from(led[:i], arm_ids)
         post, dec, pairs = decide_round(arm_ids, prev, sub)
         same = {a: list(v) for a, v in dec.items()} == {a: list(v) for a, v in e["decisions"].items()}

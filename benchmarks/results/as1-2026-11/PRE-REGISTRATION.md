@@ -581,3 +581,64 @@ are unchanged.
 
 **Unchanged:** arms, tasks, seeds, plans, validity rules (exhaustion was already apparatus failure; now it is
 detected and named), scoring, budgets, interim looks, allocation and decision rules.
+
+## Amendment 4 (AS1) — round counter, duplicate wave ids, HTTP 402 exhaustion (2026-11-07T14:30Z, written before resuming; no analysis change)
+
+**What happened.** Screening round 0 was decided at 12:58:20Z (ledger line 1: `kind round, round 0`, carrying round
+1's plan s01w00 session-window-debug, s01w01 wal-recovery-ordering, s01w02 retro-console-soc, s01w03
+cargo-flight-dispatch). Round 1 ran (s01w00 13:29Z, s01w01 13:41Z, s01w02 13:57Z, s01w03 13:59Z, re-run s01w03r
+14:00Z). At 14:00:44Z the runner wrote a **second** `kind round, round 0` entry (ledger line 2; its pair data
+already included round 1's cells) carrying a **new** round-1 plan with the **same wave ids** s01w00–s01w03 on other
+tasks (production-planning, shadow-relay, ontology-kg-querying, data-anonymization), and started it.
+The operator stopped the chain (SIGTERM to chain_as1.sh 14:02:3xZ, so the interaction stage could not start) and
+the runner (SIGINT 14:03:53Z, right after `wave s01w01 shadow-relay done`, while it waited in the slot check; no
+cell in flight).
+
+**Cause 1 — round counter (code).** In `stage_screen` the round being run was taken as `led[-1]["round"]`. A
+`kind round` entry records round N's decisions and carries round N+1's plan, so after round 0's decision every later
+round was run as "round 0": decided and labelled round 0, and planned as round 1 (`wave_ids(..., rnd + 1)`, and the
+Thompson draws seeded with round 1 instead of 2). Without the stop this repeats forever, re-using s01w00–s01w03.
+`replay` already read the ledger correctly (N decided, N+1 planned). Reproduction: ledger = [plan r0, round r0 (plan
+s01…)] → next entry round 0 with plan s01… (`test_a4_round_counter_advances_and_wave_ids_never_repeat`).
+**Cause 2 — exhaustion not detected (apparatus).** The Go account ran out at ~13:55Z, and refused as HTTP 402
+`{"error":{"type":"invalid_request_error","message":"Insufficient account funds"}}` — not the `GoUsageLimitError`
+body Amendment 3 expected — so `go_allowance.scan_cell` saw nothing: no flag, no pause. s01w02's three cells died
+mid-run on the 402 (stop `endpoint_error`, 800–890 s) yet scored **valid** zeros; s01w03 and s01w03r failed on call 1
+and were invalid only as "no model response with usage" (not apparatus), so §4.5's single re-run was spent on them.
+(FG1's lane shows the same 402s since ~14:02Z; FG1 is outside this amendment.)
+
+**Effect on data.** Before 13:55Z no AS1 cell holds a 402 (every wire status 200 or 429 "overloaded"), so the
+burn-in (round 0) and round 1's s01w00 and s01w01 are unaffected. Cells keyed by wave id would have mis-paired
+(`pairs_from` and `reruns` group by `wave`; the second s01w00's arms would have paired with session-window-debug's
+control), but every cell of the duplicate waves is invalid (402 on call 1), so **no pair was formed across tasks and
+no outcome row was overwritten** (cell ids include the task). The superseded entry's statuses are identical to the
+round-0 statuses (GC and PKG dropped_futile at round 0; all others active); it counted s01w02's three 402 cells as
+valid pairs (EL n=7 instead of 6, GR 5 instead of 4).
+
+**Handling** (`apparatus/amend4.py`, run once; nothing deleted):
+- Ledger line 2 (the second "round 0") is **superseded, not deleted**: a `{"kind": "supersede", "supersedes_lines":
+  [2]}` entry names it; `run_as1.py` and the round watcher skip superseded lines; `ledger(raw=True)` returns all.
+- The six cells of the superseded plan (s01w00 production-planning: CTL, EL, S; s01w01 shadow-relay: CTL, D, EL)
+  get a unique wave id (s01xw00, s01xw01; runs/ and jobs/ dirs renamed) and move to
+  `ledger/outcomes-superseded-a4.jsonl`; they enter no analysis and no usage count.
+- The nine round-1 cells with a 402 in their wire (s01w02 ×3, s01w03 ×3, s01w03r ×3) are re-scored by the fixed
+  rule: `invalid_reason` "apparatus: Go allowance — HTTP 402 Insufficient account funds at call N"; their original rows
+  are kept in `outcomes-superseded-a4.jsonl`.
+- Round 1 is then completed as pre-registered: the lost pairs re-run at the round's end on fresh controls —
+  s01w02r (EL, GR) and s01w03r2 (D, GR) — then round 1 is decided by the unchanged rule and labelled round 1, and
+  round 2 is planned with ids s02w.. and seeds `[20261107, 3, 2, w]`. `run_as1.py replay` reproduces round 0 exactly.
+
+**Code changes** (offline tests `OFFLINE-TESTS-amendment4.txt`, 154 passed):
+- `round_running()`: the round run is `round + 1` after a `kind round` entry, `round` after a `kind plan` entry.
+- `funds_refused()`: any HTTP 402 in a cell's wire is "apparatus: Go allowance — HTTP 402 …" and flags the account
+  (Amendment 3's guard, unchanged otherwise), so the gate pauses instead of burning waves.
+- §4.5 clarification: a re-run whose loss is apparatus-only (every invalid cell `apparatus: …`) does not use up the
+  single re-run; the still-lost arms re-run as `<wave>r2`, `r3`, … each on its own fresh control. A non-apparatus
+  second failure still stops for investigation, as registered. Wave-index parsing and `replay` accept `r2…`.
+
+**Resume condition.** Not before the Go account is funded or switched (`switch_go_account.sh`, Amendment 3): a resume
+on the dry account would only produce apparatus-invalid cells. Then: `AS1_APPROVED=yes AS1_SCREEN_PID= nohup setsid
+apparatus/chain_as1.sh > run-chain4.log 2>&1 &` and the round watcher on the new chain pid.
+
+**Unchanged:** arms, tasks, seeds, burn-in, allocation and decision rules (§4.3), validity rules (exhaustion was
+already apparatus failure; now the 402 form is detected), budgets and the stopping rule.

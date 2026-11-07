@@ -327,3 +327,84 @@ def test_arm_expectation_overrides_control_on_same_path():
     assert len(win) == 1 and win[0]["value"] == 1000000 and win[0]["arm"] == "W"
     assert any(x["path"] == "config.toml:turn.nudge_after_idle" and x["arm"] == "CTL.C" for x in sp["expects"])
     assert SP.merge([FRAGS["CTL.C"], FRAGS["ENV"]])["task_args"] == ["--trust"]
+
+
+# ---------------------------------------------------------------- Amendment 4 (2026-11-07): round counter, re-runs, 402
+
+def test_a4_round_counter_advances_and_wave_ids_never_repeat(R, tmp_path, monkeypatch):
+    """Reproduction of the 2026-11-07 ledger: after 'plan r0' and 'round 0 (plan s01w..)', the runner took round 0 as the
+    round it was running, so its next entry was labelled round 0 again and planned s01w00.. a second time."""
+    monkeypatch.setattr(R, "LEDGER_DIR", tmp_path / "ledger")
+    monkeypatch.setattr(R, "LEDGER", tmp_path / "ledger" / "LEDGER.jsonl")
+    plan0 = R.wave_ids([{"task": "a", "arms": ["X", "Y"]}], "screen", 0)
+    R.ledger_append({"stage": "screen", "kind": "plan", "round": 0, "plan": plan0})
+    assert R.round_running(R.ledger("screen")[-1]) == 0
+    R.ledger_append({"stage": "screen", "kind": "round", "round": 0,
+                     "plan": R.wave_ids([{"task": "b", "arms": ["X", "Y"]}], "screen", 1)})
+    last = R.ledger("screen")[-1]
+    rnd = R.round_running(last)
+    assert rnd == 1                                             # the bug: last["round"] == 0
+    nxt = R.wave_ids([{"task": "c", "arms": ["X", "Y"]}], "screen", rnd + 1)
+    assert {w["id"] for w in nxt}.isdisjoint({w["id"] for w in last["plan"]}) and nxt[0]["id"] == "s02w00"
+    # superseding: the bad entry stays in the file, leaves the effective ledger
+    R.ledger_append({"stage": "screen", "kind": "round", "round": 0, "plan": last["plan"]})
+    bad = R.ledger("screen")[-1]
+    R.ledger_append({"stage": "screen", "kind": "supersede", "supersedes_lines": [2]})
+    assert len(R.ledger("screen", raw=True)) == 4
+    eff = R.ledger("screen")
+    assert len(eff) == 2 and eff[-1] == last and R.round_running(eff[-1]) == 1
+
+
+def test_a4_reruns_after_an_apparatus_only_rerun_loss(R):
+    outs = []
+
+    def o(wave, label, valid=True, why=None):
+        outs.append({"cell": f"{wave}-{label}", "stage": "screen", "round": 1, "wave": wave, "label": label, "task": "t",
+                     "valid": valid, "invalid_reason": why, "frac": 0.5, "capped": False, "ff": False, "solved": False,
+                     "usd": 0.0})
+    ga = "apparatus: Go allowance — HTTP 402 Insufficient account funds at call 1"
+    for lab in ("CTL", "D", "GR"):
+        o("s01w03", lab, False, ga), o("s01w03r", lab, False, ga)
+    for lab in ("CTL", "EL", "GR"):
+        o("s01w02", lab, False, ga)
+    o("s01w01", "CTL"), o("s01w01", "D"), o("s01w01", "EL")
+    o("s01w04", "CTL", False, "no verifier reward (X)"), o("s01w04", "D")
+    o("s01w04r", "CTL", False, "no verifier reward (X)"), o("s01w04r", "D")
+    R.OUTCOMES.write_text("".join(json.dumps(x) + "\n" for x in outs))
+    plan = [{"id": "s01w01", "task": "t", "arms": ["D", "EL"]}, {"id": "s01w02", "task": "t", "arms": ["EL", "GR"]},
+            {"id": "s01w03", "task": "t", "arms": ["D", "GR"]}, {"id": "s01w04", "task": "t", "arms": ["D", "W"]}]
+    rr = R.reruns(plan, "screen")
+    # s01w04r's loss was not apparatus: §4.5's second failure, no automatic third attempt
+    assert [(w["id"], w["lost"]) for w in rr] == [("s01w02r", ["EL", "GR"]), ("s01w03r2", ["D", "GR"])]
+    assert all(R.RERUN_RE.sub("", w["id"]) == w["id"][:6] for w in rr)
+    o("s01w03r2", "CTL"), o("s01w03r2", "D"), o("s01w03r2", "GR")
+    R.OUTCOMES.write_text("".join(json.dumps(x) + "\n" for x in outs))
+    assert [w["id"] for w in R.reruns(plan, "screen")] == ["s01w02r"]
+    assert {p.wave for p in R.pairs_from(outs)} == {"s01w01", "s01w03r2"}   # never across attempts
+
+
+def test_a4_http_402_is_apparatus(R):
+    cid = "as1-s01w02-CTL-t"
+    make_cell(R, cid)
+    w = R.OUT / cid / "wire"
+    w.mkdir(parents=True, exist_ok=True)
+    (w / "calls.jsonl").write_text(json.dumps({"n": 1, "status": 200}) + "\n" + json.dumps({"n": 2, "status": 402}) + "\n")
+    (w / "resp-0002.sse.gz").write_bytes(gzip.compress(
+        b'{"error":{"type":"invalid_request_error","message":"Insufficient account funds"}}'))
+    assert R.funds_refused(w) == "HTTP 402 Insufficient account funds at call 2"
+    (w / "calls.jsonl").write_text(json.dumps({"n": 1, "status": 429}) + "\n")
+    assert R.funds_refused(w) is None
+
+
+def test_a4_score_marks_402_cell_apparatus_invalid_and_flags(R, monkeypatch):
+    flagged = []
+    monkeypatch.setattr(R.GA, "scan_cell", lambda wire: {"exhausted": None, "billing": {}, "list_usd": 0.0})
+    monkeypatch.setattr(R.GA, "flag_exhausted", lambda why, cid: flagged.append((why, cid)))
+    make_cell(R, "c402", version="gnomon v0.4.3 abcdef0123456789 ffff")
+    w = R.OUT / "c402" / "wire"
+    w.mkdir(parents=True, exist_ok=True)
+    (w / "calls.jsonl").write_text(json.dumps({"n": 1, "status": 402}) + "\n")
+    (w / "resp-0001.sse.gz").write_bytes(gzip.compress(b'{"error":{"message":"Insufficient account funds"}}'))
+    o = R.score("c402", member(), BUILD, "screen", WAVE)
+    assert not o["valid"] and o["invalid_reason"].startswith("apparatus: Go allowance — HTTP 402")
+    assert flagged and flagged[0][1] == "c402"

@@ -126,8 +126,10 @@ def commit(path: Path, msg: str) -> bool:
 def once() -> int:
     n = 0
     outs = rows(OUTCOMES)
-    for e in rows(LEDGER):
-        if not closes(e):
+    led = rows(LEDGER)
+    gone = {i for r in led if r.get("kind") == "supersede" for i in r.get("supersedes_lines", [])}  # Amendment 4
+    for i, e in enumerate(led):
+        if not closes(e) or i in gone:
             continue
         f = OUT / name_of(e)
         if f.exists():
