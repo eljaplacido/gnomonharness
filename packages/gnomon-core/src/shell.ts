@@ -2363,6 +2363,163 @@ function invocationEgress(
 }
 
 // ---------------------------------------------------------------------------
+// Environment dumps (the `secrets` family, CONTRACTS.md §37)
+// ---------------------------------------------------------------------------
+
+/**
+ * `/proc/<pid>/environ`: a process's environment, credentials included. A
+ * fixed path, protected whatever `[governance.paths] secrets` declares.
+ */
+export const ENV_DUMP_PATH = /^\/proc\/(self|thread-self|\d+)(\/task\/\d+)?\/environ$/;
+
+/** What a command that prints the environment is, as gnomon read it. */
+export interface EnvDump {
+  command: string;
+  why: string;
+}
+
+/**
+ * Does this bash call print the environment, where the tokens and keys a
+ * session runs with live? A fixed list, beside the network clients: `printenv`
+ * (with or without names: `printenv GITHUB_TOKEN` is the leak), `env` running
+ * no command, a bare `export` / `export -p`, `declare -x` / `-p` /
+ * `typeset -x` naming nothing, a bare `set`, and any read of
+ * `/proc/<pid>/environ` (ENV_DUMP_PATH, judged as a path by the caller).
+ * Followed through wrappers, `sh -c` and `$( )` like the deny-list.
+ *
+ * An intent filter, like the network one: `echo $GITHUB_TOKEN`, a script, or
+ * a program that prints its own environment is not refused by it.
+ */
+export function bashEnvDump(command: string): EnvDump | null {
+  const { invocations } = readShellCommand(command);
+  for (const inv of invocations) {
+    if (inv.synthetic) continue;
+    const argv = inv.argv;
+    if (argv.length === 0) continue;
+    const prog = programName(argv[0]!);
+    const shown = describeInvocation(inv);
+    const rest = argv.slice(1);
+    if (prog === "printenv") return { command: shown, why: "printenv prints the environment" };
+    if (prog === "env") {
+      const w = wrapped(argv, WRAPPERS.env!);
+      if (w && w.start >= argv.length && w.split === undefined) return { command: shown, why: "env with no command prints the environment" };
+      continue;
+    }
+    const names = rest.filter((a) => !a.startsWith("-"));
+    if (prog === "export" && names.length === 0 && rest.every((a) => a === "-p")) {
+      return { command: shown, why: "export with no names prints the exported environment" };
+    }
+    if ((prog === "declare" || prog === "typeset") && names.length === 0 && rest.some((a) => /^-[a-zA-Z]*[xp]/.test(a))) {
+      return { command: shown, why: `${prog} ${rest.join(" ")} prints the environment` };
+    }
+    if (prog === "set" && rest.length === 0) return { command: shown, why: "set with no arguments prints every variable" };
+  }
+  return null;
+}
+
+/** A word of a bash call that may name a file it reads or touches (shellPathWords). */
+export interface PathWord {
+  /** The path as written: `@`, `--opt=` and the like removed; `$HOME` kept as written. */
+  word: string;
+  /** The program it was given to, by name. */
+  prog: string;
+  /** The program walks a directory it is given (`grep -r`, `rg`, `tar`, `cp -r`, `find … -exec`). */
+  recursive: boolean;
+  /** The command, for a refusal. */
+  command: string;
+}
+
+/** Programs that read nothing of a path they are given: its name, or its metadata. */
+const NAMES_ONLY = new Set(["echo", "printf", "ls", "stat", "test", "[", "[[", "basename", "dirname", "realpath", "readlink", "true", "false", ":"]);
+
+/** Programs whose first operand is a pattern or a script, not a file, unless -e / -f gives it. */
+const PATTERN_FIRST: Record<string, { arg: string; given: RegExp }> = {
+  grep: { arg: "ABCmefdD", given: /^(-[a-zA-Z]*[ef]|--(regexp|file)(=|$))/ },
+  egrep: { arg: "ABCmefdD", given: /^(-[a-zA-Z]*[ef]|--(regexp|file)(=|$))/ },
+  fgrep: { arg: "ABCmefdD", given: /^(-[a-zA-Z]*[ef]|--(regexp|file)(=|$))/ },
+  rg: { arg: "ABCmefgtTjM", given: /^(-[a-zA-Z]*[ef]|--(regexp|file)(=|$))/ },
+  ag: { arg: "ABCmG", given: /^$/ },
+  ack: { arg: "ABCm", given: /^$/ },
+  sed: { arg: "el", given: /^(-[a-zA-Z]*[ef]|--(expression|file)(=|$))/ },
+  awk: { arg: "fvF", given: /^(-[a-zA-Z]*f|--file(=|$))/ },
+  gawk: { arg: "fvF", given: /^(-[a-zA-Z]*f|--file(=|$))/ },
+};
+
+/** Does this program, with these words, walk the directories it is given? */
+function walksDirs(prog: string, rest: string[]): boolean {
+  if (prog === "rg" || prog === "ag" || prog === "ack" || prog === "tar" || prog === "rsync") return true;
+  const short = (letters: RegExp) => rest.some((a) => /^-[a-zA-Z]+$/.test(a) && letters.test(a.slice(1)));
+  if (prog === "grep" || prog === "egrep" || prog === "fgrep") return short(/[rR]/) || rest.some((a) => /^--(dereference-)?recursive$|^--directories=recurse$/.test(a));
+  if (prog === "cp" || prog === "scp") return short(/[rRa]/) || rest.some((a) => a === "--recursive" || a === "--archive");
+  if (prog === "zip") return short(/r/);
+  if (prog === "find") return rest.some((a) => /^-(exec|execdir|ok|okdir)$/.test(a));
+  return false;
+}
+
+/**
+ * The words of a bash call that may name a file it reads or touches: every
+ * operand of every program it runs (through wrappers, `sh -c` and `$( )`),
+ * and every redirection's target. What the `secrets` family judges a command
+ * by (tools.ts secretWordRefusal): `cat ~/.aws/credentials`, `curl
+ * --data-binary @.env`, `nc host < .env`, `grep -r key ~`.
+ *
+ * Words that name no file are left out: options (but the value of
+ * `--opt=value`), URLs, the pattern or script a grep, sed or awk takes first,
+ * and every operand of a program that reads only a name or metadata (`echo
+ * .env >> .gitignore`, `ls ~/.ssh`, `test -f .env`).
+ */
+export function shellPathWords(command: string): PathWord[] {
+  const out: PathWord[] = [];
+  const seen = new Set<string>();
+  const add = (w: PathWord) => {
+    const key = `${w.prog}\0${w.word}\0${w.recursive}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(w);
+  };
+  const { invocations } = readShellCommand(command);
+  for (const inv of invocations) {
+    if (inv.synthetic || inv.argv.length === 0) continue;
+    const prog = programName(inv.argv[0]!);
+    const shown = describeInvocation(inv);
+    for (const r of inv.redirects) {
+      if (r.op === "<<" || r.op === "<<-" || r.op === "<<<" || r.op === ">&" || r.op === "<&") continue;
+      if (r.target) add({ word: r.target, prog, recursive: false, command: shown });
+    }
+    if (NAMES_ONLY.has(prog) || WRAPPERS[prog]) continue;
+    const rest = inv.argv.slice(1);
+    const recursive = walksDirs(prog, rest);
+    const pf = PATTERN_FIRST[prog];
+    let skipPattern = pf !== undefined && !rest.some((a) => pf.given.test(a));
+    let endOfOptions = false;
+    for (let i = 0; i < rest.length; i++) {
+      let w = rest[i]!;
+      if (!endOfOptions && w === "--") {
+        endOfOptions = true;
+        continue;
+      }
+      if (!endOfOptions && w.startsWith("-") && w.length > 1) {
+        const eq = w.indexOf("=");
+        if (w.startsWith("--") && eq > 0) {
+          w = w.slice(eq + 1);
+        } else {
+          // A short cluster ending in a letter that takes a value: the next word is that value.
+          if (pf && !w.startsWith("--") && pf.arg.includes(w[w.length - 1]!)) i++;
+          continue;
+        }
+      } else if (skipPattern) {
+        skipPattern = false;
+        continue;
+      }
+      if (w.startsWith("@")) w = w.slice(1);
+      if (!w || /^[a-z][a-z0-9+.-]*:\/\//i.test(w)) continue;
+      add({ word: w, prog, recursive, command: shown });
+    }
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Package downloads under `[sandbox] allow_package_index`
 // ---------------------------------------------------------------------------
 //

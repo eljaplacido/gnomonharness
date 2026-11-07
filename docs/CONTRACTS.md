@@ -691,6 +691,8 @@ decision gnomon could not make is never an allow.
 | `git_hooks` | a write, edit or shell write target in `.git/hooks/` or `.git/config` (a linked worktree's common git dir included), or a `git config` that sets, in any scope, a key git runs as a program: `core.hooksPath`, `core.fsmonitor`, `core.sshCommand`, `core.pager`, `core.editor`, `core.askPass`, `sequence.editor`, `credential.helper`, diff/merge/filter drivers, `gpg.program`, `pager.*`, `alias.*` starting with `!`, `include.path`, `init.templateDir` and the rest of the list in `shell.ts` (`GIT_EXEC_KEYS`). For every role |
 | `host_hooks` | a write, edit or shell write target in a host harness's hook configuration — what `gnomon guard install` writes and what can switch it off: `.claude/settings.json`, `.claude/settings.local.json`, `.claude/hooks/`, `.opencode/plugins/` (and `plugin/`), `opencode.json[c]`, `.cursor/hooks.json` in the root and the git toplevel; the user-level copies (`$CLAUDE_CONFIG_DIR` or `~/.claude`, `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`, `$OPENCODE_CONFIG`, `~/.cursor/hooks.json`); and gnomon's per-repository state (the guard's session bases and rules cache). A recursive removal, `mv`, `git rm` or `git clean` that would reach one counts. For every role, under every gate: removing the hook detaches the layer from every later session (GBS-LAYER pilot, 2026-11-06) |
 | `write_allow` | a path outside the role's `write_allow`; or a relative shell write after a `cd` gnomon cannot follow (`cd "$X"`), which it cannot place |
+| `secret_path` | only under a declared governance (§37): a read, write or edit of a protected secret path (`[governance.paths] secrets`, or its default: `.env`, keys, `~/.ssh`, `~/.aws`, …), a shell command with a word or redirection naming one or a recursive reader (`grep -r`, `rg`, `tar`, `cp -r`, `find -exec`) reaching one, a command that prints the environment (`printenv`, `env` with no command, a bare `export`, `/proc/<pid>/environ`), or a grep/glob whose scope is one or holds one |
+| `ci_path` | only under a declared governance (§37): a write, edit or shell write target in a CI definition (`[governance.paths] ci`, or its default: `.github/workflows/`, `.gitlab-ci.yml`, `.circleci/`, `Jenkinsfile`, …), or a recursive removal reaching one |
 | `network` | `[sandbox] network = false`, and the call names a network client, a remote `scp`/`rsync` target, `/dev/tcp`, interpreter code that opens a connection, a git remote by URL (`push`, `fetch`, `pull`, `ls-remote`, `clone`, `remote add\|set-url`, `submodule add`, `archive --remote`, a `-c` value, `git config remote.*.url`), or a package manager's registry or package URL (`--registry`, `--index-url`, `-i`, a URL operand) |
 | `url` | a scheme other than http(s), or a private, loopback or link-local address |
 | `repo_code` | `[approval] repo_code = true`, and the call runs repository-defined code: package.json scripts or lifecycle scripts (`npm`/`pnpm`/`yarn`/`bun` run, test, start, install, ci, …; `npx`), a Makefile, justfile, Rakefile, Gradle or Maven build, tox/nox, pre-commit hooks, `cargo` build/test/run (build.rs), `go generate`, `poetry`/`pdm`/`hatch`/`pipenv` install or run, `pip install -e`/a local path/`-r`, `python setup.py` (decision `ask`, never `deny`) |
@@ -700,9 +702,11 @@ decision gnomon could not make is never an allow.
 
 `rule` is `null` on an allow that nothing stopped. Tools decided (`tool`):
 `bash`, `write`, `edit`, `read`, `webfetch` — gnomon's own names and argument
-names — `grep` and `glob` (`{ "pattern", "path"? }`), decided as a `read` of
-the directory they search (and, for a glob whose pattern names its own
-directory, of that too), and `execute` (`{ "code" }`), JavaScript a harness runs itself
+names — `grep` and `glob` (`{ "pattern", "path"? }`), decided by the
+precheck gnomon's own search tools run (`searchPrecheck`): where they search,
+put to read's rules (a protected secret or a directory holding one, §37, then
+the sandbox), and, for a glob whose pattern names its own directory, that
+directory too — and `execute` (`{ "code" }`), JavaScript a harness runs itself
 (opencode V2's Code Mode). `execute` is decided as the equivalent bash call
 `node -e '<code>'`; for a role without `bash` it is `ask` with rule `tools`.
 Anything else is `allow` with rule `ungoverned`, never guessed at.
@@ -3106,16 +3110,17 @@ tools.ts; tools and governance tests pin the table against the rule list):
 | `write` | `write_allow` (write, edit and shell write targets), `sandbox` on write/edit |
 | `bash` | `bash_deny`, `bash_allow`, `sudo`, `repo_code` |
 | `network` | `network`, `url` |
-| `secrets` | `sandbox` on read (a read outside the root). `secret_path` arrives with shared-governance PR 3 |
+| `secrets` | `secret_path` (§37); `sandbox` on read, grep and glob (a read or search outside the root) |
 | `rules` | `surface`, `record`, `git_hooks`, `host_hooks` |
-| `ci` | none yet: `ci_path` arrives with shared-governance PR 3. A declared level is resolved and recorded |
+| `ci` | `ci_path` (§37) |
 | *(structural, never levelled)* | `tools`, `malformed`; and in the guard `ungoverned`, `error` |
 
 An `approval` ask takes the family of the calling tool: `bash` (and `execute`)
 → `bash`, `write`/`edit` → `write`, `webfetch` → `network`; a `read` ask is
-not levelled. `grep` and `glob` are decided as reads of where they search,
-and at `prevent` whatever is declared: gnomon's own search tools refuse a path
-outside the root with no levelled path yet, and the guard matches them. When
+not levelled. `grep` and `glob` read what they search: their refusals
+(`sandbox`, `secret_path`) are in family `secrets`, levelled like read's, in
+gnomon's own search tools and in the guard alike (until §37 they were held at
+`prevent`); their ask, like read's, is not levelled. When
 a verdict is levelled away the remaining rules are still
 asked, so a levelled `bash_deny` does not hide a `.gnomon/` write on the same
 line: the call is still denied, by `surface`.
@@ -3176,3 +3181,78 @@ binary (`gnomon-cli/src/guard.test.ts`), which must reach the same decision,
 verdict, rule, family and level. `conformance/guard_decision.json` lists the
 new optional keys; `conformance/enumerations_golden.json` the two
 enumerations.
+
+## 37. Protected paths — `protectedPath`, `[governance.paths]`, rules `secret_path` and `ci_path`, `v: 1`
+
+One predicate answers "is this path one an agent may not change (or, for a
+secret, read)?" for every list a rule protects: `protectedPath(ctx, abs)` in
+tools.ts. It asks, in this order, `record`, `surface`, `git_hooks`,
+`host_hooks` (§10, unchanged: each answers exactly as before, and a test holds
+the predicate to their old answers), then the two families this section adds:
+
+| Rule | Family | Binds | Default list (published: `conformance/protected_paths.json`) |
+|---|---|---|---|
+| `secret_path` | `secrets` | `read`; `write`/`edit`; a bash word naming one (operands, `--opt=value`, `@file`, redirections; through wrappers, `sh -c` and `$( )`), or a directory a recursive reader walks into one; an environment dump; a grep/glob scope that is one or holds one | `.env`, `.env.*` (but not `.env.example`/`.sample`/`.template`/`.dist`), `.envrc`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `.netrc`, `_netrc`, `.git-credentials`, `.pgpass`, `~/.ssh/**`, `~/.aws/**`, `~/.azure/**`, `~/.config/gcloud/**`, `~/.gnupg/**`, `~/.config/gh/hosts.yml`, `~/.docker/config.json`, `~/.kube/config`, `~/.npmrc`, `~/.pypirc` |
+| `ci_path` | `ci` | `write`/`edit`; a bash write target (redirections, `rm`, `mv`, `cp`, `sed -i`, …), a recursive removal reaching one. Reads stay allowed | `.github/workflows/**`, `.github/actions/**`, `.gitlab-ci.yml`, `.circleci/**`, `Jenkinsfile`, `azure-pipelines.yml`, `.azure-pipelines/**`, `.buildkite/**`, `.travis.yml`, `bitbucket-pipelines.yml`, `.drone.yml`, `.woodpecker.yml`, `.woodpecker/**` |
+
+**Environment dumps** are in `secret_path` too, as a fixed list beside the
+network clients (shell.ts `bashEnvDump`, `ENV_DUMP_PATH`): `printenv` (with or
+without names), `env` running no command, a bare `export` / `export -p`,
+`declare`/`typeset` with `-x`/`-p` and no names, a bare `set`, and any path
+`/proc/<pid>/environ`. No list declares them away; a level does.
+
+**Only where governance is declared.** The two families exist when the
+surface declares `[governance]` (or a role's `[roles.<name>.governance]`;
+`[extends]` will add its layer's lists by union). With neither, no list is in
+force (`ctx.protectedPaths` is absent), and every request, decision and record
+is master's: the loop's requests with real tools over `.env`, `printenv`, a
+tree grep and CI writes are pinned to master's hash
+(`protected_paths_loop.test.ts`), and `conformance/guard_cases.json` holds the
+same calls' undeclared decisions. `gnomon init` scaffolds `[governance] level
+= "prevent"`, so a new repository gets the defaults through a hashed
+declaration, never a code default under an unchanged hash.
+
+```toml
+# .gnomon/policy.toml
+[governance]
+level   = "prevent"
+secrets = "enforce"
+ci      = "advise"          # tell agents about CI edits before refusing them
+
+[governance.paths]          # each list REPLACES its default; [] protects nothing
+secrets = [".env", ".env.*", "!.env.example", "config/*.secret", "~/.aws/**"]
+ci      = [".github/workflows/**", "deploy/pipeline.yml"]
+```
+
+**Patterns.** `name` (no slash) is the last component of a path, wherever it
+is (a `.env` in a package or a sibling project); `dir/x/**` is relative to the
+repository root and names `dir/x` itself too; `~/…` is under the home
+directory of the deciding process; `/…` is absolute; `!pattern` excepts, and
+the last matching pattern decides, as in `.gitignore`. A path is judged as
+written and at its real path, so a symlink to a secret is the secret. A list
+that is not a list of non-empty strings is a **fatal** surface problem; an
+unknown key in `[governance.paths]` is warned with did-you-mean.
+
+**Levels.** Both families are levelled like every other (§36). Below
+`prevent` the verdict is recorded and the call runs; gnomon's own `grep` then
+searches protected files too. At `prevent` and above it skips them and says
+how many it did not search.
+
+**What it does not see.** Like the network filter it reads intent from the
+text of a call: a path built at run time, a script file's contents, code an
+interpreter runs (`python3 -c "open('.env')"`), a word after a `cd` gnomon
+does not follow (judged as if from the root), and a host grep's walk over a
+tree that holds a `.env` (the guard decides the scope, not the files the host
+then opens) are not refused by it. Containment is `[sandbox] exec`.
+Programs that read only a name or metadata (`echo`, `ls`, `test`, `stat`, …)
+and the pattern a grep, sed or awk takes first are not path words, so `echo
+.env >> .gitignore` and `grep -q .env .gitignore` stay allowed. `cp
+.env.example .env` names `.env` and is refused at `prevent`: writing a secret
+file is the person's.
+
+**Fixture**: `conformance/guard_cases.json` `levels` (secret and CI cases at
+every level, loop, guard and binary) and its gate cases (the same calls with
+no governance); `conformance/protected_paths.json` (the default lists, pinned
+against `DEFAULT_SECRET_PATHS` / `DEFAULT_CI_PATHS`); `guard_decision.json`
+and `skill_candidate.json` list the two rules.
+

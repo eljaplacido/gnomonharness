@@ -54,7 +54,6 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   loadConfig,
@@ -66,14 +65,13 @@ import {
   type GnomonConfig,
 } from "./config.js";
 import { AuditTrail, redact, resolveAudit } from "./audit.js";
-import { maxLevel, resolveLevels, type GovernanceFamily, type GovernanceLevel } from "./governance.js";
+import { resolveLevels, resolveProtectedPaths, type GovernanceFamily, type GovernanceLevel } from "./governance.js";
 import { joinWords } from "./shell.js";
 import { harnessBuild } from "./build.js";
 import {
   POLICY_TOOLS,
   buildToolSet,
   toolCallPolicy,
-  ruleFamily,
   type PolicyDecision,
   type PolicyRule,
   type ToolContext,
@@ -108,6 +106,8 @@ export const GUARD_RULES = [
   "git_hooks",
   "host_hooks",
   "write_allow",
+  "secret_path",
+  "ci_path",
   "network",
   "url",
   "repo_code",
@@ -628,8 +628,12 @@ export async function decide(
   // The committed revision's levels, like its rules. A value outside the
   // enumeration throws, and guardToolCall turns that into ask / error.
   const governance = resolveLevels(config, role);
+  // The committed revision's protected-path lists, beside its levels: absent
+  // with them. A list of the wrong shape throws, like a level.
+  const protectedPaths = resolveProtectedPaths(config, governance);
   const ctx: ToolContext = {
     ...(governance ? { governance } : {}),
+    ...(protectedPaths ? { protectedPaths } : {}),
     config: live,
     bashAllow: roleDef?.bash_allow,
     bashDeny: roleDef?.bash_deny,
@@ -651,44 +655,12 @@ export async function decide(
   };
   const offered = new Set(buildToolSet(config, role).schemas.map((s) => s.function.name));
   if (call.tool === "execute") return decideExecute(call, ctx, offered);
-  if (call.tool === "grep" || call.tool === "glob") return decideSearch(call, ctx, offered);
+  // `grep` and `glob` read what they search: a role that holds read may
+  // search, with or without the tool itself (tools.ts searchPrecheck).
+  if ((call.tool === "grep" || call.tool === "glob") && !offered.has(call.tool) && offered.has("read")) {
+    return toolCallPolicy(call.tool, call.input, ctx, new Set([...offered, call.tool]));
+  }
   return toolCallPolicy(call.tool, call.input, ctx, offered);
-}
-
-/**
- * `grep` and `glob` read what they search, so where they search is put to
- * read's rules: the same sandbox, the same gate. gnomon's own grep and glob
- * refuse a path outside the root the way read does (tools.ts searchScope).
- * Another harness's search may also name its directory in the pattern
- * (`/home/u/.ssh/*`, `../other/**`): that directory is put to read too, and
- * the strictest answer stands. A role that holds neither the tool nor read
- * may not search.
- */
-async function decideSearch(call: GuardCall, ctx: ToolContext, offered: Set<string>): Promise<PolicyDecision> {
-  if (!offered.has(call.tool) && !offered.has("read")) return toolCallPolicy(call.tool, call.input, ctx, offered);
-  const home = (p: string) => (p === "~" || p.startsWith("~/") ? join(homedir(), p.slice(1)) : p);
-  const where = typeof call.input.path === "string" && call.input.path.trim() ? home(call.input.path.trim()) : ".";
-  const scopes = [where];
-  const pattern = typeof call.input.pattern === "string" ? call.input.pattern : "";
-  if (call.tool === "glob" && (isAbsolute(pattern) || pattern.startsWith("~") || /(^|\/)\.\.(\/|$)/.test(pattern))) {
-    const literal = home(pattern).split(/[*?[{]/)[0]!;
-    const dir = literal.endsWith("/") ? literal : dirname(literal);
-    scopes.push(isAbsolute(dir) ? dir : join(where, dir));
-  }
-  const reads = new Set([...offered, "read"]);
-  // Not levelled (CONTRACTS.md §36): gnomon's own grep and glob refuse a
-  // search outside the root in searchScope, which has no levelled path, so
-  // the guard decides them at prevent too and the two cannot disagree. The
-  // decision still carries verdict/family/level under a declared level.
-  const plain: ToolContext = { ...ctx, governance: undefined };
-  let worst: PolicyDecision | null = null;
-  for (const scope of scopes) {
-    const p = await toolCallPolicy("read", { path: scope }, plain, reads);
-    if (!worst || SEVERITY[p.decision] > SEVERITY[worst.decision]) worst = { ...p, reason: `${call.tool} reads what it searches, decided as a read of "${scope}". ${p.reason}` };
-  }
-  if (!ctx.governance) return worst!;
-  const family = worst!.rule ? ruleFamily(worst!.rule, "read") : null;
-  return { ...worst!, verdict: worst!.decision, family, level: family ? maxLevel(ctx.governance.levels[family], "prevent") : null };
 }
 
 /**

@@ -738,6 +738,27 @@ level = "confined"                 # off | confined | strict
 # at all, which is isolation.
 network = false
 
+[governance]
+# How strongly each family of rules is applied (docs/CONTRACTS.md §36), weakest
+# first: observe (record it, the call runs), advise (record it and tell the
+# agent), prevent (refuse or ask: what gnomon has always done), enforce.
+level = "prevent"
+# A family may sit below \`level\`: write, bash, network, secrets, rules, ci.
+# E.g. ci = "advise" tells agents about CI edits before they are refused.
+# rules (.gnomon/, the records, git and host hooks) never goes below prevent.
+#
+# Declaring [governance] also protects two families of paths, each with a
+# default list (docs/CONTRACTS.md §37), in gnomon's loop and in \`gnomon guard\`:
+#   secrets  reading, naming or overwriting credentials -- .env (not
+#            .env.example), *.pem, *.key, id_rsa, .netrc, ~/.ssh, ~/.aws,
+#            ~/.config/gcloud, ... -- and printenv, a bare env, /proc/*/environ
+#   ci       writing CI definitions -- .github/workflows, .gitlab-ci.yml,
+#            .circleci, Jenkinsfile, azure-pipelines.yml, ...
+# A declared list replaces its default; an empty list protects nothing.
+#   [governance.paths]
+#   secrets = [".env", ".env.*", "!.env.example", "~/.aws/**"]
+#   ci      = [".github/workflows/**"]
+
 # Keys that changed nothing used to sit here — auto_merge,
 # reject_on_disagreement, env_isolation, min_line_context, preserve_formatting.
 # A surface that documents a setting no code reads is worse than one that omits

@@ -1,0 +1,89 @@
+{
+  "version": "0.1.0",
+  "_comment": [
+    "The protected-path families shared-governance PR 3 adds (docs/CONTRACTS.md §37): what",
+    "`secret_path` and `ci_path` protect when [governance] (or a role governance table) is declared",
+    "and [governance.paths] does not declare the list. A declared list REPLACES its default; an empty",
+    "list protects nothing. With no governance declared neither family exists.",
+    "",
+    "Pattern forms: `name` (no slash) is the last component of a path, anywhere; `dir/x/**` is",
+    "relative to the repository root and names the directory too; `~/...` is under the home",
+    "directory; `/...` is absolute; `!pattern` excepts. The last matching pattern decides.",
+    "",
+    "`env_dumpers` is the fixed list (shell.ts bashEnvDump, ENV_DUMP_PATH) in the secrets family; no",
+    "list declares it away. packages/gnomon-core/src/protected_paths.test.ts pins this file against",
+    "DEFAULT_SECRET_PATHS / DEFAULT_CI_PATHS."
+  ],
+  "secrets": [
+    ".env",
+    ".env.*",
+    "!.env.example",
+    "!.env.sample",
+    "!.env.template",
+    "!.env.dist",
+    ".envrc",
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    ".netrc",
+    "_netrc",
+    ".git-credentials",
+    ".pgpass",
+    "~/.ssh/**",
+    "~/.aws/**",
+    "~/.azure/**",
+    "~/.config/gcloud/**",
+    "~/.gnupg/**",
+    "~/.config/gh/hosts.yml",
+    "~/.docker/config.json",
+    "~/.kube/config",
+    "~/.npmrc",
+    "~/.pypirc"
+  ],
+  "ci": [
+    ".github/workflows/**",
+    ".github/actions/**",
+    ".gitlab-ci.yml",
+    ".circleci/**",
+    "Jenkinsfile",
+    "azure-pipelines.yml",
+    ".azure-pipelines/**",
+    ".buildkite/**",
+    ".travis.yml",
+    "bitbucket-pipelines.yml",
+    ".drone.yml",
+    ".woodpecker.yml",
+    ".woodpecker/**"
+  ],
+  "env_dumpers": [
+    "printenv",
+    "env (no command)",
+    "export (no names) / export -p",
+    "declare -x|-p, typeset -x|-p (no names)",
+    "set (no arguments)",
+    "/proc/<pid>/environ"
+  ],
+  "rules": {
+    "secret_path": "secrets",
+    "ci_path": "ci"
+  },
+  "binds": {
+    "secret_path": [
+      "read",
+      "write",
+      "edit",
+      "bash (a word naming one, a redirection, an env dump, a recursive reader reaching one)",
+      "grep / glob (the scope, or a scope above a listed directory)"
+    ],
+    "ci_path": [
+      "write",
+      "edit",
+      "bash write targets (redirections, rm/mv/cp/sed -i, …)"
+    ]
+  }
+}

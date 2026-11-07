@@ -201,3 +201,139 @@ export function adviseText(hits: ReadonlyArray<{ rule: string; verdict: "deny" |
     )
     .join("\n");
 }
+
+// ---------------------------------------------------------------------------
+// Protected paths: the `secrets` and `ci` families' lists
+// ---------------------------------------------------------------------------
+
+/** The lists `[governance.paths]` declares, by family. */
+export const GOVERNANCE_PATH_KEYS = ["secrets", "ci"] as const;
+export type GovernancePathKey = (typeof GOVERNANCE_PATH_KEYS)[number];
+
+/**
+ * What `secret_path` protects when `[governance.paths] secrets` is not
+ * declared. A published default (CONTRACTS.md §37, `gnomon enumerations`).
+ * Pattern forms (the same for both lists):
+ *
+ *   name        no slash: the last component of a path, wherever it is
+ *               (`.env` in the root, in a package, in a sibling project)
+ *   dir/x/**    a slash: relative to the repository root; `dir/**` is the
+ *               directory itself and everything below it
+ *   ~/x/**      under the home directory of the process deciding
+ *   /abs/**     an absolute path
+ *   !pattern    excepted: the last pattern that matches decides, as in
+ *               .gitignore
+ *
+ * Chosen from the credentials an agent can reach on a developer machine and
+ * the GBS-LAYER pilot's leaks (`.env` through read, `cat ~/.aws/credentials`,
+ * `~/.ssh/id_rsa`, `~/.config/gh/hosts.yml`): dotenv files (but not their
+ * committed templates), private keys and certificates by extension and by
+ * ssh's names, netrc / git / postgres password files anywhere, and the
+ * per-user credential stores of ssh, the cloud CLIs, gpg, gh, docker,
+ * kubectl, npm and PyPI. `.npmrc` and `.pypirc` only under home: a project's
+ * `.npmrc` usually holds a registry and `${NPM_TOKEN}`, not a token.
+ * `/proc/<pid>/environ` is not here: it is protected whatever the list says
+ * (shell.ts ENV_DUMP_PATH), like `printenv` and a bare `env`.
+ */
+export const DEFAULT_SECRET_PATHS: readonly string[] = [
+  ".env",
+  ".env.*",
+  "!.env.example",
+  "!.env.sample",
+  "!.env.template",
+  "!.env.dist",
+  ".envrc",
+  "*.pem",
+  "*.key",
+  "*.p12",
+  "*.pfx",
+  "id_rsa",
+  "id_dsa",
+  "id_ecdsa",
+  "id_ed25519",
+  ".netrc",
+  "_netrc",
+  ".git-credentials",
+  ".pgpass",
+  "~/.ssh/**",
+  "~/.aws/**",
+  "~/.azure/**",
+  "~/.config/gcloud/**",
+  "~/.gnupg/**",
+  "~/.config/gh/hosts.yml",
+  "~/.docker/config.json",
+  "~/.kube/config",
+  "~/.npmrc",
+  "~/.pypirc",
+];
+
+/**
+ * What `ci_path` protects when `[governance.paths] ci` is not declared: the
+ * files a CI service runs, with the repository's secrets in its environment.
+ * GitHub (workflows and the local actions they call), GitLab, CircleCI,
+ * Jenkins, Azure Pipelines, Buildkite, Travis, Bitbucket, Drone and
+ * Woodpecker. A published default (CONTRACTS.md §37).
+ */
+export const DEFAULT_CI_PATHS: readonly string[] = [
+  ".github/workflows/**",
+  ".github/actions/**",
+  ".gitlab-ci.yml",
+  ".circleci/**",
+  "Jenkinsfile",
+  "azure-pipelines.yml",
+  ".azure-pipelines/**",
+  ".buildkite/**",
+  ".travis.yml",
+  "bitbucket-pipelines.yml",
+  ".drone.yml",
+  ".woodpecker.yml",
+  ".woodpecker/**",
+];
+
+/** The protected-path lists in force: each one the declared list, or the default. */
+export interface ProtectedPathLists {
+  secrets: readonly string[];
+  ci: readonly string[];
+}
+
+/**
+ * Read `[governance.paths]`. Absent: {}. A list that is not an array of
+ * non-empty strings is fatal (GovernanceError): a misspelt list must not read
+ * as "the default", nor a string as a list of its characters. Unknown keys are
+ * the surface audit's to warn.
+ */
+export function readGovernancePaths(where: string, raw: unknown): Partial<Record<GovernancePathKey, string[]>> {
+  if (raw === undefined) return {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new GovernanceError(`${where} must be a table (secrets = [...], ci = [...]), not ${Array.isArray(raw) ? "an array" : typeof raw}`);
+  }
+  const out: Partial<Record<GovernancePathKey, string[]>> = {};
+  for (const key of GOVERNANCE_PATH_KEYS) {
+    const v = (raw as Record<string, unknown>)[key];
+    if (v === undefined) continue;
+    if (!Array.isArray(v) || v.some((p) => typeof p !== "string" || p.trim() === "" || p.trim() === "!")) {
+      throw new GovernanceError(`${where} ${key} must be a list of path patterns (strings), not ${JSON.stringify(v)}`);
+    }
+    out[key] = (v as string[]).map((p) => p.trim());
+  }
+  return out;
+}
+
+/**
+ * The lists in force for a surface whose levels are `levels`: undefined when
+ * no governance is declared (no level, no `[governance]`, no role
+ * `governance`), so an undeclared surface protects exactly what it did before
+ * these families existed. Declared: each family's declared list REPLACES its
+ * default; an empty list protects nothing. (`[extends]` will add its layer's
+ * lists by union, shared-governance PR 7a.) Throws GovernanceError on a list
+ * of the wrong shape.
+ */
+export function resolveProtectedPaths(
+  config: { policy?: unknown },
+  levels: GovernanceLevels | undefined
+): ProtectedPathLists | undefined {
+  if (!levels) return undefined;
+  const gov = (config.policy as { governance?: { paths?: unknown } } | undefined)?.governance;
+  const declared = readGovernancePaths(".gnomon/policy.toml [governance.paths]", gov?.paths);
+  return { secrets: declared.secrets ?? DEFAULT_SECRET_PATHS, ci: declared.ci ?? DEFAULT_CI_PATHS };
+}

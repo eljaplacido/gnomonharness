@@ -44,7 +44,7 @@ import {
   isValidImageRef,
 } from "./config.js";
 import { proposeSkill, ProposalRefused, renderSkill, SkillProposal } from "./skills.js";
-import { adviseText, levelAtLeast, type GovernanceFamily, type GovernanceLevel, type GovernanceLevels } from "./governance.js";
+import { adviseText, levelAtLeast, type GovernanceFamily, type GovernanceLevel, type GovernanceLevels, type ProtectedPathLists } from "./governance.js";
 import { compute, ComputeError } from "./compute.js";
 import type { McpRegistry, McpToolInfo } from "./mcp.js";
 import {
@@ -55,8 +55,10 @@ import {
   type EditVariant,
 } from "./sweep_knobs.js";
 import {
+  bashEnvDump,
   bashNetworkEgress,
   describeInvocation,
+  ENV_DUMP_PATH,
   gitExecConfigs,
   gitIndexOps,
   isDryRunSegment,
@@ -64,6 +66,7 @@ import {
   programName,
   readShellCommand,
   repoCodeRuns,
+  shellPathWords,
   shellSpellings,
   shellWriteTargets,
   type GitClean,
@@ -1221,6 +1224,13 @@ export interface ToolContext {
    */
   governance?: GovernanceLevels;
   /**
+   * The `secrets` and `ci` path lists in force (governance.ts
+   * resolveProtectedPaths): set beside `governance`, and absent with it, so an
+   * undeclared surface protects exactly the surface, records, git hooks and
+   * host hooks it always did (protectedPath).
+   */
+  protectedPaths?: ProtectedPathLists;
+  /**
    * Set for ONE evaluation of one call by toolCallPolicy / executeTool, never
    * by a caller: a refusal whose family sits below prevent is pushed here and
    * the precheck carries on to the next rule (`applies`). Absent: every
@@ -1391,6 +1401,13 @@ export function readPrecheck(
     };
   }
   const path = args.path;
+  // A protected secret, before the sandbox: `~/.aws/credentials` is named as
+  // what it is, and under `sandbox = "off"` nothing else would refuse it.
+  // `.env` inside the root is refused only here (GBS-LAYER pilot: allowed).
+  if (ctx.protectedPaths && [resolve(ctx.root, path), resolve(ctx.root, homePath(path))].some((at) => protectedPath(ctx, at, ["secret_path"]))) {
+    const refusal = secretRefusal("read", path);
+    if (applies(ctx, "read", refusal)) return { refusal };
+  }
   const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
   if (!abs) {
     const refusal: Precheck = {
@@ -2004,6 +2021,12 @@ export function sandboxCommand(
  *                settings, the opencode plugin, Cursor's hooks.json) and the
  *                user-level settings that can switch them off
  *   write_allow  a path outside the role's write_allow
+ *   secret_path  a read, a write or a shell command naming a protected secret
+ *                path (`[governance.paths] secrets`), or a command that
+ *                prints the environment (`printenv`, a bare `env`,
+ *                `/proc/<pid>/environ`). Only under a declared governance
+ *   ci_path      a write, edit or shell write of a CI definition
+ *                (`[governance.paths] ci`). Only under a declared governance
  *   network      `[sandbox] network = false`
  *   url          a scheme other than http(s), or a private / loopback address
  *   repo_code    the call runs repository-defined code (`npm test`, `make`,
@@ -2022,6 +2045,8 @@ export const POLICY_RULES = [
   "git_hooks",
   "host_hooks",
   "write_allow",
+  "secret_path",
+  "ci_path",
   "network",
   "url",
   "repo_code",
@@ -2036,7 +2061,8 @@ export type PolicyRule = (typeof POLICY_RULES)[number];
  *   null      structural, not levelled: `tools` and `malformed` are not
  *             governable calls, and are refused at every level
  *   "by_tool" the family is the calling tool's: `sandbox` is `write` for
- *             write/edit, `bash` for bash and `secrets` for read; the
+ *             write/edit, `bash` for bash and `secrets` for read, grep and
+ *             glob (which read what they search); the
  *             `approval` ask is `write` for write/edit, `bash` for bash,
  *             `network` for webfetch, and unlevelled for read
  */
@@ -2055,6 +2081,9 @@ export const RULE_FAMILY: Readonly<Record<PolicyRule | "approval", GovernanceFam
   // #165: a host harness's hook configuration. Removing it detaches the
   // guard for every later session, so it is the rules, floor prevent.
   host_hooks: "rules",
+  // shared-governance PR 3: the protected-path families (protectedPath).
+  secret_path: "secrets",
+  ci_path: "ci",
   network: "network",
   url: "network",
   approval: "by_tool",
@@ -2067,7 +2096,7 @@ export function ruleFamily(rule: PolicyRule | "approval", tool: string): Governa
   const t = tool === "execute" ? "bash" : tool;
   if (t === "bash") return "bash";
   if (t === "write" || t === "edit") return "write";
-  if (rule === "sandbox") return t === "read" ? "secrets" : null;
+  if (rule === "sandbox") return t === "read" || t === "grep" || t === "glob" ? "secrets" : null;
   return t === "webfetch" ? "network" : null;
 }
 
@@ -2418,7 +2447,9 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
     };
     if (applies(ctx, "bash", refusal)) return refusal;
   }
-  return null;
+  // The `secrets` family: a command naming a protected secret path, or one
+  // that prints the environment. Only where governance is declared.
+  return secretWordRefusal(command, ctx);
 }
 
 /**
@@ -2516,6 +2547,12 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
   });
   const hooksHit = (path: string, how: string): Precheck => gitHooksRefusal("bash", path, how);
   const hostHit = (path: string, how: string): Precheck => hostHooksRefusal("bash", path, how);
+  // The levelled families (ci, secrets): refused only where their level
+  // applies; below it the verdict is recorded and the next target judged.
+  const levelledHit = (rule: "ci_path" | "secret_path", path: string, how: string): Precheck | null => {
+    const r = rule === "ci_path" ? ciRefusal("bash", path, how) : secretRefusal("bash", path, `${how}, which writes it`);
+    return applies(ctx, "bash", r) ? r : null;
+  };
 
   const { targets } = shellWriteTargets(command, opts);
   const protectedDirs = (): Array<{ dir: string; kind: "record" | "surface" }> => [
@@ -2539,9 +2576,14 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
       const slash = literal.lastIndexOf("/");
       const base = resolve(dirAbs(t.cwd), slash >= 0 ? literal.slice(0, slash + 1) : "");
       const name = recordPathKey(slash >= 0 ? literal.slice(slash + 1) : literal);
-      if (inRecordDir(ctx, base)) return recordHit(t.path, t.how);
-      if (inSurface(ctx, base)) return surfaceHit(t.path, t.how);
-      if (inHostHooks(ctx, base)) return hostHit(t.path, t.how);
+      const under = protectedPath(ctx, base, ["record", "surface", "host_hooks", "ci_path", "secret_path"]);
+      if (under?.rule === "record") return recordHit(t.path, t.how);
+      if (under?.rule === "surface") return surfaceHit(t.path, t.how);
+      if (under?.rule === "host_hooks") return hostHit(t.path, t.how);
+      if (under?.rule === "ci_path" || under?.rule === "secret_path") {
+        const r = levelledHit(under.rule, t.path, t.how);
+        if (r) return r;
+      }
       for (const p of protectedDirs()) {
         if (name !== "" && recordPathKey(dirname(p.dir)) === recordPathKey(base) && recordPathKey(basename(p.dir)).startsWith(name)) {
           return p.kind === "record" ? recordHit(t.path, t.how) : surfaceHit(t.path, t.how);
@@ -2630,7 +2672,8 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     // are judged before the in-repository test: a custom [audit] dir may sit
     // outside the root. A second name for a record -- a hard link made
     // earlier -- is the record.
-    if (inRecordDir(ctx, j.abs) || hardLinkedToRecord(ctx, j.abs)) return recordHit(j.path, j.how);
+    const guarded = protectedPath(ctx, j.abs);
+    if (guarded?.rule === "record") return recordHit(j.path, j.how);
     // A removal of a directory ABOVE the records (or the surface) removes
     // them too: `rm -rf ../repo`, `find . -name '*.jsonl' -delete`.
     if (j.t.clean) {
@@ -2658,10 +2701,25 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
           return hostHit(j.path, `${j.how}, which removes ${relative(root, h).split(sep).join("/") || h}`);
         }
       }
+      // `rm -rf .github`, `rm -rf ~`: a CI definition or a secret goes with
+      // the directory that holds it.
+      if (!guarded) {
+        for (const rule of ["ci_path", "secret_path"] as const) {
+          const below = protectedBelow(ctx, j.abs, rule);
+          if (below && removalMatches(below, j.abs, j.path, j.t.names)) {
+            const r = levelledHit(rule, j.path, `${j.how}, which removes ${relative(root, below).split(sep).join("/") || below}`);
+            if (r) return r;
+          }
+        }
+      }
     }
-    if (inSurface(ctx, j.abs)) return surfaceHit(j.path, j.how);
-    if (inGitControl(ctx, j.abs)) return hooksHit(j.path, j.how);
-    if (inHostHooks(ctx, j.abs)) return hostHit(j.path, j.how);
+    if (guarded?.rule === "surface") return surfaceHit(j.path, j.how);
+    if (guarded?.rule === "git_hooks") return hooksHit(j.path, j.how);
+    if (guarded?.rule === "host_hooks") return hostHit(j.path, j.how);
+    if (guarded?.rule === "ci_path" || guarded?.rule === "secret_path") {
+      const r = levelledHit(guarded.rule, j.path, j.how);
+      if (r) return r;
+    }
     if (!j.writeAllow) continue;
     const rel = relative(root, j.abs);
     if (rel.startsWith("..") || isAbsolute(rel)) continue;
@@ -3105,6 +3163,240 @@ function hostHooksRefusal(tool: string, path: string, how?: string): Precheck {
     content: `Refused: ${what}.\n\n${HOST_HOOKS_WHY}`,
     summary: `${tool} ${path} — refused (host hooks)`,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Protected paths: one predicate
+// ---------------------------------------------------------------------------
+
+/** The rules protectedPath answers with, in the order it asks them. */
+export const PROTECTED_RULES = ["record", "surface", "git_hooks", "host_hooks", "ci_path", "secret_path"] as const;
+export type ProtectedRule = (typeof PROTECTED_RULES)[number];
+
+/**
+ * Is this resolved path one an agent may not change (or, for a secret, read
+ * or name)? The ONE predicate behind every path list a rule protects
+ * (shared-governance PR 3, CONTRACTS.md §37):
+ *
+ *   record       gnomon's records (inRecordDir, or a hard link to one)
+ *   surface      `.gnomon/` (inSurface)
+ *   git_hooks    `.git/hooks/`, `.git/config` (inGitControl)
+ *   host_hooks   a host harness's hook configuration (inHostHooks)
+ *   ci_path      `[governance.paths] ci`, or its default
+ *   secret_path  `[governance.paths] secrets`, or its default, and
+ *                `/proc/<pid>/environ`
+ *
+ * The first four are what they always were. The last two exist only where
+ * governance is declared (ctx.protectedPaths), so an undeclared surface gets
+ * exactly the answers it got before they existed. `only` restricts the
+ * question to some rules: a read asks about secrets alone, and a caller that
+ * judged one list at its own point in the order asks for that list there.
+ * Which operations each rule binds is the caller's: read (secret_path),
+ * write and edit (all), a shell write target (all), a shell word that names a
+ * path (secret_path).
+ */
+export function protectedPath(
+  ctx: ToolContext,
+  abs: string,
+  only?: readonly ProtectedRule[]
+): { rule: ProtectedRule; family: GovernanceFamily } | null {
+  const want = (r: ProtectedRule) => !only || only.includes(r);
+  if (want("record") && (inRecordDir(ctx, abs) || hardLinkedToRecord(ctx, abs))) return { rule: "record", family: "rules" };
+  if (want("surface") && inSurface(ctx, abs)) return { rule: "surface", family: "rules" };
+  if (want("git_hooks") && inGitControl(ctx, abs)) return { rule: "git_hooks", family: "rules" };
+  if (want("host_hooks") && inHostHooks(ctx, abs)) return { rule: "host_hooks", family: "rules" };
+  const lists = ctx.protectedPaths;
+  if (!lists) return null;
+  if (want("ci_path") && pathListed(lists.ci, ctx.root, abs)) return { rule: "ci_path", family: "ci" };
+  if (want("secret_path") && (pathListed(lists.secrets, ctx.root, abs) || ENV_DUMP_PATH.test(resolve(abs).split(sep).join("/")))) {
+    return { rule: "secret_path", family: "secrets" };
+  }
+  return null;
+}
+
+const CASE_FOLD = process.platform === "win32" || process.platform === "darwin";
+const LIST_RE = new Map<string, RegExp>();
+function listRe(glob: string): RegExp {
+  let re = LIST_RE.get(glob);
+  if (!re) {
+    re = globToRegExp(glob, CASE_FOLD ? "i" : "");
+    LIST_RE.set(glob, re);
+  }
+  return re;
+}
+
+/** `~` and `~/…` as the home directory; anything else as written. */
+function homePath(p: string): string {
+  return p === "~" || p.startsWith("~/") ? join(homedir(), p.slice(1)) : p;
+}
+
+/**
+ * Does `abs` match a protected-path list (governance.ts DEFAULT_SECRET_PATHS
+ * gives the pattern forms)? Judged at the path as written and at its real
+ * path, so a symlink to a secret is the secret. The last pattern that matches
+ * decides, so `!.env.example` excepts what `.env.*` named.
+ */
+function pathListed(list: readonly string[], root: string, abs: string): boolean {
+  if (list.length === 0) return false;
+  const views: Array<[string, string, string]> = [[resolve(abs), resolve(root), homedir()]];
+  const real = realpathOfNearest(abs);
+  if (real !== views[0]![0]) views.push([real, realpathOrSelf(resolve(root)), realpathOrSelf(homedir())]);
+  for (const [at, base, home] of views) {
+    let listed = false;
+    for (const raw of list) {
+      const neg = raw.startsWith("!");
+      if (patternMatches(neg ? raw.slice(1) : raw, at, base, home)) listed = !neg;
+    }
+    if (listed) return true;
+  }
+  return false;
+}
+
+function patternMatches(pattern: string, at: string, root: string, home: string): boolean {
+  const slash = (p: string) => p.split(sep).join("/");
+  const inside = (base: string): string | null => {
+    const rel = relative(base, at);
+    return rel.startsWith("..") || isAbsolute(rel) ? null : slash(rel);
+  };
+  let subject: string | null;
+  let glob: string;
+  if (pattern === "~" || pattern.startsWith("~/")) {
+    subject = inside(home);
+    glob = pattern.slice(2);
+  } else if (pattern.startsWith("/") || isAbsolute(pattern)) {
+    subject = slash(at);
+    glob = slash(pattern);
+  } else if (pattern.includes("/")) {
+    subject = inside(root);
+    glob = pattern.replace(/^\.\//, "");
+  } else {
+    subject = basename(at);
+    glob = pattern;
+  }
+  if (subject === null) return false;
+  const re = listRe(glob);
+  // `dir/**` names the directory too: `rm -rf ~/.ssh` removes what it protects.
+  return re.test(subject) || re.test(`${subject}/`);
+}
+
+/**
+ * A listed location below `abs` that exists: what a recursive removal or a
+ * recursive read starting at `abs` reaches (`rm -rf .github`, `grep -r key
+ * ~`). Only patterns that name a place (`~/.ssh/**`, `.github/workflows/**`)
+ * can be found below a directory; a name pattern (`.env`) is judged where the
+ * command names it.
+ */
+function protectedBelow(ctx: ToolContext, abs: string, rule: "ci_path" | "secret_path"): string | null {
+  const list = rule === "ci_path" ? ctx.protectedPaths?.ci : ctx.protectedPaths?.secrets;
+  if (!list) return null;
+  for (const pattern of list) {
+    if (pattern.startsWith("!")) continue;
+    const cut = pattern.search(/[*?[{]/);
+    const lit = cut < 0 ? pattern : pattern.slice(0, Math.max(0, pattern.lastIndexOf("/", cut)));
+    if (!lit || (!lit.includes("/") && !lit.startsWith("~"))) continue;
+    const at = lit.startsWith("~") ? homePath(lit) : isAbsolute(lit) ? lit : resolve(ctx.root, lit);
+    if (existsSync(at) && isAncestor(abs, at) && pathListed(list, ctx.root, at)) return at;
+  }
+  return null;
+}
+
+const SECRET_WHY =
+  `A credential read into a conversation is a credential sent to a model provider, kept in ` +
+  `transcripts and one tool call from leaving the machine; one removed or overwritten is ` +
+  `the person's to replace. This repository's [governance] protects these paths. If the ` +
+  `task needs a value from one, say so plainly: the person can provide what is needed (a ` +
+  `test value, the name of an environment variable) without the secret passing through here.`;
+
+function secretRefusal(tool: string, path: string, how?: string): Precheck {
+  const what =
+    how === undefined
+      ? `"${path}" is a protected secret path`
+      : how.startsWith("prints")
+        ? `\`${path}\` ${how}`
+        : `this command names "${path}" (${how}), a protected secret path`;
+  return {
+    rule: "secret_path",
+    code: TOOL_DENIED,
+    content: `Refused: ${what} ([governance.paths] secrets).\n\n${SECRET_WHY}`,
+    summary: `${tool} ${path.slice(0, 80)} — refused (secret path)`,
+  };
+}
+
+const CI_WHY =
+  `A CI service runs what is there with the repository's secrets in its environment, on ` +
+  `the next push -- outside any call gnomon decides. This repository's [governance] ` +
+  `protects its CI definitions. If the task needs a CI change, say so plainly and give ` +
+  `the person the exact change to make.`;
+
+function ciRefusal(tool: string, path: string, how?: string): Precheck {
+  const what =
+    how === undefined
+      ? `"${path}" is a CI definition`
+      : `this command writes "${path}" (${how}), a CI definition`;
+  return {
+    rule: "ci_path",
+    code: TOOL_DENIED,
+    content: `Refused: ${what} ([governance.paths] ci).\n\n${CI_WHY}`,
+    summary: `${tool} ${path} — refused (CI path)`,
+  };
+}
+
+/**
+ * The `secrets` family in a shell command: a command that prints the
+ * environment (shell.ts bashEnvDump), and any word that names a protected
+ * secret path (shell.ts shellPathWords), or a directory a recursive reader
+ * walks into one. Only where governance is declared.
+ *
+ * Words resolve from the root: a path after a `cd` gnomon does not follow is
+ * judged as if from the root, and a name pattern (`.env`) matches wherever it
+ * lands. A literal prefix before a wildcard is judged as a directory, and a
+ * wildcard in the last name is matched against what is there (`cat *.pem`).
+ * Like the network filter this reads intent, not effects: a script FILE, or a
+ * path code builds at run time, is not judged.
+ */
+function secretWordRefusal(command: string, ctx: ToolContext): Precheck | null {
+  if (!ctx.protectedPaths) return null;
+  const dump = bashEnvDump(command);
+  if (dump) {
+    const r = secretRefusal("bash", dump.command, `prints the environment (${dump.why})`);
+    if (applies(ctx, "bash", r)) return r;
+  }
+  for (const w of shellPathWords(command)) {
+    const word = w.word.replace(/^(\$HOME|\$\{HOME\})(?=\/|$)/, "~");
+    if (/^[$`]/.test(word) || (word.startsWith("~") && !(word === "~" || word.startsWith("~/")))) continue;
+    const star = word.search(/[*?[{$`]/);
+    const literal = star < 0 ? word : word.slice(0, star);
+    const slash = literal.lastIndexOf("/");
+    const dirPart = star < 0 ? null : slash >= 0 ? literal.slice(0, slash + 1) : "";
+    const candidates: string[] = [];
+    if (dirPart === null) {
+      candidates.push(resolve(ctx.root, homePath(word)));
+    } else {
+      const dir = resolve(ctx.root, homePath(dirPart || "."));
+      if (dirPart) candidates.push(dir);
+      // `cat *.pem`, `cat ~/.ssh/id_*`: what the shell would expand the last name to.
+      if (!word.slice(slash + 1).includes("/")) {
+        try {
+          const nameGlob = word.slice(slash + 1);
+          const re = globToRegExp(nameGlob);
+          for (const e of readdirSync(dir).slice(0, 2000)) {
+            if (e.startsWith(".") && !nameGlob.startsWith(".")) continue;
+            if (re.test(e)) candidates.push(join(dir, e));
+          }
+        } catch {
+          /* not a directory gnomon can list: the literal part was judged */
+        }
+      }
+    }
+    for (const at of candidates) {
+      const hit = protectedPath(ctx, at, ["secret_path"]) ? at : w.recursive ? protectedBelow(ctx, at, "secret_path") : null;
+      if (!hit) continue;
+      const how = hit === at ? `${w.prog}` : `${w.prog} reaches ${hit}`;
+      const r = secretRefusal("bash", w.word, how);
+      if (applies(ctx, "bash", r)) return r;
+    }
+  }
+  return null;
 }
 
 /**
@@ -5645,20 +5937,67 @@ export function walkFiles(root: string, dir: string, max: number = WALK_MAX_FILE
   return out.sort();
 }
 
+/**
+ * What `grep` and `glob` refuse before they walk: where they search is put to
+ * read's rules -- a protected secret, or a directory the walk would reach one
+ * through (`grep -r key ~`), then the sandbox -- each levelled like any other
+ * (family `secrets`). The one precheck for gnomon's own search tools and for
+ * `gnomon guard` deciding another harness's (toolCallPolicy).
+ *
+ * `host`: the call is another harness's, which reads the path as its shell
+ * would: `~` is the home directory, and a glob pattern may name its own
+ * directory (`/home/u/.ssh/*`, `../other/**`), judged too. gnomon's own tools
+ * read `~` as a name in the root and a pattern relative to the scope, as they
+ * always have.
+ */
+export function searchPrecheck(
+  tool: "grep" | "glob",
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  host: boolean
+): Precheck | null {
+  const raw = String(args.path ?? "").trim() || ".";
+  const scopes = [host ? homePath(raw) : raw];
+  const pattern = typeof args.pattern === "string" ? args.pattern : "";
+  if (host && tool === "glob" && (isAbsolute(pattern) || pattern.startsWith("~") || /(^|\/)\.\.(\/|$)/.test(pattern))) {
+    const literal = homePath(pattern).split(/[*?[{]/)[0]!;
+    const dir = literal.endsWith("/") ? literal : dirname(literal);
+    scopes.push(isAbsolute(dir) ? dir : join(scopes[0]!, dir));
+  }
+  for (const scope of scopes) {
+    if (ctx.protectedPaths) {
+      const at = resolve(ctx.root, scope);
+      const hit = protectedPath(ctx, at, ["secret_path"]) ? at : protectedBelow(ctx, at, "secret_path");
+      if (hit) {
+        const r = secretRefusal(tool, scope, hit === at ? undefined : `${tool} reaches ${hit}`);
+        if (applies(ctx, tool, r)) return r;
+      }
+    }
+    if (!resolveInRoot(ctx.root, scope, ctx.sandbox, ctx.extraRoots)) {
+      const r: Precheck = {
+        rule: "sandbox",
+        code: TOOL_OUT_OF_SANDBOX,
+        content: `Refused: "${scope}" is outside the repository root and sandbox=${ctx.sandbox}.`,
+        summary: `search ${scope} — refused (outside sandbox)`,
+      };
+      if (applies(ctx, tool, r)) return r;
+    }
+  }
+  return null;
+}
+
 /** Resolve the optional `path` argument to a directory inside the sandbox. */
 async function searchScope(
+  tool: "grep" | "glob",
   args: Record<string, unknown>,
   ctx: ToolContext
 ): Promise<{ abs: string; rel: string } | ToolOutcome> {
   const raw = String(args.path ?? "").trim() || ".";
-  const abs = resolveInRoot(ctx.root, raw, ctx.sandbox, ctx.extraRoots);
-  if (!abs) {
-    return {
-      code: TOOL_OUT_OF_SANDBOX,
-      content: `Refused: "${raw}" is outside the repository root and sandbox=${ctx.sandbox}.`,
-      summary: `search ${raw} — refused (outside sandbox)`,
-    };
-  }
+  const refused = searchPrecheck(tool, args, ctx, false);
+  if (refused) return outcomeOf(refused);
+  // Past the precheck, outside the sandbox only when its level recorded the
+  // refusal rather than applied it.
+  const abs = resolveInRoot(ctx.root, raw, ctx.sandbox, ctx.extraRoots) ?? resolveInRoot(ctx.root, raw, "off")!;
   // Same ordering rule as read: the gate decides before the filesystem is
   // consulted, so a declined search cannot confirm a directory exists.
   const denied = await gateReadOnly("glob", `search ${raw}`, ctx);
@@ -5703,7 +6042,7 @@ async function globTool(
       summary: "glob — no pattern",
     };
   }
-  const scope = await searchScope(args, ctx);
+  const scope = await searchScope("glob", args, ctx);
   if ("code" in scope) return scope;
 
   let re: RegExp;
@@ -5763,7 +6102,7 @@ async function grepTool(
       summary: "grep — no pattern",
     };
   }
-  const scope = await searchScope(args, ctx);
+  const scope = await searchScope("grep", args, ctx);
   if ("code" in scope) return scope;
 
   let re: RegExp;
@@ -5807,9 +6146,17 @@ async function grepTool(
   }
   const base =
     scopeIsFile || scope.rel === "." ? "" : scope.rel.replace(/\/+$/, "") + "/";
-  const files = walkFiles(ctx.root, scope.abs).filter(
+  const walked = walkFiles(ctx.root, scope.abs).filter(
     (f) => !include || include.test(base ? f.slice(base.length) : f)
   );
+  // A protected secret is not searched where its family is at prevent or
+  // above: `grep -r KEY .` must not read `.env` into the conversation.
+  // Below prevent it is searched, as it would be read.
+  const skipSecrets = ctx.protectedPaths !== undefined && (!ctx.governance || levelAtLeast(ctx.governance.levels.secrets, "prevent"));
+  const files = skipSecrets ? walked.filter((f) => !protectedPath(ctx, join(ctx.root, f), ["secret_path"])) : walked;
+  const unsearched = walked.length - files.length;
+  const unsearchedNote =
+    unsearched > 0 ? `\n\n(${unsearched} protected secret file(s) not searched: [governance.paths] secrets)` : "";
 
   const lines: string[] = [];
   let matched = 0;
@@ -5846,7 +6193,7 @@ async function grepTool(
       code: TOOL_OK_EMPTY,
       content: `No match for /${pattern}/ under ${scope.rel}${
         includeRaw ? ` (include ${includeRaw})` : ""
-      }.`,
+      }.${unsearchedNote}`,
       summary: `grep ${pattern} — 0 matches`,
     };
   }
@@ -5856,7 +6203,7 @@ async function grepTool(
       : "";
   return {
     code: TOOL_OK,
-    content: clamp(lines.join("\n") + truncated, ctx, `grep`),
+    content: clamp(lines.join("\n") + truncated + unsearchedNote, ctx, `grep`),
     summary: `grep ${pattern} — ${matched} match(es) in ${filesWithHits} file(s)`,
   };
 }
@@ -5898,8 +6245,16 @@ export function writePrecheck(
   // A host harness's hook configuration, before the sandbox: the user-level
   // settings are outside the root, and under `sandbox = "off"` nothing else
   // would refuse them. Named as what they are, wherever they are.
-  const hookAt = path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : resolve(ctx.root, path);
-  if (path.trim() !== "" && inHostHooks(ctx, hookAt)) return { refusal: hostHooksRefusal(tool, path) };
+  const hookAt = resolve(ctx.root, homePath(path));
+  if (path.trim() !== "") {
+    const early = protectedPath(ctx, hookAt, ["host_hooks", "secret_path"]);
+    if (early?.rule === "host_hooks") return { refusal: hostHooksRefusal(tool, path) };
+    // A secret, before the sandbox for the same reason: `~/.ssh/authorized_keys`.
+    if (early?.rule === "secret_path") {
+      const refusal = secretRefusal(tool, path);
+      if (applies(ctx, tool, refusal)) return { refusal };
+    }
+  }
   let abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
   if (!abs) {
     const refusal: Precheck = {
@@ -5911,12 +6266,13 @@ export function writePrecheck(
     if (applies(ctx, tool, refusal)) return { refusal };
     abs = resolveInRoot(ctx.root, path, "off")!;
   }
-  if (inRecordDir(ctx, abs) || hardLinkedToRecord(ctx, abs)) return { refusal: recordRefusal(tool, path) };
+  const guarded = protectedPath(ctx, abs, ["record", "surface", "git_hooks", "ci_path"]);
+  if (guarded?.rule === "record") return { refusal: recordRefusal(tool, path) };
   // `.git/hooks/` and `.git/config`: run or read by git on the operator's next
   // command, outside any call gnomon decides (INJ-2026-11: a pre-commit hook
   // written with the write tool passed every surface without write_allow).
-  if (inGitControl(ctx, abs)) return { refusal: gitHooksRefusal(tool, path) };
-  if (inSurface(ctx, abs)) {
+  if (guarded?.rule === "git_hooks") return { refusal: gitHooksRefusal(tool, path) };
+  if (guarded?.rule === "surface") {
     if (tool === "edit") {
       return {
         refusal: {
@@ -5949,6 +6305,12 @@ export function writePrecheck(
       };
     }
     return { abs, surface: true };
+  }
+  // CI definitions: before write_allow, so the rule named is the one that
+  // says why.
+  if (guarded?.rule === "ci_path") {
+    const refusal = ciRefusal(tool, path);
+    if (applies(ctx, tool, refusal)) return { refusal };
   }
   const scope = writeAllowed(ctx, abs);
   if (!scope.ok) {
@@ -6800,6 +7162,14 @@ function withSchemaRepair(
 export const POLICY_TOOLS = ["bash", "write", "edit", "read", "webfetch"] as const;
 export type PolicyTool = (typeof POLICY_TOOLS)[number];
 
+/**
+ * The tools toolCallPolicy decides: the POLICY_TOOLS, and `grep` and `glob`,
+ * which read what they search and are decided by searchPrecheck (levelled in
+ * family `secrets` since shared-governance PR 3; before it they were pinned at
+ * prevent).
+ */
+const DECIDED_TOOLS: ReadonlySet<string> = new Set([...POLICY_TOOLS, "grep", "glob"]);
+
 export interface PolicyDecision {
   decision: "allow" | "deny" | "ask";
   /** The rule that refused, "approval" for the gate, null when nothing stopped the call. */
@@ -6838,8 +7208,9 @@ export interface PolicyDecision {
  *          would then fail on its own (an empty command): failing is not
  *          refusing, and the reason says so.
  *
- * Only the POLICY_TOOLS are decided; anything else is an error to the caller,
- * never a silent allow.
+ * Only the POLICY_TOOLS, grep and glob are decided; anything else is an error
+ * to the caller, never a silent allow. A grep or glob is decided as another
+ * harness would run it (searchPrecheck `host`).
  */
 export async function toolCallPolicy(
   name: string,
@@ -6935,6 +7306,10 @@ async function rulesDecide(
       pre = "refusal" in f ? f.refusal : null;
       break;
     }
+    case "grep":
+    case "glob":
+      pre = searchPrecheck(name, args, ctx, true);
+      break;
     default:
       throw new Error(`no pre-execution policy for "${name}" (decided: ${POLICY_TOOLS.join(", ")})`);
   }
@@ -6972,7 +7347,7 @@ export async function executeTool(
   if (!offered.has(name)) {
     const refused = outcomeOf(notOffered(name, offered));
     // Structural, refused at every level; recorded like any other decision.
-    return ctx.governance && (POLICY_TOOLS as readonly string[]).includes(name)
+    return ctx.governance && DECIDED_TOOLS.has(name)
       ? withGovernance(refused, await toolCallPolicy(name, args, ctx, offered))
       : refused;
   }
@@ -7030,7 +7405,7 @@ export async function executeTool(
   // the decision recorded. Absent a declaration, none of this runs.
   let levels: PolicyDecision | undefined;
   let runCtx = ctx;
-  if (ctx.governance && (POLICY_TOOLS as readonly string[]).includes(name)) {
+  if (ctx.governance && DECIDED_TOOLS.has(name)) {
     levels = await toolCallPolicy(name, args, ctx, offered);
     const askLevelled = levels.levelled?.some((h) => h.verdict === "ask") ?? false;
     runCtx = { ...ctx, levelled: [], ...(askLevelled ? { gate: "never" as ApprovalGate, levelledAsk: true } : {}) };
@@ -7045,7 +7420,13 @@ export async function executeTool(
     // it: the model's own calls. The declared [verify] check, the bootstrap
     // and the must-fail-first re-run offer bash alone, and are killed at the
     // timeout as they always were.
-    outcome = await dispatch(name, args, runCtx.jobs && !offered.has(JOB_TOOL) ? { ...runCtx, jobs: undefined } : runCtx);
+    // A search decided as another harness runs it may be refused for a scope
+    // gnomon's own walk would not reach (a glob pattern naming `/home/u/.ssh`):
+    // refused here as the guard refuses it, not walked.
+    outcome =
+      levels?.decision === "deny" && (name === "grep" || name === "glob")
+        ? { code: levels.code ?? TOOL_DENIED, content: levels.reason, summary: `${name} — refused (${levels.rule})` }
+        : await dispatch(name, args, runCtx.jobs && !offered.has(JOB_TOOL) ? { ...runCtx, jobs: undefined } : runCtx);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     outcome = {
