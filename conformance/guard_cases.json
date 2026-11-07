@@ -70,5 +70,46 @@
     { "name": "npm test runs package.json scripts: asked under repo_code = true, whatever the gate", "role": "implement", "tool": "bash", "input": { "command": "npm test" }, "rule": "repo_code", "expect": { "never": "ask", "on_write": "ask" } },
     { "name": "make runs the Makefile: asked under repo_code = true", "role": "implement", "tool": "bash", "input": { "command": "make -C src all" }, "rule": "repo_code", "expect": { "never": "ask", "on_write": "ask" } },
     { "name": "npm --version runs nothing of the repository's", "role": "implement", "tool": "bash", "input": { "command": "npm --version" }, "rule": null, "expect": { "never": "allow", "on_write": "ask" } }
-  ]
+  ],
+  "levels": {
+    "_comment": [
+      "Governance levels (CONTRACTS.md §36): the same calls at each of observe, advise, prevent and",
+      "enforce, put to BOTH gnomon's own loop and `gnomon guard` (packages/gnomon-core/src/guard.test.ts,",
+      "and the real binary in packages/gnomon-cli/src/guard.test.ts). The surface is `surface` above with",
+      "policy.toml replaced by `policy` below, `{{level}}` set to the level under test.",
+      "",
+      "`verdict` is what the rules say and `rule` / `family` name the first rule that says it (for an ask:",
+      "the rule that asks). `expect` is the decision per level, derived by one rule: below prevent a deny",
+      "or ask in a levelled family is allow (recorded, not applied); `rules` has a floor of prevent;",
+      "structural rules (`family` null) are never levelled. enforce decides as prevent in this build.",
+      "`decided_by` names the rule the decision reports at a level where it is not `rule`: a verdict",
+      "levelled away lets the next rule on the same call decide.",
+      "",
+      "Every case is safe to RUN, because observe and advise run it: no command here reaches the",
+      "network or leaves the scratch repository. `ci` has no rule yet (shared-governance PR 3) and",
+      "`secrets` only the read sandbox, so neither has more cases."
+    ],
+    "levels": ["observe", "advise", "prevent", "enforce"],
+    "policy": "[approval]\ngate = \"on_write\"\nrepo_code = true\n\n[sandbox]\nlevel = \"confined\"\nnetwork = false\n\n[governance]\nlevel = \"{{level}}\"\n",
+    "cases": [
+      {"name": "bash_deny: a force-push", "role": "implement", "tool": "bash", "input": {"command": "git push --force origin main"}, "verdict": "deny", "rule": "bash_deny", "family": "bash", "expect": {"observe": "allow", "advise": "allow", "prevent": "deny", "enforce": "deny"}},
+      {"name": "bash_allow: a segment off the list", "role": "readonly", "tool": "bash", "input": {"command": "ls; echo hi"}, "verdict": "deny", "rule": "bash_allow", "family": "bash", "expect": {"observe": "allow", "advise": "allow", "prevent": "deny", "enforce": "deny"}},
+      {"name": "approval: an ordinary command under on_write", "role": "implement", "tool": "bash", "input": {"command": "ls -la"}, "verdict": "ask", "rule": "approval", "family": "bash", "expect": {"observe": "allow", "advise": "allow", "prevent": "ask", "enforce": "ask"}},
+      {"name": "repo_code: make runs the Makefile", "role": "implement", "tool": "bash", "input": {"command": "make -C src all"}, "verdict": "ask", "rule": "repo_code", "family": "bash", "expect": {"observe": "allow", "advise": "allow", "prevent": "ask", "enforce": "ask"}},
+      {"name": "write_allow: a write outside it", "role": "implement", "tool": "write", "input": {"path": "docs/x.md", "content": "x\n"}, "verdict": "deny", "rule": "write_allow", "family": "write", "expect": {"observe": "allow", "advise": "allow", "prevent": "deny", "enforce": "deny"}},
+      {"name": "write_allow: a shell append outside it", "role": "implement", "tool": "bash", "input": {"command": "echo x >> CHANGELOG.md"}, "verdict": "deny", "rule": "write_allow", "family": "write", "expect": {"observe": "allow", "advise": "allow", "prevent": "deny", "enforce": "deny"}},
+      {"name": "approval: a write inside write_allow under on_write", "role": "implement", "tool": "write", "input": {"path": "src/new.ts", "content": "export const x = 1;\n"}, "verdict": "ask", "rule": "approval", "family": "write", "expect": {"observe": "allow", "advise": "allow", "prevent": "ask", "enforce": "ask"}},
+      {"name": "sandbox: a read outside the repository", "role": "implement", "tool": "read", "input": {"path": "/etc/hostname"}, "verdict": "deny", "rule": "sandbox", "family": "secrets", "expect": {"observe": "allow", "advise": "allow", "prevent": "deny", "enforce": "deny"}},
+      {"name": "network: webfetch under network = false (and a file: URL, which never fetches)", "role": "implement", "tool": "webfetch", "input": {"url": "file:///etc/hostname"}, "verdict": "deny", "rule": "network", "family": "network", "expect": {"observe": "allow", "advise": "allow", "prevent": "deny", "enforce": "deny"}},
+      {"name": "network: a named client under network = false", "role": "implement", "tool": "bash", "input": {"command": "curl -s file:///etc/hostname"}, "verdict": "deny", "rule": "network", "family": "network", "expect": {"observe": "allow", "advise": "allow", "prevent": "deny", "enforce": "deny"}},
+      {"name": "surface: a write to .gnomon/ (rules floor: prevent)", "role": "implement", "tool": "write", "input": {"path": ".gnomon/roles.toml", "content": "[roles.implement]\nmodel = \"m\"\n"}, "verdict": "deny", "rule": "surface", "family": "rules", "expect": {"observe": "deny", "advise": "deny", "prevent": "deny", "enforce": "deny"}},
+      {"name": "surface: a shell append to .gnomon/ (rules floor: prevent)", "role": "implement", "tool": "bash", "input": {"command": "printf 'network = true\\n' >> .gnomon/policy.toml"}, "verdict": "deny", "rule": "surface", "family": "rules", "expect": {"observe": "deny", "advise": "deny", "prevent": "deny", "enforce": "deny"}},
+      {"name": "git_hooks: git config core.hooksPath (rules floor: prevent)", "role": "implement", "tool": "bash", "input": {"command": "git config core.hooksPath .githooks"}, "verdict": "deny", "rule": "git_hooks", "family": "rules", "expect": {"observe": "deny", "advise": "deny", "prevent": "deny", "enforce": "deny"}},
+      {"name": "record: a write into the audit trail (rules floor: prevent)", "role": "implement", "tool": "write", "input": {"path": ".gnomon-audit/task-x.jsonl", "content": "{}\n"}, "verdict": "deny", "rule": "record", "family": "rules", "expect": {"observe": "deny", "advise": "deny", "prevent": "deny", "enforce": "deny"}},
+      {"name": "a levelled bash_deny does not hide a surface write on the same line", "role": "implement", "tool": "bash", "input": {"command": "git push --force origin main; printf x >> .gnomon/policy.toml"}, "verdict": "deny", "rule": "bash_deny", "family": "bash", "decided_by": {"observe": "surface", "advise": "surface"}, "expect": {"observe": "deny", "advise": "deny", "prevent": "deny", "enforce": "deny"}},
+      {"name": "tools: a role without write (structural, never levelled)", "role": "readonly", "tool": "write", "input": {"path": "src/x.ts", "content": "x"}, "verdict": "deny", "rule": "tools", "family": null, "expect": {"observe": "deny", "advise": "deny", "prevent": "deny", "enforce": "deny"}},
+      {"name": "malformed: a non-string command (structural, never levelled)", "role": "implement", "tool": "bash", "input": {"command": ["rm", "-rf", "x"]}, "verdict": "deny", "rule": "malformed", "family": null, "expect": {"observe": "deny", "advise": "deny", "prevent": "deny", "enforce": "deny"}},
+      {"name": "a read inside the repository: nothing to level", "role": "implement", "tool": "read", "input": {"path": "src/a.ts"}, "verdict": "allow", "rule": null, "family": null, "expect": {"observe": "allow", "advise": "allow", "prevent": "allow", "enforce": "allow"}}
+    ]
+  }
 }

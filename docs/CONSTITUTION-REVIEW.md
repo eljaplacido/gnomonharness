@@ -123,6 +123,37 @@ there by #158) — are records, not configuration, and change no behaviour.
 run does must meet the same three tests (tightening-only or run/don't-run;
 announced; recorded) and be added to this table in the same PR.
 
+### Governance levels against the rules (added 2026-11-06, shared-governance PR 1)
+
+`[governance]` and `[roles.<name>.governance]` (CONTRACTS.md §36) add one
+concept, the level a family of rules is applied at. Checked against each rule,
+as the shared-governance design's §7 asks:
+
+| Rule | Kept? | Note |
+|---|---|---|
+| 1 No machine-scoped configuration | Kept | The levels live in `.gnomon/`; no new machine-local state, so no new carve-out above |
+| 2 Manifest | Kept | Both blocks are hashed with the surface |
+| 3 Tools | Kept | A levelled call is decided, never removed from the schema list |
+| 4 Buckets | Kept | A call levelled to `allow` runs and lands in whatever bucket its outcome does; the verdict is a record field, not a fourth bucket |
+| 5 Exit contract | Kept | `gnomon guard` exits are unchanged (0/2/3/10 from `decision`); `gnomon check` is untouched in this PR |
+| 6 Enumerations | Extended | `governance_level`, `governance_family` |
+| Behaviour changed ⇒ hash changed | Kept | Every level is declared in the surface; with neither block, decisions, records and request bytes are byte-identical (pinned) |
+
+**Drift, recorded rather than hidden:**
+
+- **`advise` reaches the agent in gnomon's own loop, not yet in another
+  harness.** The same surface hash appends the warning to a native tool result
+  and says nothing to a Claude Code or opencode agent, because delivering it
+  needs a post-tool hook (shared-governance PR 4). Bounded: the call runs in
+  both, and the guard record says `delivered: false`.
+- **`enforce` decides as `prevent`.** A declared value whose additions
+  (containment, `check` failures, ask→deny on hosts that cannot record an
+  answer) are not built yet. Never looser than prevent, and the surface audit
+  says so on every surface that declares it.
+- **`host_mode` is machine-side input.** Recorded only in this PR; it decides
+  nothing. The detachment work's bypass→deny is where it starts to decide, and
+  that is tightening-only.
+
 ---
 
 ## 3. The two principles that do not follow — and cost the most

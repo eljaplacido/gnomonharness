@@ -65,6 +65,7 @@ import {
   type GnomonConfig,
 } from "./config.js";
 import { AuditTrail, redact, resolveAudit } from "./audit.js";
+import { resolveLevels, type GovernanceFamily, type GovernanceLevel } from "./governance.js";
 import { joinWords } from "./shell.js";
 import { harnessBuild } from "./build.js";
 import {
@@ -142,6 +143,16 @@ export interface GuardVerdict {
   audit?: { trail: string; seq: number; hash: string | null };
   /** Present only when no decision could be made (decision "ask", rule "error"). */
   error?: string;
+  /**
+   * Present only when the surface declares `[governance]` or a role
+   * `governance` (CONTRACTS.md §36). `verdict` is what the rules said;
+   * `decision` is what the level makes of it. Below prevent a deny or ask
+   * verdict is decision `allow`: the adapters then say nothing, and the
+   * host's own permission flow runs as it would without gnomon.
+   */
+  verdict?: GuardDecisionValue;
+  family?: GovernanceFamily | null;
+  level?: GovernanceLevel | null;
   /** Wall time inside the decision, for the latency budget. */
   elapsed_ms: number;
 }
@@ -176,6 +187,10 @@ export interface GuardRequest {
   session?: string;
   /** Which adapter asked: claude-code, opencode, cursor, generic. Recorded only. */
   harness?: string;
+  /** The host's id for this tool call (Claude Code `tool_use_id`, opencode `id`). Recorded only, under [governance]. */
+  callId?: string;
+  /** The host's permission mode (Claude Code `permission_mode`). Recorded only, under [governance]. */
+  hostMode?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -534,6 +549,11 @@ export async function guardToolCall(req: GuardRequest): Promise<GuardVerdict> {
     v.rule = policy.rule;
     v.reason = policy.reason;
     if (policy.pattern) v.pattern = policy.pattern;
+    if (policy.verdict) {
+      v.verdict = policy.verdict;
+      v.family = policy.family ?? null;
+      v.level = policy.level ?? null;
+    }
     appendDecision(v, where, req, session);
     return done();
   } catch (err) {
@@ -560,7 +580,11 @@ export async function decide(
   // which is where the other agent's call would land.
   const live: GnomonConfig = { ...config, gnomonDir: join(where.project, ".gnomon") };
   const roleDef = config.roles[role];
+  // The committed revision's levels, like its rules. A value outside the
+  // enumeration throws, and guardToolCall turns that into ask / error.
+  const governance = resolveLevels(config, role);
   const ctx: ToolContext = {
+    ...(governance ? { governance } : {}),
     config: live,
     bashAllow: roleDef?.bash_allow,
     bashDeny: roleDef?.bash_deny,
@@ -653,8 +677,14 @@ function appendDecision(
 ): void {
   // The live surface's [audit], never the revision's (seventh review, B2):
   // a committed `[audit.attest] sign` is a command the host runs.
-  const settings = resolveAudit(hostSurface(join(where.project, ".gnomon")).config);
-  if (!settings.enabled) return;
+  let settings = resolveAudit(hostSurface(join(where.project, ".gnomon")).config);
+  // Under a declared [governance] the record IS the decision's effect at
+  // observe and advise, so it is written whether or not [audit] is on.
+  const levelled = v.verdict !== undefined;
+  if (!settings.enabled && !levelled) return;
+  // The guard trail only: [audit] enabled keeps meaning what it meant for
+  // gnomon's own session trail.
+  if (!settings.enabled) settings = { ...settings, enabled: true };
   const id = `guard-${session ?? new Date().toISOString().slice(0, 10)}`;
   ensureDirIn(where.project, settings.dir);
   const lock = join(settings.dir, `${id}.lock`);
@@ -694,6 +724,21 @@ function appendDecision(
       base: v.base,
       surface_hash: v.surface_hash,
       exit: guardExit(v.decision, v.error !== undefined),
+      // [governance] only (CONTRACTS.md §36): absent otherwise, so an
+      // undeclared surface's records are what they were.
+      ...(levelled
+        ? {
+            verdict: v.verdict,
+            family: v.family,
+            level: v.level,
+            ...(req.callId ? { call_id: req.callId } : {}),
+            ...(req.hostMode ? { host_mode: req.hostMode } : {}),
+            // advise reaches another harness's agent only through a post-tool
+            // hook (shared-governance PR 4). Until then it is recorded as not
+            // delivered rather than claimed.
+            ...(v.level === "advise" && v.verdict !== v.decision ? { delivered: false } : {}),
+          }
+        : {}),
     });
     trail.write("session_end", {});
     trail.close();
@@ -747,6 +792,9 @@ export interface HarnessRequest {
   session?: string;
   /** Cursor's event name: its answer's shape depends on it. */
   event?: string;
+  /** The host's tool-call id and permission mode, when its payload carries them. */
+  callId?: string;
+  hostMode?: string;
 }
 
 const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
@@ -770,7 +818,13 @@ export function patchPaths(patch: string): string[] {
 export function fromClaudeCode(raw: Record<string, unknown>): HarnessRequest {
   const name = str(raw.tool_name) ?? "";
   const input = obj(raw.tool_input);
-  const base = { harnessTool: name, cwd: str(raw.cwd), session: str(raw.session_id) };
+  const base = {
+    harnessTool: name,
+    cwd: str(raw.cwd),
+    session: str(raw.session_id),
+    ...(str(raw.tool_use_id) ? { callId: str(raw.tool_use_id) } : {}),
+    ...(str(raw.permission_mode) ? { hostMode: str(raw.permission_mode) } : {}),
+  };
   switch (name) {
     case "Bash":
       return { ...base, calls: [{ tool: "bash", input: { command: input.command } }] };
@@ -800,7 +854,12 @@ export function fromClaudeCode(raw: Record<string, unknown>): HarnessRequest {
 export function fromOpencode(raw: Record<string, unknown>): HarnessRequest {
   const name = str(raw.tool) ?? "";
   const input = obj(raw.input);
-  const base = { harnessTool: name, cwd: str(raw.directory) ?? str(raw.cwd), session: str(raw.sessionID) };
+  const base = {
+    harnessTool: name,
+    cwd: str(raw.directory) ?? str(raw.cwd),
+    session: str(raw.sessionID),
+    ...(str(raw.id) ?? str(raw.callID) ? { callId: str(raw.id) ?? str(raw.callID) } : {}),
+  };
   switch (name) {
     case "shell":
     case "bash":
@@ -896,6 +955,11 @@ export async function guardHarnessRequest(
 ): Promise<GuardVerdict> {
   const cwd = opts.cwd ?? hr.cwd ?? process.cwd();
   const session = opts.session ?? hr.session;
+  opts = {
+    ...opts,
+    ...(opts.callId ?? hr.callId ? { callId: opts.callId ?? hr.callId } : {}),
+    ...(opts.hostMode ?? hr.hostMode ? { hostMode: opts.hostMode ?? hr.hostMode } : {}),
+  };
   if (hr.calls.length === 0) {
     return guardToolCall({ ...opts, cwd, session, call: { tool: hr.harnessTool || "(none)", input: {} } });
   }

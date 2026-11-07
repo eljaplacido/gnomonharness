@@ -2615,7 +2615,7 @@ Commands:
     Show surface hash, manifest, or paths for .gnomon/ tree
 
   enumerations
-    Show the enumerations contract (edit_format, sandbox, approval, role_profile)
+    Show the enumerations contract (edit_format, sandbox, approval, role_profile, governance_level, governance_family)
 
   session [--dir <path>] <command> [command ...]
     Run commands as a session, recording outcomes. Each command runs with

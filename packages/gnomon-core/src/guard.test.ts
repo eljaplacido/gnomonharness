@@ -32,6 +32,7 @@ import {
   type GuardVerdict,
 } from "./guard.js";
 import { POLICY_TOOLS, TOOL_DENIED, TOOL_NOT_DECLARED, TOOL_OUT_OF_SANDBOX } from "./tools.js";
+import { GOVERNANCE_LEVELS } from "./governance.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const CASES = JSON.parse(readFileSync(resolve(here, "../../../conformance/guard_cases.json"), "utf-8")) as {
@@ -44,6 +45,21 @@ const CASES = JSON.parse(readFileSync(resolve(here, "../../../conformance/guard_
     rule: string | null;
     expect: Partial<Record<"never" | "on_write" | "always", GuardDecisionValue>>;
   }>;
+  levels: {
+    levels: Array<"observe" | "advise" | "prevent" | "enforce">;
+    policy: string;
+    cases: Array<{
+      name: string;
+      role: string;
+      tool: string;
+      input: Record<string, unknown>;
+      verdict: GuardDecisionValue;
+      rule: string | null;
+      family: string | null;
+      decided_by?: Record<string, string>;
+      expect: Record<string, GuardDecisionValue>;
+    }>;
+  };
 };
 
 let repo: string;
@@ -95,14 +111,25 @@ afterEach(() => {
  * Returns what the loop decided: asked → ask; a refusal code (2-4) → deny;
  * anything else (it ran, or failed on its own) → allow.
  */
-async function loopDecides(role: string, tool: string, input: Record<string, unknown>): Promise<GuardDecisionValue> {
+async function loopDecides(
+  role: string,
+  tool: string,
+  input: Record<string, unknown>,
+  seen?: { governance?: Record<string, unknown>; result?: string }
+): Promise<GuardDecisionValue> {
   const state: any = { config: loadConfig(repo), exchanges: [], currentRole: role };
   let asked = false;
   const codes: number[] = [];
   let call = 0;
   const original = globalThis.fetch;
-  globalThis.fetch = (async () => {
+  globalThis.fetch = (async (_url: unknown, init?: { body?: unknown }) => {
     call++;
+    // The tool result as the model is sent it, on the request after the call.
+    if (seen && call === 2 && typeof init?.body === "string") {
+      const msgs = (JSON.parse(init.body) as { messages?: Array<{ role: string; content?: unknown }> }).messages ?? [];
+      const last = [...msgs].reverse().find((m) => m.role === "tool");
+      if (last) seen.result = String(last.content);
+    }
     const tool_calls = call === 1 ? [{ function: { name: tool, arguments: input } }] : undefined;
     return { ok: true, json: async () => ({ message: { content: tool_calls ? "" : "done", tool_calls } }) };
   }) as unknown as typeof fetch;
@@ -122,7 +149,10 @@ async function loopDecides(role: string, tool: string, input: Record<string, unk
         say: () => {},
         audit: {
           write: (kind: string, fields: Record<string, unknown>) => {
-            if (kind === "tool_call") codes.push(fields.code as number);
+            if (kind === "tool_call") {
+              codes.push(fields.code as number);
+              if (seen && fields.governance) seen.governance = fields.governance as Record<string, unknown>;
+            }
           },
           text: () => undefined,
           action: (t: string) => t,
@@ -161,6 +191,142 @@ describe("gnomon guard — the same decision as gnomon's own loop", () => {
     expect(new Set(CASES.cases.map((c) => c.tool))).toEqual(new Set(POLICY_TOOLS));
     const seen = new Set(CASES.cases.flatMap((c) => Object.values(c.expect)));
     expect(seen).toEqual(new Set(GUARD_DECISIONS));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Governance levels: the same table, both callers
+// ---------------------------------------------------------------------------
+
+/** The cases' surface with the levels' policy.toml, at one level, committed. */
+function levelSurface(level: string, policyExtra = "", rolesExtra = "", config = ""): string {
+  for (const [file, text] of Object.entries(CASES.surface)) {
+    const body =
+      file === "policy.toml"
+        ? CASES.levels.policy.replace("{{level}}", level) + policyExtra
+        : file === "roles.toml"
+          ? text + rolesExtra
+          : file === "config.toml"
+            ? text + config
+            : text;
+    put(`.gnomon/${file}`, body);
+  }
+  put("src/a.ts", "old\n");
+  return commit(`surface (governance ${level})`);
+}
+
+describe("governance levels — gnomon guard and the loop decide alike (conformance/guard_cases.json levels)", () => {
+  for (const level of CASES.levels.levels) {
+    describe(`level = "${level}"`, () => {
+      for (const c of CASES.levels.cases) {
+        it(`${c.name}: ${c.expect[level]}`, async () => {
+          levelSurface(level);
+          const v = await guardToolCall({ cwd: repo, call: { tool: c.tool, input: c.input }, role: c.role });
+          expect(v.error).toBeUndefined();
+          const seen: { governance?: Record<string, unknown>; result?: string } = {};
+          const loop = await loopDecides(c.role, c.tool, c.input, seen);
+          expect({ guard: v.decision, loop }).toEqual({ guard: c.expect[level], loop: c.expect[level] });
+          // What the rules said is the same at every level; the level only
+          // decides what it does.
+          expect(v.verdict).toBe(c.verdict);
+          expect(seen.governance?.verdict).toBe(c.verdict);
+          const rule = c.decided_by?.[level] ?? c.rule;
+          expect(v.rule).toBe(rule);
+          expect(seen.governance?.rule).toBe(rule);
+          if (!c.decided_by?.[level]) {
+            expect(v.family).toBe(c.family);
+            expect(v.level).toBe(c.family ? (c.family === "rules" && (level === "observe" || level === "advise") ? "prevent" : level) : null);
+          }
+          expect(seen.governance?.decision).toBe(c.expect[level]);
+          // advise tells the model, in the result it reads next; observe and
+          // the levels that refuse say nothing new.
+          // A call still refused is not advised: it did not run.
+          const advised = c.expect[level] !== "deny" && c.verdict !== "allow" && level === "advise";
+          if (seen.result !== undefined) {
+            expect(seen.result.includes("gnomon ▸ advise:"), seen.result).toBe(advised);
+          }
+          expect(seen.governance?.advised === true).toBe(advised);
+        });
+      }
+    });
+  }
+
+  it("the matrix covers every levelled family that has a rule, and every verdict", () => {
+    const families = new Set(CASES.levels.cases.map((c) => c.family));
+    for (const f of ["write", "bash", "network", "secrets", "rules", null]) expect(families.has(f)).toBe(true);
+    expect(new Set(CASES.levels.cases.map((c) => c.verdict))).toEqual(new Set(GUARD_DECISIONS));
+    expect(CASES.levels.levels).toEqual([...GOVERNANCE_LEVELS]);
+  });
+
+  it("tighten-only: a role cannot lower its repository's level, and can raise it", async () => {
+    const forcePush = { tool: "bash", input: { command: "git push --force origin main" } };
+    levelSurface("prevent", "", `\n[roles.implement.governance]\nlevel = "observe"\n`);
+    const held = await guardToolCall({ cwd: repo, call: forcePush, role: "implement" });
+    expect(held.error).toBeUndefined();
+    expect(held).toMatchObject({ decision: "deny", level: "prevent" });
+    expect(await loopDecides("implement", "bash", forcePush.input)).toBe("deny");
+    levelSurface("observe", "", `\n[roles.implement.governance]\nbash = "prevent"\n`);
+    expect((await guardToolCall({ cwd: repo, call: forcePush, role: "implement" })).decision).toBe("deny");
+    expect(await loopDecides("implement", "bash", forcePush.input)).toBe("deny");
+    // The same repository, the other role: still observe.
+    const off = { tool: "bash", input: { command: "ls; echo hi" } };
+    expect((await guardToolCall({ cwd: repo, call: off, role: "readonly" })).decision).toBe("allow");
+  });
+
+  it("a family key sits below the layer's level within one layer", async () => {
+    levelSurface("prevent", `write = "observe"\n`);
+    const write = { tool: "write", input: { path: "docs/x.md", content: "x\n" } };
+    const v = await guardToolCall({ cwd: repo, call: write, role: "implement" });
+    expect(v).toMatchObject({ decision: "allow", verdict: "deny", rule: "write_allow", family: "write", level: "observe" });
+    const push = await guardToolCall({ cwd: repo, call: { tool: "bash", input: { command: "git push --force origin main" } }, role: "implement" });
+    expect(push).toMatchObject({ decision: "deny", family: "bash", level: "prevent" });
+  });
+
+  it("rules has a floor of prevent, declared or not", async () => {
+    levelSurface("observe", `rules = "observe"\n`);
+    const v = await guardToolCall({
+      cwd: repo,
+      call: { tool: "write", input: { path: ".gnomon/policy.toml", content: "" } },
+      role: "implement",
+    });
+    expect(v).toMatchObject({ decision: "deny", rule: "surface", family: "rules", level: "prevent" });
+  });
+
+  it("a level outside the enumeration is no decision (ask, error), never 'nothing declared'", async () => {
+    levelSurface("prevnt");
+    const v = await guardToolCall({ cwd: repo, call: { tool: "read", input: { path: "src/a.ts" } }, role: "implement" });
+    expect(v).toMatchObject({ decision: "ask", rule: "error" });
+    expect(v.error).toMatch(/prevnt.*is not a governance level/);
+  });
+
+  it("guard records carry verdict, family, level, call id and host mode, with [audit] off", async () => {
+    levelSurface("advise");
+    const hr = fromClaudeCode({
+      tool_name: "Bash",
+      tool_input: { command: "git push --force origin main" },
+      cwd: repo,
+      session_id: "gov-1",
+      tool_use_id: "toolu_01",
+      permission_mode: "default",
+    });
+    const v = await guardHarnessRequest(hr, { role: "implement", harness: "claude-code" });
+    expect(v).toMatchObject({ decision: "allow", verdict: "deny", level: "advise" });
+    // allow says nothing to the host: its own permission flow runs.
+    expect(toClaudeCode(v)).toBe("");
+    const trail = v.audit!.trail;
+    expect(trail).toMatch(/guard-gov-1\.jsonl$/);
+    const records = readFileSync(trail, "utf-8").trim().split("\n").map((l) => JSON.parse(l) as AuditRecord & Record<string, any>);
+    const g = records.find((r) => r.kind === "guard")!;
+    expect(g).toMatchObject({
+      verdict: "deny",
+      decision: "allow",
+      family: "bash",
+      level: "advise",
+      call_id: "toolu_01",
+      host_mode: "default",
+      delivered: false,
+    });
+    expect(verifyTrail(trail).ok).toBe(true);
   });
 });
 

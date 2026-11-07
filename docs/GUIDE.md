@@ -1087,6 +1087,31 @@ prints it, or `--write` to add it to this project's config:
 | Cursor | `.cursor/hooks.json` for shell commands and file reads; writes are left to `check` |
 | anything with a pre-tool hook | `gnomon guard --from generic`, with `{"tool": "bash", "input": {"command": "…"}, "cwd": "…", "session_id": "…"}` on stdin |
 
+**Audit first, then gates: governance levels.** To watch what the rules would
+refuse before you let them refuse it, declare a level per family (CONTRACTS.md
+§36):
+
+```toml
+# .gnomon/policy.toml
+[governance]
+level = "observe"   # record what would be refused; let it run
+network = "prevent" # but keep network refusals on
+
+# .gnomon/roles.toml: a sub-table (gnomon's TOML has no inline tables)
+[roles.implement.governance]
+bash = "advise"     # this role also tells the agent; a role can only tighten
+```
+
+`observe` runs the call and records the verdict; `advise` also appends
+`gnomon ▸ advise: …` to the tool result in gnomon's own sessions (another
+harness's agent is not told yet; its guard record says `delivered: false`);
+`prevent` is today's behaviour and the default; `enforce` behaves as
+`prevent` for now. Edits to `.gnomon/`, the records and git hooks (family
+`rules`) stay refused at every level. Turn on `[audit] enabled` so gnomon's own
+sessions keep the trail; `gnomon guard` keeps its trail under a declared level
+regardless. A misspelt level stops the session rather than reading as
+"nothing declared".
+
 `guard` stops only what a hook shows it; a harness without one is judged after
 the fact by `check`. The README section
 [Before the call: `gnomon guard`](../README.md#before-the-call-gnomon-guard)

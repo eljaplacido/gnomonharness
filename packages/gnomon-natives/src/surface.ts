@@ -40,6 +40,8 @@ export interface Enumerations {
   sandbox: string[];
   approval: string[];
   role_profile: string[];
+  governance_level: string[];
+  governance_family: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -348,7 +350,8 @@ export function listPaths(dir?: string): string[] {
 
 /**
  * Load the enumerations contract from the gnomon-enums binary.
- * Returns the 4 top-level keys: edit_format, sandbox, approval, role_profile.
+ * Returns the 6 top-level keys: edit_format, sandbox, approval, role_profile,
+ * governance_level, governance_family.
  */
 export function enumerations(): Enumerations {
   const result = spawnSync(nativeBin("gnomon-enums"), [], {

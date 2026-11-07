@@ -34,6 +34,7 @@ import {
   type ReasoningEffort,
   type SamplingParam,
 } from "./sweep_knobs.js";
+import { GOVERNANCE_FAMILIES, GOVERNANCE_KEYS, GOVERNANCE_LEVELS, GovernanceError, LEVEL_FLOOR, readGovernanceLayer } from "./governance.js";
 
 // ---------------------------------------------------------------------------
 // Types — mirror Rust structs from gnomon-surface
@@ -377,6 +378,8 @@ export interface Policy {
     modes: string[];
     default: string;
   };
+  /** `[governance]`: levels per family (governance.ts, CONTRACTS.md §36). */
+  governance?: Record<string, unknown>;
   /**
    * A check the harness runs after a turn that changed files.
    *
@@ -565,6 +568,12 @@ export interface RoleDef {
    * relative to the root, so `docs/../src/main.rs` is judged as `src/main.rs`.
    */
   write_allow?: string[];
+  /**
+   * Governance levels for this role, the `[governance]` shape (governance.ts):
+   * a `[roles.<name>.governance]` sub-table (`level`, `bash`, …; gnomon's TOML subset has no inline tables). Composed with the repository's by max,
+   * so a role can only tighten.
+   */
+  governance?: Record<string, unknown>;
   fallback?: FallbackDef;
   // Legacy field (kept for compat with older role files)
   profile?: string;
@@ -2428,6 +2437,9 @@ const KNOWN_BLOCKS = new Set([
   // [bootstrap.<id>] in policy.toml: resolveBootstrap reads it when
   // `[context] bootstrap` names it. Listed with the feature.
   "bootstrap",
+  // [governance] in policy.toml: resolveLevels (governance.ts). Listed with
+  // the feature.
+  "governance",
 ]);
 
 /**
@@ -2559,6 +2571,8 @@ const BLOCK_OWNER: Record<string, BlockOwner> = {
   // resolveBootstrap reads config.policy.bootstrap.<id>, as [verify] is read:
   // a command the surface decides to run belongs beside the other one.
   bootstrap: { file: "policy.toml", read: true },
+  // resolveLevels (governance.ts) reads config.policy.governance.
+  governance: { file: "policy.toml", read: true },
   endpoints: { file: "config.toml", read: true },
   defaults: { file: "config.toml", read: true },
   context: { file: "config.toml", read: true },
@@ -2646,9 +2660,12 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
   ],
   ["policy.toml", "sandbox", ["level", "network", "exec", "image", "extra_roots", "allow_package_index", "filesystem"]],
   ["policy.toml", "approval", ["gate", "repo_code", "after_refusal", "after_refusal_calls", "modes", "default"]],
+  // resolveLevels (governance.ts). A value outside the enumeration is fatal
+  // (auditGovernance); an unknown key is warned here like any other.
+  ["policy.toml", "governance", GOVERNANCE_KEYS],
 ];
 
-const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "max_tokens", "model", "exec", "image", "profile", "reasoning_effort", "task_allow", "temperature", "tools", "top_p", "write_allow"]);
+const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "max_tokens", "model", "exec", "image", "profile", "reasoning_effort", "task_allow", "temperature", "tools", "top_p", "write_allow", "governance"]);
 
 /**
  * Spellings people reach for when they mean to supply a secret directly.
@@ -3887,6 +3904,104 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
     }
   }
 
+  problems.push(...auditGovernance(config));
+
+  return problems;
+}
+
+/**
+ * `[governance]` and each role's `governance` (governance.ts).
+ *
+ *  - a level outside the enumeration, or a block of the wrong shape: FATAL.
+ *    A misspelt `prevnt` must not read as "nothing declared", which would be
+ *    prevent today and something else the day the default moves.
+ *  - an unknown key in a role's table: warned with did-you-mean (the
+ *    repository's block is warned through BLOCK_KEYS).
+ *  - `rules` below its floor: warned; the floor holds and the record says so.
+ *  - `enforce`: warned that in this build it decides as prevent; the proof it
+ *    adds arrives with the later shared-governance PRs.
+ *  - observe/advise with `[audit] enabled` off: warned; gnomon's own session
+ *    keeps no trail of what was recorded and not applied (`gnomon guard`
+ *    writes its trail under [governance] regardless).
+ */
+function auditGovernance(config: GnomonConfig): SurfaceProblem[] {
+  const problems: SurfaceProblem[] = [];
+  const tables: Array<{ where: string; raw: unknown; role: boolean }> = [
+    { where: ".gnomon/policy.toml [governance]", raw: (config.policy as { governance?: unknown } | undefined)?.governance, role: false },
+    ...Object.entries(config.roles ?? {}).map(([name, def]) => ({
+      where: `.gnomon/roles.toml [roles.${name}.governance]`,
+      raw: (def as RoleDef | undefined)?.governance,
+      role: true,
+    })),
+  ];
+  const declared: string[] = [];
+  for (const t of tables) {
+    if (t.raw === undefined) continue;
+    let layer;
+    try {
+      layer = readGovernanceLayer("audit", t.where, t.raw);
+    } catch (err) {
+      problems.push({
+        where: t.where,
+        problem: err instanceof GovernanceError ? err.message : String(err),
+        fix:
+          `Use one of ${GOVERNANCE_LEVELS.join(", ")} for \`level\` and for each family ` +
+          `(${GOVERNANCE_FAMILIES.join(", ")}).`,
+        fatal: true,
+      });
+      continue;
+    }
+    if (!layer) continue;
+    declared.push(...[layer.level, ...Object.values(layer.families)].filter((l): l is NonNullable<typeof l> => !!l));
+    if (t.role) {
+      for (const key of Object.keys(t.raw as Record<string, unknown>)) {
+        if ((GOVERNANCE_KEYS as readonly string[]).includes(key)) continue;
+        const near = GOVERNANCE_KEYS.map((k) => [k, editDistance(key, k)] as const)
+          .filter(([, d]) => d <= 2)
+          .sort((a, b) => a[1] - b[1])[0]?.[0];
+        problems.push({
+          where: t.where,
+          problem: `${key} is not a governance key; it does nothing` + (near ? `. Did you mean "${near}"?` : "."),
+          fix: `governance reads: ${GOVERNANCE_KEYS.join(", ")}.`,
+          fatal: false,
+        });
+      }
+    }
+    for (const [family, floor] of Object.entries(LEVEL_FLOOR)) {
+      const said = layer.families[family as keyof typeof layer.families];
+      if (said && floor && GOVERNANCE_LEVELS.indexOf(said) < GOVERNANCE_LEVELS.indexOf(floor)) {
+        problems.push({
+          where: t.where,
+          problem:
+            `${family} has a floor of ${floor}; ${said} is ignored. An agent that may rewrite ` +
+            `the rules, the records or the git hooks can remove the record ${said} promises.`,
+          fix: `Drop ${family} = "${said}", or declare ${floor} or enforce.`,
+          fatal: false,
+        });
+      }
+    }
+  }
+  if (declared.includes("enforce")) {
+    problems.push({
+      where: ".gnomon [governance]",
+      problem:
+        `enforce is declared. In this build it decides exactly as prevent; what it adds (containment, ` +
+        `check failures, recorded answers to asks) arrives with the later shared-governance changes.`,
+      fix: `Nothing to change: enforce is never weaker than prevent. Read docs/CONTRACTS.md §36 for what it does today.`,
+      fatal: false,
+    });
+  }
+  const audit = (config.config as { audit?: { enabled?: unknown } }).audit;
+  if (declared.some((l) => l === "observe" || l === "advise") && audit?.enabled !== true) {
+    problems.push({
+      where: ".gnomon [governance]",
+      problem:
+        `observe or advise is declared and [audit] enabled is not true: gnomon's own sessions keep no ` +
+        `trail of the verdicts they record and do not apply (gnomon guard writes its trail regardless).`,
+      fix: `Set [audit] enabled = true in .gnomon/config.toml.`,
+      fatal: false,
+    });
+  }
   return problems;
 }
 

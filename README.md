@@ -93,8 +93,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2806 TypeScript tests (2281 core, 500 cli, 18
-> natives, 7 tui) and 63 Rust tests — **2869 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2915 TypeScript tests (2386 core, 504 cli, 18
+> natives, 7 tui) and 63 Rust tests — **2978 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2497,6 +2497,27 @@ of which a bare `node -e 0` is 22–28 ms. The rules are materialised once per
 `.gnomon/` tree under `.git/gnomon-guard/`, and a warm call spawns no `git`.
 A checkout's `./gnomon` runs through tsx and costs several hundred
 milliseconds more.
+
+**Governance levels: from audit-only to gates.** By default every rule
+refuses (`prevent`). `[governance]` in policy.toml, and
+`[roles.<name>.governance]` in roles.toml to tighten one role, set per
+family how a verdict is applied: `observe` records it and lets the call run,
+`advise` also tells the agent, `prevent` refuses or asks as above, `enforce`
+decides as `prevent` for now. Families: `write`, `bash`, `network`,
+`secrets`, `rules`, `ci`. A role can only raise its repository's level, and
+`rules` (edits to `.gnomon/`, the records, git hooks) never goes below
+`prevent`. The same levels apply in gnomon's own loop and in `gnomon guard`,
+because both get the decision from one function; the guard's document and
+record then carry `verdict` (what the rules said) beside `decision`. In
+another harness `advise` is recorded but not yet shown to its agent (that
+needs a post-tool hook). Contract: [CONTRACTS.md §36](docs/CONTRACTS.md).
+
+```toml
+# .gnomon/policy.toml: roll out the bash rules as warnings before they block
+[governance]
+level = "prevent"
+bash  = "advise"
+```
 
 **What this does and does not pin.** gnomon decides each tool call the other
 agent proposes; it does not steer, re-prompt or constrain the agent itself,
