@@ -93,8 +93,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 2963 TypeScript tests (2430 core, 508 cli, 18
-> natives, 7 tui) and 63 Rust tests — **3026 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 2911 TypeScript tests (2382 core, 504 cli, 18
+> natives, 7 tui) and 63 Rust tests — **2974 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -890,6 +890,17 @@ than 15% of the step budget or the `--deadline` left. On, it supersedes
 `completion_gate` and `todo_gate`. Off, the request bytes are unchanged. See [docs/GUIDE.md §8](docs/GUIDE.md) and
 [CONTRACTS.md §33](docs/CONTRACTS.md).
 
+Two more, both off by default. `[turn] deliverable_first = true` (read only
+under `gnomon task --deadline`) adds to the time note at 40% and 70% of the
+deadline the output files the task names that do not exist yet ("These
+required outputs do not exist yet: … Write a first complete version now, then
+improve it."); 54 of 80 capped long-task runs had never written theirs.
+`[resilience] first_token_timeout_ms` aborts a streamed request whose first
+token has not arrived in that many milliseconds and asks again within
+`attempts`; a reply that has started is never cut by it. Off, the request
+bytes are unchanged. See [docs/GUIDE.md §8](docs/GUIDE.md) and
+[CONTRACTS.md §35](docs/CONTRACTS.md).
+
 #### `[turn]` — when a turn stops, is nudged, or converges
 
 ```toml
@@ -906,6 +917,7 @@ nudge_after_idle = 12             # calls without changing a file before the mod
 converge_refire = 6               # calls between convergence re-pushes past converge_after
 deadline_notes = [0.5, 0.8]       # gnomon task --deadline: budget fractions that get a time-left note
 deadline_margin_ms = 30000        # gnomon task --deadline: stop this long before it (at most a tenth)
+deliverable_first = false         # gnomon task --deadline: name the task's missing outputs at 40% and 70%
 ```
 
 Every value shown is the default, so a surface that omits the block — or writes
@@ -941,6 +953,7 @@ nothing in the record could say so.
 | `converge_refire` | Calls between convergence re-pushes once `converge_after` is reached. A single "submit what you have" is easy to ignore. |
 | `deadline_notes` | Read only under `gnomon task --deadline`. Fractions of the wall-clock budget, in (0, 1); when the turn has used one, its next request carries one short note of the time left, as a mid-turn system message (a user message marked `[gnomon]` under `steer_role = "user"`). `[]` sends none. |
 | `deadline_margin_ms` | Read only under `gnomon task --deadline`. The turn stops itself this long before the deadline, and a `bash` command's timeout is clamped to end one margin before that, so the model gets the partial output. Capped at a tenth of the budget. |
+| `deliverable_first` | Read only under `gnomon task --deadline`; off by default. `true`: the output paths the task text names (an absolute path, or a quoted filename with an extension, after "write", "save", "create", "produce" and the like) are checked at 40% and 70% of the budget, and the ones that do not exist yet are named in that request's time note with "Write a first complete version now, then improve it." Nothing missing, nothing is added. [CONTRACTS §35](docs/CONTRACTS.md). |
 
 Values are floored where a zero would mean the opposite of what it reads:
 `max_run_notes = 0` would keep *every* note (`slice(-0)` returns the whole
@@ -949,7 +962,7 @@ every turn, so both floor at 1. `max_consecutive_empty`,
 `max_consecutive_malformed`, `all_refused_notice` and `nudge_after_idle`
 accept `0`, where it honestly means "never".
 
-**Known limit.** `[turn]` declares ten of the loop's numbers (and the two the
+**Known limit.** `[turn]` declares ten of the loop's numbers (and the three the
 deadline reads), not all of them.
 The A-B-A-B alternation test (8-call window, 2 distinct signatures) and the
 *wording* of the nudge and convergence messages are still compiled into the

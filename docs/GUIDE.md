@@ -614,7 +614,8 @@ events, with `stream_options.include_usage` so the token counts stay exact. A
 streamed reply is timed by the gap between chunks, `[resilience]
 stream_idle_timeout_ms` (default 300 s), under an overall cap,
 `stream_total_timeout_ms` (default 30 min); the first byte waits
-`request_timeout_ms`. Only first-byte waits count against the retry budget
+`request_timeout_ms`, and the first token `first_token_timeout_ms` when one is
+declared (off by default; see §8). Only first-byte waits count against the retry budget
 (`attempts` × `request_timeout_ms`), so one streamed call can take up to
 `attempts` × `stream_total_timeout_ms` of wall time in the worst case. Size
 an external harness wall with that in mind. A surface with no `[defaults]`
@@ -1535,6 +1536,39 @@ ids found ([CONTRACTS.md §33](CONTRACTS.md)).
 # policy.toml: inside the existing [verify] block
 [verify]
 finish_gate = "v2"                # "off" (default) or "v2"
+```
+
+**Opt-in: deliverable-first notes and the first-token watchdog.** Two keys
+for long hosted tasks ([CONTRACTS.md §35](CONTRACTS.md)), both off by default;
+off, a turn sends the same request bytes as before.
+
+- `[turn] deliverable_first = true`, read only under `gnomon task
+  --deadline`. gnomon reads the output paths the task text names (an absolute
+  path, or a quoted filename with an extension, after an instruction such as
+  "write", "save", "create" or "produce"; a file the program under repair is
+  said to write is not one), and at 40% and 70% of the deadline adds the ones
+  that do not exist yet to that request's time note: "These required outputs
+  do not exist yet: …. Write a first complete version now, then improve it."
+  It goes out on the same channel as the time notes. Nothing missing, nothing
+  is added. Relative names are read against the working directory, on the
+  filesystem gnomon runs on; directories are never named. The `deliverable_first`
+  audit record lists what was looked for and what was missing at each check.
+- `[resilience] first_token_timeout_ms`: a streamed request whose first token
+  has not arrived in that many milliseconds is aborted and asked again within
+  `attempts`, under the same retry budget, without doubling the request
+  deadline. Keep-alive comments and an empty role chunk are not a token; the
+  first content, reasoning or tool-call chunk is, and from then on only
+  `stream_idle_timeout_ms` applies. Set it well above the model's normal time
+  to first token: a reasoning model that hides its reasoning sends nothing
+  until it is done thinking. Each abort is a `first_token_stall` audit record.
+
+```toml
+# config.toml
+[turn]
+deliverable_first = true          # false (default); read only under --deadline
+
+[resilience]
+first_token_timeout_ms = 120000   # 0 (default) = off; streamed calls only
 ```
 
 **Opt-in: the sweep knobs.** Six settings, each off (or the old behaviour)

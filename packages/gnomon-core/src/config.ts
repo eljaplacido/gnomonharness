@@ -22,6 +22,7 @@ import { harnessBuild } from "./build.js";
 import { AUTO_WINDOW, rememberedWindow, type ContextSource } from "./context_window.js";
 import { COMPLETION_GATE_MODES, auditCompletionGate } from "./completion_gate.js";
 import { auditSoftShell } from "./soft_shell.js";
+import { auditDeliverableFirst } from "./deliverable_first.js";
 import { FINISH_GATE_MODES, auditFinishGate } from "./finish_gate.js";
 import {
   ENV_SNAPSHOT_ID,
@@ -1821,6 +1822,8 @@ export interface RouteTarget {
   streamIdleMs?: number;
   /** `[resilience] stream_total_timeout_ms`, for a streamed call */
   streamTotalMs?: number;
+  /** `[resilience] first_token_timeout_ms`, for a streamed call; absent when 0 (off) */
+  firstTokenMs?: number;
   /** The output limit sent with each call; 0 or absent sends none. */
   maxTokens?: number;
   /**
@@ -2626,6 +2629,7 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "converge_refire",
       "deadline_notes",
       "deadline_margin_ms",
+      "deliverable_first",
       "todo_gate",
     ],
   ],
@@ -2640,6 +2644,7 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "task_transport_grace_ms",
       "stream_idle_timeout_ms",
       "stream_total_timeout_ms",
+      "first_token_timeout_ms",
     ],
   ],
   [
@@ -3227,6 +3232,7 @@ problems.push(...auditFinishGate(config));
 // The sweep knobs (sweep_knobs.ts): each opt-in, none fatal.
 problems.push(...auditSweepKnobs(config, (ep) => endpointKind(ep)));
 problems.push(...auditSoftShell(config));
+problems.push(...auditDeliverableFirst(config));
 
 // [shadow] is log-only, so nothing in it is fatal: a shadow that cannot run
 // changes nothing about the run. What it can do is look like it is recording
@@ -4281,6 +4287,7 @@ export function routeRole(
     stream: resolveStream(endpoint, "ollama", config.config.defaults?.stream),
     streamIdleMs: resilience.stream_idle_timeout_ms,
     streamTotalMs: resilience.stream_total_timeout_ms,
+    ...firstTokenOf(resilience),
     maxTokens: resolveMaxTokens(config, roleDef, endpoint),
     ...contextWindowOf(config, endpoint.max_context_tokens, { url, kind, model }),
     ...replayFieldsOf(endpoint),
@@ -4314,6 +4321,7 @@ export function routeRole(
       stream: resolveStream(fbEndpoint ?? { url: fb.url }, "openai", config.config.defaults?.stream),
       streamIdleMs: resilience.stream_idle_timeout_ms,
       streamTotalMs: resilience.stream_total_timeout_ms,
+      ...firstTokenOf(resilience),
       maxTokens: resolveMaxTokens(config, roleDef, fbEndpoint),
       ...contextWindowOf(config, fbEndpoint?.max_context_tokens, { url: fbUrl, kind: fbKind, model: fb.model }),
       // By its own URL: the one the fallback is actually sent to.
@@ -4732,6 +4740,15 @@ export interface ResolvedResilience {
   stream_idle_timeout_ms: number;
   /** The overall cap on one streamed reply, however steadily it arrives. */
   stream_total_timeout_ms: number;
+  /**
+   * The first-token watchdog, opt-in: a streamed request whose first token
+   * (content, reasoning or a tool call; not a keep-alive comment or an empty
+   * role chunk) has not arrived this many milliseconds after it was sent is
+   * aborted and asked again, under the same `attempts` and retry budget as a
+   * timeout. 0 (the default) arms no such clock: `request_timeout_ms` is the
+   * wait for the first byte, as before. Unstreamed calls never read it.
+   */
+  first_token_timeout_ms: number;
 }
 
 /**
@@ -4765,6 +4782,11 @@ export function taskResilience(r: ResolvedResilience): ResolvedResilience {
   return { ...r, transport_grace_ms: r.task_transport_grace_ms };
 }
 
+/** `[resilience] first_token_timeout_ms` on a route target: absent when off, so an undeclared surface builds the target it always did. */
+function firstTokenOf(r: ResolvedResilience): { firstTokenMs?: number } {
+  return r.first_token_timeout_ms > 0 ? { firstTokenMs: r.first_token_timeout_ms } : {};
+}
+
 export function resolveResilience(config: GnomonConfig): ResolvedResilience {
   const r = (config.config as { resilience?: Record<string, unknown> } | undefined)
     ?.resilience;
@@ -4794,6 +4816,10 @@ export function resolveResilience(config: GnomonConfig): ResolvedResilience {
       1000,
       Math.floor(num(r?.stream_total_timeout_ms, 1_800_000))
     ),
+    // Off unless declared. H3 R1 (2026-11-06) lost 4 of its 14 capped cells
+    // mostly to provider first-token stalls: one request waited out the 300 s
+    // request timeout, and its retry got its first token at 537 s.
+    first_token_timeout_ms: Math.floor(num(r?.first_token_timeout_ms, 0)),
   };
 }
 
