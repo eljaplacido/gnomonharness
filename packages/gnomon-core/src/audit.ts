@@ -265,6 +265,15 @@ export type AuditKind =
   // sent to it, how it exited, or why it was killed. Its own kind because a
   // job outlives the tool_call that started it.
   | "job"
+  // `[turn] deliverable_first` under --deadline (deliverable_first.ts):
+  // `named`, once, the outputs the task text names; `check`, at each
+  // DELIVERABLE_FIRST_AT fraction, which of them did not exist yet and
+  // whether the time note said so.
+  | "deliverable_first"
+  // `[resilience] first_token_timeout_ms`: a streamed request aborted because
+  // no token arrived in time, its attempt and wait, and whether a later
+  // attempt under the same retry budget answered.
+  | "first_token_stall"
   // One per end of a turn the finish gate (`[verify] finish_gate = "v2"`,
   // finish_gate.ts) judged: fire, no_tool or accept, the budget left, the
   // caveat ids its audit found, claims without evidence, the open todos.

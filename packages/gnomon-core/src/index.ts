@@ -36,6 +36,9 @@ export * from "./completion_gate.js";
 // The finish gate (`[verify] finish_gate = "v2"`): task verbatim, caveat
 // audit, claims against evidence, targeted checks. CONTRACTS.md §33.
 export * from "./finish_gate.js";
+// Deliverable-first time notes (`[turn] deliverable_first`, under --deadline):
+// the task's named outputs that do not exist yet, in the time note.
+export * from "./deliverable_first.js";
 // The sweep knobs: reasoning effort, sampling passthrough, the environment
 // snapshot, the todo gate, the edit variant and the package-index allowlist,
 // each opt-in (docs/CONTRACTS.md §32).

@@ -136,6 +136,13 @@ import {
   type EvidenceCall,
 } from "./finish_gate.js";
 import {
+  DELIVERABLE_FIRST_AT,
+  deliverableNote,
+  extractDeliverables,
+  missingDeliverables,
+  resolveDeliverableFirst,
+} from "./deliverable_first.js";
+import {
   CallLedger,
   legBudget,
   overflowBudget,
@@ -861,9 +868,17 @@ interface InferenceResult {
    * Which clock ended the call, when one did. `first`: nothing arrived within
    * the request deadline (for an unstreamed call, the whole reply). `idle`: a
    * streamed reply went silent mid-way. `total`: a streamed reply ran past its
-   * overall cap. callEndpointWithRetry treats each differently.
+   * overall cap. `first_token`: a streamed reply sent no token within
+   * `[resilience] first_token_timeout_ms` (opt-in). callEndpointWithRetry
+   * treats each differently.
    */
-  timedOut?: "first" | "idle" | "total";
+  timedOut?: "first" | "idle" | "total" | "first_token";
+  /**
+   * The first-token watchdog's aborts inside callEndpointWithRetry, in order:
+   * the attempt and how long it waited. Carried on whatever it returns, so
+   * the turn can record them (audit kind `first_token_stall`).
+   */
+  firstTokenStalls?: Array<{ attempt: number; waited_ms: number }>;
   /**
    * A streamed reply that started and then broke off: the connection dropped,
    * or the stream ended with neither a finish_reason nor [DONE]. Code 12, but
@@ -1287,8 +1302,13 @@ export async function callEndpointWithRetry(
   // across every attempt -- a failed attempt is billed too, and its tokens are
   // in no total. Carried on whatever this returns.
   let unmetered = 0;
-  const metered = (x: InferenceResult): InferenceResult =>
-    unmetered > 0 ? { ...x, unmeteredCalls: unmetered } : x;
+  // The first-token watchdog's aborts, carried on whatever this returns.
+  const stalls: Array<{ attempt: number; waited_ms: number }> = [];
+  const metered = (x: InferenceResult): InferenceResult => {
+    let out = unmetered > 0 ? { ...x, unmeteredCalls: unmetered } : x;
+    if (stalls.length > 0) out = { ...out, firstTokenStalls: [...stalls] };
+    return out;
+  };
   for (let attempt = 1; attempt <= resilience.attempts; attempt++) {
     const startedAt = Date.now();
     const r = await callEndpoint(target, messages, tools, deadline, signal, session, observe);
@@ -1298,7 +1318,16 @@ export async function callEndpointWithRetry(
     // stream that ran six minutes and then stalled had "spent" a 900 s budget
     // and was never asked again, and a refused socket right after a long
     // stream had no room left for transport_grace_ms either.
-    spentMs += r.firstByteMs ?? Date.now() - startedAt;
+    //
+    // A first-token stall is charged its whole wait: keep-alives may have set
+    // the first byte early, and the request was unanswered all the same.
+    if (r.timedOut === "first_token") {
+      const waited = Date.now() - startedAt;
+      spentMs += waited;
+      stalls.push({ attempt, waited_ms: waited });
+    } else {
+      spentMs += r.firstByteMs ?? Date.now() - startedAt;
+    }
     unmetered += r.unmeteredCalls ?? 0;
     if (r.code === 0 || !RETRYABLE.has(r.code)) return metered(r);
     last = r;
@@ -1399,7 +1428,11 @@ export async function callEndpointWithRetry(
       // longer wait for its first byte, so that deadline is not doubled. The
       // stall is not a property of the prompt, and the aborted request has
       // already stopped the generation, so asking again is not paying twice.
-      if (r.timedOut !== "idle") deadline = Math.min(deadline * 2, remainingMs);
+      //
+      // A first-token stall is the provider's, not the prompt's, for the same
+      // reason: the watchdog's own clock is the same on the next attempt, and
+      // the request deadline is not doubled either.
+      if (r.timedOut !== "idle" && r.timedOut !== "first_token") deadline = Math.min(deadline * 2, remainingMs);
     }
     if (attempt < resilience.attempts) {
       const wait = resilience.backoff_ms * Math.pow(2, attempt - 1);
@@ -1413,7 +1446,9 @@ export async function callEndpointWithRetry(
               r.code === 11
                 ? r.timedOut === "idle"
                   ? `the stream went silent mid-reply`
-                  : `timed out (deadline now ${deadline}ms)`
+                  : r.timedOut === "first_token"
+                    ? `no first token in ${target.firstTokenMs}ms (first_token_timeout_ms)`
+                    : `timed out (deadline now ${deadline}ms)`
                 : r.streamBroken
                   ? `the stream broke off mid-reply`
                   : r.unreadable
@@ -1833,6 +1868,18 @@ async function callEndpointOnce(
     clearTimeout(clock);
     clock = setTimeout(expire("idle"), idleMs);
   };
+  // `[resilience] first_token_timeout_ms`, opt-in, streamed calls only: a
+  // fourth clock, from the send to the first token of the reply. A keep-alive
+  // comment re-arms the idle clock (the server is alive) but does not stop
+  // this one: a provider that queues a request for minutes while sending
+  // keep-alives is exactly the stall it is for. Disarmed by the first token,
+  // so a request that has produced output is never cut off by it.
+  const firstTokenMs = streamed && target.firstTokenMs && target.firstTokenMs > 0 ? target.firstTokenMs : 0;
+  let tokenClock = firstTokenMs > 0 ? setTimeout(expire("first_token"), firstTokenMs) : undefined;
+  const firstToken = (): void => {
+    if (tokenClock) clearTimeout(tokenClock);
+    tokenClock = undefined;
+  };
   const onCancel = (): void => controller.abort(signal?.reason);
   if (signal?.aborted) controller.abort(signal.reason);
   else signal?.addEventListener("abort", onCancel, { once: true });
@@ -1855,6 +1902,10 @@ async function callEndpointOnce(
       ...(dispatcher ? { dispatcher } : {}),
     } as RequestInit);
     answered = true;
+    // A reply that is not an event stream (an error status, or a server that
+    // ignored `stream: true`) arrives as one body: there is no first token to
+    // wait for, and the request deadline times it as it always did.
+    if (!/text\/event-stream/i.test(res.headers?.get?.("content-type") ?? "")) firstToken();
 
     if (!res.ok) {
       // The body carries the reason; the status alone does not. Reporting
@@ -1980,10 +2031,14 @@ async function callEndpointOnce(
     // one, so a server that cannot stream needs no declaration to keep working.
     const contentType = res.headers?.get?.("content-type") ?? "";
     if (streamed && res.body && /text\/event-stream/i.test(contentType)) {
-      const s = await readChatStream(res.body, () => {
-        trace.firstByteAt ??= Date.now();
-        rearm();
-      });
+      const s = await readChatStream(
+        res.body,
+        () => {
+          trace.firstByteAt ??= Date.now();
+          rearm();
+        },
+        tokenClock ? firstToken : undefined
+      );
       drained = s.complete;
       trace.detail = s.usageDetail;
       trace.reasoningChars = s.reasoning.length;
@@ -2148,6 +2203,9 @@ async function callEndpointOnce(
             ? `Model unavailable at ${target.url}: no ` +
               (streamed ? "first byte" : "reply") +
               ` within ${secs(timeoutMs)} ([resilience] request_timeout_ms)`
+            : timedOut === "first_token"
+              ? `Model unavailable at ${target.url}: no first token within ${secs(firstTokenMs)} ` +
+                `([resilience] first_token_timeout_ms), so the request was aborted.`
             : timedOut === "idle"
               ? `The stream from ${target.url} went silent for ${secs(idleMs)} mid-reply ` +
                 `([resilience] stream_idle_timeout_ms), so the request was aborted.`
@@ -2250,6 +2308,7 @@ async function callEndpointOnce(
   } finally {
     clearTimeout(clock);
     if (cap) clearTimeout(cap);
+    firstToken();
     signal?.removeEventListener("abort", onCancel);
     // A reply abandoned part-way -- an error chunk, a timeout, Esc -- has its
     // connection closed here, so the server stops writing it.
@@ -2315,7 +2374,13 @@ export interface StreamedReply {
  */
 export async function readChatStream(
   body: AsyncIterable<Uint8Array> | ReadableStream<Uint8Array>,
-  onData?: () => void
+  onData?: () => void,
+  /**
+   * Called for each chunk that carries part of the reply -- content,
+   * reasoning or a tool call -- and never for a keep-alive comment or an
+   * empty role chunk. The first-token watchdog reads it.
+   */
+  onToken?: () => void
 ): Promise<StreamedReply> {
   const out: StreamedReply = { content: "", reasoning: "", toolCalls: [], complete: false, unparsed: 0 };
   const decoder = new TextDecoder();
@@ -2364,6 +2429,14 @@ export async function readChatStream(
     if (typeof delta.content === "string") out.content += delta.content;
     const thought = delta.reasoning_content ?? delta.reasoning;
     if (typeof thought === "string") out.reasoning += thought;
+    if (
+      onToken &&
+      ((typeof delta.content === "string" && delta.content !== "") ||
+        (typeof thought === "string" && thought !== "") ||
+        (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0))
+    ) {
+      onToken();
+    }
     if (Array.isArray(delta.tool_calls)) {
       for (const tc of delta.tool_calls) {
         // By index, which every server checked sends -- but an id is the
@@ -2435,6 +2508,8 @@ export interface WireRecord {
   stream: boolean;
   stream_idle_timeout_ms?: number;
   stream_total_timeout_ms?: number;
+  /** `[resilience] first_token_timeout_ms`, present only when declared (streamed calls) */
+  first_token_timeout_ms?: number;
   /** The output limit sent; 0 when none was */
   max_tokens?: number;
   /** Set only when the limit went out under another name */
@@ -2499,6 +2574,7 @@ export function wireOf(target: RouteTarget): WireRecord {
           stream: true,
           stream_idle_timeout_ms: target.streamIdleMs,
           stream_total_timeout_ms: target.streamTotalMs,
+          ...(target.firstTokenMs ? { first_token_timeout_ms: target.firstTokenMs } : {}),
         }
       : { stream: false }),
     max_tokens: target.maxTokens ?? 0,
@@ -3284,6 +3360,16 @@ export interface TurnDeps {
    * DEADLINE_ABORT. Absent, the turn is the turn it always was.
    */
   deadline?: TurnDeadline;
+  /**
+   * `[turn] deliverable_first` under `--deadline` (deliverable_first.ts): the
+   * output paths the task text names, and the directory a relative one is
+   * read against. At each DELIVERABLE_FIRST_AT fraction of the deadline the
+   * ones that do not exist yet are named in the time note. Read only with
+   * `deadline.stopAt`, at depth 0. Absent, the notes are the notes they were.
+   */
+  deliverables?: { paths: string[]; root: string };
+  /** RunTaskOptions.clock: what the deadline notes read the time from. `Date.now` when absent. */
+  clock?: () => number;
   /**
    * Where each tool call's start and wall time go (TB4), in the order they
    * ran, sub-turns included (`depth`). Told, never asked: nothing reads it
@@ -4128,6 +4214,17 @@ export interface TurnCounters {
    * request that carried one (`[turn] deadline_notes`). Absent when none were.
    */
   deadline_notes?: number;
+  /**
+   * Time notes that named outputs the task asks for and that did not exist
+   * yet (`[turn] deliverable_first`, deliverable_first.ts). Absent when none were.
+   */
+  deliverable_first_notes?: number;
+  /**
+   * Streamed requests aborted because no token arrived within `[resilience]
+   * first_token_timeout_ms`, and asked again under the retry budget. Absent
+   * when none were.
+   */
+  first_token_stalls?: number;
   /**
    * Calls resent because the endpoint refused reasoning_content that gnomon
    * replayed by default (no `replay_reasoning` declared); replay stays off
@@ -5111,6 +5208,18 @@ async function agenticTurn(
   // A request whose tokens no usage report covers. See TurnCounters.
   const countUnmetered = (r: InferenceResult): void => {
     if (r.unmeteredCalls) counters.unmetered_calls = (counters.unmetered_calls ?? 0) + r.unmeteredCalls;
+    // `[resilience] first_token_timeout_ms`: each abort, recorded where every
+    // call's accounting already lands. `recovered`: a later attempt answered.
+    for (const st of r.firstTokenStalls ?? []) {
+      counters.first_token_stalls = (counters.first_token_stalls ?? 0) + 1;
+      deps.audit?.write("first_token_stall", {
+        role,
+        step: steps,
+        attempt: st.attempt,
+        waited_ms: st.waited_ms,
+        recovered: r.code === 0,
+      });
+    }
   };
   const tally = (name: string, field: "calls" | "refusals" | "apparatus") => {
     const t = (counters.per_tool[name] ??= { calls: 0, refusals: 0, apparatus: 0 });
@@ -5666,6 +5775,9 @@ async function agenticTurn(
 
   // `--deadline`: the next fraction of the budget whose note is still unsent.
   let deadlineNoteNext = 0;
+  // `[turn] deliverable_first`: the next DELIVERABLE_FIRST_AT fraction unchecked.
+  let deliverableNext = 0;
+  const deliverables = depth === 0 && stopClock ? deps.deliverables : undefined;
   for (;;) {
     if (deps.signal?.aborted) return cancelled();
 
@@ -5675,24 +5787,55 @@ async function agenticTurn(
     // system message, sent as a user message marked [gnomon] where
     // steer_role = "user". Fractions passed together send one note. The turn
     // a person asked for only: a sub-turn is part of its parent's call.
+    //
+    // `[turn] deliverable_first` (deliverable_first.ts) adds its own
+    // fractions to the same note: at each, the outputs the task names that
+    // do not exist yet are listed in it. Nothing missing, nothing is added,
+    // so a turn that wrote its outputs early sees only the time notes.
     if (depth === 0 && stopClock) {
       const d = stopClock;
-      const now = Date.now();
+      const now = (deps.clock ?? Date.now)();
       const used = (now - d.started_at) / Math.max(1, d.total_ms);
       let crossed = false;
       while (deadlineNoteNext < d.notes.length && used >= d.notes[deadlineNoteNext]!) {
         deadlineNoteNext++;
         crossed = true;
       }
-      if (crossed) {
+      let missing: string[] = [];
+      if (deliverables) {
+        let at: number | undefined;
+        while (deliverableNext < DELIVERABLE_FIRST_AT.length && used >= DELIVERABLE_FIRST_AT[deliverableNext]!) {
+          at = DELIVERABLE_FIRST_AT[deliverableNext++]!;
+        }
+        if (at !== undefined && deliverables.paths.length > 0) {
+          missing = missingDeliverables(deliverables.paths, deliverables.root);
+          deps.audit?.write("deliverable_first", {
+            event: "check",
+            at,
+            step: steps,
+            used: Math.round(used * 1000) / 1000,
+            named: deliverables.paths,
+            missing,
+            noted: missing.length > 0,
+          });
+          if (missing.length > 0) {
+            counters.deliverable_first_notes = (counters.deliverable_first_notes ?? 0) + 1;
+            say(paint(deps.ui, "gray", `  [deadline] ${missing.length} named output(s) not written yet — noting it`));
+          }
+        }
+      }
+      if (crossed || missing.length > 0) {
         const left = Math.max(0, d.stopAt - now);
-        counters.deadline_notes = (counters.deadline_notes ?? 0) + 1;
-        say(paint(deps.ui, "gray", `  [deadline] ${formatSpan(left)} left of ${formatSpan(d.total_ms)} — noting it`));
+        if (crossed) {
+          counters.deadline_notes = (counters.deadline_notes ?? 0) + 1;
+          say(paint(deps.ui, "gray", `  [deadline] ${formatSpan(left)} left of ${formatSpan(d.total_ms)} — noting it`));
+        }
         working.push({
           role: "system",
           content:
             `Time check: about ${formatSpan(left)} of this task's ${formatSpan(d.total_ms)} remain ` +
-            `before it is stopped. Plan the rest of the work, and checking it, to finish inside that.`,
+            `before it is stopped. Plan the rest of the work, and checking it, to finish inside that.` +
+            (missing.length > 0 ? ` ${deliverableNote(missing)}` : ""),
         });
       }
     }
@@ -7959,6 +8102,14 @@ export interface RunTaskOptions {
    * no clock, as before.
    */
   deadline?: { at: number; source: "flag" | "env" };
+  /**
+   * The clock `--deadline` reads its budget and its notes from: epoch
+   * milliseconds, `Date.now` when absent. For tests, so the 40%/70% and
+   * `deadline_notes` thresholds follow the script rather than the runner's
+   * speed. The stop timer still runs on real time, `stopAt` less this clock's
+   * reading at the start.
+   */
+  clock?: () => number;
 }
 
 /** See RunTaskOptions.interrupt. */
@@ -8181,7 +8332,8 @@ export async function runTask(
   // of its time. The timer aborts the turn's signal with DEADLINE_ABORT; the
   // turn reads that as its `deadline` ending. unref'd: it must never be what
   // keeps a finished run's process alive.
-  const deadlineStart = Date.now();
+  const clock = options.clock ?? Date.now;
+  const deadlineStart = clock();
   // Each tool call's start and wall time, for `volatile.tool_calls` (TB4).
   const toolTimes: ToolTiming[] = [];
   let turnDeadline: Required<TurnDeadline> | undefined;
@@ -8201,7 +8353,7 @@ export async function runTask(
     };
     const ctl = new AbortController();
     deadlineSignal = ctl.signal;
-    deadlineTimer = setTimeout(() => ctl.abort(DEADLINE_ABORT), Math.max(0, turnDeadline.stopAt - Date.now()));
+    deadlineTimer = setTimeout(() => ctl.abort(DEADLINE_ABORT), Math.max(0, turnDeadline.stopAt - clock()));
     deadlineTimer.unref?.();
   }
 
@@ -8230,6 +8382,23 @@ export async function runTask(
   });
   if (options.trust) audit.write("trust", { ...options.trust, root: resolve(config.gnomonDir, "..") });
   let trust = options.trust;
+
+  // `[turn] deliverable_first` (deliverable_first.ts): read only under
+  // --deadline. The outputs the task names, said once on the trail, so a
+  // check that finds nothing missing can be read against what was looked for.
+  let deliverables: TurnDeps["deliverables"];
+  if (turnDeadline && resolveDeliverableFirst(config)) {
+    deliverables = { paths: extractDeliverables(input), root: workRootOf(config) };
+    audit.write("deliverable_first", { event: "named", named: deliverables.paths, at: [...DELIVERABLE_FIRST_AT] });
+  }
+  const deadlineDeps = turnDeadline
+    ? {
+        deadline: turnDeadline,
+        signal: deadlineSignal,
+        ...(deliverables ? { deliverables } : {}),
+        ...(options.clock ? { clock: options.clock } : {}),
+      }
+    : {};
 
   // The record as the run goes, beside the trail (live_record.ts): opened
   // here, before anything slow, so a run killed at any point after its
@@ -8395,7 +8564,7 @@ export async function runTask(
           live,
           toolTimes,
           unattended: true,
-          ...(turnDeadline ? { deadline: turnDeadline, signal: deadlineSignal } : {}),
+          ...deadlineDeps,
         });
         shadow?.turnEnd(stageInfo, shadowOutcome(r, stageInfo.t0));
         if (stageState.bootstrap) state.bootstrap = stageState.bootstrap;
@@ -8465,7 +8634,7 @@ export async function runTask(
         live,
         toolTimes,
         unattended: true,
-        ...(turnDeadline ? { deadline: turnDeadline, signal: deadlineSignal } : {}),
+        ...deadlineDeps,
       });
       shadow?.turnEnd(turnInfo, shadowOutcome(turn, turnInfo.t0));
     }

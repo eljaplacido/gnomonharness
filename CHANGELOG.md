@@ -28,6 +28,33 @@
 
 ### Added
 
+- **Deliverable-first time notes (opt-in): `[turn] deliverable_first =
+  true`.** Read only under `gnomon task --deadline`. The 2026-11-06 timeout
+  anatomy of 80 capped long-task runs found 54 had never written the output
+  the task names when the cap hit, and that `--deadline`'s half-time note
+  worked as an answer-now rule. With the key on, gnomon extracts the output
+  paths the task text names (an absolute path, or a quoted filename with an
+  extension, after an instruction verb such as "write", "save", "create",
+  "produce"; 33 of 33 hand-labelled deliverables and no false ones on the 29
+  P2G41 instructions) and, at 40% and 70% of the deadline, adds to the time
+  note the ones that do not exist yet: "These required outputs do not exist
+  yet: …. Write a first complete version now, then improve it." Same channel
+  as the time notes (a user message marked `[gnomon]` under `steer_role =
+  "user"`). `counters.deliverable_first_notes`; audit kind
+  `deliverable_first` (`named`, `check`). A value that is not a boolean is a
+  fatal surface finding. Off, or without `--deadline`, every request body is
+  master's. CONTRACTS.md §35, `conformance/deliverable_first.json`.
+- **First-token stall watchdog (opt-in): `[resilience]
+  first_token_timeout_ms`.** A streamed request whose first token (content,
+  reasoning or a tool call; keep-alives and empty role chunks do not count)
+  has not arrived in that many milliseconds is aborted and asked again under
+  the existing `attempts` and retry budget, without doubling the request
+  deadline. A request that has produced a token is never cut by it.
+  Unstreamed calls never read it. H3 R1 lost 4 of its 14 capped cells mostly
+  to provider first-token stalls (one request waited out the 300 s request
+  timeout, and its retry got its first token at 537 s). Default 0 (off);
+  `counters.first_token_stalls`, audit kind `first_token_stall`,
+  `wire.first_token_timeout_ms`. CONTRACTS.md §35.
 - **Soft-timeout shell (opt-in): a long command is handed back as a job, not
   killed.** tools.toml `[[tools]] name = "bash"`, `soft_timeout = "handle"`.
   A model's bash command still running at `timeout_seconds` keeps running as
