@@ -20,7 +20,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { formatSpan, platformBlock, runTask, taskExitCode } from "./prompt_loop.js";
@@ -536,6 +536,52 @@ describe("a read-only working directory (TB7)", () => {
     const plain = surface("http://127.0.0.1:1/v1/chat/completions");
     expect(loadConfig(plain).workRoot).toBeUndefined();
     expect(workRootOf(loadConfig(plain))).toBe(plain);
+  });
+
+  it("from inside the directory, its kept surface wins over an ancestor's .gnomon/ (CF1 wire test)", () => {
+    // A read-only directory below a project with its own surface: `gnomon init`
+    // in it keeps a surface for exactly this directory, and `trust grant --dir`
+    // finds that one. The walk from the cwd must find the same surface, not the
+    // ancestor's, or the task runs another surface without the grant.
+    // The real path: process.cwd() after chdir reports it (macOS /var -> /private/var, Windows 8.3 names), and the
+    // kept surface is keyed by the path the cwd reports.
+    const project = realpathSync.native(mkdtempSync(join(tmpdir(), "gnomon-ro-parent-")));
+    roots.push(project);
+    mkdirSync(join(project, ".gnomon"), { recursive: true });
+    writeFileSync(join(project, ".gnomon", "config.toml"), "");
+    writeFileSync(join(project, ".gnomon", "roles.toml"), `[roles.parent]\nmodel = "p"\n`);
+    const dir = join(project, "app");
+    mkdirSync(dir);
+    const state = workdirStateDir(dir);
+    roots.push(state);
+    mkdirSync(join(state, ".gnomon"), { recursive: true });
+    writeFileSync(join(state, WORKDIR_MARKER), `${dir}\n`);
+    writeFileSync(join(state, ".gnomon", "config.toml"), "");
+    writeFileSync(join(state, ".gnomon", "roles.toml"), `[roles.smol]\nmodel = "m"\n`);
+    expect(FIXTURE.workdir_state.lookup_from_cwd).toEqual([
+      "<cwd>/.gnomon",
+      "the kept surface of <cwd>",
+      "each ancestor's .gnomon, nearest first",
+    ]);
+    const cwd = process.cwd();
+    try {
+      process.chdir(dir);
+      expect(resolveGnomonDir()).toBe(join(state, ".gnomon"));
+      expect(resolveGnomonDir()).toBe(resolveGnomonDir(dir));
+      const config = loadConfig();
+      expect(config.workRoot).toBe(dir);
+      // A subdirectory of the read-only directory still walks up to the project.
+      mkdirSync(join(dir, "sub"));
+      process.chdir(join(dir, "sub"));
+      expect(resolveGnomonDir()).toBe(join(project, ".gnomon"));
+      // Without a kept surface the ancestor's is found, as before.
+      process.chdir(project);
+      mkdirSync(join(project, "other"));
+      process.chdir(join(project, "other"));
+      expect(resolveGnomonDir()).toBe(join(project, ".gnomon"));
+    } finally {
+      process.chdir(cwd);
+    }
   });
 });
 
