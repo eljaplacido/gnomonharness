@@ -184,11 +184,36 @@ as the shared-governance design's §7 asks:
   change** keeps it undeclared, and so unchanged, until a person adds
   `[governance]` — the hash moves when the behaviour does.
 
+### Outside the root against the rules (added 2026-11-07, shared-governance)
+
+Rule `outside_root` (CONTRACTS.md §38):
+
+| Rule | Kept? | Note |
+|---|---|---|
+| 1 No machine-scoped configuration | Kept, with drift below | Nothing new to configure: the boundary is the root, `extra_roots` and `write_allow`, all in `.gnomon/` |
+| 2 Manifest | Kept | No new key; the opt-in is the hashed `[governance]` declaration |
+| 3 Tools | Kept | A refused command is refused, the bash tool stays in the schema list |
+| 4 Buckets | Kept | A refusal; below `prevent` a record field |
+| 5 Exit contract | Kept | One new value of the guard's `rule` (`outside_root`); exits unchanged |
+| 6 Enumerations | Extended | `guard_decision.json` and `skill_candidate.json` list the rule |
+| Behaviour changed ⇒ hash changed | **Kept, by choice** | Only where `[governance]` is declared, the same opt-in as §37; with none, requests and decisions are master's (pinned), and `chmod`/`chown` are not read as targets |
+
+**Drift, recorded rather than hidden:**
+
+- **Temp space is the machine's.** Which directory is scratch comes from
+  `os.tmpdir()` (so `TMPDIR`) and `/tmp`, `/var/tmp`: the same command may be
+  scratch on one machine and outside on another whose `TMPDIR` differs.
+  Bounded: it only ever exempts temp space, never the project's neighbours,
+  and a project living in temp space is judged stricter, not looser.
+- **Where a symlink points is the filesystem's.** As with the tools'
+  sandbox, a write through a link inside the root is judged where it lands
+  today. Tightening-only.
+
 ### Long-task tier (a) against the rules (added 2026-11-07)
 
 One locality rule, replay wherever reasoning comes back, steering delivery on
 local lanes, the factual network refusal, `[turn] deadline_note`,
-`[turn] prompt_profile` (CONTRACTS.md §38):
+`[turn] prompt_profile` (CONTRACTS.md §39):
 
 | Rule | Kept? | Note |
 |---|---|---|

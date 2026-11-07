@@ -4631,7 +4631,7 @@ export function buildSystemPrompt(
  * One route target's resolved defaults, for `session_start.resolved`: where
  * it is by the one locality rule, whether its reasoning is replayed, and the
  * channel its steering goes out on -- each with the reason. The defaults
- * these settle moved in v0.4.6 (CONTRACTS §38), so the trail says, per
+ * these settle moved in v0.4.6 (CONTRACTS §39), so the trail says, per
  * session, what each one resolved to rather than leave a reader to re-derive
  * it from the surface and the build.
  */

@@ -126,7 +126,7 @@ function surface(
     (o.defaults ? `[defaults]\n${o.defaults}\n\n` : "") +
       (o.audit ? `[audit]\nenabled = true\nrecord = "metadata"\n\n` : "") +
       // steer_role = "system": the fake is on 127.0.0.1, a local lane, whose
-      // undeclared channel is the user role since v0.4.6 (CONTRACTS §38).
+      // undeclared channel is the user role since v0.4.6 (CONTRACTS §39).
       // Declared, these tests keep master's wire for the mechanism they test.
       `[endpoints.target]\nurl = "${url}"\nkind = "${kind}"\nsteer_role = "system"\n` +
       (kind === "openai" ? "stream = false\n" : "") +

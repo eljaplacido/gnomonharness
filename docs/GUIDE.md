@@ -729,7 +729,7 @@ lane that returns reasoning (llama.cpp with a thinking model, vLLM with a
 reasoning parser, Ollama's `/v1`) is replayed too. **That is unmeasured on
 local lanes**; `session_start.resolved` records what each route resolved to,
 and `replay_reasoning = false` restores the old local default. Ollama's
-`/api/chat` is never sent reasoning ([CONTRACTS §38](CONTRACTS.md)).
+`/api/chat` is never sent reasoning ([CONTRACTS §39](CONTRACTS.md)).
 
 **Steering role.** gnomon steers a turn with messages of its own: the idle
 nudge, the convergence push, a failed verification, the tool-less wrap-up,
@@ -1155,6 +1155,22 @@ because it writes a secret file; ask the person to create it, or set
 `secrets = "advise"`. Like every shell rule, this reads the command's text: a
 script that opens `.env` itself is not refused by it (containment is
 `[sandbox] exec`).
+
+**Writes outside the project.** Under the same declaration a shell command
+that writes or removes something outside the repository root is refused as
+`outside_root` (CONTRACTS.md §38): `rm -rf ../sibling`, `cd .. && rm -rf x`,
+`echo … >> ~/.bashrc`, `cp build/app ../deploy/`, `sed -i … ../other/file`.
+Reading outside the root, and writing to the system temp directory, stay
+allowed. To let the agent write a neighbouring directory, grant it:
+
+```toml
+# .gnomon/policy.toml
+[sandbox]
+extra_roots = ["../shared-fixtures"]
+```
+
+or name it in the role's `write_allow` (`"../shared-fixtures/**"`). To watch
+before refusing, level the family: `[governance] write = "advise"`.
 
 `guard` stops only what a hook shows it; a harness without one is judged after
 the fact by `check`. The README section

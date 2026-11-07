@@ -160,7 +160,7 @@ interface Extra {
 /** Each request body's sha256 (first 12 hex), the Windows platform note cut out. */
 function hashOf(raw: string): string {
   const note = JSON.stringify(platformBlock()).slice(1, -1);
-  // The network refusal was reworded on purpose (CONTRACTS §38): master's
+  // The network refusal was reworded on purpose (CONTRACTS §39): master's
   // text goes back in, so every other byte is still checked against master.
   const body = withMasterRefusal(raw);
   return createHash("sha256").update(note ? body.split(note).join("") : body).digest("hex").slice(0, 12);
@@ -590,7 +590,7 @@ describe("[turn] todo_gate", () => {
 
   it("hands the turn back once, naming the open items; an answer that leaves them open is accepted as exhausted", async () => {
     // steer_role = "system" declared: the fake is on 127.0.0.1, a local lane,
-    // whose undeclared channel is the user role (CONTRACTS §38).
+    // whose undeclared channel is the user role (CONTRACTS §39).
     const r = await scripted("openai", { turn: "todo_gate = true\n", endpoint: 'steer_role = "system"\n' }, [TODO, { answer: "done" }, { answer: "done, really" }]);
     expect(r.bodies).toHaveLength(3);
     const last = r.bodies[2]!.messages.at(-1);

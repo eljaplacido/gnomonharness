@@ -1,5 +1,5 @@
 /**
- * Two declared opt-ins for unattended long tasks (docs/CONTRACTS.md §38,
+ * Two declared opt-ins for unattended long tasks (docs/CONTRACTS.md §39,
  * conformance/long_task_profile.json):
  *
  * - `[turn] deadline_note = "plan" | "continue"`: the wording and timing of the

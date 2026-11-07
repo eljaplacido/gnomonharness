@@ -93,8 +93,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3139 TypeScript tests (2606 core, 508 cli, 18
-> natives, 7 tui) and 63 Rust tests — **3202 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3175 TypeScript tests (2642 core, 508 cli, 18
+> natives, 7 tui) and 63 Rust tests — **3238 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -738,7 +738,7 @@ reasoning gets it back too; only Ollama's `/api/chat`, where gnomon reads no
 reasoning, is never sent any. Replay on local lanes is **not measured** (LG1's
 lane returned no reasoning); the choice is recorded per session in
 `session_start.resolved`. `replay_reasoning = false` turns it off anywhere
-([GUIDE §5.2](docs/GUIDE.md), [CONTRACTS §38](docs/CONTRACTS.md)).
+([GUIDE §5.2](docs/GUIDE.md), [CONTRACTS §39](docs/CONTRACTS.md)).
 
 **Steering on local lanes** (`master`, unreleased): gnomon's own mid-turn
 messages (the idle nudge, the time notes, a failed check) go to a local lane
@@ -989,8 +989,8 @@ nothing in the record could say so.
 | `converge_refire` | Calls between convergence re-pushes once `converge_after` is reached. A single "submit what you have" is easy to ignore. |
 | `deadline_notes` | Read only under `gnomon task --deadline`. Fractions of the wall-clock budget, in (0, 1); when the turn has used one, its next request carries one short note of the time left, as a mid-turn system message (a user message marked `[gnomon]` under `steer_role = "user"`). `[]` sends none. |
 | `deadline_margin_ms` | Read only under `gnomon task --deadline`. The turn stops itself this long before the deadline, and a `bash` command's timeout is clamped to end one margin before that, so the model gets the partial output. Capped at a tenth of the budget. |
-| `deadline_note` | **Temporary** (deleted after the SW1 sweep). Read only under `gnomon task --deadline`. `"plan"` (default): the notes above, "Plan the rest of the work, and checking it, to finish inside that." `"continue"`: one note at 80%, "There is enough time left for substantial work; keep going and make sure the required outputs exist."; the deliverable-first note then ends "then keep improving it." [CONTRACTS §38](docs/CONTRACTS.md). |
-| `prompt_profile` | `"default"`: system.md as written. `"unattended"` (opt-in, declared only, never inferred from a TTY or the environment): drops the scaffold's "Verify in proportion to the task …" and "Once it works … stop." sentences, adds "Test edge cases, then submit" and two measurement lines (reproduce a timed gate literally, cold, with a 2x margin; for black-box parity compare exact strings over many random probes and round fitted constants), and makes `nudge_after_idle` 0 unless declared. For long unattended runs; daily development keeps the default. [CONTRACTS §38](docs/CONTRACTS.md). |
+| `deadline_note` | **Temporary** (deleted after the SW1 sweep). Read only under `gnomon task --deadline`. `"plan"` (default): the notes above, "Plan the rest of the work, and checking it, to finish inside that." `"continue"`: one note at 80%, "There is enough time left for substantial work; keep going and make sure the required outputs exist."; the deliverable-first note then ends "then keep improving it." [CONTRACTS §39](docs/CONTRACTS.md). |
+| `prompt_profile` | `"default"`: system.md as written. `"unattended"` (opt-in, declared only, never inferred from a TTY or the environment): drops the scaffold's "Verify in proportion to the task …" and "Once it works … stop." sentences, adds "Test edge cases, then submit" and two measurement lines (reproduce a timed gate literally, cold, with a 2x margin; for black-box parity compare exact strings over many random probes and round fitted constants), and makes `nudge_after_idle` 0 unless declared. For long unattended runs; daily development keeps the default. [CONTRACTS §39](docs/CONTRACTS.md). |
 | `deliverable_first` | Read only under `gnomon task --deadline`; off by default. `true`: the output paths the task text names (an absolute path, or a quoted filename with an extension, after "write", "save", "create", "produce" and the like) are checked at 40% and 70% of the budget, and the ones that do not exist yet are named in that request's time note with "Write a first complete version now, then improve it." Nothing missing, nothing is added. Dependency manifests ("write any dependencies to `requirements.txt`") are not outputs, and a named file that exists when the run starts is not checked. [CONTRACTS §35](docs/CONTRACTS.md). |
 
 Values are floored where a zero would mean the opposite of what it reads:
@@ -2602,6 +2602,16 @@ writes to CI definitions (`.github/workflows`, `.gitlab-ci.yml`, `.circleci`,
 levelled like any family (`ci = "advise"` to warn first). A surface with no
 `[governance]` gets neither, exactly as before. Contract:
 [CONTRACTS.md §37](docs/CONTRACTS.md).
+
+**Outside the root.** The same declaration bounds the shell the way the write
+and edit tools were always bounded: a command that writes or removes a file
+outside the repository — `rm -rf ../other-project`, `echo … >> ~/.bashrc`,
+`cp x ../sibling/`, `find .. -delete`, `chmod -R 777 ~/x`, a literal path in
+`python3 -c` — is refused as `outside_root` (family `write`). Temp space stays
+scratch, `[sandbox] extra_roots` grants another directory, and reads are not
+affected. It reads the command's text, so a script file that writes elsewhere
+is not refused by it (containment is `[sandbox] exec`). Contract:
+[CONTRACTS.md §38](docs/CONTRACTS.md).
 
 **What this does and does not pin.** gnomon decides each tool call the other
 agent proposes; it does not steer, re-prompt or constrain the agent itself,

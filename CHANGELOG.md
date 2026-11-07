@@ -35,7 +35,7 @@ request bodies are master's — except where the long-task tier (a) changes a
 default on purpose (below: replay and steering on local lanes, the network
 refusal's wording).
 
-### Changed (default) — long-task tier (a), CONTRACTS §38
+### Changed (default) — long-task tier (a), CONTRACTS §39
 
 Two defaults move, deliberately, under an unchanged surface hash. Each is
 recorded per session (`session_start.resolved`) and restored by one line.
@@ -116,6 +116,28 @@ recorded per session (`session_start.resolved`) and restored by one line.
   dependency manifest).
 
 ### Added
+
+- **Writes and removals outside the project root are refused in the shell
+  too: rule `outside_root`** (shared-governance; CONTRACTS.md §38). The write
+  and edit tools always refused a path outside the root (`sandbox`); a shell
+  command naming the same path was not judged, and the GBS-LAYER pilot's
+  sibling deletions (`rm -rf ../sibling`, `find ../sibling -delete`,
+  `shutil.rmtree('../sibling')`) and out-of-root writes (`> ../ESCAPED.txt`,
+  `>> ~/.bashrc`, `cp … ../sibling/`) ran. Every shell write target gnomon
+  reads (redirections, `rm`/`mv`/`cp`/`tee`/`dd`/`install`/`ln`/`truncate`/
+  `sed -i` operands, `find -delete`, inline interpreter code, and now
+  `chmod`/`chown`/`chgrp` for this rule only) is put to the root, the granted
+  `extra_roots` and any `write_allow` pattern that names a place outside the
+  root, through `cd` sequences, `~`/`$HOME` and symlinks. Temp space is
+  scratch, except the project's own neighbours when the project lives in it.
+  Family `write`, levelled like the rest; a more specific rule on the same
+  command (`record`, `secret_path`, `host_hooks`, `network`) still names it.
+  **Only where governance is declared** (the `gnomon init` scaffold) and not
+  under `[sandbox] level = "off"`; with no `[governance]`, requests and
+  decisions are master's. Pilot G-4 re-run ($0, fake models): 10 of the 12
+  leaks left open after protected paths close in every arm where they were
+  open, with no new benign refusal; the G-2 everyday set (60 commands) gets
+  none.
 
 - **Protected paths: one predicate, and the `secrets` and `ci` families**
   (shared-governance PR 3). `protectedPath` (tools.ts) now answers for every
@@ -266,6 +288,16 @@ recorded per session (`session_start.resolved`) and restored by one line.
   `glob` (CONTRACTS.md §10, `conformance/guard_cases.json`).
 
 ### Fixed
+
+- **A read-only directory below another project ran the project's surface.**
+  `gnomon init` in a read-only directory keeps its surface in the state
+  directory (TB7), and `gnomon trust grant --dir` found that one, but
+  `gnomon task` from the directory walked up first and ran an ancestor's
+  `.gnomon/` when one existed: the wrong surface, without the directory's
+  trust grant. The kept surface now stands in for `<dir>/.gnomon` and is found
+  before any ancestor. Present since 0.4.4; found by the CF1 wire test, whose
+  work directory sat inside a gnomon checkout. A read-only `/app` with no
+  surface above it (P2G) was never affected.
 
 - **`gnomon guard status` no longer reports a CRLF checkout of a hook file as
   modified, and the opencode plugin starts gnomon through a shell on

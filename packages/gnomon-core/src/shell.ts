@@ -3595,7 +3595,7 @@ const REMOVERS = new Set(["rm", "unlink", "shred", "rmdir", "mv", "truncate"]);
  */
 export function shellWriteTargets(
   command: string,
-  opts: { dirExists?: (dir: string) => boolean } = {}
+  opts: { dirExists?: (dir: string) => boolean; modes?: boolean } = {}
 ): { targets: WriteTarget[]; truncated: boolean } {
   const read = readShellCommand(command);
   const targets: WriteTarget[] = [];
@@ -3653,8 +3653,52 @@ export function shellWriteTargets(
       return;
     }
     writesOf(inv, prog, add);
+    if (opts.modes && MODE_CHANGERS.has(prog)) for (const m of modeTargets(prog, inv.argv)) add(m.path, prog, m.recursive ? { recursive: true } : {});
   });
   return { targets, truncated: read.truncated };
+}
+
+/**
+ * Programs that change a file's mode or owner, not its contents. Reported
+ * only when asked (`modes`): `outside_root` judges them (`chmod 777 ~/.ssh`,
+ * `chown -R … ../sibling`), while write_allow and the protected-path rules,
+ * which never judged them, keep deciding exactly as before.
+ */
+export const MODE_CHANGERS: ReadonlySet<string> = new Set(["chmod", "chown", "chgrp"]);
+
+/** The files a chmod / chown / chgrp changes: its operands after the mode or owner. */
+function modeTargets(prog: string, argv: string[]): Array<{ path: string; recursive: boolean }> {
+  let recursive = false;
+  let reference = false;
+  const ops: string[] = [];
+  for (let i = 1; i < argv.length; i++) {
+    const w = argv[i]!;
+    if (w === "--") {
+      ops.push(...argv.slice(i + 1));
+      break;
+    }
+    if (w.startsWith("--")) {
+      if (w === "--recursive") recursive = true;
+      else if (w.startsWith("--reference")) {
+        reference = true;
+        if (!w.includes("=")) i++;
+      } else if (w === "--from" ) i++;
+      continue;
+    }
+    // chmod's symbolic mode may start with a dash (`chmod -w f`): the first
+    // such word with no mode yet is the mode, not an option.
+    if (prog === "chmod" && /^-[rwxXst]+$/.test(w) && ops.length === 0 && !reference) {
+      ops.push(w);
+      continue;
+    }
+    if (/^-[A-Za-z]+$/.test(w)) {
+      if (w.includes("R")) recursive = true;
+      continue;
+    }
+    ops.push(w);
+  }
+  const files = reference ? ops : ops.slice(1);
+  return files.map((path) => ({ path, recursive }));
 }
 
 /** What one invocation writes, handed to `add`. */

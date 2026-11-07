@@ -53,7 +53,7 @@ export function stubDeclaredKeys(config: GnomonConfig): () => void {
 
 /**
  * The bash network refusal's closing text on master before v0.4.6. The
- * refusal was reworded on purpose (CONTRACTS §38, tools.ts
+ * refusal was reworded on purpose (CONTRACTS §39, tools.ts
  * NETWORK_REFUSAL_TAIL); the byte-identity tests put this text back before
  * hashing, so a pinned master hash still checks every other byte of a request
  * that carries a refusal, and nothing but that sentence may differ.

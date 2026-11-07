@@ -203,7 +203,7 @@ describe("on by default when the endpoint reasons (v0.4.3)", () => {
 
   it("a local lane (llama.cpp-style, 127.0.0.1) that returns reasoning_content is replayed by default (v0.4.6); declared false, it is not", async () => {
     // One rule wherever the endpoint is: it returned reasoning, so it gets it
-    // back (CONTRACTS §38). Untested on local lanes by any study; recorded.
+    // back (CONTRACTS §39). Untested on local lanes by any study; recorded.
     const on = await serve(false);
     const root = audited(on.url, "stream = false");
     const rec = await runTask(loadConfig(root), "read x.txt", { role: "smol", yes: true });

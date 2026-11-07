@@ -1,8 +1,8 @@
 /**
- * Long-task tier (a), docs/CONTRACTS.md §38, conformance/long_task_profile.json.
+ * Long-task tier (a), docs/CONTRACTS.md §39, conformance/long_task_profile.json.
  *
  * - The fixture and the code agree; the keys are known to the surface audit;
- *   CONTRACTS §38 names them.
+ *   CONTRACTS §39 names them.
  * - `[turn] deadline_note`: "plan" is §31's text byte for byte; "continue" is
  *   one note at 0.8 in the SW1 wording. Declared at its default, or with a
  *   far deadline, every request body is master's (ae17a1ae).
@@ -92,9 +92,9 @@ describe("conformance/long_task_profile.json", () => {
     expect(NETWORK_REFUSAL_TAIL).not.toContain(FIXTURE.network_refusal.removed);
   });
 
-  it("CONTRACTS §38 names the keys, values, record fields and the fixture", () => {
+  it("CONTRACTS §39 names the keys, values, record fields and the fixture", () => {
     const contracts = readFileSync(join(REPO, "docs/CONTRACTS.md"), "utf-8");
-    const s38 = contracts.split("\n## 38.")[1]!.split("\n## 39.")[0]!;
+    const s38 = contracts.split("\n## 39.")[1]!.split("\n## 40.")[0]!;
     for (const w of [
       "deadline_note",
       "prompt_profile",

@@ -672,7 +672,7 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
       surface_hash: surfaceHash,
       cwd,
       roles,
-      // The defaults each route resolved to (CONTRACTS §38).
+      // The defaults each route resolved to (CONTRACTS §39).
       resolved: resolvedSessionRecord(config, roles),
       record: auditSettings.record,
       // Which front end. `gnomon task` writes "task"; the terminal writes none.

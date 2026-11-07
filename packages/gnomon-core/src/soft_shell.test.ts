@@ -160,7 +160,7 @@ function reply(kind: Kind, n: number, steps: Step[]): unknown {
 
 function hashOf(raw: string): string {
   const note = JSON.stringify(platformBlock()).slice(1, -1);
-  // The network refusal was reworded on purpose (CONTRACTS §38): master's
+  // The network refusal was reworded on purpose (CONTRACTS §39): master's
   // text goes back in, so every other byte is still checked against master.
   const body = withMasterRefusal(raw);
   return createHash("sha256").update(note ? body.split(note).join("") : body).digest("hex").slice(0, 12);

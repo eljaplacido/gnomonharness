@@ -20,7 +20,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { formatSpan, platformBlock, runTask, taskExitCode } from "./prompt_loop.js";
@@ -69,7 +69,7 @@ describe("v0.4.4 release defaults (H3 adopt, LG1 keep)", () => {
   it("replay: one rule wherever the endpoint is (v0.4.6): undeclared, it waits for reasoning; Ollama's /api/chat never; false stays off", () => {
     // H3 adopted replay as a default on hosted endpoints. Since v0.4.6 the same
     // rule holds on a local lane and behind a private relay: the endpoint
-    // returning reasoning is the only trigger (CONTRACTS §38).
+    // returning reasoning is the only trigger (CONTRACTS §39).
     for (const url of [
       "https://openrouter.ai/api/v1/chat/completions",
       "http://127.0.0.1:8080/v1/chat/completions",
@@ -260,7 +260,7 @@ function surface(url: string, opts: { turn?: string; tools?: string[]; resilienc
     join(root, ".gnomon", "config.toml"),
     `[defaults]\nmax_tokens = 4096\n\n[turn]\n${opts.turn ?? ""}\n\n[audit]\nenabled = true\n\n` +
       (opts.resilience ? `[resilience]\n${opts.resilience}\n\n` : "") +
-      // Both v0.4.6 local-lane defaults declared off (CONTRACTS §38): these
+      // Both v0.4.6 local-lane defaults declared off (CONTRACTS §39): these
       // tests are about the deadline, on master's wire.
       `[endpoints.target]\nurl = "${url}"\nkind = "openai"\nstream = false\nreplay_reasoning = false\nsteer_role = "system"\n`
   );
@@ -563,6 +563,52 @@ describe("a read-only working directory (TB7)", () => {
     expect(loadConfig(plain).workRoot).toBeUndefined();
     expect(workRootOf(loadConfig(plain))).toBe(plain);
   });
+
+  it("from inside the directory, its kept surface wins over an ancestor's .gnomon/ (CF1 wire test)", () => {
+    // A read-only directory below a project with its own surface: `gnomon init`
+    // in it keeps a surface for exactly this directory, and `trust grant --dir`
+    // finds that one. The walk from the cwd must find the same surface, not the
+    // ancestor's, or the task runs another surface without the grant.
+    // The real path: process.cwd() after chdir reports it (macOS /var -> /private/var, Windows 8.3 names), and the
+    // kept surface is keyed by the path the cwd reports.
+    const project = realpathSync.native(mkdtempSync(join(tmpdir(), "gnomon-ro-parent-")));
+    roots.push(project);
+    mkdirSync(join(project, ".gnomon"), { recursive: true });
+    writeFileSync(join(project, ".gnomon", "config.toml"), "");
+    writeFileSync(join(project, ".gnomon", "roles.toml"), `[roles.parent]\nmodel = "p"\n`);
+    const dir = join(project, "app");
+    mkdirSync(dir);
+    const state = workdirStateDir(dir);
+    roots.push(state);
+    mkdirSync(join(state, ".gnomon"), { recursive: true });
+    writeFileSync(join(state, WORKDIR_MARKER), `${dir}\n`);
+    writeFileSync(join(state, ".gnomon", "config.toml"), "");
+    writeFileSync(join(state, ".gnomon", "roles.toml"), `[roles.smol]\nmodel = "m"\n`);
+    expect(FIXTURE.workdir_state.lookup_from_cwd).toEqual([
+      "<cwd>/.gnomon",
+      "the kept surface of <cwd>",
+      "each ancestor's .gnomon, nearest first",
+    ]);
+    const cwd = process.cwd();
+    try {
+      process.chdir(dir);
+      expect(resolveGnomonDir()).toBe(join(state, ".gnomon"));
+      expect(resolveGnomonDir()).toBe(resolveGnomonDir(dir));
+      const config = loadConfig();
+      expect(config.workRoot).toBe(dir);
+      // A subdirectory of the read-only directory still walks up to the project.
+      mkdirSync(join(dir, "sub"));
+      process.chdir(join(dir, "sub"));
+      expect(resolveGnomonDir()).toBe(join(project, ".gnomon"));
+      // Without a kept surface the ancestor's is found, as before.
+      process.chdir(project);
+      mkdirSync(join(project, "other"));
+      process.chdir(join(project, "other"));
+      expect(resolveGnomonDir()).toBe(join(project, ".gnomon"));
+    } finally {
+      process.chdir(cwd);
+    }
+  });
 });
 
 /**
@@ -624,7 +670,7 @@ async function scripted(
 /**
  * The default changes, turned off: master's behaviour, declared. Replay
  * (v0.4.4 hosted, v0.4.6 every endpoint) and, on a local lane such as these
- * fakes on 127.0.0.1, the steering channel (v0.4.6, CONTRACTS §38).
+ * fakes on 127.0.0.1, the steering channel (v0.4.6, CONTRACTS §39).
  */
 const DISABLED = { endpoint: 'replay_reasoning = false\nsteer_role = "system"\n' };
 

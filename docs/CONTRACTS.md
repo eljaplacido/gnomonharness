@@ -691,6 +691,7 @@ decision gnomon could not make is never an allow.
 | `git_hooks` | a write, edit or shell write target in `.git/hooks/` or `.git/config` (a linked worktree's common git dir included), or a `git config` that sets, in any scope, a key git runs as a program: `core.hooksPath`, `core.fsmonitor`, `core.sshCommand`, `core.pager`, `core.editor`, `core.askPass`, `sequence.editor`, `credential.helper`, diff/merge/filter drivers, `gpg.program`, `pager.*`, `alias.*` starting with `!`, `include.path`, `init.templateDir` and the rest of the list in `shell.ts` (`GIT_EXEC_KEYS`). For every role |
 | `host_hooks` | a write, edit or shell write target in a host harness's hook configuration — what `gnomon guard install` writes and what can switch it off: `.claude/settings.json`, `.claude/settings.local.json`, `.claude/hooks/`, `.opencode/plugins/` (and `plugin/`), `opencode.json[c]`, `.cursor/hooks.json` in the root and the git toplevel; the user-level copies (`$CLAUDE_CONFIG_DIR` or `~/.claude`, `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`, `$OPENCODE_CONFIG`, `~/.cursor/hooks.json`); and gnomon's per-repository state (the guard's session bases and rules cache). A recursive removal, `mv`, `git rm` or `git clean` that would reach one counts. For every role, under every gate: removing the hook detaches the layer from every later session (GBS-LAYER pilot, 2026-11-06) |
 | `write_allow` | a path outside the role's `write_allow`; or a relative shell write after a `cd` gnomon cannot follow (`cd "$X"`), which it cannot place |
+| `outside_root` | only under a declared governance (§38), and not under `[sandbox] level = "off"`: a shell write or removal target outside the root and every granted `extra_roots` — redirections, `rm`/`mv`/`cp`/`tee`/`dd`/`install`/`ln`/`truncate`/`sed -i`/`chmod`/`chown`/… operands, `find -delete`/`-exec rm`, literal paths in inline python/node/perl code — after `cd` sequences gnomon can follow, `~` and `$HOME`, globs by their literal part. Temp space is scratch, except the project's own neighbours when it lives there. The bash half of what `sandbox` refuses for write and edit |
 | `secret_path` | only under a declared governance (§37): a read, write or edit of a protected secret path (`[governance.paths] secrets`, or its default: `.env`, keys, `~/.ssh`, `~/.aws`, …), a shell command with a word or redirection naming one or a recursive reader (`grep -r`, `rg`, `tar`, `cp -r`, `find -exec`) reaching one, a command that prints the environment (`printenv`, `env` with no command, a bare `export`, `/proc/<pid>/environ`), or a grep/glob whose scope is one or holds one |
 | `ci_path` | only under a declared governance (§37): a write, edit or shell write target in a CI definition (`[governance.paths] ci`, or its default: `.github/workflows/`, `.gitlab-ci.yml`, `.circleci/`, `Jenkinsfile`, …), or a recursive removal reaching one |
 | `network` | `[sandbox] network = false`, and the call names a network client, a remote `scp`/`rsync` target, `/dev/tcp`, interpreter code that opens a connection, a git remote by URL (`push`, `fetch`, `pull`, `ls-remote`, `clone`, `remote add\|set-url`, `submodule add`, `archive --remote`, a `-c` value, `git config remote.*.url`), or a package manager's registry or package URL (`--registry`, `--index-url`, `-i`, a URL operand) |
@@ -2287,7 +2288,7 @@ the surface, so it is outside `volatile`.
 | `steered_calls` | `{nudge, converge, other}`: requests carrying at least one steering message of that kind |
 | `trims` | `{leg, overflow, dropped}`: trims by reason, and the messages they dropped |
 | `first` | `i` of `calls[0]`, present only when older entries were let go |
-| `steer_messages` | each of gnomon's mid-turn messages once, on the first request that carried it: `{i, kind, via, delivered}` (§38). Present once there is one; the last 512 |
+| `steer_messages` | each of gnomon's mid-turn messages once, on the first request that carried it: `{i, kind, via, delivered}` (§39). Present once there is one; the last 512 |
 | `calls` | the last 512 requests, one entry each (below) |
 
 One entry per request:
@@ -2299,8 +2300,8 @@ One entry per request:
 | `est_body` | the same estimate over the whole request body: tool schemas, tool calls, replayed reasoning and JSON included |
 | `replayed` | assistant messages whose reasoning went out as `reasoning_content` (only an OpenAI-shaped endpoint with replay on is sent any: declared, DeepSeek's API, or by default once it answered a tool call with reasoning, §31) |
 | `steer` | gnomon's own system messages after the leading ones, present in the request, by kind: `nudge` (the idle nudge), `converge` (the convergence push), `other` (a trim's ledger, a failed check, the wrap-up, a context notice) |
-| `via` | `system`, or `user` under `steer_role = "user"` (declared, learned, or undeclared on a local lane, §38): the role they went out in. Present with `steer` |
-| `delivered` | beside `via`, always: `true` when that channel is known to reach the model (user content; a late system message to a remote endpoint), `false` for a late system message to a local lane, whose chat templates dropped every one on the M2 lanes (§38) |
+| `via` | `system`, or `user` under `steer_role = "user"` (declared, learned, or undeclared on a local lane, §39): the role they went out in. Present with `steer` |
+| `delivered` | beside `via`, always: `true` when that channel is known to reach the model (user content; a late system message to a remote endpoint), `false` for a late system message to a local lane, whose chat templates dropped every one on the M2 lanes (§39) |
 | `trim` | a trim since the request before: `why` (`leg`: the leg checkpoint; `overflow`: the provider refused the request as too long, code 13, and gnomon trimmed to 50% to send it again), `dropped` messages, the working context's estimate `before` and `after`, the `budget` it was trimmed to, and the `ratio` it was divided by under `calibrated` |
 | `leg` | the turn's leg, from 2 on |
 | `depth` | `1` for a request a delegated sub-turn (the `task` tool) made; its requests are its parent's |
@@ -2516,7 +2517,7 @@ and a 60 s provider grace outlasted by 503s.
 
 | key | before | now | to restore |
 |---|---|---|---|
-| `[endpoints.<name>] replay_reasoning` | off unless declared (or `api.deepseek.com`) | undeclared on a **hosted** endpoint: on from the request after it first answers a tool call with reasoning content (`reasoning_content` or `reasoning`), for the session. Undeclared on a **local lane** (`isLocalLaneUrl`): off, as before. **Since v0.4.6 (§38) the hosted rule holds on every OpenAI-shaped endpoint, local lanes and private relays included; Ollama's `/api/chat` stays off** | `replay_reasoning = false` |
+| `[endpoints.<name>] replay_reasoning` | off unless declared (or `api.deepseek.com`) | undeclared on a **hosted** endpoint: on from the request after it first answers a tool call with reasoning content (`reasoning_content` or `reasoning`), for the session. Undeclared on a **local lane** (`isLocalLaneUrl`): off, as before. **Since v0.4.6 (§39) the hosted rule holds on every OpenAI-shaped endpoint, local lanes and private relays included; Ollama's `/api/chat` stays off** | `replay_reasoning = false` |
 | `[turn] nudge_after_idle` | `12` | `12`, unchanged; a declared `0` is now off (it was floored to 1) | — |
 
 Replay is H3's verdict (pre-registered; hosted DeepSeek V4.1 Flash, 30-minute
@@ -2543,7 +2544,7 @@ turn record's `wire` carries, beside `replay_reasoning: true`,
 | value | when |
 |---|---|
 | `declared` | `replay_reasoning = true` |
-| `default` | gnomon turned it on: `api.deepseek.com`, or an undeclared endpoint that answered a tool call with reasoning (hosted only until v0.4.6; any OpenAI-shaped endpoint since, §38) |
+| `default` | gnomon turned it on: `api.deepseek.com`, or an undeclared endpoint that answered a tool call with reasoning (hosted only until v0.4.6; any OpenAI-shaped endpoint since, §39) |
 
 **`gnomon task --deadline <seconds|ISO 8601 time with a zone>`**, else
 `GNOMON_DEADLINE`. Opt-in; absent, nothing below happens. A value that is not
@@ -2575,7 +2576,9 @@ write keeps the surface and every record gnomon writes beside one in
 `$XDG_STATE_HOME/gnomon/workdirs/<first 16 hex of sha256(absolute path)>`
 (else `~/.local/state/...`), with a `WORKDIR` file naming the directory, and
 writes nothing in the directory. Loading from the directory (or `--dir` it)
-finds that surface; the directory stays the root the tools work in. "No
+finds that surface; the directory stays the root the tools work in. It stands
+in for `<dir>/.gnomon`, so from the directory itself it wins over an
+ancestor's `.gnomon/` (a subdirectory still walks up as before). "No
 .gnomon/ surface found" names the cause when the directory is not writable.
 
 **Truncation.** The re-ask after an output-limit truncation is once per
@@ -2586,7 +2589,7 @@ for being blank or markup. Two cuts in a row still end the turn (§1).
 request body of a scripted turn is byte-identical to master's (0.4.2 + #151),
 with and without a far `--deadline`; an undeclared endpoint that sends no
 reasoning gets master's bytes with nothing declared (a local lane that does
-send reasoning is replayed since v0.4.6, §38). The tool timing, the task
+send reasoning is replayed since v0.4.6, §39). The tool timing, the task
 grace and the read-only fallback change no request.
 
 **Fixture**: `conformance/long_tasks.json`; `packages/gnomon-core/src/long_tasks.test.ts`
@@ -3039,7 +3042,7 @@ hashes §32 pinned, held again in `deliverable_first.test.ts`). The same with
   request's time note (§31's `Time check: about … remain …`) ends with
   `These required outputs do not exist yet: <paths>. Write a first complete
   version now, then improve it.` (at most 12 paths, then `(and N more)`;
-  under `[turn] deadline_note = "continue"`, §38, the time note's own sentence
+  under `[turn] deadline_note = "continue"`, §39, the time note's own sentence
   is the continue wording and this one ends `then keep improving it.`). It
   goes on the steering channel: a mid-turn system message, a user message
   marked `[gnomon]` under `steer_role = "user"`. A deliverable fraction and a
@@ -3125,7 +3128,7 @@ tools.ts; tools and governance tests pin the table against the rule list):
 
 | Family | Rules |
 |---|---|
-| `write` | `write_allow` (write, edit and shell write targets), `sandbox` on write/edit |
+| `write` | `write_allow` (write, edit and shell write targets), `sandbox` on write/edit, `outside_root` (§38, shell write targets) |
 | `bash` | `bash_deny`, `bash_allow`, `sudo`, `repo_code` |
 | `network` | `network`, `url` |
 | `secrets` | `secret_path` (§37); `sandbox` on read, grep and glob (a read or search outside the root) |
@@ -3275,7 +3278,57 @@ no governance); `conformance/protected_paths.json` (the default lists, pinned
 against `DEFAULT_SECRET_PATHS` / `DEFAULT_CI_PATHS`); `guard_decision.json`
 and `skill_candidate.json` list the two rules.
 
-## 38. Long-task tier (a) — one locality rule, replay wherever reasoning comes back, steering delivery, the network refusal, `[turn] deadline_note`, `[turn] prompt_profile`, `v: 1`
+## 38. Outside the root — rule `outside_root`, `v: 1`
+
+The write and edit tools have refused a path outside the root and every
+granted `[sandbox] extra_roots` since the sandbox existed (`sandbox`, family
+`write`). A shell command naming the same path was not judged: in the
+GBS-LAYER pilot (2026-11-06) `rm -rf ../sibling`, `find ../sibling -delete`,
+`echo … >> ~/.bashrc` and `cp … ../sibling/` ran in every guarded arm whose
+gate did not ask. `outside_root` puts the shell's write targets to the same
+boundary, in gnomon's loop and in `gnomon guard` alike.
+
+| | |
+|---|---|
+| Family | `write` (levelled like `write_allow` and the tools' `sandbox`) |
+| In force | only where governance is declared (§36, §37's opt-in: `ctx.protectedPaths`), and not under `[sandbox] level = "off"`, which says the root does not bound the agent |
+| Judged | every shell write target `write_allow` reads (§10: redirections, `rm`, `rmdir`, `unlink`, `shred`, `truncate`, `touch`, `mkdir`, `tee`, `cp`, `mv` destination and source, `install`, `ln`, `dd of=`, `curl -o`, `wget -O`, `sed -i`/`perl -i`, `tar -x`/`unzip`/`rsync` destinations, git writes, `find -delete` and `find -exec rm` start points, awk redirects, literal paths inline python/node/perl/ruby code writes or removes), plus `chmod`, `chown` and `chgrp` operands (judged by this rule only: no other rule reads a mode change). Through wrappers, `sh -c`, `eval`, here-documents and base64 fed to a shell, as the target reader follows them; `cd`/`pushd`/`popd` sequences it can follow; `~`, `$HOME`, `${HOME}`; a glob by the literal part before its first wildcard (`rm -rf ../sib*`; a leading `*` lands in the directory the shell is in) |
+| Not judged | reads (`cat ../x`, `cp ../x src/`); a link's source (`ln -s ../x l` writes `l`); a target gnomon cannot place (`cd "$X"`, a path starting with a variable other than HOME, `xargs`); what a script file or compiled program does. Containment is `[sandbox] exec` |
+
+**Inside** (not refused): the root and each `extra_roots`, compared as real
+paths, so a symlink inside the root pointing out is out. A write through a
+symlink lands where it points; a removal of the symlink itself (`rm -rf link`,
+no trailing slash) removes the link and is in. A `write_allow` pattern that
+names a place outside the root (`../shared/**`, `/srv/out/**`, `~/notes/**`)
+grants it; a pattern of the repository's own (`**`) does not reach out.
+
+**Scratch space.** The system temp directories (`os.tmpdir()`, and `/tmp` and
+`/var/tmp` off Windows; on Windows a `/tmp/…` target, which Git Bash maps to
+the user's temp directory) are not refused — a scratch file, a build in
+`/tmp/out`, a venv in `/tmp/venv` — **except** when the project itself lives
+in temp space: then the directory that holds it, and everything below it, are
+its neighbours (a checkout in `/tmp/x/ws` may write `/tmp/notes`, never
+`/tmp/x/sibling`), and a recursive removal reaching that directory is refused.
+
+**Order.** The rules that name a protected place keep naming it first: a
+removal above the records is `record`, `rm -rf ~/.ssh` is `secret_path`, a
+write over `~/.claude/settings.json` is `host_hooks`. `outside_root` is
+reported only when no other rule on the same command refuses it (a secret it
+names, the network it reaches, a `write_allow` target).
+
+**Undeclared surfaces are unchanged.** With no `[governance]` (nor a role's;
+`[extends]` will be the same opt-in), `ctx.protectedPaths` is absent, the rule never answers, and
+`chmod`/`chown`/`chgrp` are not even read as targets: requests and decisions
+are master's (`protected_paths_loop.test.ts` pins the request bytes;
+`conformance/guard_cases.json` holds the undeclared decision).
+
+**Fixture**: `conformance/guard_cases.json` `levels` (an out-of-root write, a
+sibling removal and a HOME append at every level, loop, guard and binary; a
+shell read outside the root, which only the gate asks about) and its gate
+cases (the same write undeclared); `guard_decision.json` and
+`skill_candidate.json` list the rule.
+
+## 39. Long-task tier (a) — one locality rule, replay wherever reasoning comes back, steering delivery, the network refusal, `[turn] deadline_note`, `[turn] prompt_profile`, `v: 1`
 
 **Why.** The long-task convergence synthesis of 2026-11-07 (research notes,
 §5a items a2, a3, a5, a6, a7) found five defects or missing switches that

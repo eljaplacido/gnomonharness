@@ -89,7 +89,7 @@ function surface(url: string, o: { defaults?: string; turn?: string; endpoint?: 
       `[turn]\n${o.turn ?? ""}\n\n` +
       `[audit]\nenabled = true\n\n` +
       // steer_role = "system": the fake is on 127.0.0.1, a local lane, whose
-      // undeclared channel is the user role since v0.4.6 (CONTRACTS §38).
+      // undeclared channel is the user role since v0.4.6 (CONTRACTS §39).
       // Declared, these tests keep master's wire for the mechanism they test.
       `[endpoints.target]\nurl = "${url}"\nkind = "openai"\nsteer_role = "system"\n${o.endpoint ?? ""}\n`
   );
@@ -646,7 +646,7 @@ describe("the contract: conformance/mediator_record.json and CONTRACTS.md", () =
         }
         if (c.steer) for (const k of Object.keys(c.steer)) expect(fixture.steer).toContain(k);
         if (c.via) expect(fixture.via).toContain(c.via);
-        // `delivered` goes with `via`, always (CONTRACTS §29, §38).
+        // `delivered` goes with `via`, always (CONTRACTS §29, §39).
         expect("delivered" in c, `call ${c.i} delivered`).toBe("via" in c);
       }
       for (const m of sent.steer_messages ?? []) {

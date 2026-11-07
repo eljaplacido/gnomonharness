@@ -334,7 +334,7 @@ function reply(kind: Kind, n: number): unknown {
 
 function hashOf(raw: string): string {
   const note = JSON.stringify(platformBlock()).slice(1, -1);
-  // The network refusal was reworded on purpose (CONTRACTS §38): master's
+  // The network refusal was reworded on purpose (CONTRACTS §39): master's
   // text goes back in, so every other byte is still checked against master.
   const body = withMasterRefusal(raw);
   return createHash("sha256").update(note ? body.split(note).join("") : body).digest("hex").slice(0, 12);
@@ -556,7 +556,7 @@ async function deliverableRun(turn: string, endpoint = "") {
 describe("--deadline with deliverable_first = true", () => {
   it("at 40% names both missing outputs; at 70% only the one still missing; the trail records both checks", async () => {
     // steer_role = "system" declared: the fake is on 127.0.0.1, a local lane,
-    // whose undeclared channel is the user role (CONTRACTS §38, tested below).
+    // whose undeclared channel is the user role (CONTRACTS §39, tested below).
     const r = await deliverableRun("deliverable_first = true\ndeadline_notes = []\ndeadline_margin_ms = 200\nnudge_after_idle = 0", 'steer_role = "system"\n');
     expect(r.rec.stop_reason).toBe("answered");
     // The notes, as they went out: system messages on the steering channel.
