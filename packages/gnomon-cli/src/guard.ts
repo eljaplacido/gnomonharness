@@ -255,13 +255,19 @@ function guard(event, directory, base) {
   return new Promise((resolve) => {
     const args = ["guard", "--from", "opencode", "--agent", AGENT];
     if (/^[0-9a-f]{40,64}$/.test(base || "")) args.push("--session-base", base);
-    const child = execFile(GNOMON, args, { cwd: directory, timeout: 30000, maxBuffer: 1 << 20 }, (err, stdout) => {
+    // Windows: npm installs gnomon as a .cmd shim, which only a shell starts
+    // (execFile alone fails with ENOENT/EFTYPE). The arguments are fixed
+    // flags and a checked commit id, so nothing here needs quoting.
+    const child = execFile(GNOMON, args, { cwd: directory, timeout: 30000, maxBuffer: 1 << 20, shell: process.platform === "win32" }, (err, stdout) => {
       try {
         resolve(JSON.parse(String(stdout).trim().split("\\n").pop()));
       } catch {
         resolve({ decision: "deny", reason: "gnomon guard gave no answer" + (err ? ": " + err.message : "") });
       }
     });
+    // A gnomon that exits before reading stdin must not crash opencode: its
+    // answer (or the deny for none) comes from the callback above.
+    child.stdin.on("error", () => {});
     child.stdin.end(JSON.stringify({ ...event, directory }));
   });
 }
@@ -439,6 +445,13 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
 const sha256 = (b: string | Buffer) => createHash("sha256").update(b).digest("hex");
 
 /**
+ * A file's text as git compares it across checkouts: a Windows checkout
+ * (core.autocrlf) holds CRLF where the commit and gnomon's own output hold
+ * LF, and that is not a change to the hook.
+ */
+const lf = (b: string | Buffer) => (typeof b === "string" ? b : b.toString("utf-8")).replace(/\r\n/g, "\n");
+
+/**
  * What `install --write` wrote, kept in gnomon's state for this repository
  * (outside it, and refused to every tool call as host hook configuration):
  * the file and its hash, so `status` can tell a removed or changed hook even
@@ -450,7 +463,7 @@ function recordInstall(project: string, host: string, file: string): void {
   try {
     const at = join(repo.stateDir, "installed.json");
     const current = existsSync(at) ? (JSON.parse(readFileSync(at, "utf-8")) as Record<string, unknown>) : {};
-    current[host] = { file, sha256: sha256(readFileSync(file)), at: new Date().toISOString() };
+    current[host] = { file, sha256: sha256(lf(readFileSync(file))), at: new Date().toISOString() };
     mkdirSync(dirname(at), { recursive: true });
     writeFileSync(at, `${JSON.stringify(current, null, 2)}\n`);
   } catch {
@@ -524,13 +537,13 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
     const atHead = committed(file);
     const rec = recorded(host);
     const live = existsSync(file) ? readFileSync(file) : null;
-    const expected = (atHead !== null && present(atHead.toString("utf-8")) === null) || rec !== undefined || expect.includes(host);
+    const expected = (atHead !== null && present(lf(atHead)) === null) || rec !== undefined || expect.includes(host);
     const at = (state: HookState, detail: string): HookStatus => ({ host, state, file, detail });
     if (live === null) return expected ? at("missing", "the hook file is gone") : at("not_installed", "");
-    const wrong = present(live.toString("utf-8"));
+    const wrong = present(lf(live));
     if (wrong !== null) return expected ? at("modified", wrong) : at("not_installed", "");
-    if (atHead !== null && !atHead.equals(live)) return at("modified", "it differs from the version committed at HEAD");
-    if (atHead === null && rec?.sha256 && rec.sha256 !== sha256(live)) return at("modified", "it changed since `gnomon guard install` wrote it");
+    if (atHead !== null && lf(atHead) !== lf(live)) return at("modified", "it differs from the version committed at HEAD");
+    if (atHead === null && rec?.sha256 && rec.sha256 !== sha256(lf(live))) return at("modified", "it changed since `gnomon guard install` wrote it");
     const off = extra?.();
     if (off) return at("disabled", off);
     return at("ok", "");

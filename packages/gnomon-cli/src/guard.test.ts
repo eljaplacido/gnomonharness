@@ -273,6 +273,9 @@ describe("gnomon guard status — a missing, changed or switched-off hook is a f
     expect(s.st.findings).toHaveLength(2);
 
     git("checkout", "--", ".");
+    // A CRLF checkout (Windows, core.autocrlf) of the same hook is not a change.
+    writeFileSync(join(r, ".opencode/plugins/gnomon-guard.js"), opencodePlugin().replace(/\n/g, "\r\n"));
+    expect((await status(r)).st.hosts.map((h) => h.state)).toEqual(["ok", "ok", "ok"]);
     writeFileSync(join(r, ".claude/settings.local.json"), JSON.stringify({ disableAllHooks: true }));
     s = await status(r);
     expect(stateOf(s.st, "claude-code")).toBe("disabled");
@@ -398,8 +401,17 @@ describe("gnomon guard — opencode V2 plugin", () => {
     const r = governedRepo("never");
     const start = git("rev-parse", "HEAD");
     const log = join(dir, "args.log");
-    const fake = join(dir, "fake-gnomon.sh");
-    writeFileSync(fake, `#!/bin/sh\necho "$*" >> ${log}\ncat >/dev/null\necho '{"decision":"allow"}'\n`, { mode: 0o755 });
+    // A stand-in gnomon in the platform's own script form: on Windows the
+    // plugin starts gnomon through a shell, as npm's gnomon.cmd needs.
+    const win = process.platform === "win32";
+    const fake = join(dir, win ? "fake-gnomon.cmd" : "fake-gnomon.sh");
+    writeFileSync(
+      fake,
+      win
+        ? `@echo %*>>"${log}"\r\n@echo {"decision":"allow"}\r\n`
+        : `#!/bin/sh\necho "$*" >> ${log}\ncat >/dev/null\necho '{"decision":"allow"}'\n`,
+      { mode: 0o755 }
+    );
     writeFileSync(join(dir, "gnomon-guard-sb.mjs"), opencodePlugin());
     process.env.GNOMON_GUARD_BIN = fake;
     try {
