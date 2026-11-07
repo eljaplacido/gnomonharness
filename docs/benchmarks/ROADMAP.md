@@ -7,8 +7,11 @@
 
 - One project wrote these drafts, and that project also builds a harness they
   will measure.
-- No reference implementation exists yet.
-- No result conforms yet, gnomon's included.
+- Reference runners exist only as one-off apparatus for gnomon's first results
+  ([`gbs-2026-11-04`](../../benchmarks/results/gbs-2026-11-04/README.md),
+  gnomon v0.4.1); nothing under `benchmarks/standards/` yet.
+- Of those results, CHAOS (arm R) conforms as written; the other three are
+  partial. No peer harness has a result.
 - No outside reviewer has read the specs, and no venue or partner has been
   contacted.
 

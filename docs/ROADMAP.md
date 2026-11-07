@@ -156,7 +156,7 @@ role routing, `hashline` edit format. You stop reaching for other agents.
 
 **Goal:** `.gnomon/ci.sh` validates all contracts end-to-end.
 
-- [x] Run all tests across all crates (46 Rust + ~616 TS; ci.sh reports the live counts)
+- [x] Run all tests across all crates (`.gnomon/ci.sh` reads the live counts back from the runners; the README status line carries them)
 - [x] Manifest golden fixture match
 - [x] Enumerations schema validation
 - [x] Session golden fixture validation
@@ -167,8 +167,10 @@ role routing, `hashline` edit format. You stop reaching for other agents.
         macOS build, interactive smoke test, clippy
   - [x] Push-triggered on master/develop, PR-triggered on master
   - [x] Build badges in README
-- [ ] aarch64 build step (Docker or cross-compile)
-- [ ] **Spec and documentation drift.** Structured claims are pinned by tests
+- [x] aarch64 build step: `linux-arm64` is cross-built in `.github/workflows/build-release.yml` and ships with every release
+- [x] **Spec and documentation drift.** *Done: `scripts/doc_reconciliation.mjs` with
+      `docs/reconciliation.json` reports, on every `.gnomon/ci.sh` run, which documents
+      are owed a reading since the commit each was last checked against.* Structured claims are pinned by tests
       (21 in `docs.test.ts`: the tool table, the role table, the command
       registry, the exit codes, the stop_reason enumeration, and every
       `file.ts:line` citation the docs make). **Prose is not**, and that is the
@@ -231,18 +233,25 @@ Ordered by what a day of real use runs into first.
       the audit record now, but no comparative run has used it. Until those
       exist, claims on those axes are not honest — see
       [POSITIONING.md](POSITIONING.md).
+      *Since then (not re-audited here): injection runs (`injection-2026-08-31`,
+      `injection-2026-09-01`, `inj-2026-11-guardfix`), `latency-2026-08-31`,
+      `token-efficiency-2026-09-01` and the GBS v0.1 overhead/chaos/audit/governance
+      results (`gbs-2026-11-04`) are committed under `benchmarks/results/`;
+      [EVIDENCE.md](EVIDENCE.md) is where each is read.*
 - [x] **MCP (stdio).** `tools.toml`'s `[mcp_servers]` block spawns a pinned
       stdio server at startup, discovers its tools and offers them per role as
       `mcp__<server>__<tool>`. HTTP/SSE transports remain to be wired, and the
       reproducibility guarantee is bounded — gnomon pins the invocation, not the
       server's behaviour.
-- [ ] **Compiled entry point.** ~197ms of every invocation is `tsx`
+- [~] **Compiled entry point.** *Partly: the launcher (`packages/gnomon-cli/gnomon.js`)
+      now caches a bundle of the sources and imports it in-process, falling back
+      to `tsx`.* The original note: ~197ms of every invocation is `tsx`
       transpiling the sources; gnomon's own logic is ~33ms. Needs conditional
       `exports` across every workspace package, which also changes what vitest
       resolves — a deliberate build change, not a launcher tweak.
 - [ ] **Repo map.** Context is a sliding window over turns, not a ranked view
       of the repository.
-- [ ] aarch64 static binary (`musl` or Docker cross-compile)
+- [~] aarch64 static binary: a glibc `linux-arm64` build ships with each release; a static `musl` one does not
 - [~] Code coverage — **measured 2026-08-31**, not yet enforced. `pnpm run coverage`.
       gnomon-core: 75.4% statements, 80.8% branches, 92.7% functions. The gap is
       concentrated in one place: `prompt_loop.ts` at **50.1%**, almost entirely

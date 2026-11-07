@@ -5,6 +5,17 @@ must refuse to stay itself. Written against
 [BENCHMARK-REPORT-2026-08-30.md](BENCHMARK-REPORT-2026-08-30.md) and the Six Rules in
 [../README.md](../README.md).
 
+> **Status, checked against `master` on 2026-11-07.** This is the 2026-08-30
+> plan, kept as written; its numbers are from that report. Since then:
+> `stop_reason`/`stop_detail` are on every `TaskRecord` (CONTRACTS.md); the
+> idle nudge, stall and converge constants are declared role keys
+> (`nudge_after_idle`, `stall_repeats`, `converge_refire` in `config.ts`);
+> unrecognised config keys are warned by the surface audit; a wall clock
+> arrived as the caller-supplied flag this plan asked for, `gnomon task
+> --deadline` (on `master`; in v0.4.4, drafted but not yet published), never
+> a surface default. `gnomon experiment` (Tier 3) does not exist. Read the
+> tiers below as history, not as the current plan.
+
 ---
 
 ## 1. The finding

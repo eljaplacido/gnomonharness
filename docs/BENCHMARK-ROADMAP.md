@@ -1,5 +1,13 @@
 # Benchmark roadmap
 
+> **Historical (August 2026), kept for the record. Do not cite its claims as
+> current.** Its "validly claimable" list predates the corrections in
+> [EVIDENCE.md](EVIDENCE.md): the goose comparison is no longer a valid baseline,
+> "13–43× leaner" is retracted, and the "hybrid flailed" note below was
+> superseded by the 2026-11 hybrid campaigns (R1H, R3R, R4H, M2). The current
+> benchmark plan is [benchmarks/ROADMAP.md](benchmarks/ROADMAP.md); the current
+> claim-to-evidence map is [EVIDENCE.md](EVIDENCE.md).
+
 What gnomon's benchmarks can validly claim today, where they can't yet, and the
 program to close the gap. Companion to [BENCHMARKS.md](BENCHMARKS.md) and
 [BENCHMARK-POSTMORTEM.md](BENCHMARK-POSTMORTEM.md).

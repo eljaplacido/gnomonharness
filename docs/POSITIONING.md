@@ -37,6 +37,16 @@ reached parity on the fraction of hidden tests passed (+0.050, CI −0.097 to
 So on a hosted model the defaults cost task completion, and the recipe
 recovers partial credit but has not shown parity on solves.
 
+One part of that recipe has since become a default. H3 (2026-11-06,
+pre-registered, the same 29 tasks and model, gnomon v0.4.2) tested reasoning
+replay alone: hidden-test fraction +0.160 (95% CI +0.042 to +0.293) and 5 fewer
+capped tasks, which met the pre-registered rule, while solves were 2 against 1
+(too few discordant tasks to tell)
+([H3 summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+Replay for hosted endpoints is on by default on `master` and in the v0.4.4
+release notes, which are a draft: the newest published release, v0.4.3, does
+not have it. No peer comparison has been run on that build.
+
 That is the finding, not a disappointment: at this model tier the harness is not
 the bottleneck on task completion, so the properties below — determinism,
 capability separation, disclosure, auditability — are what this document is
@@ -94,8 +104,9 @@ run there is nobody to ask, so a gated call is refused rather than assumed.
 disabled by default. Enabled, every turn, tool call and approval decision is
 appended to a hash-chained JSONL trail carrying the surface hash. Altering a
 record is detectable — `gnomon audit verify` reports which sequence number
-broke. Measured on this machine, a task with the trail on took 338ms against
-354ms with it off: within run-to-run noise.
+broke. Measured on this machine in August 2026 (v0.1 era), a task with the
+trail on took 338ms against 354ms with it off: within run-to-run noise. Not
+re-measured on the current build.
 
 This is deliberately not sold as a compliance product. It provides the
 primitives an oversight regime needs — an append-only record, tamper-evidence,
@@ -129,7 +140,7 @@ provider-specific features.
 | **MCP (HTTP/SSE)** | Cline, Goose, Continue, Claude Code | stdio MCP is wired — a pinned server's tools are discovered and offered per role, no `gnomon-core` change needed. The remaining gap is the HTTP/SSE transports and the breadth of the server ecosystem. |
 | **Cloud / async execution** | Codex, Cursor, OpenHands | No queue, no worktree pool, no issue-to-PR while you do something else. Cron-scheduled `loops` are the one unattended path — single guard/act ticks, not a queue. |
 | **IDE surface** | Cursor, Cline, Continue, Windsurf, Roo | `gnomon acp` puts the same loop in any Agent Client Protocol editor (Zed, JetBrains): the agent panel, permission prompts and tool-call cards. No inline completions, no editor-buffer edits, no VS Code extension of its own. |
-| **Sandboxed isolation** | OpenHands | `confined` is filesystem path containment, not a container. `bash` reaches the network. |
+| **Sandboxed isolation** | OpenHands | `confined` is filesystem path containment, not a container. `[sandbox] exec = "docker"` (opt-in, per surface or per role) runs `bash` in a container with no network unless `[sandbox] network = true`; its containment is tested in CI only against a stub `docker`, not a real one. The default, `exec = "off"`, runs `bash` on the host, where it reaches the network. A kernel sandbox (`exec = "os"`, PR #156) is not merged. |
 | **Ecosystem** | all of them | This is one repository. |
 | **Repo map / semantic context** | Aider, Cursor | Context is a sliding window over turns, not a ranked map of the repository. |
 | **A role chain that *gates*** | Devin, ForgeCode-style pipelines | Closed 2026-09-05. `[chain] gate` has three positions: `never` (apparatus failure only — what every existing surface has, and the default), `on_refusal` (a stage whose bucket is `refusal` stops it), and `on_check` (also a stage whose declared `[verify]` check did not pass). What it deliberately does NOT do is gate on a stage's *opinion*: a verifier reporting "this is wrong" in prose still exits 0, and reading its sentence would be instruction rather than capability. What stops the chain is a check that ran and failed. Not re-measured: [role-chain-2026-09-02](../benchmarks/results/role-chain-2026-09-02/README.md) found 48.7% vs 56.6% (p = 0.375) for a chain that could not gate, and says nothing about one that can. |
@@ -174,14 +185,17 @@ record around it.
 
 That evaluation suite now exists, and it is the reason the top of this document
 changed. What would change *this* section is a **powered** peer comparison:
-every arm run to date is sized to detect roughly a 10pp difference, and every
-one has come back null, which rules out a large difference and says nothing
-about a small one. A run that could separate 50.0% from 47.1% needs several
-hundred paired tasks, not 34.
+every arm run to date is sized to detect roughly a 10pp difference. The v0.2
+arms all came back null, which rules out a large difference and says nothing
+about a small one; a run that could separate 50.0% from 47.1% needs several
+hundred paired tasks, not 34. The one later peer arm, P2G41 on v0.4.1, was not
+null for the release defaults (they trailed opencode, above), and with the
+hosted recipe it showed neither a difference nor parity on solves.
 
 So the honest claim remains about *design properties that are testable* —
 determinism, capability boundaries, disclosure, auditability — measured
 exhaustively rather than sampled. The difference from the earlier version of
-this paragraph is that task success rates have now been measured, repeatedly,
-and the answer was "no difference". That is a result, and it is why this
-document leads with the properties.
+this paragraph is that task success rates have now been measured, repeatedly:
+"no difference" on v0.2, and on v0.4.1 a deficit for the defaults on a hosted
+model that the recipe narrowed without closing. That is a result, and it is why
+this document leads with the properties.

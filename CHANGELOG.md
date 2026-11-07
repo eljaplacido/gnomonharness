@@ -26,6 +26,13 @@
 
 ## [Unreleased]
 
+Everything in this section is on master and in no release. The new keys below
+(`soft_timeout = "handle"`, `finish_gate = "v2"`, `deliverable_first`,
+`first_token_timeout_ms`, `[governance]` levels) are **opt-in and unmeasured**:
+the long-task arms that test them (FG1, AS1) were still running when they
+merged, and no result is claimed for any of them yet. With none declared,
+request bodies are master's.
+
 ### Added
 
 - **Governance levels: `observe < advise < prevent < enforce`, per family of
@@ -132,8 +139,29 @@
   modules when run. `startup_budget.test.ts` pins what `--version` may load
   (no network stack) instead of a wall time.
 
+### Security
+
+- **`gnomon guard` holds when the agent it guards tries to detach it** (#165,
+  from the GBS-LAYER pilot's detachment probes, 2026-11-06). New rule
+  `host_hooks`: writes, edits, removals and overwrites of the hook
+  installation (`.claude/settings*.json`, `.claude/hooks/`,
+  `.opencode/plugins/`, `opencode.json[c]`, `.cursor/hooks.json`, their
+  user-level copies, and gnomon's per-repository guard state) are denied under
+  every gate, in the guard and in gnomon's own loop. Under Claude Code's
+  `bypassPermissions` mode an ask becomes a deny (recorded with `host_mode`).
+  opencode: the plugin passes `--session-base`; `git rm`/`git mv` of
+  `.gnomon` and a commit that would record a change to `.gnomon/` are denied
+  (rule `surface`). `grep` and `glob` (opencode's and Claude Code's) are
+  decided as a `read` of where they search. `gnomon guard status` reports
+  each host's hook as ok, missing, modified, disabled or not installed (exit
+  0 / 2 / 10). `GUARD_RULES` gains `host_hooks`, `GUARD_TOOLS` `grep` and
+  `glob` (CONTRACTS.md §10, `conformance/guard_cases.json`).
+
 ### Fixed
 
+- **`gnomon guard status` no longer reports a CRLF checkout of a hook file as
+  modified, and the opencode plugin starts gnomon through a shell on
+  Windows** (#165).
 - **Docker job kills leave no stray `docker rm`.** Killing a job or a timed-out
   command under `exec = "docker"` ran three `docker rm -f`s: killTree's and the
   `docker run` exit handler's, detached and never awaited, beside the awaited,
@@ -157,6 +185,11 @@
   v0.5.0) and the "24 of 32" figure given with its later re-runs.
 
 ## [0.4.5] — 2026-11-06
+
+> **Not yet published.** This release is a GitHub draft; the latest published
+> release is [0.4.3], which is what the installer and `gnomon update` install
+> (npm's `gnomon-harness` is still 0.3.2). Until it is published, this section
+> describes master.
 
 Security release for `exec = "docker"` (PR #158). Upgrade if you run a model
 you do not trust in a container. Nothing changes for `exec = "off"`.
@@ -225,6 +258,11 @@ you do not trust in a container. Nothing changes for `exec = "off"`.
   [`exec` — where `bash` actually runs](README.md#exec--where-bash-actually-runs).
 
 ## [0.4.4] — 2026-11-06
+
+> **Not yet published.** This release is a GitHub draft; the latest published
+> release is [0.4.3], which is what the installer and `gnomon update` install
+> (npm's `gnomon-harness` is still 0.3.2). Until it is published, this section
+> describes master.
 
 Long hosted-model tasks, from the P2G41 root causes (2026-11-05). **One default
 changes: reasoning replay is on for a hosted endpoint that returns reasoning**,

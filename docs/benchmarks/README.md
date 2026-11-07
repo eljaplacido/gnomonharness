@@ -2,8 +2,11 @@
 
 **Version 0.1 (draft), 2026-11-03.** A proposal for open benchmark standards
 covering what a coding-agent *harness* decides, as distinct from what the model
-decides. It is a draft for comment. No result conforms to it yet, gnomon's
-included.
+decides. It is a draft for comment. The first author-run results, for the
+four model-free specs on gnomon v0.4.1, are in
+[`gbs-2026-11-04`](../../benchmarks/results/gbs-2026-11-04/README.md): CHAOS
+(arm R) conforms as written; OVERHEAD, AUDIT and GOVERNANCE conform only
+partially. No peer harness has a result.
 
 ## Why harness-level benchmarks
 
@@ -54,8 +57,8 @@ standards are meant to fill the gaps.
 | GBS-HYBRID | [HYBRID.md](HYBRID.md) | Does a local/cloud split beat local on quality and cloud on cost, with local compute priced and no hidden regression? | v0.1 draft |
 | GBS-GOVERNANCE | [GOVERNANCE.md](GOVERNANCE.md) | When an agent attempts a forbidden action, does the harness stop it, and can the agent rewrite its own rules? | v0.1 draft |
 | GBS-REPORTING | [REPORTING.md](REPORTING.md) | What every result under this family must state | v0.1 draft |
-| GBS-CHAOS | [CHAOS.md](CHAOS.md) | Does the harness announce injected endpoint faults, or fail silently? | Companion spec, separate PR |
-| GBS-AUDIT | [AUDITABILITY.md](AUDITABILITY.md) | Can the agent's record survive tampering, and can a third party verify it? | Companion spec, separate PR |
+| GBS-CHAOS | [CHAOS.md](CHAOS.md) | Does the harness announce injected endpoint faults, or fail silently? | v0.1 draft |
+| GBS-AUDIT | [AUDITABILITY.md](AUDITABILITY.md) | Can the agent's record survive tampering, and can a third party verify it? | v0.1 draft |
 
 [ROADMAP.md](ROADMAP.md) says how these could become community standards:
 reference implementations, peer adapters, a results page, versioning, and where
@@ -199,4 +202,4 @@ measurements are cited by result directory, on `master` or on the public
 [`bench/peers-2026-11`](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results)
 branch.
 
-Latest findings: [FINDINGS-2026-11-04](FINDINGS-2026-11-04.md) — long-task diagnosis (C2D, H1, H2), hybrid on v0.4.0 (M2, R3R), causal analysis.
+Latest findings: [FINDINGS-2026-11-04](FINDINGS-2026-11-04.md) — long-task diagnosis (C2D, H1, H2), hybrid on v0.4.0 (M2, R3R), causal analysis. Later campaigns (P2G41, H3, H4-lite, G1gate, LG1, R4H) are summarised in [EVIDENCE.md](../EVIDENCE.md#2026-11-campaigns).

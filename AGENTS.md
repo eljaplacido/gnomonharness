@@ -17,6 +17,7 @@ the constitution; a change that weakens one of them needs to say so.
 | `packages/gnomon-core/src/` | The loop: `prompt_loop.ts` (turns, slash commands), `tools.ts`, `config.ts` (surface loading, TOML parser, `auditSurface`), `audit.ts`, `check.ts`, `loops.ts` |
 | `packages/gnomon-natives/` | Typed wrappers that spawn the Rust binaries |
 | `packages/gnomon-tui/` | Saved-session viewer |
+| `packages/gnomon-desktop/` | Draft Tauri window over `gnomon dashboard` (Rust; not in the pnpm build, not released) |
 | `crates/` | Rust: `gnomon-surface` (the hash authority), `gnomon-edit`, `gnomon-exec` |
 | `conformance/` | Golden fixtures: the published contracts |
 | `.gnomon/` | This repository's own surface. `ci.sh` is the gate. |

@@ -1,13 +1,14 @@
 # Design: first-run setup and the command center
 
-Status: **Part I implemented, steps 1 to 5**, 2026-11-03, unreleased. Step 1
+Status: **Part I implemented, steps 1 to 5**, 2026-11-03; released in v0.4.1
+(#129), together with `gnomon dashboard` and the desktop shell (#128). Step 1
 (the read-only hardware probe and runtime discovery) came with this document
 (#105). Steps 2 to 5 (`gnomon doctor`, the catalog and recommendation,
 `gnomon setup` with the consent-gated pull, the speed check and the mode it
 suggests) came in the setup-wizard PR that supersedes #105. Step 6 (hybrid
 control on `escalate`) waits for #102: setup records the choice as a
-preference only. Part II is still a proposal; `gnomon dashboard` is being
-built separately and reads `setup --json` and `doctor --json`.
+preference only. What is below under Part II is the proposal as written; the
+`gnomon dashboard` that shipped reads `setup --json` and `doctor --json`.
 
 **Decisions taken on the open questions (2026-11-03),** and where the build
 differs from the text below:
