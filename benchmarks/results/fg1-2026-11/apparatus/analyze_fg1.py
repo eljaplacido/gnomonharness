@@ -214,6 +214,50 @@ def contention_lines(eff: list[dict], cov_path: Path) -> list[str]:
     return L
 
 
+def host_lines(eff: list[dict], oracle_path: Path) -> list[str]:
+    """Amendment 3 (descriptive, not decision-bearing): waves ran on two hosts (gx10 aarch64, hub amd64), every wave's
+    three arms on one host, so each pair is within one host. Host is a recorded stratum: per host, each arm's counts
+    and each comparison's paired difference; host differences are confounded with which waves each lane happened to
+    claim (queue timing) and with the task mix, so they are a flag, not an effect estimate."""
+    L = ["", "Amendment 3 — host strata (descriptive; pairs are within-wave, so within-host)"]
+    hosts = sorted({o.get("host", "gx10-aarch64") for o in eff})
+    for h in hosts:
+        hc = [o for o in eff if o.get("host", "gx10-aarch64") == h]
+        L.append(f"  {h}: {len({o['wave'] for o in hc})} waves, {len({o['task'] for o in hc})} tasks")
+        for arm in ARMS:
+            g = [o for o in hc if o["arm"] == arm and o["valid"]]
+            L.append(f"    {arm}: valid {len(g)}, solved {sum(o['solved'] for o in g)}, capped "
+                     f"{sum(o['capped'] for o in g)}, median agent wall {_fmt(_med(o.get('agent_s') for o in g))}, "
+                     f"invalid {sum(1 for o in hc if o['arm'] == arm and not o['valid'])}")
+        cell = {(o["arm"], o["task"], o["attempt"]): o for o in hc}
+        for arm in ("FG", "SH"):
+            pr = [(cell[("C", t, a)], cell[(arm, t, a)]) for (x, t, a) in cell if x == "C" and (arm, t, a) in cell
+                  and cell[("C", t, a)]["valid"] and cell[(arm, t, a)]["valid"]]
+            n10 = sum(1 for c, x in pr if x["solved"] and not c["solved"])
+            n01 = sum(1 for c, x in pr if c["solved"] and not x["solved"])
+            L.append(f"    {arm} - C on {h}: {len(pr)} pairs, paired solve difference "
+                     f"{(n10 - n01) / len(pr) if pr else float('nan'):+.3f} ({arm}-only {n10}, C-only {n01})")
+    both = [t for t in {o["task"] for o in eff}
+            if len({o.get("host", "gx10-aarch64") for o in eff if o["task"] == t}) > 1]
+    L.append(f"  tasks run on both hosts: {len(both)}")
+    if oracle_path.exists():
+        try:
+            orc = json.loads(oracle_path.read_text())
+            bad = {h: sorted(t for t, v in d.items() if v is not True) for h, d in orc.items() if isinstance(d, dict)}
+            L.append(f"  oracle status per host ({oracle_path.name}): " + "; ".join(
+                f"{h}: {len(orc[h]) - len(b)}/{len(orc[h])} pass" + (f" (not passing: {', '.join(b)})" if b else "")
+                for h, b in bad.items()))
+            for h, b in bad.items():
+                for t in b:
+                    n = [o for o in eff if o["task"] == t and o.get("host", "gx10-aarch64") == h]
+                    if n:
+                        L.append(f"    {t} on {h}: oracle not passing there; {len(n)} cells ran there (valid by "
+                                 f"section 6; reported, not excluded)")
+        except Exception as e:
+            L.append(f"  oracle status unavailable: {e}")
+    return L
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--outcomes", default=str(HERE.parent / "ledger" / "outcomes.jsonl"))
@@ -258,6 +302,7 @@ def main(argv=None) -> int:
             why.append("more than 10% invalid cells")
         L.append(f"  DECISION {arm}: {'ADOPT as a default' if not why else 'NOT ADOPTED (' + '; '.join(why) + ')'}")
     L += contention_lines(eff, Path(a.outcomes).parent / "covariates.jsonl")
+    L += host_lines(eff, Path(a.outcomes).parent.parent / "ORACLE-HOSTS.json")
     text = "\n".join(L)
     print(text)
     Path(a.out).write_text(text + "\n", encoding="utf-8")

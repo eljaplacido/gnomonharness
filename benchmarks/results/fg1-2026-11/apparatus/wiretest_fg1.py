@@ -200,6 +200,8 @@ def main() -> int:
     ap.add_argument("--arms", default="")
     ap.add_argument("--out", default=str(HERE.parent / "wiretest-fg1.txt"))
     ap.add_argument("--build", default=str(HERE / "build.toml"))
+    ap.add_argument("--fake-host", default="172.17.0.1", help="Amendment 3: the fake model's (non-loopback, private) "
+                    "bind address; on the hub the wire test runs inside an amd64 container, whose bridge address it is")
     ap.add_argument("--slots", default="", help="Amendment 1: also check the live path log relay -> slot relay -> Go "
                     "for these slots (one tiny real request each, the cell's placeholder key)")
     a = ap.parse_args()
@@ -221,7 +223,8 @@ def main() -> int:
     say(f"== FG1 wire test: build {stamp}, `gnomon --version` = {ver}; build.toml {b['version']} {b['commit'][:12]} "
         f"({b['status']})")
     check(stamp == b["build_stamp"] and ver == f"gnomon/{b['version']}+{b['build_stamp']}", "local build = build.toml pins")
-    host = "172.17.0.1"  # never loopback: the key grant only applies to a non-loopback address
+    host = a.fake_host  # never loopback: the key grant only applies to a non-loopback address
+    assert not host.startswith("127.") and host not in ("localhost", "::1"), "the fake model must not be on loopback"
     srv = ThreadingHTTPServer((host, 0), Fake)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     base = f"http://{host}:{srv.server_address[1]}/openai/v1"

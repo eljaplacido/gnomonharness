@@ -433,3 +433,111 @@ def test_runner_interim_gate_runs_before_attempt_2_and_stops(tmp_path, monkeypat
         push = False
     assert R.execute(waves, A(), {}, {}, None, interim=True) == "stopped"
     assert not ran and (tmp_path / "interim" / "look1.json").exists() and R.stopped_look() == 1
+
+
+# ---------------------------------------------------------------- Amendment 3: two lanes, one queue, claims, barriers
+import run_fg1_lanes as L  # noqa: E402
+
+
+def _lanes(tmp_path, monkeypatch, lane, rows=()):
+    monkeypatch.setattr(L, "CLAIMS", tmp_path / "claims")
+    monkeypatch.setattr(L, "LOCK", tmp_path / ".lanes.lock")
+    monkeypatch.setattr(L, "LANE", lane)
+    monkeypatch.setattr(L, "GA", None)
+    monkeypatch.setattr(R, "STATUS", tmp_path / "STATUS.txt")
+    monkeypatch.setattr(R, "INTERIM_DIR", tmp_path / "interim")
+    monkeypatch.setattr(IM, "INTERIM_DIR", tmp_path / "interim")
+    monkeypatch.setattr(R, "commit", lambda *a, **k: True)
+    monkeypatch.setattr(L, "commit", lambda *a, **k: True)
+    monkeypatch.setattr(R, "OUTCOMES", _write(tmp_path, list(rows)))
+    monkeypatch.setattr(R, "wait_for_wave", lambda args: None)
+    monkeypatch.setattr(L, "wait_hub", lambda args: None)
+
+
+class _Args:
+    push = False
+
+
+def test_lanes_claim_is_exclusive_and_owned(tmp_path, monkeypatch):
+    _lanes(tmp_path, monkeypatch, "gx10")
+    assert L.claim("a1w09") and L.claim("a1w09")  # own claim: idempotent
+    monkeypatch.setattr(L, "LANE", "hub")
+    assert not L.claim("a1w09") and L.claim("a1w10")
+    assert L.claim_owner("a1w09") == "gx10" and L.claim_owner("a1w10") == "hub"
+
+
+def test_lanes_take_plan_order_skipping_done_and_other_lanes_claims(tmp_path, monkeypatch):
+    waves = R.plan()
+    done = [{"cell": c, "usd": 0.0} for w in waves[:2] for c in L.cells_of(w).values()]
+    _lanes(tmp_path, monkeypatch, "hub", done)
+    monkeypatch.setattr(L, "LANE", "gx10")
+    L.claim(waves[2]["id"])
+    monkeypatch.setattr(L, "LANE", "hub")
+    ran = []
+
+    def fake_wave(w, *a):
+        ran.append(w["id"])
+        if len(ran) == 2:
+            monkeypatch.setattr(R, "stopped_look", lambda: 1)  # end the loop
+        return {"aborted": False, "hold": False, "spent": 0.0}
+    monkeypatch.setattr(L, "run_wave", fake_wave)
+    monkeypatch.setattr(L, "done_cells", lambda: {d["cell"] for d in done} | {c for w in waves if w["id"] in ran
+                                                                               for c in L.cells_of(w).values()})
+    assert L.execute(waves[:6], _Args(), {}, {}, None, interim=False) == "stopped"
+    assert ran == [waves[3]["id"], waves[4]["id"]]  # w0, w1 done; w2 the gx10 lane's
+
+
+def test_lanes_barrier_holds_attempt_2_until_attempt_1_complete_then_look_runs(tmp_path, monkeypatch):
+    waves = R.plan()
+    a1 = [w for w in waves if w["attempt"] == 1]
+    # all of attempt 1 but its last wave done: a lane must not start attempt 2, it waits (barrier)
+    rows = [o for o in _rows({"C": lambda i, a: i == 0, "FG": lambda i, a: i < 20, "SH": lambda i, a: False})
+            if o["attempt"] == 1]
+    _lanes(tmp_path, monkeypatch, "hub", rows)
+    monkeypatch.setattr(L, "LANE", "gx10")
+    L.claim(a1[-1]["id"])           # the other lane is running attempt 1's last wave
+    monkeypatch.setattr(L, "LANE", "hub")
+    names = {o["cell"] for o in rows}
+    done_ids = {w["id"] for w in a1[:-1]}
+    monkeypatch.setattr(L, "done_cells", lambda: {c for w in waves if w["id"] in done_ids for c in L.cells_of(w).values()})
+    slept = []
+
+    def fake_sleep(s):
+        slept.append(s)
+        done_ids.add(a1[-1]["id"])  # the other lane finishes during the wait
+    monkeypatch.setattr(L.time, "sleep", fake_sleep)
+    monkeypatch.setattr(L, "run_wave", lambda *a: pytest.fail("no attempt-2 wave may run: look 1 stops the study"))
+    # rows give FG 20 solves vs C 1 over 29 pairs: look 1 crosses efficacy for FG and futility for SH -> stop
+    assert L.execute(waves[:30], _Args(), {}, {}, None, interim=True) == "stopped"
+    assert slept and (tmp_path / "interim" / "look1.json").exists() and names
+    assert "BARRIER" in (tmp_path / "STATUS.txt").read_text()
+
+
+def test_lanes_budget_reserves_for_the_other_lanes_wave(tmp_path, monkeypatch):
+    waves = R.plan()
+    _lanes(tmp_path, monkeypatch, "gx10", [{"cell": "x", "usd": 46.5}])
+    L.claim(waves[0]["id"])
+    monkeypatch.setattr(L, "LANE", "hub")
+    seen = []
+    monkeypatch.setattr(L.time, "sleep", lambda s: (seen.append(s), monkeypatch.setattr(R, "stopped_look", lambda: 1)))
+    monkeypatch.setattr(L, "run_wave", lambda *a: pytest.fail("46.5 + 2 x 2 > 50: no wave while the other is in flight"))
+    assert L.execute(waves[:3], _Args(), {}, {}, None, interim=False) == "stopped" and seen
+
+
+def test_lanes_honour_the_go_pause_line_without_go_allowance(tmp_path, monkeypatch):
+    _lanes(tmp_path, monkeypatch, "hub")
+    (tmp_path / "STATUS.txt").write_text("t PAUSED: Go allowance — weekly\n")
+    assert L.go_paused()
+    (tmp_path / "STATUS.txt").write_text("t PAUSED: Go allowance — weekly\nt RESUMED Go allowance\n")
+    assert L.go_paused() is None
+
+
+def test_hub_cell_cmd_matches_the_gx10_harbor_flags():
+    s = L.H.cell_cmd("fg1-a1w09-C-t", "t", "abc", 4746, R.MODEL, str(R.CAP_S / R.TB4_AGENT_TIMEOUT_S),
+                     R.BUILD_TIMEOUT_MULT, R.GNOMON_AGENT, R.PLACEHOLDER)
+    for part in ("-n 1 -k 1", "--force-build", "--environment-build-timeout-multiplier 4.0",
+                 "-a gnomon_harbor_fg1:GnomonFG1", "-m openai/deepseek-v4.1-flash",
+                 "base_url=http://100.86.231.23:4746/openai/v1", "--agent-timeout-multiplier 0.0625",
+                 "--ae OPENAI_API_KEY=p2g-relay-placeholder", "FG1_SPEC_SHA256=abc", "GNOMON_REL_BASE=http://100.86.231.23:4759"):
+        assert part in s, part
+    assert "\r\n" in s

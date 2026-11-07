@@ -494,3 +494,141 @@ are unchanged.
 
 **Unchanged:** arms, tasks, seeds, plans, validity rules (exhaustion was already apparatus failure; now it is
 detected and named), scoring, budgets, interim looks, allocation and decision rules.
+
+---
+
+## Amendment 3 — 2026-11-07, before any hub cell: a second lane on the RTX hub, one PLAN-order queue, look barriers
+
+(Numbered 3 as reserved; committed after Amendment 4, whose Go-allowance guard it uses.)
+
+Written and committed before any hub cell or hub-lane wave exists. It changes WHERE a wave runs and the order in which
+two lanes take waves; PLAN.json, the arms, the build pin, the scoring, the validity and re-run rules, the interim looks'
+definitions and boundaries, the decision rule, the seed and the $50 budget are unchanged (same 261 cells, faster).
+
+**A3.0 Disclosure.** Before writing this, the author ran the amended `analyze_fg1.py` once over the ledger to test the
+new host section, and so saw the first 8 waves (a1w00–a1w07): C 1/8, FG 1/8, SH 1/8 solved. The scheme below was chosen
+on design grounds (A3.2) before that run, and nothing in it depends on outcomes.
+
+**A3.1 What changes.** A second lane runs FG1 waves on the user's RTX hub (Windows 11, Docker Desktop, x86_64, 32 CPUs
+and 32 GB to the Docker VM, 61.7 GB RAM): `apparatus/run_fg1_lanes.py --lane hub` with `apparatus/hub_lane.py`. The gx10
+lane is the same runner logic (`run_fg1_lanes.py --lane gx10`: `run_fg1.py`'s cells, slots 3–5, mirror, guards). Both
+lanes are processes on the gx10 and serve **one queue in PLAN order**: a lane takes the first wave that is neither done
+nor claimed, claiming it by an O_EXCL file `claims/<wave>.json` (lane, host, pid, time; committed), so no wave runs
+twice. **Every wave's three arms run on one host**, at once, as before: pairing stays within the wave.
+
+**A3.2 The interim looks under two lanes — scheme (c): barriers, not hold-outs.**
+- **Rule.** No lane claims a wave of attempt a+1 until every wave of attempts ≤ a has all three outcome rows on the
+  ledger (both lanes); then look a runs once (under a lock; `interim_gate` skips a look already written) and a stop
+  ends both lanes. So look 1 sees exactly attempt 1's 29 waves and look 2 exactly attempts 1–2's 58, and **no data of a
+  later attempt exists when a look is taken** — the information sets, fractions t_k = valid pairs / 87, boundaries
+  (c = 3.710, 2.511, 1.993 planned; recomputed at actual t as A2.2), futility rules and the final level are A2's,
+  unchanged.
+- **Alpha.** Under H0 each wave's within-wave arm contrast has the same null distribution whichever host runs it (the
+  host is fixed before the wave starts, by queue timing, and is common to the three arms), so the statistics at each
+  look have the joint null distribution A2 computed. Each comparison spends one-sided 0.025 by Lan-DeMets O'Brien-
+  Fleming; FG vs C and SH vs C → **familywise ≤ 0.05** (Bonferroni, as §8 and A2.2; A2's simulation: 0.047). Amendment
+  3 adds no look, moves no look and uses no data at a look that A2's design would not have had: **overall alpha
+  ≤ 0.05, unchanged.**
+- **Why not (a)** (hub starts a3 only after look 2): the hub would sit idle for two thirds of the study and help only
+  the last 29 waves (~half of them); the a1–a2 bottleneck stays on one lane.
+- **Why not (b)** (hub runs a3 now, held out of the looks until their turn): it is valid for alpha only if every look
+  filters by attempt (interim_fg1 does: `attempt <= k`) and a look's decision stands regardless of overrunning data,
+  but (1) if a look stops the study — under the global null, probability ~0.66 (A2.4: 0.25 at look 1, 0.41 at look 2) —
+  up to 29 waves (~$10 at ~$0.33/wave) were bought that can only be reported descriptively, which defeats the looks'
+  purpose and the remaining Go allowance; (2) attempt-3 outcomes would sit in the ledger and STATUS before look 2,
+  visible to every operator and agent — an operational unblinding that a later amendment could not credibly claim to be
+  independent of; (3) host would be fully confounded with attempt (all a3 on the hub, all a1–a2 on the gx10), so the
+  host covariate could not be separated from attempt order or calendar time.
+- **(c) costs** one barrier idle per look (a lane waits for the other's last wave of the attempt, ≤ one wave, ~25 min)
+  and nothing else; host varies within attempts, so the host line (A3.6) is estimable.
+
+**A3.3 x86 vs aarch64.** Hub cells build and run linux/amd64 images (`--force-build`, the same unpinned dataset copy:
+29 task dirs, tree digest `ac1c65ff…` = the gx10 copy, 762 files); gx10 cells arm64. A task whose oracle differs by
+arch changes what a cell on that host can achieve, but the three arms of a wave share the host, so validity and the
+contrast are per wave: such cells are **valid by §6** (a verifier reward exists), never excluded after the fact, and
+reported. The hub's oracle status for all 29 tasks is measured before the first hub wave (`ORACLE-HOSTS.json`, hub
+column; the gx10 column from P2G's oracle runs) and printed per host in the summary with the cells each failing task
+had on that host. Agent-side: the pinned tarballs are pure JS (gnomon-natives shells out, no native addon), so the
+install is arch-independent; the three-way pin runs in every hub cell.
+
+**A3.4 Model path; the key never leaves the gx10.** Three more `relay-go.mjs` instances (slots 6–8), started exactly
+as slots 0–5 (cwd `p2g-2026-11`, `RELAY_AUTH_FILE` = opencode's auth file, read inside the relay) but bound to the
+gx10's Tailscale address: `RELAY_BIND=100.86.231.23`, `RELAY_PORT` 4716–4718, `RELAY_COUNTERS_PORT` 4816–4818
+(counters on 127.0.0.1 only), logs `p2g-2026-11/relay-p2g-{6,7,8}.log`. Per hub cell the gx10 runs `log-relay.mjs` on
+100.86.231.23:4740+slot (4746–4748) in front of its slot relay; the hub container's base URL is that log relay, the key
+it carries is the P2G placeholder. gnomon classes 100.64/10 exactly as it classes 172.17.0.1 (`isLocalLaneUrl` and
+`isLocalEndpoint`: local; `keyHostIsDefault`: not loopback, so the key needs the grant), so the surface, the replay
+declaration and the trust grant are the same as on the gx10 (the grant names 100.86.231.23 instead of 172.17.0.1). The
+build is served to hub cells from the gx10 (`apparatus/build` on 100.86.231.23:4759); a hash-checked copy is on the hub.
+Go concurrency with the hub lane (up to 9 FG1/AS1 cells on one key): `HUB-GO-PROBE.json` (A3.8).
+
+**A3.5 Hub setup (C:\dev\fg1-hub\, nothing else on the hub touched).** `.venv`: Python 3.12.10 (gx10: 3.12.3),
+harbor 0.25.0 installed with the gx10 Harbor venv's `pip freeze` as constraints — identical package set (+ colorama, a
+Windows-only dependency). `datasets\terminal-bench\`: the 29 task dirs from the gx10's copy, digest equal. `build\v0.4.5\`:
+the four tarballs + SHA256SUMS, sha256 `b3654365…` = build.toml's, each tarball OK. `apparatus\`: the adapter
+(`gnomon_harbor_fg1.py`), `surface_patch.py`, `fg1_checks.py`, P2G's `gnomon_harbor.py`, `build.toml`, `arms\`, all
+byte-identical to the gx10's. Docker: Docker Desktop's Linux engine (`npipe dockerDesktopLinuxEngine`, 29.8.2), a private
+`DOCKER_CONFIG` (no credential helper). Harbor flags identical to `run_fg1.run_cell` (cap multiplier 0.0625, build
+multiplier 4.0, `--force-build`, `-n 1 -k 1`, `--ae OPENAI_API_KEY=<placeholder>`). Each cell's `.cmd` is started
+detached through WMI (`Win32_Process.Create`), so neither an ssh drop nor a gx10 restart kills a running hub cell; the
+gx10 polls for its rc file, then copies the Harbor job dir and harbor.log back to `jobs/` and `runs/` and scores it with
+`run_fg1.score` unchanged. Outcome rows gain `host` (`gx10-aarch64` / `hub-amd64`) and `lane`; covariates rows gain
+`host` and, on the hub, `hub_*` (CPU, free RAM, GPU utilisation, VRAM, sampled every 60 s).
+
+**A3.6 Analysis additions (descriptive, not decision-bearing).** `analyze_fg1.host_lines`: per host, waves, tasks,
+each arm's valid/solved/capped/invalid and median agent wall, and each comparison's within-host paired solve difference
+with its discordant counts; the number of tasks run on both hosts; per-host oracle status. Host is a stratum and a
+covariate; host differences are confounded with which waves each lane happened to take and the task mix — a flag, not
+an effect estimate. The pre-registered estimate pools all pairs as before.
+
+**A3.7 Hub host guards (the hub is the user's daily machine).** Before every hub wave, three samples ~10 s apart must
+all show: free RAM ≥ 8 GB, CPU ≤ 85 %, C: ≥ 50 GB free, GPU utilisation ≤ 50 % and VRAM used ≤ 28 GB, no
+`C:\dev\fg1-hub\PAUSE` file; plus Go's 2× windows, the hub slots idle 15 s, ≥ 50 GB free on the gx10. A breach holds
+the lane (logged as HUB HOLD). "Using the GPU heavily" is read as the GPU computing, not a model merely loaded: at
+06:22Z the user opened ComfyUI, which holds 19 GB of VRAM at 0 % utilisation; that alone does not hold the lane, any
+sample above 50 % does. Memory: Docker Desktop's WSL VM keeps clean page cache (after the oracle sweep 27 of its 30 GB
+were buff/cache and Windows had 6.7 GB free); when free RAM is the only breach, the lane drops the VM's CLEAN caches
+once (`echo 1 > /proc/sys/vm/drop_caches` in a throwaway privileged alpine container; no process, container or
+setting touched; measured 6.7 → 14.5 GB free in 20 s) and re-samples. Mid-wave (60-s samples), a breach lets the in-flight cells finish and
+holds the lane after the wave; free RAM < 4 GB aborts the wave (cells killed, that task's containers removed, the cells
+moved to `runs-aborted/*-hubabort`, the claim released, the wave re-run whole in its place, as Addendum 1). No reboot,
+no Docker Desktop restart, nothing outside C:\dev\fg1-hub.
+
+**A3.8 Before the first hub cell (recorded in STATUS.txt).** (1) `wiretest_fg1_hub.py` → `wiretest-fg1-hub.txt`
+(sha256 pinned in build.toml as `wiretest_hub`; `run_fg1_lanes.py check --lane hub` requires it): A. `wiretest_fg1.py`
+itself (C, FG, SH, the negative control without the trust grant, the read-only cwd), changed only by a `--fake-host`
+option (default unchanged), in a linux/amd64 container on the hub as a non-root user; B. the live path from a hub
+container through each hub slot (log relay classes the placeholder; one metered request with usage; go-plus at 1.2) and
+a classifier negative control (no Authorization → `absent`); C. the mirror from a hub container (sums and tarballs).
+(2) `HUB-GO-PROBE.json`: 9 concurrent tiny requests through slots 6–8 on the one Go key (06:20:50Z: 9/9 HTTP 200 in
+1.2–2.3 s, go-plus, allowance/list 1.2 on every one, counters 9 requests 9 with usage, 0 4xx/5xx — billing normal; a
+second probe with the gx10 lanes busy is appended once they run). (3) The hub oracle sweep (`ORACLE-HOSTS.json`).
+Result: wire test **PASS** (`wiretest-fg1-hub.txt`, sha256 `ddc7725f…`): amd64 offline C/FG/SH all checks ok, FG
+hand-back and finish_gate fired, SH yield + job call, negative control FAILS the key check as it must, read-only cwd ok;
+live slots 6–8 HTTP 200 with usage, placeholder classed, one metered request each, go-plus 1.2; classifier negative
+control `absent` on all three; mirror sums and tarballs match. Offline tests: 36 passed (+6: exclusive claims, PLAN
+order skipping done/other-lane waves, the barrier holds attempt 2 until attempt 1 is complete then runs look 1, budget
+reserve for the other lane's wave, the pause line fallback, hub Harbor flags = the gx10's).
+
+**A3.9 Budget and Go allowance.** Unchanged $50 for all cells and re-runs; a wave starts only if spent + $2 × (this wave
++ the other lane's wave in flight) ≤ $50. Amendment 4's Go-allowance guard gates every wave of both lanes:
+`go_allowance.wave_gate` under the lane's key (`fg1` on the gx10, as run_fg1.py; `fg1-hub` on the hub, as Amendment 4
+names it) blocks while the allowance is paused and registers the wave in flight; `wave_done` after scoring; every
+cell, hub cells included, is scanned by `run_fg1.score` (exhaustion = apparatus-invalid, re-run); the account label is
+recorded per cell. Relays 6–8 are switched with 0–5 by `switch_go_account.sh`. Two lanes spend the allowance about twice as fast in wall time; the total is unchanged.
+
+**A3.10 Switch-over.** The gx10 runner (`run_fg1.py run`, started by the resume gate at ~06:24Z on wave a1w08) is
+stopped by SIGINT at a wave boundary (its `wave … done` line written, no cell in flight), as before A2, and replaced by
+`run_fg1_lanes.py run --lane gx10 --push`; then the hub lane starts, `run_fg1_lanes.py run --lane hub --push`. A lane
+refuses to start while an unlaned `run_fg1.py run` is alive (it takes waves without claims). No completed
+cell is touched; finished waves are skipped as before.
+
+**A3.11 Files.** `apparatus/run_fg1_lanes.py` (queue, claims, barriers, hub cells), `apparatus/hub_lane.py` (ssh, WMI,
+guards, copy-back), `apparatus/wiretest_fg1_hub.py`, `apparatus/go_probe_hub.py`, `apparatus/wiretest_fg1.py`
+(`--fake-host`), `apparatus/analyze_fg1.py` (`host_lines`), `wiretest-fg1-hub.txt`, `HUB-GO-PROBE.json`,
+`ORACLE-HOSTS.json`, `claims/`.
+
+**A3.12 Calendar.** At the switch (after a1w08, ~06:47Z) 78 waves remain. One lane at the measured ~22 min/wave: ~28.6 h
+(end ~Sun 2026-11-08 11:30Z). Two lanes: ~39 waves each plus two barrier idles (≤ ~25 min each) → **~15 h, end ~Sat
+2026-11-07 22:00Z** if the hub's waves take as long as the gx10's (no Go 2× windows on a weekend; Monday's start at
+01:00Z is not reached), plus re-runs. Holds (hub guards, the Go-allowance pause until an account switch) add to this.

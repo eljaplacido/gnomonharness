@@ -1,0 +1,130 @@
+== FG1 hub wire test (Amendment 3) 2026-11-07T06:13:54Z; build 0.4.5 f8c8a3964351 master-f8c8a39; hub eljap@100.77.18.0 C:\dev\fg1-hub
+hub: harbor 0.25.0, Python 3.12.10, docker linux/amd64/29.8.2
+  ok   hub harbor 0.25.0 on a linux/amd64 docker engine
+== A. offline wire test (wiretest_fg1.py) in a linux/amd64 container on the hub
+  started detached on the hub (pid 40704); image python:3.12-bookworm linux/amd64
+  container exit 0; env: x86_64 node v22.22.2 Python 3.12.16 harbor 0.25.0 fake-host 172.17.0.3 user wt (298 s)
+  ---- wiretest_fg1.py output (amd64, hub) ----
+  | == FG1 wire test: build master-f8c8a39, `gnomon --version` = gnomon/0.4.5+master-f8c8a39; build.toml 0.4.5 f8c8a3964351 (ready)
+  |   ok   local build = build.toml pins
+  | fake model at http://172.17.0.3:46717/openai/v1 (non-loopback private address, as the cells' relays)
+  | 
+  | C (C): script rc 0, gnomon exit 0, 2 requests, 41 s; patch [{'file': 'config.toml', 'table': 'endpoints.bench', 'key': 'replay_reasoning', 'op': 'set', 'action': 'inserted'}]
+  |   ok   C: script and gnomon task exit 0
+  |   ok   C: patch ok with the spec's hash
+  |   ok   C: no patch-failed marker
+  |   trust grant: Trusted /tmp/wtwork/cwd at surface 74a4b79bc5fd: | endpoint bench  sends $OPENAI_API_KEY to 172.17.0.3   (default: keys go only to known providers) | Recorded in /tmp/wtwork/home/xdg/gnomon/trust.json — not in the repository.
+  |   ok   C: expect surface config.toml:endpoints.bench.replay_reasoning equals True (config.toml:endpoints.bench.replay_reasoning = True)
+  |   ok   C: expect record counters.model_calls.window equals 65536 (counters.model_calls.window = 65536)
+  |   ok   C: expect surface config.toml:turn.nudge_after_idle equals 12 (config.toml:turn.nudge_after_idle = 12)
+  |   ok   C: expect record volatile.deadline present None (volatile.deadline = {'at': '2026-11-07T06:44:07.168Z', 'budget_ms': 1739983, 'margin_ms': 30000, 'source': 'flag'})
+  |   ok   C: expect surface policy.toml:verify.finish_gate absent None (policy.toml:verify.finish_gate = <missing>)
+  |   ok   C: expect surface tools.toml:tools[name=bash].soft_timeout absent None (tools.toml:tools[name=bash].soft_timeout = <missing>)
+  |   ok   C: expect record counters.finish_gate absent None (counters.finish_gate = <missing>)
+  |   info C: warn-expectation record counters.model_calls.replayed_calls: pass (counters.model_calls.replayed_calls = 1)
+  |   ok   C: fg1 check key: pass (2/2 requests carried the key)
+  |   ok   C: fg1 check trust: pass (Trusted /tmp/wtwork/cwd at surface 74a4b79bc5fd:; audit trust decisions ['granted', 'trusted'])
+  |   ok   C: fg1 check job_tool: pass (job offered in 0/2)
+  |   ok   C: fg1 check job_audit: pass (0 job record(s))
+  |   ok   C: fg1 check gate_audit: pass (0 finish_gate record(s))
+  |   ok   C: fg1 check replay: pass (max assistant_with_reasoning after the first reasoned tool reply = 1)
+  |   record: stop_reason answered, finish_gate None, deadline {'at': '2026-11-07T06:44:07.168Z', 'budget_ms': 1739983, 'margin_ms': 30000, 'source': 'flag'}
+  |   audit kinds: ['approval', 'model_call', 'session_end', 'session_start', 'tool_call', 'trust', 'turn']; trust-bearing records: [{'kind': 'trust', 'decision': 'trusted', 'by': 'store'}, {'kind': 'trust', 'decision': 'granted', 'by': 'command:trust'}]
+  |   ok   C: no '[gnomon] ' hand-back on the wire
+  |   ok   C: no job yield (0) and no job call (0)
+  |   request keys: ['max_tokens', 'messages', 'model', 'stream', 'stream_options', 'temperature', 'tools', 'top_p']; tools offered: ['bash', 'compute', 'edit', 'glob', 'grep', 'note', 'read', 'todo', 'write']
+  | 
+  | FG (C, FG): script rc 0, gnomon exit 0, 4 requests, 41 s; patch [{'file': 'config.toml', 'table': 'endpoints.bench', 'key': 'replay_reasoning', 'op': 'set', 'action': 'inserted'}, {'file': 'policy.toml', 'table': 'verify', 'key': 'finish_gate', 'op': 'set', 'action': 'table-added'}]
+  |   ok   FG: script and gnomon task exit 0
+  |   ok   FG: patch ok with the spec's hash
+  |   ok   FG: no patch-failed marker
+  |   trust grant: Trusted /tmp/wtwork/cwd at surface 6acf97389f91: | endpoint bench  sends $OPENAI_API_KEY to 172.17.0.3   (default: keys go only to known providers) | Recorded in /tmp/wtwork/home/xdg/gnomon/trust.json — not in the repository.
+  |   ok   FG: surface = control's + exactly [('policy.toml', 'verify', 'finish_gate')]
+  |   ok   FG: expect surface config.toml:endpoints.bench.replay_reasoning equals True (config.toml:endpoints.bench.replay_reasoning = True)
+  |   ok   FG: expect record counters.model_calls.window equals 65536 (counters.model_calls.window = 65536)
+  |   ok   FG: expect surface config.toml:turn.nudge_after_idle equals 12 (config.toml:turn.nudge_after_idle = 12)
+  |   ok   FG: expect record volatile.deadline present None (volatile.deadline = {'at': '2026-11-07T06:44:47.648Z', 'budget_ms': 1739991, 'margin_ms': 30000, 'source': 'flag'})
+  |   ok   FG: expect surface tools.toml:tools[name=bash].soft_timeout absent None (tools.toml:tools[name=bash].soft_timeout = <missing>)
+  |   info FG: warn-expectation record counters.model_calls.replayed_calls: pass (counters.model_calls.replayed_calls = 3)
+  |   ok   FG: expect surface policy.toml:verify.finish_gate equals 'v2' (policy.toml:verify.finish_gate = 'v2')
+  |   ok   FG: expect record counters.finish_gate present None (counters.finish_gate = {'v': 1, 'mode': 'v2', 'max_rounds': 2, 'min_remaining': 0.15, 'rounds': 1, 'tool_calls': 1, 'caveats': 1, 'outcome': 'passed', 'caveats_final': 1})
+  |   ok   FG: expect record counters.finish_gate.mode equals 'v2' (counters.finish_gate.mode = 'v2')
+  |   ok   FG: fg1 check key: pass (4/4 requests carried the key)
+  |   ok   FG: fg1 check trust: pass (Trusted /tmp/wtwork/cwd at surface 6acf97389f91:; audit trust decisions ['granted', 'trusted'])
+  |   ok   FG: fg1 check job_tool: pass (job offered in 0/4)
+  |   ok   FG: fg1 check job_audit: pass (0 job record(s))
+  |   info FG: fg1 check gate_audit: pass (2 finish_gate record(s), 1 fire(s))
+  |   ok   FG: fg1 check replay: pass (max assistant_with_reasoning after the first reasoned tool reply = 3)
+  |   record: stop_reason answered, finish_gate {'v': 1, 'mode': 'v2', 'max_rounds': 2, 'min_remaining': 0.15, 'rounds': 1, 'tool_calls': 1, 'caveats': 1, 'outcome': 'passed', 'caveats_final': 1}, deadline {'at': '2026-11-07T06:44:47.648Z', 'budget_ms': 1739991, 'margin_ms': 30000, 'source': 'flag'}
+  |   audit kinds: ['approval', 'finish_gate', 'model_call', 'session_end', 'session_start', 'tool_call', 'trust', 'turn']; trust-bearing records: [{'kind': 'trust', 'decision': 'trusted', 'by': 'store'}, {'kind': 'trust', 'decision': 'granted', 'by': 'command:trust'}]
+  |   ok   FG: a user-role '[gnomon] ' hand-back follows the rejected answer on the wire
+  |   ok   FG: record finish_gate fired and applicable ({'outcome': 'passed', 'rounds': 1, 'applicable': True, 'fired': True, 'caveats': 1, 'caveats_final': 1})
+  |   ok   FG: no job yield (0) and no job call (0)
+  |   request keys: ['max_tokens', 'messages', 'model', 'stream', 'stream_options', 'temperature', 'tools', 'top_p']; tools offered: ['bash', 'compute', 'edit', 'glob', 'grep', 'note', 'read', 'todo', 'write']
+  | 
+  | SH (C, SH): script rc 0, gnomon exit 0, 4 requests, 40 s; patch [{'file': 'config.toml', 'table': 'endpoints.bench', 'key': 'replay_reasoning', 'op': 'set', 'action': 'inserted'}, {'file': 'tools.toml', 'table': 'tools[name=bash]', 'key': 'soft_timeout', 'op': 'set', 'action': 'inserted'}, {'file': 'tools.toml', 'table': 'tools[name=bash]', 'key': 'timeout_seconds', 'op': 'set', 'action': 'replaced'}]
+  |   ok   SH: script and gnomon task exit 0
+  |   ok   SH: patch ok with the spec's hash
+  |   ok   SH: no patch-failed marker
+  |   trust grant: Trusted /tmp/wtwork/cwd at surface d83991488f2f: | endpoint bench  sends $OPENAI_API_KEY to 172.17.0.3   (default: keys go only to known providers) | Recorded in /tmp/wtwork/home/xdg/gnomon/trust.json — not in the repository.
+  |   ok   SH: surface = control's + exactly [('tools.toml', 'tools[name=bash]', 'soft_timeout'), ('tools.toml', 'tools[name=bash]', 'timeout_seconds')]
+  |   ok   SH: expect surface config.toml:endpoints.bench.replay_reasoning equals True (config.toml:endpoints.bench.replay_reasoning = True)
+  |   ok   SH: expect record counters.model_calls.window equals 65536 (counters.model_calls.window = 65536)
+  |   ok   SH: expect surface config.toml:turn.nudge_after_idle equals 12 (config.toml:turn.nudge_after_idle = 12)
+  |   ok   SH: expect record volatile.deadline present None (volatile.deadline = {'at': '2026-11-07T06:45:28.132Z', 'budget_ms': 1739988, 'margin_ms': 30000, 'source': 'flag'})
+  |   ok   SH: expect surface policy.toml:verify.finish_gate absent None (policy.toml:verify.finish_gate = <missing>)
+  |   ok   SH: expect record counters.finish_gate absent None (counters.finish_gate = <missing>)
+  |   info SH: warn-expectation record counters.model_calls.replayed_calls: pass (counters.model_calls.replayed_calls = 3)
+  |   ok   SH: expect surface tools.toml:tools[name=bash].soft_timeout equals 'handle' (tools.toml:tools[name=bash].soft_timeout = 'handle')
+  |   ok   SH: expect surface tools.toml:tools[name=bash].timeout_seconds equals 30 (tools.toml:tools[name=bash].timeout_seconds = 30)
+  |   ok   SH: fg1 check key: pass (4/4 requests carried the key)
+  |   ok   SH: fg1 check trust: pass (Trusted /tmp/wtwork/cwd at surface d83991488f2f:; audit trust decisions ['granted', 'trusted'])
+  |   ok   SH: fg1 check job_tool: pass (job offered in 4/4)
+  |   ok   SH: fg1 check job_audit: pass (1 yield(s), 2 job record(s); bash calls past yield+5 s: [])
+  |   ok   SH: fg1 check gate_audit: pass (0 finish_gate record(s))
+  |   ok   SH: fg1 check replay: pass (max assistant_with_reasoning after the first reasoned tool reply = 3)
+  |   record: stop_reason answered, finish_gate None, deadline {'at': '2026-11-07T06:45:28.132Z', 'budget_ms': 1739988, 'margin_ms': 30000, 'source': 'flag'}
+  |   audit kinds: ['approval', 'job', 'model_call', 'session_end', 'session_start', 'tool_call', 'trust', 'turn']; trust-bearing records: [{'kind': 'trust', 'decision': 'trusted', 'by': 'store'}, {'kind': 'trust', 'decision': 'granted', 'by': 'command:trust'}]
+  |   ok   SH: no '[gnomon] ' hand-back on the wire
+  |   ok   SH: 1 job yield(s) audited, 1 job call(s) on the wire
+  |   request keys: ['max_tokens', 'messages', 'model', 'stream', 'stream_options', 'temperature', 'tools', 'top_p']; tools offered: ['bash', 'compute', 'edit', 'glob', 'grep', 'job', 'note', 'read', 'todo', 'write']
+  | 
+  | NEGATIVE CONTROL C without the trust grant: gnomon exit 0, 2 requests, auth ['absent']; key check fail; clamp notice: ['gnomon: untrusted surface 74a4b79bc5fd grants more than the defaults (endpoint bench: sends $OPENAI_API_KEY to 172.17.0.3) — running clamped to the defaults. Trust it with `gnomon trust grant`, --trust, or GNOMON_TRUST=74a4b79bc5fd.']
+  |   ok   negative control: without the grant the key does not reach the relay and the key check FAILS (detector works)
+  | 
+  | C with a read-only working directory: surface root /tmp/wtwork/home/state/gnomon/workdirs/8aa5f6aa1de77252, gnomon exit 0, key check pass
+  |   ok   read-only cwd: state-directory fallback; the patch and the trust grant find it; the key reaches the relay
+  | 
+  | wire test: PASS (gnomon master-f8c8a39, arms ['C'] + ['FG', 'SH'], build.toml status ready)
+  ---- end ----
+  ok   offline wire test on amd64: PASS (C, FG, SH, negative control, read-only cwd)
+  ok   negative control (no trust grant -> key check FAILS) fired
+
+== B. live path from a hub container through the gx10's Tailscale relays, slots [6, 7, 8]
+slot 6 auth=yes: HTTP 200, usage in 37 out 14, billing go-plus, ratio 1.2; log-relay auth ['placeholder']; counters delta {'chat_requests': 1, 'responses_with_usage': 1, 'status_4xx': 0, 'status_5xx': 0, 'errors': 0, 'allowance': 1.674e-05}
+  ok   slot 6: HTTP 200 with usage from the hub
+  ok   slot 6: log relay saw the placeholder key
+  ok   slot 6: slot relay metered one request with usage, no errors
+  ok   slot 6: billed go-plus at allowance/list 1.2
+slot 6 auth=no: HTTP 200, usage in 37 out 14, billing go-plus, ratio 1.2; log-relay auth ['absent']; counters delta {'chat_requests': 1, 'responses_with_usage': 1, 'status_4xx': 0, 'status_5xx': 0, 'errors': 0, 'allowance': 1.674e-05}
+  ok   slot 6: NEGATIVE CONTROL — no Authorization header is classed 'absent' (the key check can fail)
+slot 7 auth=yes: HTTP 200, usage in 37 out 13, billing go-plus, ratio 1.2; log-relay auth ['placeholder']; counters delta {'chat_requests': 1, 'responses_with_usage': 1, 'status_4xx': 0, 'status_5xx': 0, 'errors': 0, 'allowance': 1.602e-05}
+  ok   slot 7: HTTP 200 with usage from the hub
+  ok   slot 7: log relay saw the placeholder key
+  ok   slot 7: slot relay metered one request with usage, no errors
+  ok   slot 7: billed go-plus at allowance/list 1.2
+slot 7 auth=no: HTTP 200, usage in 37 out 16, billing go-plus, ratio 1.2; log-relay auth ['absent']; counters delta {'chat_requests': 1, 'responses_with_usage': 1, 'status_4xx': 0, 'status_5xx': 0, 'errors': 0, 'allowance': 1.818e-05}
+  ok   slot 7: NEGATIVE CONTROL — no Authorization header is classed 'absent' (the key check can fail)
+slot 8 auth=yes: HTTP 200, usage in 37 out 13, billing go-plus, ratio 1.2; log-relay auth ['placeholder']; counters delta {'chat_requests': 1, 'responses_with_usage': 1, 'status_4xx': 0, 'status_5xx': 0, 'errors': 0, 'allowance': 1.602e-05}
+  ok   slot 8: HTTP 200 with usage from the hub
+  ok   slot 8: log relay saw the placeholder key
+  ok   slot 8: slot relay metered one request with usage, no errors
+  ok   slot 8: billed go-plus at allowance/list 1.2
+slot 8 auth=no: HTTP 200, usage in 37 out 12, billing go-plus, ratio 1.2; log-relay auth ['absent']; counters delta {'chat_requests': 1, 'responses_with_usage': 1, 'status_4xx': 0, 'status_5xx': 0, 'errors': 0, 'allowance': 1.53e-05}
+  ok   slot 8: NEGATIVE CONTROL — no Authorization header is classed 'absent' (the key check can fail)
+
+== C. mirror 100.86.231.23:4759 from a hub container
+  SHA256SUMS b36543653e7c4a2149eb4a61accc4c5b0708f426a1b9f5179524e2af60df27dc; tarballs {'gnomon-core-0.4.5.tgz': True, 'gnomon-harness-0.4.5.tgz': True, 'gnomon-natives-0.4.5.tgz': True, 'gnomon-tui-0.4.5.tgz': True}
+  ok   mirror from the hub: SHA256SUMS = build.toml sums_sha256 and all four tarballs match
+
+wire test: PASS (hub, gnomon master-f8c8a39, amd64 offline + live slots 6,7,8 + mirror)
