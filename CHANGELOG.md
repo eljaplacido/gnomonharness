@@ -28,6 +28,30 @@
 
 ### Added
 
+- **Governance levels: `observe < advise < prevent < enforce`, per family of
+  rules** (shared-governance PR 1). `[governance]` in policy.toml and
+  `[roles.<name>.governance]` in roles.toml set how strongly each family's
+  verdicts are applied: `write`, `bash`, `network`, `secrets`, `rules`, `ci`.
+  Every existing rule is assigned to one (`RULE_FAMILY`; `tools` and
+  `malformed` stay structural; `host_hooks` is `rules`; grep/glob searches
+  outside the root stay at prevent). The effective level is the max along
+  org (a stub until `[extends]`) → repo → role, so a role only tightens; a
+  family no layer names is `prevent`, and `rules` (the surface, the records,
+  git hooks) never goes below it. The level is applied in one place,
+  `toolCallPolicy`, which gnomon's own loop and `gnomon guard` both call: at
+  `observe` a refused call runs and its verdict is recorded; at `advise` it
+  runs and the tool result says what prevent would have done (in gnomon's own
+  loop; another harness's agent gets it with the post-tool hook in PR 4, and
+  the guard records `delivered: false` until then); `enforce` decides as
+  `prevent` in this build, and the surface audit says so. Tool-call and guard
+  records gain `verdict`, `family` and `level`, guard records also `call_id`
+  and `host_mode`; the guard writes its trail under a declared level whether
+  or not `[audit]` is on. `gnomon enumerations` adds `governance_level` and
+  `governance_family`. A level outside the enumeration, or an inline-table
+  role key, is fatal; unknown keys are warned with did-you-mean. With neither
+  block, decisions, records and request bytes are master's (pinned).
+  CONTRACTS.md §36, `conformance/guard_cases.json` `levels` (18 cases × 4
+  levels, put to the loop, `guardToolCall` and the real binary).
 - **Deliverable-first time notes (opt-in): `[turn] deliverable_first =
   true`.** Read only under `gnomon task --deadline`. The 2026-11-06 timeout
   anatomy of 80 capped long-task runs found 54 had never written the output

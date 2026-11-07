@@ -44,6 +44,7 @@ import {
   isValidImageRef,
 } from "./config.js";
 import { proposeSkill, ProposalRefused, renderSkill, SkillProposal } from "./skills.js";
+import { adviseText, levelAtLeast, type GovernanceFamily, type GovernanceLevel, type GovernanceLevels } from "./governance.js";
 import { compute, ComputeError } from "./compute.js";
 import type { McpRegistry, McpToolInfo } from "./mcp.js";
 import {
@@ -132,9 +133,23 @@ export const TOOL_OUT_OF_SANDBOX = 3;
 export const TOOL_NOT_DECLARED = 4;
 export const TOOL_FAILED = 11;
 
+/** What `[governance]` made of one call, on its tool_call record (CONTRACTS.md §36). */
+export interface ToolGovernance {
+  verdict: "allow" | "deny" | "ask";
+  decision: "allow" | "deny" | "ask";
+  rule: PolicyRule | "approval" | null;
+  family: GovernanceFamily | null;
+  level: GovernanceLevel | null;
+  levelled?: Array<{ rule: PolicyRule | "approval"; family: GovernanceFamily; level: GovernanceLevel; verdict: "deny" | "ask" }>;
+  /** The advise warning was appended to the tool result. */
+  advised?: true;
+}
+
 export interface ToolOutcome {
   /** Maps to a bucket via conformance/exit_codes.json */
   code: number;
+  /** Present only under a declared `[governance]`: the verdict, the decision and the level. */
+  governance?: ToolGovernance;
   /** What goes back to the model as the tool message */
   content: string;
   /** One line for the transcript */
@@ -720,6 +735,7 @@ export function needsApproval(tool: string, gate: ApprovalGate): boolean {
  * default. Only a sandbox (`exec = "docker"`) contains what the script does.
  */
 export function repoCodeAsks(ctx: ToolContext): boolean {
+  if (ctx.levelledAsk) return false;
   return (ctx.config?.policy as { approval?: { repo_code?: unknown } } | undefined)?.approval?.repo_code === true;
 }
 
@@ -1199,6 +1215,21 @@ export interface ToolContext {
    */
   signal?: AbortSignal;
   /**
+   * `[governance]` levels for this role (governance.ts resolveLevels). Absent
+   * when the surface declares none, and then nothing below reads it: every
+   * refusal applies, exactly as before levels existed.
+   */
+  governance?: GovernanceLevels;
+  /**
+   * Set for ONE evaluation of one call by toolCallPolicy / executeTool, never
+   * by a caller: a refusal whose family sits below prevent is pushed here and
+   * the precheck carries on to the next rule (`applies`). Absent: every
+   * refusal applies.
+   */
+  levelled?: LevelledHit[];
+  /** The call's ask was levelled below prevent: `[approval] repo_code` does not ask either. */
+  levelledAsk?: boolean;
+  /**
    * The run's scratch notes. Supplied by the loop, which owns session state.
    * Absent means the tool is unavailable rather than silently forgetful.
    */
@@ -1362,14 +1393,14 @@ export function readPrecheck(
   const path = args.path;
   const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
   if (!abs) {
-    return {
-      refusal: {
-        rule: "sandbox",
-        code: TOOL_OUT_OF_SANDBOX,
-        content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
-        summary: `read ${path} — refused (outside sandbox)`,
-      },
+    const refusal: Precheck = {
+      rule: "sandbox",
+      code: TOOL_OUT_OF_SANDBOX,
+      content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
+      summary: `read ${path} — refused (outside sandbox)`,
     };
+    if (applies(ctx, "read", refusal)) return { refusal };
+    return { abs: resolveInRoot(ctx.root, path, "off")! };
   }
   return { abs };
 }
@@ -1998,6 +2029,75 @@ export const POLICY_RULES = [
 export type PolicyRule = (typeof POLICY_RULES)[number];
 
 /**
+ * Which governance family each rule belongs to (governance.ts): the family's
+ * level decides what the rule's verdict does. Every rule is assigned exactly
+ * once (CONTRACTS.md §36; tools.test pins the table against POLICY_RULES).
+ *
+ *   null      structural, not levelled: `tools` and `malformed` are not
+ *             governable calls, and are refused at every level
+ *   "by_tool" the family is the calling tool's: `sandbox` is `write` for
+ *             write/edit, `bash` for bash and `secrets` for read; the
+ *             `approval` ask is `write` for write/edit, `bash` for bash,
+ *             `network` for webfetch, and unlevelled for read
+ */
+export const RULE_FAMILY: Readonly<Record<PolicyRule | "approval", GovernanceFamily | "by_tool" | null>> = {
+  tools: null,
+  malformed: null,
+  bash_deny: "bash",
+  bash_allow: "bash",
+  sudo: "bash",
+  repo_code: "bash",
+  sandbox: "by_tool",
+  write_allow: "write",
+  surface: "rules",
+  record: "rules",
+  git_hooks: "rules",
+  // #165: a host harness's hook configuration. Removing it detaches the
+  // guard for every later session, so it is the rules, floor prevent.
+  host_hooks: "rules",
+  network: "network",
+  url: "network",
+  approval: "by_tool",
+};
+
+/** The family a rule's verdict on a call to `tool` belongs to; null when it is not levelled. */
+export function ruleFamily(rule: PolicyRule | "approval", tool: string): GovernanceFamily | null {
+  const f = RULE_FAMILY[rule];
+  if (f !== "by_tool") return f ?? null;
+  const t = tool === "execute" ? "bash" : tool;
+  if (t === "bash") return "bash";
+  if (t === "write" || t === "edit") return "write";
+  if (rule === "sandbox") return t === "read" ? "secrets" : null;
+  return t === "webfetch" ? "network" : null;
+}
+
+/** A verdict recorded rather than applied, because its family sits below prevent. */
+export interface LevelledHit {
+  rule: PolicyRule | "approval";
+  family: GovernanceFamily;
+  level: GovernanceLevel;
+  verdict: "deny" | "ask";
+  reason: string;
+  pattern?: string;
+}
+
+/**
+ * Does this refusal apply? Always, unless this evaluation is levelling
+ * (ctx.levelled) and the rule's family sits below prevent: then it is
+ * recorded there and the caller carries on to the next rule, so a refusal
+ * of a family still at prevent (the surface, say) is still found.
+ */
+function applies(ctx: ToolContext, tool: string, r: Precheck): boolean {
+  if (!ctx.levelled || !ctx.governance || !r.rule) return true;
+  const family = ruleFamily(r.rule, tool);
+  if (!family) return true;
+  const level = ctx.governance.levels[family];
+  if (levelAtLeast(level, "prevent")) return true;
+  ctx.levelled.push({ rule: r.rule, family, level, verdict: "deny", reason: r.content, ...(r.pattern ? { pattern: r.pattern } : {}) });
+  return false;
+}
+
+/**
  * What a tool's precheck says before it would ask anyone or do anything.
  * With `rule`: a refusal, and the rule that made it. Without: the call would
  * fail on its own (an empty command, a URL that does not parse) -- the tool's
@@ -2254,7 +2354,7 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
 
   // Deny first, then the allow-list: see bashPolicy.
   const refused = bashPolicy(command, ctx.bashAllow, ctx.bashDeny);
-  if (refused) return refused;
+  if (refused && applies(ctx, "bash", refused)) return refused;
 
   const outside = bashWriteRefusal(command, ctx);
   if (outside) return outside;
@@ -2278,8 +2378,7 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
     // whose --network none no host list opens.
     const listed = packageIndexOf(ctx);
     const egress = bashNetworkEgress(command, listed);
-    if (egress) {
-      return {
+    const refusal: Precheck | null = egress && {
         // The rule was missing, and toolCallPolicy reads a precheck with no rule
         // as "the call would fail on its own": `gnomon guard` allowed curl under
         // network = false unless a bash_deny pattern also named it.
@@ -2298,7 +2397,7 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
           `grant it with /network on, or network = true in policy.toml.`,
         summary: "bash — refused (network = false)",
       };
-    }
+    if (refusal && applies(ctx, "bash", refusal)) return refusal;
   }
 
   // Privilege escalation on the host is refused outright, before any approval
@@ -2308,7 +2407,7 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
   // session-approved agent ran `echo ... | sudo tee -a /etc/sysctl.conf`.
   // Inside the docker sandbox it is the container's root, not the host's.
   if (ctx.exec?.mode !== "docker" && SUDO_AT_COMMAND_POSITION.test(command)) {
-    return {
+    const refusal: Precheck = {
       rule: "sudo",
       code: TOOL_DENIED,
       content:
@@ -2317,6 +2416,7 @@ export function bashPrecheck(args: Record<string, unknown>, ctx: ToolContext): P
         "to run themselves, and say why it is needed.",
       summary: "bash — refused (sudo)",
     };
+    if (applies(ctx, "bash", refusal)) return refusal;
   }
   return null;
 }
@@ -2483,7 +2583,7 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
           return recordHit(t.path, `${t.how}, from a directory gnomon cannot place`);
         }
         if (allowed.length > 0 && t.how !== "ln (source)" && t.how !== "find -delete" && !t.clean) {
-          return {
+          const refusal: Precheck = {
             rule: "write_allow",
             code: TOOL_DENIED,
             content:
@@ -2494,6 +2594,7 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
               `root, or cd to a literal directory first.`,
             summary: `bash — writes ${t.path}, not permitted for this role`,
           };
+          if (applies(ctx, "bash", refusal)) return refusal;
         }
       }
       continue;
@@ -2567,7 +2668,7 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     if (allowed.length === 0) continue;
     const scope = writeAllowed(ctx, j.abs);
     if (scope.ok) continue;
-    return {
+    const refusal: Precheck = {
       rule: "write_allow",
       code: TOOL_DENIED,
       content:
@@ -2578,6 +2679,7 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
         `refused for the same reason. If the task needs it, say so plainly.`,
       summary: `bash — writes ${scope.rel}, not permitted for this role`,
     };
+    if (applies(ctx, "bash", refusal)) return refusal;
   }
 
   const committed = surfaceCommitRefusal(command, ctx);
@@ -5311,17 +5413,16 @@ export async function webfetchPrecheck(
   }
 
   if (ctx.network === false) {
-    return {
-      refusal: {
-        rule: "network",
-        code: TOOL_DENIED,
-        content:
-          `Refused: .gnomon/policy.toml sets [sandbox] network = false, so tools ` +
-          `may not reach the network. Set it to true to allow webfetch — that is ` +
-          `an edit to the surface, and it changes the surface hash.`,
-        summary: `webfetch ${raw} — refused (network disabled)`,
-      },
+    const refusal: Precheck = {
+      rule: "network",
+      code: TOOL_DENIED,
+      content:
+        `Refused: .gnomon/policy.toml sets [sandbox] network = false, so tools ` +
+        `may not reach the network. Set it to true to allow webfetch — that is ` +
+        `an edit to the surface, and it changes the surface hash.`,
+      summary: `webfetch ${raw} — refused (network disabled)`,
     };
+    if (applies(ctx, "webfetch", refusal)) return { refusal };
   }
 
   let url: URL;
@@ -5339,30 +5440,37 @@ export async function webfetchPrecheck(
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     // file: would read the filesystem with none of the sandbox checks that
     // `read` applies; the rest are not fetchable in any useful sense.
+    const refusal: Precheck = {
+      rule: "url",
+      code: TOOL_DENIED,
+      content: `Refused: only http and https are fetchable, not "${url.protocol}".`,
+      summary: `webfetch — ${url.protocol} refused`,
+    };
+    if (applies(ctx, "webfetch", refusal)) return { refusal };
+    // Levelled below prevent, and still not fetchable: webfetchTool speaks
+    // http(s) only, so the call fails on its own rather than reading a file.
     return {
       refusal: {
-        rule: "url",
-        code: TOOL_DENIED,
-        content: `Refused: only http and https are fetchable, not "${url.protocol}".`,
-        summary: `webfetch — ${url.protocol} refused`,
+        code: TOOL_FAILED,
+        content: `webfetch fetches http and https only, not "${url.protocol}".`,
+        summary: `webfetch — ${url.protocol} not fetchable`,
       },
     };
   }
 
   const blocked = await resolvesToBlocked(url.hostname);
   if (blocked) {
-    return {
-      refusal: {
-        rule: "url",
-        code: TOOL_DENIED,
-        content:
-          `Refused: ${url.hostname} resolves to ${blocked}, a private, loopback ` +
-          `or link-local address. Fetching those would let a URL reach services ` +
-          `this machine can see and the network cannot — including cloud ` +
-          `metadata endpoints.`,
-        summary: `webfetch ${url.hostname} — refused (private address)`,
-      },
+    const refusal: Precheck = {
+      rule: "url",
+      code: TOOL_DENIED,
+      content:
+        `Refused: ${url.hostname} resolves to ${blocked}, a private, loopback ` +
+        `or link-local address. Fetching those would let a URL reach services ` +
+        `this machine can see and the network cannot — including cloud ` +
+        `metadata endpoints.`,
+      summary: `webfetch ${url.hostname} — refused (private address)`,
     };
+    if (applies(ctx, "webfetch", refusal)) return { refusal };
   }
   return { url };
 }
@@ -5792,16 +5900,16 @@ export function writePrecheck(
   // would refuse them. Named as what they are, wherever they are.
   const hookAt = path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : resolve(ctx.root, path);
   if (path.trim() !== "" && inHostHooks(ctx, hookAt)) return { refusal: hostHooksRefusal(tool, path) };
-  const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
+  let abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
   if (!abs) {
-    return {
-      refusal: {
-        rule: "sandbox",
-        code: TOOL_OUT_OF_SANDBOX,
-        content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
-        summary: `${tool} ${path} — refused (outside sandbox)`,
-      },
+    const refusal: Precheck = {
+      rule: "sandbox",
+      code: TOOL_OUT_OF_SANDBOX,
+      content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
+      summary: `${tool} ${path} — refused (outside sandbox)`,
     };
+    if (applies(ctx, tool, refusal)) return { refusal };
+    abs = resolveInRoot(ctx.root, path, "off")!;
   }
   if (inRecordDir(ctx, abs) || hardLinkedToRecord(ctx, abs)) return { refusal: recordRefusal(tool, path) };
   // `.git/hooks/` and `.git/config`: run or read by git on the operator's next
@@ -5844,16 +5952,15 @@ export function writePrecheck(
   }
   const scope = writeAllowed(ctx, abs);
   if (!scope.ok) {
-    return {
-      refusal: {
-        rule: "write_allow",
-        code: TOOL_DENIED,
-        content:
-          `Refused: "${scope.rel}" is not a path this role may ${tool === "write" ? "write" : "modify"}.\n` +
-          `This role may write ${scope.listed}.`,
-        summary: `${tool} ${path} — not permitted for this role`,
-      },
+    const refusal: Precheck = {
+      rule: "write_allow",
+      code: TOOL_DENIED,
+      content:
+        `Refused: "${scope.rel}" is not a path this role may ${tool === "write" ? "write" : "modify"}.\n` +
+        `This role may write ${scope.listed}.`,
+      summary: `${tool} ${path} — not permitted for this role`,
     };
+    if (applies(ctx, tool, refusal)) return { refusal };
   }
   return { abs, surface: false };
 }
@@ -6703,6 +6810,17 @@ export interface PolicyDecision {
   pattern?: string;
   /** The tool outcome code the loop would have returned, on deny. */
   code?: number;
+  /**
+   * Present only when `[governance]` (or a role's `governance`) is declared
+   * (CONTRACTS.md §36). `verdict` is what the rules said; `decision` above is
+   * what the caller must do once the level is applied. `family` and `level`
+   * are those of `rule` (null: a structural rule, or an unlevelled read ask).
+   */
+  verdict?: "allow" | "deny" | "ask";
+  family?: GovernanceFamily | null;
+  level?: GovernanceLevel | null;
+  /** Verdicts recorded and not applied, because their family sits below prevent, in the order they were found. */
+  levelled?: LevelledHit[];
 }
 
 /**
@@ -6724,6 +6842,65 @@ export interface PolicyDecision {
  * never a silent allow.
  */
 export async function toolCallPolicy(
+  name: string,
+  args: Record<string, unknown>,
+  ctx: ToolContext,
+  offered: Set<string>
+): Promise<PolicyDecision> {
+  // No [governance] declared: the decision as it always was, byte for byte.
+  if (!ctx.governance) return rulesDecide(name, args, ctx, offered);
+  const ev: ToolContext = { ...ctx, levelled: [] };
+  const said = await rulesDecide(name, args, ev, offered);
+  return applyLevels(name, said, ev.levelled!, ctx.governance);
+}
+
+/**
+ * The level applied to what the rules said, in the one place it is applied.
+ *
+ * A deny the precheck still returned is from a family at prevent or above, or
+ * structural: it stands. An ask (`[approval] gate`, `repo_code`) takes the
+ * level of the calling tool's family (ruleFamily "by_tool"): below prevent
+ * it is recorded and the call is allowed. A call with any verdict recorded
+ * and nothing applied is `allow`, and names the first recorded rule.
+ */
+function applyLevels(
+  name: string,
+  said: PolicyDecision,
+  hits: LevelledHit[],
+  governance: GovernanceLevels
+): PolicyDecision {
+  const familyOf = (rule: PolicyDecision["rule"]) => (rule ? ruleFamily(rule, name) : null);
+  if (said.decision === "ask" && said.rule) {
+    const family = familyOf(said.rule);
+    const level = family ? governance.levels[family] : null;
+    if (family && level && !levelAtLeast(level, "prevent")) {
+      hits.push({ rule: said.rule, family, level, verdict: "ask", reason: said.reason });
+      said = { decision: "allow", rule: null, reason: said.reason };
+    }
+  }
+  const verdict: PolicyDecision["decision"] = [said.decision, ...hits.map((h) => h.verdict)].reduce((a, b) =>
+    a === "deny" || b === "deny" ? "deny" : a === "ask" || b === "ask" ? "ask" : "allow"
+  );
+  const extra = hits.length > 0 ? { levelled: hits } : {};
+  if (said.decision !== "allow" || hits.length === 0) {
+    const family = familyOf(said.rule);
+    return { ...said, verdict, family, level: family ? governance.levels[family] : null, ...extra };
+  }
+  const first = hits[0]!;
+  return {
+    decision: "allow",
+    rule: first.rule,
+    reason: `[governance] ${first.family} = "${first.level}": recorded, not applied. ${first.reason}`,
+    ...(first.pattern ? { pattern: first.pattern } : {}),
+    verdict,
+    family: first.family,
+    level: first.level,
+    ...extra,
+  };
+}
+
+/** The rules alone, before any level: what toolCallPolicy always answered. */
+async function rulesDecide(
   name: string,
   args: Record<string, unknown>,
   ctx: ToolContext,
@@ -6792,7 +6969,13 @@ export async function executeTool(
   ctx: ToolContext,
   offered: Set<string>
 ): Promise<ToolOutcome> {
-  if (!offered.has(name)) return outcomeOf(notOffered(name, offered));
+  if (!offered.has(name)) {
+    const refused = outcomeOf(notOffered(name, offered));
+    // Structural, refused at every level; recorded like any other decision.
+    return ctx.governance && (POLICY_TOOLS as readonly string[]).includes(name)
+      ? withGovernance(refused, await toolCallPolicy(name, args, ctx, offered))
+      : refused;
+  }
 
   // A call the endpoint never finished emitting. Named as such rather than
   // dispatched with the arguments stripped: a truncated `read {"path": "src/ma`
@@ -6841,6 +7024,18 @@ export async function executeTool(
     };
   }
 
+  // `[governance]` levels (governance.ts): the decision comes from
+  // toolCallPolicy, the function `gnomon guard` calls, and the tool then runs
+  // with the same levelling, so its own precheck skips exactly the verdicts
+  // the decision recorded. Absent a declaration, none of this runs.
+  let levels: PolicyDecision | undefined;
+  let runCtx = ctx;
+  if (ctx.governance && (POLICY_TOOLS as readonly string[]).includes(name)) {
+    levels = await toolCallPolicy(name, args, ctx, offered);
+    const askLevelled = levels.levelled?.some((h) => h.verdict === "ask") ?? false;
+    runCtx = { ...ctx, levelled: [], ...(askLevelled ? { gate: "never" as ApprovalGate, levelledAsk: true } : {}) };
+  }
+
   // A throw here would take the whole session down: an unguarded
   // readFileSync on a directory (EISDIR) once killed a live run outright.
   // A broken tool is an apparatus_failure the model can be told about.
@@ -6850,7 +7045,7 @@ export async function executeTool(
     // it: the model's own calls. The declared [verify] check, the bootstrap
     // and the must-fail-first re-run offer bash alone, and are killed at the
     // timeout as they always were.
-    outcome = await dispatch(name, args, ctx.jobs && !offered.has(JOB_TOOL) ? { ...ctx, jobs: undefined } : ctx);
+    outcome = await dispatch(name, args, runCtx.jobs && !offered.has(JOB_TOOL) ? { ...runCtx, jobs: undefined } : runCtx);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     outcome = {
@@ -6859,10 +7054,34 @@ export async function executeTool(
       summary: `${name} — ${msg}`,
     };
   }
+  if (levels) outcome = withGovernance(outcome, levels);
   // Error path only: a call that failed with arguments the schema does not
   // accept is told which parameters the tool takes. Anything else is returned
   // untouched.
   return withSchemaRepair(name, args, outcome, ctx.maxLines?.read, ctx.editVariant, ctx.jobs !== undefined && offered.has(JOB_TOOL));
+}
+
+/**
+ * The governance record on an outcome, and at advise the warning appended to
+ * what the model reads: what prevent would have done, and why.
+ */
+function withGovernance(outcome: ToolOutcome, p: PolicyDecision): ToolOutcome {
+  // Advice is for a call that goes ahead; one still refused is told why it was refused, and no more.
+  const advised = p.decision === "deny" ? [] : (p.levelled ?? []).filter((h) => h.level === "advise");
+  const governance: ToolGovernance = {
+    verdict: p.verdict ?? p.decision,
+    decision: p.decision,
+    rule: p.rule,
+    family: p.family ?? null,
+    level: p.level ?? null,
+    ...(p.levelled ? { levelled: p.levelled.map(({ rule, family, level, verdict }) => ({ rule, family, level, verdict })) } : {}),
+    ...(advised.length > 0 ? { advised: true } : {}),
+  };
+  return {
+    ...outcome,
+    ...(advised.length > 0 ? { content: `${outcome.content}\n\n${adviseText(advised)}` } : {}),
+    governance,
+  };
 }
 
 async function dispatch(

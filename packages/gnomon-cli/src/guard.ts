@@ -303,7 +303,7 @@ export default {
     });
     api.tool.hook("execute.before", async (e) => {
       const base = await baseOf(e.sessionID);
-      const v = await guard({ tool: e.tool, sessionID: e.sessionID, agent: e.agent, input: e.input }, directory, base);
+      const v = await guard({ tool: e.tool, sessionID: e.sessionID, agent: e.agent, id: e.id, input: e.input }, directory, base);
       if (v.decision === "allow") return;
       const why = "gnomon guard" + (v.rule && v.rule !== "approval" ? " (" + v.rule + ")" : "") + ": " + v.reason;
       if (v.decision === "ask") {

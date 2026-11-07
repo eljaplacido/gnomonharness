@@ -209,8 +209,14 @@ so both format drift and non-determinism fail the build.
   "edit_format": ["ast", "hashline", "str_replace"],
   "sandbox": ["off", "confined", "strict"],
   "approval": ["never", "on_write", "always"],
-  "role_profile": ["local_first", "frontier_plan", "all_remote"]
+  "role_profile": ["local_first", "frontier_plan", "all_remote"],
+  "governance_level": ["observe", "advise", "prevent", "enforce"],
+  "governance_family": ["write", "bash", "network", "secrets", "rules", "ci"]
+}
 ```
+
+`governance_level` and `governance_family` are §36's: the levels, weakest
+first, and the families every policy rule is assigned to.
 
 **`role_profile` is implemented.** This paragraph said it was "declared and not
 implemented" and stayed there after `495fa40` made it route: `applyProfile`
@@ -225,10 +231,6 @@ the enumerations contract and inert. They stay published because entries leave
 that list by being implemented, never by being dropped from what was already
 published — and `auditSurface` reports a surface that selects one, so nobody
 gets the inert behaviour in silence.
-
-```json
-}
-```
 
 **Fixture**: `conformance/enumerations_schema.json` — JSON Schema for the
 enumerations output. CI asserts the output conforms.
@@ -704,6 +706,13 @@ directory, of that too), and `execute` (`{ "code" }`), JavaScript a harness runs
 (opencode V2's Code Mode). `execute` is decided as the equivalent bash call
 `node -e '<code>'`; for a role without `bash` it is `ask` with rule `tools`.
 Anything else is `allow` with rule `ungoverned`, never guessed at.
+
+**Governance levels (§36).** Under a declared `[governance]` (or a role's
+`[roles.<name>.governance]`), the document also carries `verdict` (what the
+rules said), `family` and `level`, and `decision` is what the level makes of
+the verdict: below `prevent` a deny or ask in a levelled family is `allow`,
+so the adapters say nothing and the host's own permission flow runs. With no
+such block, neither the fields nor any decision change.
 
 **What these rules are, and are not.** Every shell rule here is a pattern
 check over the command's text. It refuses what the text names, and nothing
@@ -3071,3 +3080,99 @@ on the 29 P2G41 instructions (by hash, read from `GNOMON_P2G_DATASET` or the
 local dataset, skipped where absent: the instructions carry a benchmark canary
 and are not in this repository), the notes in a paced `--deadline` run, and the
 watchdog against fake streaming servers.
+
+---
+
+## 36. Governance levels — `[governance]`, `[roles.<name>.governance]`, `v: 1`
+
+How strongly a rule's verdict is applied, set per **family** of rules. One
+concept beside the two that already exist: the rules (`bash_deny`,
+`write_allow`, …) decide whether a call is wrong; `[approval] gate` decides
+which acceptable calls still need a person; the **level** decides what a
+`deny` or `ask` verdict *does*. Both published enumerations are in §3.
+
+| Level | gnomon's own loop (IP-0) | `gnomon guard` (IP-1) |
+|---|---|---|
+| `observe` | the call runs; the `tool_call` record carries the verdict | `decision: "allow"`; the adapters say nothing (the host's own prompts still run); the guard record carries the verdict |
+| `advise` | the call runs; the tool result ends with `gnomon ▸ advise: <rule> would refuse this under prevent: <reason>` (or "would ask a person before this") | as `observe`. Delivering the warning to another harness's agent needs a post-tool hook (shared-governance PR 4); until then the guard record says `delivered: false` |
+| `prevent` | deny or ask exactly as before levels existed (the default) | the same |
+| `enforce` | **in this build, decides exactly as `prevent`**; the surface audit says so. What it adds (containment for bash/network, `gnomon check` failures, ask→deny on hosts that cannot record a person's answer) arrives with later changes | the same |
+
+**Families.** Every rule in §10 is assigned to exactly one (`RULE_FAMILY`,
+tools.ts; tools and governance tests pin the table against the rule list):
+
+| Family | Rules |
+|---|---|
+| `write` | `write_allow` (write, edit and shell write targets), `sandbox` on write/edit |
+| `bash` | `bash_deny`, `bash_allow`, `sudo`, `repo_code` |
+| `network` | `network`, `url` |
+| `secrets` | `sandbox` on read (a read outside the root). `secret_path` arrives with shared-governance PR 3 |
+| `rules` | `surface`, `record`, `git_hooks`, `host_hooks` |
+| `ci` | none yet: `ci_path` arrives with shared-governance PR 3. A declared level is resolved and recorded |
+| *(structural, never levelled)* | `tools`, `malformed`; and in the guard `ungoverned`, `error` |
+
+An `approval` ask takes the family of the calling tool: `bash` (and `execute`)
+→ `bash`, `write`/`edit` → `write`, `webfetch` → `network`; a `read` ask is
+not levelled. `grep` and `glob` are decided as reads of where they search,
+and at `prevent` whatever is declared: gnomon's own search tools refuse a path
+outside the root with no levelled path yet, and the guard matches them. When
+a verdict is levelled away the remaining rules are still
+asked, so a levelled `bash_deny` does not hide a `.gnomon/` write on the same
+line: the call is still denied, by `surface`.
+
+**Where levels are set, and how they compose.**
+
+```toml
+# .gnomon/policy.toml
+[governance]
+level = "prevent"   # every family this layer does not name
+ci    = "advise"    # a family key may sit below the layer's level
+
+# .gnomon/roles.toml — a sub-table: gnomon's TOML subset reads an inline
+# table as a string (§5.3), so `governance = { … }` is refused, fatally.
+[roles.implement.governance]
+bash = "enforce"
+```
+
+`effective(family) = max over layers (layer[family] ?? layer.level)`, in the
+order `observe < advise < prevent < enforce`, over the layers that say
+something about the family, in order org (a stub until `[extends]`), repo,
+role. A family no layer names is `prevent`. `rules` has a floor of `prevent`:
+a lower declaration is ignored and the surface audit says so. Across layers
+only `max` applies, so a role can only tighten its repository.
+
+**Validation.** A value outside the enumeration, a block or role key that is
+not a table, and an inline table are **fatal** surface problems (a misspelt
+`prevnt` must not read as "nothing declared"); `gnomon guard` answers such a
+surface with `ask`/`error` (exit 10). An unknown key is warned with
+did-you-mean. Also warned: `rules` below its floor, any `enforce` (it decides
+as `prevent` here), and `observe`/`advise` with `[audit] enabled` not `true`
+(gnomon's own session then keeps no trail of what it recorded and did not
+apply).
+
+**Records.** Only under a declared level, so an undeclared surface's records
+are unchanged:
+
+- the loop's `tool_call` record gains `governance`: `verdict`, `decision`,
+  `rule`, `family`, `level`, and when anything was levelled `levelled` (each
+  `{rule, family, level, verdict}`, in the order found) and `advised: true`
+  when the warning was appended;
+- the guard's `guard` record and JSON document gain `verdict`, `family` and
+  `level`; the record also `call_id` (Claude Code `tool_use_id`, opencode
+  `id`), `host_mode` (Claude Code `permission_mode`) and `delivered: false`
+  on an advise it could not deliver. Under a declared level the guard writes
+  its trail whether or not `[audit] enabled` is on: at `observe` the record is
+  the decision's whole effect.
+
+**Byte identity.** With no `[governance]` and no role `governance`,
+`toolCallPolicy` takes its old path untouched and every request, decision and
+record is what it was; the loop's requests are pinned to master's hash
+(`governance_loop.test.ts`), and absent and `level = "prevent"` send the same
+bytes with real tools (`governance.test.ts`).
+
+**Fixture**: `conformance/guard_cases.json` `levels`: every case at every
+level, put to the loop and to `guardToolCall` (`guard.test.ts`) and to the real
+binary (`gnomon-cli/src/guard.test.ts`), which must reach the same decision,
+verdict, rule, family and level. `conformance/guard_decision.json` lists the
+new optional keys; `conformance/enumerations_golden.json` the two
+enumerations.

@@ -148,6 +148,29 @@ describe("gnomon guard — the shared cases, put to the real binary", () => {
   }
 });
 
+describe("gnomon guard — governance levels, put to the real binary (guard_cases.json levels)", () => {
+  for (const level of CASES.levels.levels as string[]) {
+    it(`every levels case at "${level}" gets its decision, exit and verdict`, () => {
+      governedRepo("on_write");
+      writeFileSync(join(repo, ".gnomon", "policy.toml"), CASES.levels.policy.replace("{{level}}", level));
+      git("add", "-A");
+      git("commit", "-q", "-m", `governance ${level}`);
+      for (const c of CASES.levels.cases) {
+        const r = guardBin(["--role", c.role], JSON.stringify({ tool: c.tool, input: c.input }));
+        const v = JSON.parse(r.stdout) as GuardVerdict;
+        for (const k of Object.keys(v)) expect([...fixture.verdict_keys.required, ...fixture.verdict_keys.optional]).toContain(k);
+        expect({ name: c.name, decision: v.decision, verdict: v.verdict, exit: r.code }).toEqual({
+          name: c.name,
+          decision: c.expect[level],
+          verdict: c.verdict,
+          exit: guardExit(c.expect[level]),
+        });
+      }
+      rmSync(repo, { recursive: true, force: true });
+    }, 180_000);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Claude Code
 // ---------------------------------------------------------------------------

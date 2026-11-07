@@ -164,6 +164,7 @@ import {
 } from "./live_record.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { AFTER_REFUSAL_REASON, AfterRefusalWindow, resolveAfterRefusal } from "./after_refusal.js";
+import { resolveLevels } from "./governance.js";
 import { settleMcpTools, toolsHash } from "./tools_hash.js";
 import {
   REASONING_EFFORT_FIELD,
@@ -4855,6 +4856,9 @@ async function agenticTurn(
     bashAllow: config.roles[role]?.bash_allow,
     bashDeny: config.roles[role]?.bash_deny,
     writeAllow: config.roles[role]?.write_allow,
+    // `[governance]` levels (governance.ts). Absent unless declared, so an
+    // undeclared surface builds the context it always did.
+    ...((governance) => (governance ? { governance } : {}))(resolveLevels(config, role)),
     root: workRootOf(config),
     sandbox,
     // Declared in policy.toml, hashed with the surface. A grant that does not
@@ -7438,6 +7442,8 @@ async function agenticTurn(
         duration_ms: toolTiming.duration_ms,
         ...(outcome.edit_tier ? { edit_tier: outcome.edit_tier } : {}),
         ...(outcome.package_index ? { package_index: outcome.package_index } : {}),
+        // `[governance]` (CONTRACTS.md §36): only when a level is declared.
+        ...(outcome.governance ? { governance: outcome.governance } : {}),
         args: deps.audit.text(JSON.stringify(call.args)),
         result: deps.audit.text(outcome.content),
       });
