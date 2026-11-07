@@ -950,20 +950,26 @@ export function resolveGnomonDir(root?: string): string {
   // Otherwise walk up from the cwd, the way git finds .git. Working from a
   // subdirectory of a project is normal, and requiring the exact project root
   // made it easy to run in the wrong place and get a confusing miss.
+  //
+  // A read-only working directory keeps its surface in the state directory
+  // instead (workdirStateDir), with the cwd as its root. That surface stands
+  // in for `<cwd>/.gnomon`, so it is checked at the cwd's level, before any
+  // ancestor: `gnomon init` in a read-only directory below a project that
+  // has its own .gnomon/ wrote it for exactly this directory, and
+  // `gnomon trust grant --dir <cwd>` resolves to it too. Checked after the
+  // ancestors (until 0.4.5), `gnomon task` ran the ancestor's surface with
+  // the cwd's trust grant missing (CF1 wire test, 2026-11-07).
   const start = process.cwd();
+  const kept = join(workdirStateDir(start), ".gnomon");
   let dir = start;
   for (;;) {
     const candidate = join(dir, ".gnomon");
     if (existsSync(candidate)) return candidate;
+    if (dir === start && existsSync(kept)) return kept;
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-
-  // None in the tree: a read-only working directory keeps its surface in
-  // the state directory instead (workdirStateDir), with the cwd as its root.
-  const kept = join(workdirStateDir(start), ".gnomon");
-  if (existsSync(kept)) return kept;
 
   throw new Error(
     `No .gnomon/ surface found in ${start} or any parent directory.${readOnlyNote(start)}\n` +

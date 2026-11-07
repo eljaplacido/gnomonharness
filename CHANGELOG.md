@@ -185,6 +185,16 @@ request bodies are master's.
 
 ### Fixed
 
+- **A read-only directory below another project ran the project's surface.**
+  `gnomon init` in a read-only directory keeps its surface in the state
+  directory (TB7), and `gnomon trust grant --dir` found that one, but
+  `gnomon task` from the directory walked up first and ran an ancestor's
+  `.gnomon/` when one existed: the wrong surface, without the directory's
+  trust grant. The kept surface now stands in for `<dir>/.gnomon` and is found
+  before any ancestor. Present since 0.4.4; found by the CF1 wire test, whose
+  work directory sat inside a gnomon checkout. A read-only `/app` with no
+  surface above it (P2G) was never affected.
+
 - **`gnomon guard status` no longer reports a CRLF checkout of a hook file as
   modified, and the opencode plugin starts gnomon through a shell on
   Windows** (#165).
