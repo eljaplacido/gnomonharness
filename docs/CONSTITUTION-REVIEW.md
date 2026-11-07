@@ -209,6 +209,47 @@ Rule `outside_root` (CONTRACTS.md §38):
   sandbox, a write through a link inside the root is judged where it lands
   today. Tightening-only.
 
+### Long-task tier (a) against the rules (added 2026-11-07)
+
+One locality rule, the recorded `delivered` flag and resolved defaults, the
+factual network refusal, `[turn] deadline_note`, `[turn] prompt_profile`
+(CONTRACTS.md §39):
+
+| Rule | Kept? | Note |
+|---|---|---|
+| 1 No machine-scoped configuration | Kept | Both keys live in `.gnomon/`. The unattended profile is **declared, never inferred** from a TTY, the environment or the command line; the synthesis's rejected alternative (an auto-detected unattended mode) is not built. No new machine-local state, so no new carve-out |
+| 2 Manifest | Kept | Both keys are hashed with the surface |
+| 3 Tools | Kept | No tool is added, removed or reworded except the network refusal's text, which is a tool *result*, not a schema |
+| 4 Buckets | Kept | A refusal is still a refusal (`rule: network`) |
+| 5 Exit contract | Kept | No exit changes |
+| 6 Enumerations | Extended | `endpointLocality` tiers, `deadline_note` and `prompt_profile` values, `session_start.resolved` values (`conformance/long_task_profile.json`) |
+| Behaviour changed ⇒ hash changed | Kept, one declared text change | Replay and the steering channel keep their defaults on local lanes (the change was proposed and held back, below). The network refusal's wording is the one default that moves under an unchanged hash: a tool-result text, pinned by tests that put master's text back and hold every other byte |
+
+**Held back, on the rule that defaults move only on measured evidence.**
+Defaulting local lanes to replay and to user-role steering was proposed
+(synthesis a2/a3) and is not in this change: replay's evidence (H3, the
+leaderboard logs) is hosted, and LG1's local lane never returned reasoning;
+delivering the idle nudge to a local model changes local behaviour no study
+has measured (LG1's nudge result may have been taken with a nudge that never
+arrived). Both stay one declared line away (`replay_reasoning = true`,
+`steer_role = "user"`), and SW1/LG2 test them. What does land is the
+measurement: every request now records `via` and `delivered`, and every
+session records what each route resolved to and why (`session_start.resolved`),
+so the silent divergence between declared and delivered steering is at least
+visible in the record.
+
+**Drift left in place, recorded.** A relay on a private address in front of
+a hosted model is a local lane by URL, so it does not replay unless it
+declares `replay_reasoning = true` — the "same surface replays on a hosted URL
+but not behind a private relay" inconsistency. It is now explicit in
+`session_start.resolved` (`replay_source: local_lane`), not hidden.
+
+**Not done, on purpose.** A per-endpoint `local = true|false` override key:
+`steer_role` and `replay_reasoning` already override each default where the
+URL misleads (a relay), so a third key would add surface without adding a
+choice. The audit's #11 merge is done as tiers of one function rather than a
+new key.
+
 ---
 
 ## 3. The two principles that do not follow — and cost the most

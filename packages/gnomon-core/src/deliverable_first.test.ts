@@ -34,11 +34,13 @@ import {
   DELIVERABLE_FIRST_EVENTS,
   DELIVERABLE_FIRST_MAX_NAMED,
   DELIVERABLE_VERBS,
+  DEPENDENCY_WORDS,
   deliverableNote,
   extractDeliverables,
   missingDeliverables,
   resolveDeliverableFirst,
 } from "./deliverable_first.js";
+import { withMasterRefusal } from "./test_support.js";
 
 const REPO = join(__dirname, "../../..");
 const FIXTURE = JSON.parse(readFileSync(join(REPO, "conformance/deliverable_first.json"), "utf-8"));
@@ -65,6 +67,9 @@ describe("conformance/deliverable_first.json", () => {
     expect([...DELIVERABLE_VERBS]).toEqual(FIXTURE.verbs);
     expect([...DELIVERABLE_FIRST_EVENTS]).toEqual(FIXTURE.audit.events);
     expect(deliverableNote(["a", "b"])).toBe(FIXTURE.note.replace("{paths}", "a, b"));
+    expect(deliverableNote(["a", "b"], "plan")).toBe(FIXTURE.note.replace("{paths}", "a, b"));
+    expect(deliverableNote(["a", "b"], "continue")).toBe(FIXTURE.continue_note.replace("{paths}", "a, b"));
+    expect([...DEPENDENCY_WORDS]).toEqual(FIXTURE.dependency_words);
     expect(resolveResilience({ config: {} } as never).first_token_timeout_ms).toBe(FIXTURE.first_token.default);
     const known = (block: string) => BLOCK_KEYS.find(([, b]) => b === block)![2];
     expect(known("turn")).toContain("deliverable_first");
@@ -117,6 +122,10 @@ describe("extractDeliverables", () => {
     ["Save the report as C:\\Users\\RUNNER~1\\out\\report.json.", ["C:\\Users\\RUNNER~1\\out\\report.json"]],
     ["Provide a CSV file named `Answers.csv` and save it inside `C:\\results\\`.", ["C:\\results\\Answers.csv"]],
     ["Write the summary to `.\\out\\summary.md`.", [".\\out\\summary.md"]],
+    // The outputs a named command must leave (v0.4.6, research note 13 finding 3).
+    ["The command `/app/rebuild.sh` should rebuild the packet and write `/app/output/scores.csv`.", ["/app/output/scores.csv"]],
+    ["Fix the planning tool so that running `python /app/dispatch.py --output /output/flight_plan.json` produces a correct flight plan.", ["/output/flight_plan.json"]],
+    ["Build `/app/cracker.py`. Write any Python dependencies to `/app/requirements.txt` (may be empty).", ["/app/cracker.py"]],
   ])("names the deliverable: %s", (task, expected) => {
     expect(extractDeliverables(task)).toEqual(expected);
   });
@@ -126,7 +135,13 @@ describe("extractDeliverables", () => {
     "The harness at `/app/pretrain.py` writes a loss trace to `/app/output/loss.pt`.",
     "Accepted leads should write `/app/output/submission.json` and `/app/output/crm.json`.",
     "For each directory, it should read the files and write the generated `unified.ttl` into it.",
-    "The command `/app/rebuild.sh` should rebuild the packet and write `/app/output/scores.csv`.",
+    // Dependency manifests are not outputs (v0.4.6, research note 13 finding 3).
+    "Write any Python dependencies needed to run your code to `/app/requirements.txt`.",
+    "Write any apt packages needed to run your code to `/app/apt-packages.txt`, one per line.",
+    "Add any extra Python packages to `/app/src/worker/requirements.txt`.",
+    // A command line run without "running"/"run" before it, or a flag that is not an output.
+    "Use `python /app/x.py --output /o/a.json` as a reference.",
+    "Fix it so running `python /app/x.py --input /o/a.json` works.",
     // A verb used as a noun or an adjective.
     "The output config, rendered through the provided `/app/render.py`, must match.",
     "Repair it from the output contract in `/app/docs/ticket.md`.",
@@ -319,7 +334,10 @@ function reply(kind: Kind, n: number): unknown {
 
 function hashOf(raw: string): string {
   const note = JSON.stringify(platformBlock()).slice(1, -1);
-  return createHash("sha256").update(note ? raw.split(note).join("") : raw).digest("hex").slice(0, 12);
+  // The network refusal was reworded on purpose (CONTRACTS §39): master's
+  // text goes back in, so every other byte is still checked against master.
+  const body = withMasterRefusal(raw);
+  return createHash("sha256").update(note ? body.split(note).join("") : body).digest("hex").slice(0, 12);
 }
 
 function trail(root: string): Array<Record<string, any>> {

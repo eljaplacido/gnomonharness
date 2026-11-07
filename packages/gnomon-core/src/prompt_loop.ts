@@ -73,6 +73,7 @@ import {
   resolveDeadline,
   taskResilience,
   workRootOf,
+  steerRoleOf,
 } from "./config.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence,
   safeForPrompt, traceLines, isEmptyReasoning, terminalWidth,
@@ -181,6 +182,13 @@ import {
   type TodoGateCounters,
 } from "./sweep_knobs.js";
 import { harnessBuild } from "./build.js";
+import {
+  applyPromptProfile,
+  deadlineNoteText,
+  promptProfileBlock,
+  resolvePromptProfile,
+  type DeadlineNoteStyle,
+} from "./long_task_profile.js";
 import { mapBucket } from "./session.js";
 import {
   loadSkills,
@@ -3397,6 +3405,8 @@ export interface TurnDeadline {
   /** Fractions of the budget at which a remaining-time note is sent */
   notes?: number[];
   marginMs?: number;
+  /** `[turn] deadline_note`: the note's wording (long_task_profile.ts). Absent is "plan". */
+  style?: DeadlineNoteStyle;
 }
 
 /** A tool call as `TurnEvents` reports it. */
@@ -4597,19 +4607,101 @@ export function buildSystemPrompt(
   // every machine with the same checkout.
   const chosen = new Set(active.map((s) => s.id));
   const dormant = roleSkills(all, role).filter((s) => !chosen.has(s.id));
+  // `[turn] prompt_profile` (long_task_profile.ts): "default" is system.md as
+  // written and no block, so a surface that declares nothing builds the
+  // prompt it always did.
+  const profile = resolvePromptProfile(state.config);
   return withWorkingContext(
     applySkills(
-      state.config.system.content ?? "",
+      applyPromptProfile(state.config.system.content ?? "", profile).text,
       active,
       dormant,
       `${basename(state.config.gnomonDir)}/${SKILLS_DIR}`
     ) + runNotesBlock(state)
   ) + platformBlock() + `\n\n${sessionModeBlock(state.interactive === true && !opts.delegated)}` +
+    promptProfileBlock(profile) +
     // Last, and only once a bootstrap has run: "" otherwise, so a surface
     // without one builds the prompt it always did. Appended rather than
     // placed, so the turn that runs the bootstrap can extend the prompt it
     // already built by exactly this text.
     (state.bootstrap?.block ?? "");
+}
+
+/**
+ * One route target's resolved defaults, for `session_start.resolved`: where
+ * it is by the one locality rule, whether its reasoning is replayed, and the
+ * channel its steering goes out on -- each with the reason. The defaults
+ * these settle (CONTRACTS §39) depend on where the endpoint is, so the trail says, per
+ * session, what each one resolved to rather than leave a reader to re-derive
+ * it from the surface and the build.
+ */
+export interface ResolvedTargetRecord {
+  endpoint?: string;
+  model: string;
+  /** endpointLocality's loopback or private */
+  local: boolean;
+  /** `on` from the first request; `on_reasoning` from the request after the first tool call answered with reasoning; `off` */
+  replay: "on" | "on_reasoning" | "off";
+  /** `declared`; `default` (gnomon's rule, remote); `local_lane` (off by default on a local lane); `ollama_route` (Ollama's /api/chat: no reasoning is read there) */
+  replay_source: "declared" | "default" | "local_lane" | "ollama_route";
+  steer_role: "system" | "user";
+  steer_role_source: "declared" | "default";
+}
+
+export function resolvedTargetRecord(config: GnomonConfig, t: RouteTarget): ResolvedTargetRecord {
+  let declared: EndpointConfig | undefined;
+  try {
+    declared = t.endpoint ? resolveEndpoint(config, t.endpoint) : undefined;
+  } catch {
+    declared = undefined;
+  }
+  const steer = steerRoleOf(declared);
+  const replayDeclared = typeof declared?.replay_reasoning === "boolean";
+  return {
+    ...(t.endpoint ? { endpoint: t.endpoint } : {}),
+    model: t.model,
+    local: isLocalEndpoint(t.url),
+    replay: t.replayReasoning ? "on" : t.replayReasoningAuto ? "on_reasoning" : "off",
+    replay_source: t.replayReasoning
+      ? (t.replayReasoningSource ?? "declared")
+      : t.replayReasoningAuto
+        ? "default"
+        : (t.kind ?? "ollama") === "ollama"
+          ? "ollama_route"
+          : replayDeclared
+            ? "declared"
+            : "local_lane",
+    steer_role: steer.role,
+    steer_role_source: steer.source,
+  };
+}
+
+/**
+ * `session_start.resolved`: per role, the target's and the fallback's
+ * resolved defaults, and the prompt profile when one other than the default
+ * is declared (with how many scaffold sentences it dropped). A role whose
+ * route cannot be resolved is left out; the turn that uses it says why.
+ */
+export function resolvedSessionRecord(config: GnomonConfig, roles: string[]): Record<string, unknown> {
+  const routes: Record<string, { target: ResolvedTargetRecord; fallback?: ResolvedTargetRecord }> = {};
+  for (const role of roles) {
+    try {
+      const r = routeRole(config, role);
+      routes[role] = {
+        target: resolvedTargetRecord(config, r.target),
+        ...(r.fallback ? { fallback: resolvedTargetRecord(config, r.fallback) } : {}),
+      };
+    } catch {
+      // Unroutable: reported where it is used.
+    }
+  }
+  const profile = resolvePromptProfile(config);
+  return {
+    routes,
+    ...(profile !== "default"
+      ? { prompt_profile: { name: profile, dropped: applyPromptProfile(config.system.content ?? "", profile).dropped } }
+      : {}),
+  };
 }
 
 /** A turn's model-free outcome, as the shadow's `turn_end` record carries it. */
@@ -5839,12 +5931,18 @@ async function agenticTurn(
           counters.deadline_notes = (counters.deadline_notes ?? 0) + 1;
           say(paint(deps.ui, "gray", `  [deadline] ${formatSpan(left)} left of ${formatSpan(d.total_ms)} — noting it`));
         }
+        // The wording is `[turn] deadline_note` (long_task_profile.ts):
+        // "plan" is the text §31 always sent, byte for byte. "none" has no
+        // time note (no fraction is crossed), so only a missing output is
+        // said, with no countdown before it.
+        const style = d.style ?? "plan";
         working.push({
           role: "system",
           content:
-            `Time check: about ${formatSpan(left)} of this task's ${formatSpan(d.total_ms)} remain ` +
-            `before it is stopped. Plan the rest of the work, and checking it, to finish inside that.` +
-            (missing.length > 0 ? ` ${deliverableNote(missing)}` : ""),
+            style === "none"
+              ? deliverableNote(missing, "continue")
+              : deadlineNoteText(style, formatSpan(left), formatSpan(d.total_ms)) +
+                (missing.length > 0 ? ` ${deliverableNote(missing, style)}` : ""),
         });
       }
     }
@@ -8361,6 +8459,7 @@ export async function runTask(
       started_at: deadlineStart,
       notes: settings.notes,
       marginMs,
+      style: settings.style,
     };
     const ctl = new AbortController();
     deadlineSignal = ctl.signal;
@@ -8384,10 +8483,13 @@ export async function runTask(
             margin_ms: turnDeadline.marginMs,
             notes: turnDeadline.notes,
             source: options.deadline!.source,
+            // Present only when declared otherwise than the default.
+            ...(turnDeadline.style && turnDeadline.style !== "plan" ? { note: turnDeadline.style } : {}),
           },
         }
       : {}),
     role,
+    resolved: resolvedSessionRecord(config, [role]),
     record: auditSettings.record,
     approvals: options.yes ? "granted" : "refused",
   });
@@ -8399,8 +8501,20 @@ export async function runTask(
   // check that finds nothing missing can be read against what was looked for.
   let deliverables: TurnDeps["deliverables"];
   if (turnDeadline && resolveDeliverableFirst(config)) {
-    deliverables = { paths: extractDeliverables(input), root: workRootOf(config) };
-    audit.write("deliverable_first", { event: "named", named: deliverables.paths, at: [...DELIVERABLE_FIRST_AT] });
+    // A named path that already exists when the run starts is a file the
+    // task ships (an empty requirements.txt, a stub), not an output still
+    // owed: it is left out of the checks and said on the record (research
+    // note 13, finding 3).
+    const extracted = extractDeliverables(input);
+    const root = workRootOf(config);
+    const present = extracted.filter((p) => missingDeliverables([p], root).length === 0);
+    deliverables = { paths: extracted.filter((p) => !present.includes(p)), root };
+    audit.write("deliverable_first", {
+      event: "named",
+      named: deliverables.paths,
+      present,
+      at: [...DELIVERABLE_FIRST_AT],
+    });
   }
   const deadlineDeps = turnDeadline
     ? {
@@ -11029,6 +11143,7 @@ export async function runPromptLoop(
     surface_hash: surfaceHash,
     cwd: process.cwd(),
     roles: listRoles(config),
+    resolved: resolvedSessionRecord(config, listRoles(config)),
     record: auditSettings.record,
   });
   if (options.trust) audit.write("trust", { ...options.trust, root: resolve(config.gnomonDir, "..") });

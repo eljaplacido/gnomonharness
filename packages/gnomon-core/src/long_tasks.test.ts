@@ -29,7 +29,10 @@ import {
   LOOP_DEFAULTS,
   TASK_TRANSPORT_GRACE_MS,
   loadConfig,
-  isLocalLaneUrl,
+  endpointLocality,
+  isLocalEndpoint,
+  isLoopbackEndpoint,
+  replayLocal,
   parseDeadline,
   replayFieldsOf,
   routeRole,
@@ -109,7 +112,7 @@ describe("v0.4.4 release defaults (H3 adopt, LG1 keep)", () => {
     expect(b.fallback?.replayReasoningAuto).toBe(true);
   });
 
-  it("isLocalLaneUrl: loopback, private, link-local, CGNAT/Tailscale, *.local, host.docker.internal are local", () => {
+  it("the replay default's local set is endpointLocality's loopback and private tiers, plus a URL that does not parse (v0.4.6: one rule)", () => {
     const local = [
       "http://localhost:8080/v1",
       "http://127.0.0.2:1/v1",
@@ -137,8 +140,21 @@ describe("v0.4.4 release defaults (H3 adopt, LG1 keep)", () => {
       "https://8.8.8.8/v1",
       "https://[2001:db8::1]/v1",
     ];
-    for (const u of local) expect(isLocalLaneUrl(u), u).toBe(true);
-    for (const u of hosted) expect(isLocalLaneUrl(u), u).toBe(false);
+    // The set isLocalLaneUrl held until v0.4.6, unchanged.
+    for (const u of local) expect(replayLocal(u), u).toBe(true);
+    for (const u of hosted) expect(replayLocal(u), u).toBe(false);
+    for (const u of local.filter((x) => x !== "not a url")) expect(isLocalEndpoint(u), u).toBe(true);
+    for (const u of hosted) expect(endpointLocality(u), u).toBe("remote");
+    // Trust's tier is narrower: only this machine.
+    for (const u of ["http://localhost:8080/v1", "http://127.0.0.2:1/v1", "http://[::1]:8080/v1", "http://[::ffff:127.0.0.1]/v1"]) {
+      expect(endpointLocality(u), u).toBe("loopback");
+      expect(isLoopbackEndpoint(u), u).toBe(true);
+    }
+    for (const u of ["http://foo.localhost/v1", "http://0.0.0.0:8000/v1", "http://10.1.2.3/v1", "http://vllm:8000/v1", "http://[::ffff:10.0.0.1]/v1"]) {
+      expect(endpointLocality(u), u).toBe("private");
+      expect(isLoopbackEndpoint(u), u).toBe(false);
+    }
+    expect(endpointLocality("not a url")).toBe("remote");
   });
 
   it("the idle nudge is v0.4.3's: 12 with nothing declared", () => {
@@ -306,10 +322,10 @@ describe("--deadline: parsing and settings", () => {
 
   it("[turn] deadline_notes and deadline_margin_ms, with defaults", () => {
     expect(resolveDeadline({ config: {} } as never)).toEqual(DEADLINE_DEFAULTS);
-    expect(DEADLINE_DEFAULTS).toEqual({ notes: [0.5, 0.8], margin_ms: 30_000 });
+    expect(DEADLINE_DEFAULTS).toEqual({ notes: [0.5, 0.8], margin_ms: 30_000, style: "plan" });
     expect(
       resolveDeadline({ config: { turn: { deadline_notes: [0.9, 0.25, 2, 0.25], deadline_margin_ms: 5000 } } } as never)
-    ).toEqual({ notes: [0.25, 0.9], margin_ms: 5000 });
+    ).toEqual({ notes: [0.25, 0.9], margin_ms: 5000, style: "plan" });
     expect(resolveDeadline({ config: { turn: { deadline_notes: [] } } } as never).notes).toEqual([]);
     expect(formatSpan(450_000)).toBe("7m 30s");
     expect(formatSpan(3_720_000)).toBe("1h 2m");

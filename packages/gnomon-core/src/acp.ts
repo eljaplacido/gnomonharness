@@ -79,6 +79,7 @@ import {
   type PromptState,
   type TurnEventCall,
   type TurnResult,
+  resolvedSessionRecord,
 } from "./prompt_loop.js";
 import { resolveSessionStore, saveSession, SESSION_FORMAT } from "./session_store.js";
 import type { ApprovalRequest, ToolOutcome } from "./tools.js";
@@ -671,6 +672,8 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
       surface_hash: surfaceHash,
       cwd,
       roles,
+      // The defaults each route resolved to (CONTRACTS §39).
+      resolved: resolvedSessionRecord(config, roles),
       record: auditSettings.record,
       // Which front end. `gnomon task` writes "task"; the terminal writes none.
       mode: "acp",

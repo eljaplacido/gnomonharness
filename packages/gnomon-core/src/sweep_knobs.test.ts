@@ -48,6 +48,7 @@ import {
   resolveReasoningEffort,
   samplingOmitted,
 } from "./sweep_knobs.js";
+import { withMasterRefusal } from "./test_support.js";
 
 const REPO = join(__dirname, "../../..");
 const FIXTURE = JSON.parse(readFileSync(join(REPO, "conformance/sweep_knobs.json"), "utf-8"));
@@ -159,7 +160,10 @@ interface Extra {
 /** Each request body's sha256 (first 12 hex), the Windows platform note cut out. */
 function hashOf(raw: string): string {
   const note = JSON.stringify(platformBlock()).slice(1, -1);
-  return createHash("sha256").update(note ? raw.split(note).join("") : raw).digest("hex").slice(0, 12);
+  // The network refusal was reworded on purpose (CONTRACTS §39): master's
+  // text goes back in, so every other byte is still checked against master.
+  const body = withMasterRefusal(raw);
+  return createHash("sha256").update(note ? body.split(note).join("") : body).digest("hex").slice(0, 12);
 }
 
 /** Every record in the surface's audit trails. */

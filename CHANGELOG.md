@@ -31,7 +31,81 @@ Everything in this section is on master and in no release. The new keys below
 `first_token_timeout_ms`, `[governance]` levels) are **opt-in and unmeasured**:
 the long-task arms that test them (FG1, AS1) were still running when they
 merged, and no result is claimed for any of them yet. With none declared,
-request bodies are master's.
+request bodies are master's — except the network refusal's wording, which the
+long-task tier (a) changes on purpose (below).
+
+### Changed — long-task tier (a), CONTRACTS §39
+
+Local-lane defaults are **unchanged**: replay stays off and steering stays
+`system` on local lanes unless declared. Both were proposed as defaults and
+held back because neither is measured on a local lane (LG1's lane returned no
+reasoning; delivering the idle nudge locally is untested); SW1/LG2 test them.
+
+- **One locality rule.** `endpointLocality` (`loopback`/`private`/`remote`)
+  replaces three predicates (audit 2026-11-06 #11); `isLoopbackEndpoint`
+  (trust), `isLocalEndpoint` (listings, a skill trial's billed check, the
+  `delivered` flag) and `replayLocal` (the replay default: the same host set
+  `isLocalLaneUrl` held) are its tiers. `isLocalEndpoint` now also counts
+  127/8, `*.localhost`, 0/8, link-local, IPv6 private ranges,
+  `host.docker.internal` and single-label names as local; `*.localhost` is not
+  loopback for trust.
+- **Steering delivery is recorded.** Each request records `via` and
+  `delivered` (false for a late system message to a local lane, whose chat
+  templates dropped every one on the three M2 lanes: 1,754/1,754,
+  1,111/1,111, 1,857/1,857, research note 04 §0.6);
+  `counters.model_calls.steer_messages` lists each message once with
+  `{i, kind, via, delivered}`. `steer_role = "user"` remains the opt-in fix.
+- **`session_start.resolved`**: per role, each route's `local`, `replay`
+  (`on`/`on_reasoning`/`off`) and `steer_role`, each with its source
+  (`replay_source: local_lane` marks a local lane off by default, e.g. a
+  relay in front of a hosted model that should declare `replay_reasoning =
+  true`).
+- **The network refusal states what was refused and why** (a default text
+  change). Under `[sandbox] network = false` a bash network call is refused
+  with what the filter refuses and who can grant network; "Do not look for
+  another route to the network" is gone. It was a stop cue (research note 07:
+  4–6 such refusals per arm) that also misdescribed the enforcement (`pip
+  download` passes the same filter). Pinned request hashes put master's text
+  back and hold every other byte.
+
+### Added — long-task tier (a), opt-in
+
+- **`[turn] deadline_note = "plan" | "continue" | "none"`** (**temporary**:
+  deleted after the SW1 sweep, whichever values lose). `"none"` sends no time
+  note at all; the deadline's self-stop stays, and a declared
+  `deliverable_first` names a missing output without a countdown ("…Write a
+  first complete version now, then keep improving it."). It exists because
+  DP1's decision-point replays put the early-stop cue in the countdown, not in
+  the "plan the rest" ending. `"plan"`, the default, is the
+  time notes as before, byte for byte. `"continue"` sends one note at 80%:
+  "There is enough time left for substantial work; keep going and make sure
+  the required outputs exist.", and the deliverable-first note then ends "then
+  keep improving it." instead of riding on a plan-to-finish sentence (research
+  notes 12 §1, 13 finding 2). Unmeasured; SW1's P arm measures it.
+- **`[turn] prompt_profile = "default" | "unattended"`.** Declared only, never
+  inferred (Rule 1). `"unattended"` drops the scaffold's "Verify in proportion
+  to the task …" and "Once it works … stop." sentences, adds "Test edge cases,
+  then submit" and note 12's F3 lines (reproduce a timed gate literally: fresh
+  objects, one cold call, the stated cases and statistic, ≥ 2x margin; for
+  black-box parity compare exact strings over many random probes and round
+  fitted constants), and makes `nudge_after_idle` 0 unless declared. Says on
+  the trail how many sentences it dropped. H2's null (2 vs 2 of 12) is the
+  counter-evidence; SW1's U arm measures it.
+### Fixed — the deliverable extractor (`[turn] deliverable_first`)
+
+- Dependency manifests are no longer named as deliverables ("Write any Python
+  dependencies … to `/app/requirements.txt`"): on cargo-flight-dispatch the
+  extractor named only two legitimately empty files, and on
+  interleaved-vigenere one of its two names was one (research note 13,
+  finding 3). The outputs a named command must leave are named ("the command
+  `x.sh` should … write `/out/y`"; "running `x --output /out/y`"), which gives
+  risk-scorer-replay and cargo-flight-dispatch their real outputs. A named
+  file that exists at the run's start is not checked (`present` on the
+  `named` event). On the 29 P2G41 instructions, against labels revised the
+  same way: precision 30/33 → 34/34, recall 30/34 → 34/34; tasks wrong or
+  empty 11 → 8, and the 8 name no output file. Across all 66 local task
+  instructions, 4 change: these three and payments-pipeline-fix (a
+  dependency manifest).
 
 ### Added
 

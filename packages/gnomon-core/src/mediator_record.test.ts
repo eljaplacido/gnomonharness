@@ -643,6 +643,14 @@ describe("the contract: conformance/mediator_record.json and CONTRACTS.md", () =
         }
         if (c.steer) for (const k of Object.keys(c.steer)) expect(fixture.steer).toContain(k);
         if (c.via) expect(fixture.via).toContain(c.via);
+        // `delivered` goes with `via`, always (CONTRACTS §29, §39).
+        expect("delivered" in c, `call ${c.i} delivered`).toBe("via" in c);
+      }
+      for (const m of sent.steer_messages ?? []) {
+        expect(Object.keys(m).sort()).toEqual([...fixture.sent.steer_message].sort());
+        expect(fixture.steer).toContain(m.kind);
+        expect(fixture.via).toContain(m.via);
+        expect(typeof m.delivered).toBe("boolean");
       }
       const got = record.volatile.model_calls! as unknown as Record<string, any>;
       conforms(got, fixture.received, "volatile.model_calls");

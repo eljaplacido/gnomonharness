@@ -724,8 +724,10 @@ fraction by +0.160 [95% +0.042, +0.293] and cut capped runs from 19 to 14
 H3 measured hosted endpoints only, so **local lanes are untested and off unless
 declared**: an endpoint whose URL host is a loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local, CGNAT/Tailscale (100.64/10), `*.local` or `host.docker.internal` host, a single-label name, or Ollama's `/api/chat` gets no replay by default,
 even when it returns reasoning (llama.cpp with a thinking model, vLLM with a
-reasoning parser, Ollama's `/v1`). Declare `replay_reasoning = true` there to
-turn it on; a fallback is judged by its own URL.
+reasoning parser, Ollama's `/v1`), and so does a relay on a private address in
+front of a hosted model. Declare `replay_reasoning = true` there to turn it on;
+a fallback is judged by its own URL. `session_start.resolved` records what
+each route resolved to and why ([CONTRACTS §39](CONTRACTS.md)).
 
 **Steering role.** gnomon steers a turn with messages of its own: the idle
 nudge, the convergence push, a failed verification, the tool-less wrap-up,
@@ -738,7 +740,10 @@ messages starting `[gnomon] `. The system prompt stays the one system message
 (a summary right after it is folded in), and user messages next to each other
 are sent as one; a note followed by someone else's text in that message ends
 with a `[/gnomon]` line. `steer_role = "system"`, or no line, is the default
-and sends what gnomon always sent. An endpoint that refuses the system form
+and sends what gnomon always sent. Each request's record says `via` and
+`delivered` (`false` for a late system message to a local lane: the three
+local lanes measured dropped every one, so it is not known to arrive). An
+endpoint that refuses the system form
 with a template error is sent the call once more as user messages, and gets
 them that way for the rest of the session. The turn record counts that in
 `counters.steer_role_adapted`, and its `wire` says `steer_role: "user"`. A
@@ -1606,8 +1611,26 @@ off, a turn sends the same request bytes as before.
   do not exist yet: …. Write a first complete version now, then improve it."
   It goes out on the same channel as the time notes. Nothing missing, nothing
   is added. Relative names are read against the working directory, on the
-  filesystem gnomon runs on; directories are never named. The `deliverable_first`
-  audit record lists what was looked for and what was missing at each check.
+  filesystem gnomon runs on; directories are never named. Dependency manifests
+  ("write any Python dependencies to `requirements.txt`") are not outputs; the
+  outputs a named command must write ("the command `x.sh` should … write
+  `/out/y`", "running `x --output /out/y`") are; a named file that already
+  exists when the run starts is not checked. The `deliverable_first` audit
+  record lists what was looked for, what was present at the start, and what
+  was missing at each check.
+- `[turn] deadline_note = "continue"` (**temporary**, for the SW1 sweep; the
+  losing value is deleted after it): one time note at 80% saying "There is
+  enough time left for substantial work; keep going and make sure the required
+  outputs exist.", and a deliverable note ending "then keep improving it."
+  `"none"` sends no time note at all (the deadline still stops the run); a
+  missing output is still named by deliverable-first, without a countdown.
+  `"plan"`, the default, is the notes as before.
+- `[turn] prompt_profile = "unattended"`: for long unattended runs, declared
+  in the surface (never detected). Drops the scaffold's "Verify in proportion
+  …" and "Once it works … stop." sentences, adds "Test edge cases, then
+  submit" and two lines on reproducing a timed gate or a black-box parity check
+  the way a verifier measures it, and turns the idle nudge off unless
+  `nudge_after_idle` is declared. Daily development keeps `"default"`.
 - `[resilience] first_token_timeout_ms`: a streamed request whose first token
   has not arrived in that many milliseconds is aborted and asked again within
   `attempts`, under the same retry budget, without doubling the request

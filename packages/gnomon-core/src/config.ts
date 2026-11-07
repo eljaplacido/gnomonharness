@@ -23,6 +23,13 @@ import { AUTO_WINDOW, rememberedWindow, type ContextSource } from "./context_win
 import { COMPLETION_GATE_MODES, auditCompletionGate } from "./completion_gate.js";
 import { auditSoftShell } from "./soft_shell.js";
 import { auditDeliverableFirst } from "./deliverable_first.js";
+import {
+  CONTINUE_NOTE_AT,
+  auditLongTaskProfile,
+  resolveDeadlineNoteStyle,
+  resolvePromptProfile,
+  type DeadlineNoteStyle,
+} from "./long_task_profile.js";
 import { FINISH_GATE_MODES, auditFinishGate } from "./finish_gate.js";
 import {
   ENV_SNAPSHOT_ID,
@@ -174,8 +181,9 @@ export interface EndpointConfig {
    */
   max_context_tokens?: number | typeof AUTO_WINDOW;
   /**
-   * Send each assistant message's reasoning back as `reasoning_content`. See
-   * resolveReplayReasoning for the default and why it is off almost everywhere.
+   * Send each assistant message's reasoning back as `reasoning_content`.
+   * Undeclared: on once a remote endpoint answers a tool call with reasoning;
+   * off on a local lane (replayFieldsOf).
    */
   replay_reasoning?: boolean;
   /**
@@ -2097,22 +2105,44 @@ const ENDPOINT_KEYS = new Set([
  *
  * Declared wins; anything else is `system`, which is what every surface got
  * before the key existed, so an existing surface sends the same bytes (Rule
- * 1). Whether `user` should be the default is for a benchmark to decide, not
- * this function.
+ * 1). Whether `user` should be the default anywhere is for a benchmark to
+ * decide, not this function.
  *
  * Why the key exists: gnomon's steering arrives as `role: "system"` after the
- * conversation has started, and two common local stacks do not take that.
+ * conversation has started, and the common local stacks do not take that.
  * vLLM serving Qwen3.x refuses the request, 400 "System message must be at the
  * beginning." (M1, 2026-11: 4 of 16 cells ended at their first nudge). Unsloth's
  * qwen3.6 template under llama.cpp has no branch for a system message after
  * the first two and drops it, so the model never sees the steering at all
- * (rendered offline with jinja2, 2026-11-03). The refusal is caught and
- * answered at run time (prompt_loop.ts, steerAsUser); the silent drop cannot
- * be, which is what declaring `user` is for.
+ * (rendered offline with jinja2, 2026-11-03); on the three M2 local lanes
+ * every request that carried a late system message had it dropped (1,754 of
+ * 1,754, 1,111 of 1,111, 1,857 of 1,857; research note 04 §0.6). The refusal
+ * is caught and answered at run time (prompt_loop.ts, steerAsUser); the
+ * silent drop cannot be, which is what declaring `user` is for. A local-lane
+ * default of `user` was considered and left opt-in: delivering the idle nudge
+ * to a local model changes local behaviour no study has measured (LG1's nudge
+ * may never have arrived), and SW1/LG2 test it. Each request records whether
+ * its channel is known to arrive (mediators.ts `delivered`), so the drop is
+ * visible in the record either way.
  */
 export function resolveSteerRole(endpoint: { steer_role?: unknown } | undefined): SteerRole {
+  return steerRoleOf(endpoint).role;
+}
+
+/** resolveSteerRole with its reason: `declared` or `default`. */
+export function steerRoleOf(
+  endpoint: { steer_role?: unknown } | undefined
+): { role: SteerRole; source: "declared" | "default" } {
   const v = endpoint?.steer_role;
-  return typeof v === "string" && (STEER_ROLES as readonly string[]).includes(v) ? (v as SteerRole) : "system";
+  if (typeof v === "string" && (STEER_ROLES as readonly string[]).includes(v)) {
+    return { role: v as SteerRole, source: "declared" };
+  }
+  return { role: "system", source: "default" };
+}
+
+/** The steering fields of a route target: `steerRole`, only when `user` is declared. */
+export function steerFieldsOf(endpoint: { steer_role?: unknown } | undefined): Pick<RouteTarget, "steerRole"> {
+  return steerRoleOf(endpoint).role === "user" ? { steerRole: "user" } : {};
 }
 
 /**
@@ -2133,7 +2163,7 @@ const REPLAY_REASONING_HOSTS = [/(^|\.)api\.deepseek\.com$/];
  * from its first request.
  *
  * Declared wins. Undeclared it is off at the start, except for a host listed
- * above, and on a hosted endpoint turns on at run time once it answers a tool call with
+ * above, and turns on at run time once the endpoint answers a tool call with
  * reasoning (replayFieldsOf, prompt_loop.ts adaptReplayReasoning): the field
  * is not part of OpenAI's message schema and strict servers refuse extra
  * message fields (opencode's Console Go answered gnomon's surplus
@@ -2159,67 +2189,23 @@ export function resolveReplayReasoning(endpoint: {
 }
 
 /**
- * Whether an endpoint URL is a local lane for the reasoning-replay default:
- * the operator's own hardware, where H3 never measured replay.
- *
- * Wider than isLocalEndpoint (which feeds listings and trust and is left
- * alone): loopback (all of 127/8, ::1, localhost, *.localhost, 0.0.0.0), the
- * private ranges (10/8, 172.16/12, 192.168/16, IPv6 fc00::/7), link-local
- * (169.254/16, fe80::/10), CGNAT and Tailscale (100.64/10), `*.local`,
- * `host.docker.internal`, and a bare single-label host (a container or LAN
- * name). A URL that does not parse counts as local, so the default stays off
- * for it: it can only make replay less likely, never more.
- */
-export function isLocalLaneUrl(url: string): boolean {
-  let host: string;
-  try {
-    host = new URL(url).hostname.toLowerCase();
-  } catch {
-    return true;
-  }
-  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
-  if (host === "" || host === "localhost" || host.endsWith(".localhost")) return true;
-  if (host.endsWith(".local") || host === "host.docker.internal") return true;
-  if (host.includes(":")) {
-    // IPv6: loopback, unspecified, unique-local fc00::/7, link-local fe80::/10,
-    // and an IPv4-mapped address judged as its IPv4 part.
-    if (host === "::1" || host === "::") return true;
-    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(host);
-    if (mapped) return isLocalLaneUrl(`http://${mapped[1]}/`);
-    return /^f[cd][0-9a-f]{0,2}:/.test(host) || /^fe[89ab][0-9a-f]?:/.test(host);
-  }
-  const v4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(host);
-  if (v4) {
-    const [a, b] = [Number(v4[1]), Number(v4[2])];
-    return (
-      a === 127 ||
-      a === 10 ||
-      a === 0 ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 169 && b === 254) ||
-      (a === 100 && b >= 64 && b <= 127)
-    );
-  }
-  // A name with no dot is not a public host: a container, a LAN machine.
-  return !host.includes(".");
-}
-
-/**
  * The replay fields of a route target: `replayReasoning`, why it is on, and
  * whether it may still turn on at run time.
  *
- * v0.4.4: undeclared on a HOSTED endpoint means "on once the endpoint shows it
- * reasons". An endpoint that answers a tool call with reasoning content gets
- * it back on every later assistant message, which every 2026 open-weights
- * family asks for. H3 (2026-11-06, pre-registered, hosted DeepSeek V4.1
- * Flash) adopted it: hidden-test fraction +0.160 [95% +0.042, +0.293], capped
- * 14 vs 19 (https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt).
+ * v0.4.4: undeclared on a REMOTE endpoint (endpointLocality) means "on once the
+ * endpoint shows it reasons". An endpoint that answers a tool call with
+ * reasoning content gets it back on every later assistant message, which every
+ * 2026 open-weights family asks for. H3 (2026-11-06, pre-registered, hosted
+ * DeepSeek V4.1 Flash) adopted it: hidden-test fraction +0.160 [95% +0.042,
+ * +0.293], capped 14 vs 19 (https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt).
  * H3 measured hosted endpoints only, and LG1's local lane returned no
- * reasoning, so on a local lane (isLocalLaneUrl, and Ollama's /api/chat) the
- * default is off: replay there is untested and would grow every prompt.
- * `replay_reasoning = true` turns it on anywhere; `false` turns it off. An
- * endpoint that never sends reasoning is never sent any.
+ * reasoning, so on a local lane (endpointLocality `loopback` or `private`, a
+ * URL that does not parse, and Ollama's /api/chat) the default is off: replay
+ * there is untested and would grow every prompt. That includes a relay on a
+ * private address in front of a hosted model, which therefore has to declare
+ * `replay_reasoning = true`; SW1/LG2 test whether the local default should
+ * move. `replay_reasoning = true` turns it on anywhere; `false` turns it off.
+ * An endpoint that never sends reasoning is never sent any.
  */
 export function replayFieldsOf(
   endpoint: { url?: string; kind?: EndpointKind; replay_reasoning?: unknown },
@@ -2228,10 +2214,24 @@ export function replayFieldsOf(
   const on = resolveReplayReasoning(endpoint, unclear);
   const declared = typeof endpoint.replay_reasoning === "boolean";
   if (on) return { replayReasoning: true, replayReasoningSource: declared ? "declared" : "default" };
-  if (declared || endpointKind(endpoint, unclear) === "ollama" || isLocalLaneUrl(endpoint.url ?? "")) {
+  if (declared || endpointKind(endpoint, unclear) === "ollama" || replayLocal(endpoint.url ?? "")) {
     return { replayReasoning: false };
   }
   return { replayReasoning: false, replayReasoningAuto: true };
+}
+
+/**
+ * Local for the replay default: endpointLocality's `loopback` or `private`,
+ * and a URL that does not parse (the default can only be less likely there,
+ * never more, as before v0.4.6).
+ */
+export function replayLocal(url: string): boolean {
+  try {
+    if (!new URL(url).hostname) return true;
+  } catch {
+    return true;
+  }
+  return isLocalEndpoint(url);
 }
 
 /**
@@ -2646,6 +2646,8 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "deadline_margin_ms",
       "deliverable_first",
       "todo_gate",
+      "deadline_note",
+      "prompt_profile",
     ],
   ],
   [
@@ -3250,6 +3252,7 @@ problems.push(...auditFinishGate(config));
 problems.push(...auditSweepKnobs(config, (ep) => endpointKind(ep)));
 problems.push(...auditSoftShell(config));
 problems.push(...auditDeliverableFirst(config));
+problems.push(...auditLongTaskProfile(config));
 
 // [shadow] is log-only, so nothing in it is fatal: a shadow that cannot run
 // changes nothing about the run. What it can do is look like it is recording
@@ -4187,49 +4190,104 @@ export function listEndpoints(config: GnomonConfig): string[] {
 }
 
 /**
- * Whether an endpoint URL is the operator's own hardware rather than a cloud.
+ * Where an endpoint URL points. The ONE "local" rule; every other question
+ * about locality is a tier of this answer.
  *
- * The distinction is the one a reader keeps confusing — a role on a cloud
- * endpoint must name a model that endpoint hosts, never a local Ollama tag —
- * so the listings mark each endpoint local or cloud from this. localhost, the
- * LAN (RFC1918), and Tailscale's CGNAT range (100.64.0.0/10) are all local.
+ * - `loopback`: this machine. localhost, 127/8, ::1, and an IPv4-mapped
+ *   loopback.
+ * - `private`: hardware the operator reaches without the internet.
+ *   `*.localhost`, 0.0.0.0 and ::, the private ranges (10/8, 172.16/12, 192.168/16, fc00::/7),
+ *   link-local (169.254/16, fe80::/10), CGNAT and Tailscale (100.64/10),
+ *   `*.local`, `host.docker.internal`, and a bare single-label name (a
+ *   container or LAN machine).
+ * - `remote`: everything else, and a URL that does not parse.
+ *
+ * Its tiers, and what reads them:
+ * - isLoopbackEndpoint (`loopback`): trust. Only this machine may be sent a key
+ *   or session text without a grant -- anyone on the LAN or the tailnet can
+ *   listen at a private address (seventh review, L3).
+ * - isLocalEndpoint (`loopback` or `private`): the listings' local/cloud mark,
+ *   the billed-endpoint check of a skill trial, the reasoning-replay default
+ *   (replayFieldsOf), and whether a late system message is recorded as
+ *   delivered (mediators.ts).
+ *
+ * Until v0.4.6 there were three predicates with three different host sets
+ * (isLocalEndpoint, isLocalLaneUrl, isLoopbackEndpoint; audit 2026-11-06 #11).
+ * Merging them widened isLocalEndpoint by the hosts only isLocalLaneUrl knew:
+ * 127/8 beyond 127.0.0.1, `*.localhost`, 0/8, link-local, IPv6 private ranges,
+ * `host.docker.internal` and single-label names.
  */
-export function isLocalEndpoint(url: string): boolean {
+export type EndpointLocality = "loopback" | "private" | "remote";
+
+export function endpointLocality(url: string): EndpointLocality {
   let host: string;
   try {
     host = new URL(url).hostname.toLowerCase();
   } catch {
-    return false;
+    return "remote";
   }
-  if (["localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"].includes(host)) return true;
-  if (host.endsWith(".local")) return true;
-  return (
-    /^10\./.test(host) ||
-    /^192\.168\./.test(host) ||
-    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-    /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(host)
-  );
+  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+  if (host === "") return "remote";
+  if (host === "localhost") return "loopback";
+  // `*.localhost` is loopback by RFC 6761, but only a resolver that honours it
+  // makes it so; for trust it is not "this machine" on a name alone.
+  if (host.endsWith(".localhost") || host.endsWith(".local") || host === "host.docker.internal") return "private";
+  if (host.includes(":")) {
+    // IPv6: loopback, unspecified, unique-local fc00::/7, link-local fe80::/10,
+    // and an IPv4-mapped address judged as its IPv4 part.
+    if (host === "::1") return "loopback";
+    if (host === "::") return "private";
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(host);
+    if (mapped) return endpointLocality(`http://${mapped[1]}/`);
+    // WHATWG URL writes an IPv4-mapped address in hex (::ffff:7f00:1).
+    const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(host);
+    if (hex) {
+      const hi = parseInt(hex[1]!, 16);
+      const lo = parseInt(hex[2]!, 16);
+      return endpointLocality(`http://${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}/`);
+    }
+    return /^f[cd][0-9a-f]{0,2}:/.test(host) || /^fe[89ab][0-9a-f]?:/.test(host) ? "private" : "remote";
+  }
+  const v4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(host);
+  if (v4) {
+    const [a, b] = [Number(v4[1]), Number(v4[2])];
+    if (a === 127) return "loopback";
+    return a === 10 ||
+      a === 0 ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 169 && b === 254) ||
+      (a === 100 && b >= 64 && b <= 127)
+      ? "private"
+      : "remote";
+  }
+  // A name with no dot is not a public host: a container, a LAN machine.
+  return host.includes(".") ? "remote" : "private";
 }
 
 /**
- * Whether an endpoint URL is THIS machine: localhost, 127.0.0.0/8, ::1.
+ * Whether an endpoint URL is the operator's own hardware rather than a cloud:
+ * endpointLocality's `loopback` or `private`.
+ *
+ * The distinction is the one a reader keeps confusing — a role on a cloud
+ * endpoint must name a model that endpoint hosts, never a local Ollama tag —
+ * so the listings mark each endpoint local or cloud from this.
+ */
+export function isLocalEndpoint(url: string): boolean {
+  return endpointLocality(url) !== "remote";
+}
+
+/**
+ * Whether an endpoint URL is THIS machine: endpointLocality's `loopback`.
  *
  * What a decision to send a key (or session text) without a grant may
- * count as local (seventh review, L3). isLocalEndpoint's `.local`, RFC1918
- * and CGNAT hosts are local for a listing, but anyone on the LAN or the
- * tailnet can listen there -- and a surface below a contained root is a
- * container's to have written, so `api_key_env` aimed at 10.0.0.5 sent the
- * key there with no grant.
+ * count as local (seventh review, L3). A `private` host is local for a
+ * listing, but anyone on the LAN or the tailnet can listen there -- and a
+ * surface below a contained root is a container's to have written, so
+ * `api_key_env` aimed at 10.0.0.5 sent the key there with no grant.
  */
 export function isLoopbackEndpoint(url: string): boolean {
-  let host: string;
-  try {
-    host = new URL(url).hostname.toLowerCase();
-  } catch {
-    return false;
-  }
-  if (host === "localhost" || host === "::1" || host === "[::1]") return true;
-  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+  return endpointLocality(url) === "loopback";
 }
 
 const KNOWN_PROVIDERS: Array<[RegExp, string]> = [
@@ -4336,7 +4394,7 @@ export function routeRole(
     maxTokens: resolveMaxTokens(config, roleDef, endpoint),
     ...contextWindowOf(config, endpoint.max_context_tokens, { url, kind, model }),
     ...replayFieldsOf(endpoint),
-    ...(resolveSteerRole(endpoint) === "user" ? { steerRole: "user" as const } : {}),
+    ...steerFieldsOf(endpoint),
     // The sweep knobs (sweep_knobs.ts): each absent unless declared, so an
     // undeclared surface builds the target it always did.
     ...knobsOf(roleDef, endpoint, kind),
@@ -4371,7 +4429,7 @@ export function routeRole(
       ...contextWindowOf(config, fbEndpoint?.max_context_tokens, { url: fbUrl, kind: fbKind, model: fb.model }),
       // By its own URL: the one the fallback is actually sent to.
       ...replayFieldsOf({ ...(fbEndpoint ?? {}), url: fbUrl }, "openai"),
-      ...(resolveSteerRole(fbEndpoint) === "user" ? { steerRole: "user" as const } : {}),
+      ...steerFieldsOf(fbEndpoint),
       ...knobsOf(roleDef, fbEndpoint, fbKind),
     };
   }
@@ -5060,8 +5118,11 @@ export function resolveLoop(config: GnomonConfig): ResolvedLoop {
     stall_repeats: Math.max(1, Math.floor(num(l?.stall_repeats, d.stall_repeats))),
     // 0 is off, as 0 is "never" for read_only_converge_after.
     // Any other number is "calls since the last one", floored at 1.
+    // `[turn] prompt_profile = "unattended"` (long_task_profile.ts) makes the
+    // undeclared value 0: no winning long-task harness nudges (research note
+    // 07). A declared number still wins.
     nudge_after_idle: ((n) => (n === 0 ? 0 : Math.max(1, Math.floor(n))))(
-      num(l?.nudge_after_idle, d.nudge_after_idle)
+      num(l?.nudge_after_idle, resolvePromptProfile(config) === "unattended" ? 0 : d.nudge_after_idle)
     ),
     // "Calls since the last one", so 0 would fire on every single call and
     // turn a push into a wall of system messages.
@@ -5089,9 +5150,16 @@ export interface ResolvedDeadline {
    * a short deadline keeps most of its time.
    */
   margin_ms: number;
+  /**
+   * `[turn] deadline_note` (long_task_profile.ts): the note's wording.
+   * "plan", the default, is §31's text; "none" sends no time note (notes is
+   * [], the self-stop stays); "continue" sends one note at 0.8
+   * saying to keep going, and `notes` is then [0.8]. Temporary, for SW1.
+   */
+  style: DeadlineNoteStyle;
 }
 
-export const DEADLINE_DEFAULTS: ResolvedDeadline = { notes: [0.5, 0.8], margin_ms: 30_000 };
+export const DEADLINE_DEFAULTS: ResolvedDeadline = { notes: [0.5, 0.8], margin_ms: 30_000, style: "plan" };
 
 export function resolveDeadline(config: GnomonConfig): ResolvedDeadline {
   const t = (config.config as { turn?: Record<string, unknown> } | undefined)?.turn;
@@ -5101,7 +5169,8 @@ export function resolveDeadline(config: GnomonConfig): ResolvedDeadline {
     : DEADLINE_DEFAULTS.notes;
   const m = t?.deadline_margin_ms;
   const margin_ms = typeof m === "number" && isFinite(m) && m >= 0 ? Math.floor(m) : DEADLINE_DEFAULTS.margin_ms;
-  return { notes, margin_ms };
+  const style = resolveDeadlineNoteStyle(config);
+  return { notes: style === "continue" ? [...CONTINUE_NOTE_AT] : style === "none" ? [] : notes, margin_ms, style };
 }
 
 /**

@@ -9,7 +9,11 @@
     "instruction tells the agent to write (labelled by hand before the extractor was run on them).",
     "The instructions themselves are not in this repository (benchmark canary); the test reads them from",
     "GNOMON_P2G_DATASET, or the default local path, and skips the comparison where they are absent.",
-    "not_extracted: what the labelling found and the extractor leaves out on purpose."
+    "not_extracted: what the labelling found and the extractor leaves out on purpose.",
+    "Relabelled 2026-11-07 (v0.4.6, research note 13 finding 3): dependency manifests are not deliverables; outputs a named",
+    "command must write (\"the command `x` should ... write\", \"running `x --output <file>`\") are. Against these labels the",
+    "extractor before scored precision 30/33, recall 30/34 (11 of 29 tasks wrong or empty); after, 34/34 and 34/34 (8 tasks",
+    "correctly empty: they name no output file). A named path present at the run's start is recorded as `present` and not checked."
   ],
   "key": "config.toml [turn] deliverable_first",
   "values": [
@@ -50,6 +54,7 @@
     "named_fields": [
       "event",
       "named",
+      "present",
       "at"
     ],
     "check_fields": [
@@ -110,8 +115,7 @@
     "cargo-flight-dispatch": {
       "sha256_16": "a7b0333a36ba0889",
       "expected": [
-        "/app/requirements.txt",
-        "/app/apt-packages.txt"
+        "/output/flight_plan.json"
       ]
     },
     "data-anonymization": {
@@ -136,8 +140,7 @@
     "interleaved-vigenere": {
       "sha256_16": "d9a28686a9f18d5f",
       "expected": [
-        "/app/cracker.py",
-        "/app/requirements.txt"
+        "/app/cracker.py"
       ]
     },
     "lake-temp-glm": {
@@ -207,7 +210,11 @@
     },
     "risk-scorer-replay": {
       "sha256_16": "78cfe68f132a464c",
-      "expected": []
+      "expected": [
+        "/app/output/parity_scores.csv",
+        "/app/output/parity_summary.json",
+        "/app/output/scorer_audit.sqlite"
+      ]
     },
     "roy-polymorph-cn": {
       "sha256_16": "da944cb2cafd1183",
@@ -253,20 +260,32 @@
     }
   },
   "p2g_score": {
-    "labelled": 33,
-    "extracted": 33,
-    "correct": 33,
+    "labelled": 34,
+    "extracted": 34,
+    "correct": 34,
     "precision": 1.0,
     "recall": 1.0
   },
   "not_extracted": {
     "retro-console-soc": "/app/src: a directory deliverable; directories are never named",
     "bun-sourcemap-leak": "/app/dist/release-manifest.json (and client-entry.js, server-entry.js): written by bun run release, described not instructed",
-    "cargo-flight-dispatch": "/output/flight_plan.json: written by the fixed program when run",
     "production-planning": "/app/output/audit.log: written by the gateway",
-    "risk-scorer-replay": "/app/output/parity_scores.csv, parity_summary.json, scorer_audit.sqlite: the command should write them",
     "react-lead-form": "/app/output/*.json: conditional outputs of the pipeline (accepted, incomplete, rejected)",
     "vpp-loss-divergence": "/app/output/loss_trace.pt: the harness writes it",
-    "ontology-kg-querying": "unified.ttl: written by pipeline.py into the target directory"
+    "ontology-kg-querying": "unified.ttl: written by pipeline.py into the target directory",
+    "cargo-flight-dispatch": "/app/requirements.txt, /app/apt-packages.txt: dependency manifests (\"Write any Python dependencies ... to\"), legitimately empty; not outputs (v0.4.6)",
+    "interleaved-vigenere": "/app/requirements.txt: a dependency manifest (\"may be empty\"), not an output (v0.4.6)"
+  },
+  "dependency_words": [
+    "dependencies",
+    "dependency",
+    "packages"
+  ],
+  "continue_note": "These required outputs do not exist yet: {paths}. Write a first complete version now, then keep improving it.",
+  "p2g_score_before_v046": {
+    "labelled": 34,
+    "extracted": 33,
+    "correct": 30,
+    "tasks_wrong_or_empty": 11
   }
 }

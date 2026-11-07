@@ -1,0 +1,139 @@
+{
+  "v": 1,
+  "_comment": [
+    "docs/CONTRACTS.md section 39: long-task tier (a) -- the one locality rule, reasoning replay where",
+    "a remote endpoint returns reasoning (local lanes unchanged, opt-in until SW1/LG2), the delivered flag on steering, the factual network",
+    "refusal, the temporary [turn] deadline_note key and the opt-in [turn] prompt_profile = \"unattended\".",
+    "packages/gnomon-core/src/long_task_profile.test.ts asserts the code equals this file.",
+    "deadline_note is TEMPORARY: it exists for the SW1 sweep and the losing value is deleted after SW1."
+  ],
+  "locality": {
+    "tiers": [
+      "loopback",
+      "private",
+      "remote"
+    ],
+    "readers": {
+      "isLoopbackEndpoint": [
+        "loopback"
+      ],
+      "isLocalEndpoint": [
+        "loopback",
+        "private"
+      ],
+      "replayLocal": [
+        "loopback",
+        "private",
+        "unparseable"
+      ]
+    }
+  },
+  "replay": {
+    "rule": "an OpenAI-shaped endpoint that does not declare replay_reasoning is sent its reasoning back from the request after it first answers a tool call with reasoning, on a REMOTE host; off on a local lane (loopback, private, or a URL that does not parse) unless declared; SW1/LG2 test the local default",
+    "session_start_values": [
+      "on",
+      "on_reasoning",
+      "off"
+    ],
+    "session_start_sources": [
+      "declared",
+      "default",
+      "local_lane",
+      "ollama_route"
+    ]
+  },
+  "steering": {
+    "default": "system",
+    "sources": [
+      "declared",
+      "default"
+    ],
+    "call_keys": [
+      "via",
+      "delivered"
+    ],
+    "steer_message_keys": [
+      "i",
+      "kind",
+      "via",
+      "delivered"
+    ],
+    "delivered": "true for user content and for a late system message to a remote host; false for a late system message to a local lane"
+  },
+  "session_start": {
+    "key": "resolved",
+    "keys": [
+      "routes",
+      "prompt_profile"
+    ],
+    "route_keys": [
+      "target",
+      "fallback"
+    ],
+    "target_keys": [
+      "endpoint",
+      "model",
+      "local",
+      "replay",
+      "replay_source",
+      "steer_role",
+      "steer_role_source"
+    ],
+    "prompt_profile_keys": [
+      "name",
+      "dropped"
+    ]
+  },
+  "network_refusal": {
+    "removed": "Do not look for another route to the network",
+    "rule": "network"
+  },
+  "deadline_note": {
+    "key": "config.toml [turn] deadline_note",
+    "values": [
+      "plan",
+      "continue",
+      "none"
+    ],
+    "default": "plan",
+    "continue_at": [
+      0.8
+    ],
+    "session_start_field": "note",
+    "temporary": true,
+    "text": {
+      "plan": "Time check: about {left} of this task's {total} remain before it is stopped. Plan the rest of the work, and checking it, to finish inside that.",
+      "continue": "Time check: about {left} of this task's {total} remain before it is stopped. There is enough time left for substantial work; keep going and make sure the required outputs exist.",
+      "none": ""
+    },
+    "none": {
+      "notes": [],
+      "deliverable_note": "These required outputs do not exist yet: {paths}. Write a first complete version now, then keep improving it.",
+      "self_stop": "unchanged",
+      "why": "DP1 (bench/peers-2026-11 benchmarks/results/dp1-2026-11/SUMMARY.txt): the early-stop cue is the countdown, not the 'plan the rest' ending"
+    }
+  },
+  "prompt_profile": {
+    "key": "config.toml [turn] prompt_profile",
+    "values": [
+      "default",
+      "unattended"
+    ],
+    "default": "default",
+    "unattended": {
+      "nudge_after_idle": 0,
+      "drops": [
+        "Verify in proportion to the task: do not build test suites, helper scripts or extra checks nobody asked for, and do not re-check what already passed.",
+        "Once it works and the task's requirements are met, stop."
+      ],
+      "block_heading": "## Unattended run",
+      "block_lines": [
+        "Test edge cases, then submit.",
+        "one cold call each",
+        "at least a 2x margin",
+        "compare exact output strings over many random probes",
+        "round fitted constants"
+      ]
+    }
+  }
+}

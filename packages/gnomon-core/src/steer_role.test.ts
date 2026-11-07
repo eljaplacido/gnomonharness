@@ -511,3 +511,30 @@ describe("a turn with no refusal and nothing declared", () => {
     expect(turnRecords(root)[0]!.wire).not.toHaveProperty("steer_role");
   });
 });
+
+describe("delivery is recorded (CONTRACTS §39): the channel stays as declared", () => {
+  it("a local lane, nothing declared: system messages, as before, recorded as not known to arrive", async () => {
+    const { url, bodies } = await serve((body, n) =>
+      body.messages.filter((m: { role: string }) => m.role === "tool").length < 1 ? readCall(n) : answer("done")
+    );
+    const rec = await runTask(loadConfig(surface(url)), "read f1.txt", { role: "smol", yes: true });
+    expect(bodies[1]!.messages.at(-1)).toMatchObject({ role: "system" });
+    expect(rec.counters.model_calls!.calls[1]).toMatchObject({ via: "system", delivered: false });
+    expect(rec.counters.model_calls!.steer_messages).toEqual([{ i: 2, kind: "nudge", via: "system", delivered: false }]);
+  });
+
+  it("steer_role = \"user\" declared on a local lane: user content, recorded as delivered", async () => {
+    const { url, bodies } = await serve((body, n) =>
+      body.messages.filter((m: { role: string }) => m.role === "tool").length < 1 ? readCall(n) : answer("done")
+    );
+    const rec = await runTask(loadConfig(surface(url, { endpoint: 'steer_role = "user"' })), "read f1.txt", { role: "smol", yes: true });
+    expect(bodies[1]!.messages.at(-1)).toMatchObject({ role: "user" });
+    expect(rec.counters.model_calls!.steer_messages).toEqual([{ i: 2, kind: "nudge", via: "user", delivered: true }]);
+  });
+
+  it("the undeclared role is system wherever the endpoint is", () => {
+    for (const u of ["http://127.0.0.1:8080/v1", "http://10.0.0.5:8080/v1", "https://api.deepseek.com/v1"]) {
+      expect(resolveSteerRole({ url: u } as never), u).toBe("system");
+    }
+  });
+});

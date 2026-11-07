@@ -41,6 +41,7 @@ import {
   frameHeader,
   resolveSoftTimeout,
 } from "./soft_shell.js";
+import { withMasterRefusal } from "./test_support.js";
 
 const REPO = join(__dirname, "../../..");
 const FIXTURE = JSON.parse(readFileSync(join(REPO, "conformance/soft_shell.json"), "utf-8"));
@@ -159,7 +160,10 @@ function reply(kind: Kind, n: number, steps: Step[]): unknown {
 
 function hashOf(raw: string): string {
   const note = JSON.stringify(platformBlock()).slice(1, -1);
-  return createHash("sha256").update(note ? raw.split(note).join("") : raw).digest("hex").slice(0, 12);
+  // The network refusal was reworded on purpose (CONTRACTS §39): master's
+  // text goes back in, so every other byte is still checked against master.
+  const body = withMasterRefusal(raw);
+  return createHash("sha256").update(note ? body.split(note).join("") : body).digest("hex").slice(0, 12);
 }
 
 function trail(root: string): Array<Record<string, any>> {
