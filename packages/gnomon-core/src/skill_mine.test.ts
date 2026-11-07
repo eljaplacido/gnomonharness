@@ -249,6 +249,7 @@ describe("gnomon skill mine", () => {
       { tool: "bash", target: "printenv TOKEN", pre: bashPrecheck({ command: "printenv TOKEN" }, ctx(declared)) },
       { tool: "write", target: ".github/workflows/x.yml", pre: refusalOf(writePrecheck("write", { path: ".github/workflows/x.yml", content: "" }, ctx(declared))) },
       { tool: "bash", target: "echo x >> .github/workflows/x.yml", pre: bashPrecheck({ command: "echo x >> .github/workflows/x.yml" }, ctx(declared)) },
+      { tool: "bash", target: "echo x > ../escaped.txt", pre: bashPrecheck({ command: "echo x > ../escaped.txt" }, ctx(declared)) },
     ];
     // Two refusals come from executeTool itself rather than a precheck: a tool
     // the role was not given, and arguments that are not one JSON object.

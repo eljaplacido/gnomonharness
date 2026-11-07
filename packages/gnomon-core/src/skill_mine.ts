@@ -167,6 +167,7 @@ export function classifyRefusal(
     [/refused \(gnomon's records\)$/, "record"],
     [/refused \(git hooks\)$/, "git_hooks"],
     [/refused \(host hooks\)$/, "host_hooks"],
+    [/refused \(outside the root\)$/, "outside_root"],
     [/refused \(secret path\)$/, "secret_path"],
     [/refused \(CI path\)$/, "ci_path"],
   ];

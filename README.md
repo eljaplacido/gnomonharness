@@ -93,8 +93,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3104 TypeScript tests (2571 core, 508 cli, 18
-> natives, 7 tui) and 63 Rust tests — **3167 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3139 TypeScript tests (2606 core, 508 cli, 18
+> natives, 7 tui) and 63 Rust tests — **3202 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2586,6 +2586,16 @@ writes to CI definitions (`.github/workflows`, `.gitlab-ci.yml`, `.circleci`,
 levelled like any family (`ci = "advise"` to warn first). A surface with no
 `[governance]` gets neither, exactly as before. Contract:
 [CONTRACTS.md §37](docs/CONTRACTS.md).
+
+**Outside the root.** The same declaration bounds the shell the way the write
+and edit tools were always bounded: a command that writes or removes a file
+outside the repository — `rm -rf ../other-project`, `echo … >> ~/.bashrc`,
+`cp x ../sibling/`, `find .. -delete`, `chmod -R 777 ~/x`, a literal path in
+`python3 -c` — is refused as `outside_root` (family `write`). Temp space stays
+scratch, `[sandbox] extra_roots` grants another directory, and reads are not
+affected. It reads the command's text, so a script file that writes elsewhere
+is not refused by it (containment is `[sandbox] exec`). Contract:
+[CONTRACTS.md §38](docs/CONTRACTS.md).
 
 **What this does and does not pin.** gnomon decides each tool call the other
 agent proposes; it does not steer, re-prompt or constrain the agent itself,

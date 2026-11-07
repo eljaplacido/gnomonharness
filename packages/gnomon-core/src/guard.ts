@@ -106,6 +106,7 @@ export const GUARD_RULES = [
   "git_hooks",
   "host_hooks",
   "write_allow",
+  "outside_root",
   "secret_path",
   "ci_path",
   "network",
