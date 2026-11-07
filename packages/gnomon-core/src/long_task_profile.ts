@@ -2,7 +2,7 @@
  * Two declared opt-ins for unattended long tasks (docs/CONTRACTS.md §39,
  * conformance/long_task_profile.json):
  *
- * - `[turn] deadline_note = "plan" | "continue"`: the wording and timing of the
+ * - `[turn] deadline_note = "plan" | "continue" | "none"`: the wording and timing of the
  *   `--deadline` time note. TEMPORARY: it exists so the SW1 sweep can test
  *   one wording against the other on one build, and the losing value is
  *   deleted after SW1 (research note convergence-synthesis-2026-11-07 §5a a6).
@@ -44,7 +44,7 @@
  */
 import type { GnomonConfig } from "./config.js";
 
-export const DEADLINE_NOTE_STYLES = ["plan", "continue"] as const;
+export const DEADLINE_NOTE_STYLES = ["plan", "continue", "none"] as const;
 export type DeadlineNoteStyle = (typeof DEADLINE_NOTE_STYLES)[number];
 
 export const PROMPT_PROFILES = ["default", "unattended"] as const;
@@ -55,9 +55,15 @@ export const CONTINUE_NOTE_AT: readonly number[] = [0.8];
 
 /**
  * The time note's text. `plan` is the text every `--deadline` run has sent
- * since §31, byte for byte; `continue` is the SW1 alternative.
+ * since §31, byte for byte; `continue` is the SW1 alternative. `none` sends no
+ * time note at all (its deliverable-first note goes out alone, without a
+ * countdown): DP1's decision-point replays put the early-stop cue in the
+ * countdown itself ("about N of 29m remain"), not in the "plan the rest"
+ * ending, and swapping the ending to `continue` barely changed it. Never
+ * called for `none`; given it, it returns "".
  */
 export function deadlineNoteText(style: DeadlineNoteStyle, left: string, total: string): string {
+  if (style === "none") return "";
   const head = `Time check: about ${left} of this task's ${total} remain before it is stopped. `;
   return style === "continue"
     ? head + `There is enough time left for substantial work; keep going and make sure the required outputs exist.`
@@ -96,7 +102,7 @@ export const UNATTENDED_BLOCK =
 /** `[turn] deadline_note`, resolved: "plan" unless "continue" is declared. */
 export function resolveDeadlineNoteStyle(config: GnomonConfig): DeadlineNoteStyle {
   const v = turnOf(config)?.deadline_note;
-  return v === "continue" ? "continue" : "plan";
+  return v === "continue" || v === "none" ? v : "plan";
 }
 
 /** `[turn] prompt_profile`, resolved: "default" unless "unattended" is declared. */
@@ -144,14 +150,17 @@ export function auditLongTaskProfile(
   if (note !== undefined && !(DEADLINE_NOTE_STYLES as readonly unknown[]).includes(note)) {
     out.push({
       where: ".gnomon/config.toml [turn] deadline_note",
-      problem: `deadline_note = ${JSON.stringify(note)} is not "plan" or "continue". Refused rather than run with a time note the surface did not ask for.`,
-      fix: 'deadline_note = "continue" (one note at 0.8: keep going), or "plan" (the default).',
+      problem: `deadline_note = ${JSON.stringify(note)} is not "plan", "continue" or "none". Refused rather than run with a time note the surface did not ask for.`,
+      fix: 'deadline_note = "continue" (one note at 0.8: keep going), "none" (no time note), or "plan" (the default).',
       fatal: true,
     });
-  } else if (note === "continue" && t?.deadline_notes !== undefined) {
+  } else if ((note === "continue" || note === "none") && t?.deadline_notes !== undefined) {
     out.push({
       where: ".gnomon/config.toml [turn] deadline_notes",
-      problem: `deadline_notes is not read under deadline_note = "continue": that style sends one note, at ${CONTINUE_NOTE_AT.join(", ")} of the budget.`,
+      problem:
+        note === "continue"
+          ? `deadline_notes is not read under deadline_note = "continue": that style sends one note, at ${CONTINUE_NOTE_AT.join(", ")} of the budget.`
+          : `deadline_notes is not read under deadline_note = "none": that style sends no time note.`,
       fix: 'Remove deadline_notes, or use deadline_note = "plan".',
       fatal: false,
     });

@@ -211,9 +211,9 @@ Rule `outside_root` (CONTRACTS.md §38):
 
 ### Long-task tier (a) against the rules (added 2026-11-07)
 
-One locality rule, replay wherever reasoning comes back, steering delivery on
-local lanes, the factual network refusal, `[turn] deadline_note`,
-`[turn] prompt_profile` (CONTRACTS.md §39):
+One locality rule, the recorded `delivered` flag and resolved defaults, the
+factual network refusal, `[turn] deadline_note`, `[turn] prompt_profile`
+(CONTRACTS.md §39):
 
 | Rule | Kept? | Note |
 |---|---|---|
@@ -223,21 +223,26 @@ local lanes, the factual network refusal, `[turn] deadline_note`,
 | 4 Buckets | Kept | A refusal is still a refusal (`rule: network`) |
 | 5 Exit contract | Kept | No exit changes |
 | 6 Enumerations | Extended | `endpointLocality` tiers, `deadline_note` and `prompt_profile` values, `session_start.resolved` values (`conformance/long_task_profile.json`) |
-| Behaviour changed ⇒ hash changed | **Drift, declared and recorded** | Two defaults move under an unchanged surface hash: replay on local lanes and private relays, and the steering channel on local lanes. Same shape as v0.4.4's hosted replay default: a build default, not a surface value. Mitigation: the harness build is on every record, and every session now records the resolved value and its reason per route (`session_start.resolved`: `replay`/`replay_source`, `steer_role`/`steer_role_source`, `local`), every request records `via`/`delivered`, and each default is restored by one declared line (`replay_reasoning = false`, `steer_role = "system"`). The network refusal's wording is a default text change of the same kind (pinned tests put master's text back and hold every other byte) |
+| Behaviour changed ⇒ hash changed | Kept, one declared text change | Replay and the steering channel keep their defaults on local lanes (the change was proposed and held back, below). The network refusal's wording is the one default that moves under an unchanged hash: a tool-result text, pinned by tests that put master's text back and hold every other byte |
 
-**Why the two defaults move instead of waiting for a measurement.**
-- *Steering on local lanes* is a defect fix: the surface declared steering
-  that the measured local templates dropped on 100% of requests (research
-  note 04 §0.6), so behaviour and declaration had already diverged silently.
-  The fix makes the declared behaviour happen and records whether it can.
-  What it changes is unmeasured: LG1's local nudge result may have been
-  measured with a nudge that never arrived.
-- *Replay on local lanes* removes an inconsistency the constitution cannot
-  accept: the same surface replayed against a hosted URL and not when the
-  same model sat behind a relay on 10.0.0.5. The evidence for replay (H3 +0.160,
-  HLB 91% vs 0% dropped) is hosted; on a local lane it is untested and said so.
-  An endpoint that returns no reasoning is unaffected, which is every lane LG1
-  measured.
+**Held back, on the rule that defaults move only on measured evidence.**
+Defaulting local lanes to replay and to user-role steering was proposed
+(synthesis a2/a3) and is not in this change: replay's evidence (H3, the
+leaderboard logs) is hosted, and LG1's local lane never returned reasoning;
+delivering the idle nudge to a local model changes local behaviour no study
+has measured (LG1's nudge result may have been taken with a nudge that never
+arrived). Both stay one declared line away (`replay_reasoning = true`,
+`steer_role = "user"`), and SW1/LG2 test them. What does land is the
+measurement: every request now records `via` and `delivered`, and every
+session records what each route resolved to and why (`session_start.resolved`),
+so the silent divergence between declared and delivered steering is at least
+visible in the record.
+
+**Drift left in place, recorded.** A relay on a private address in front of
+a hosted model is a local lane by URL, so it does not replay unless it
+declares `replay_reasoning = true` — the "same surface replays on a hosted URL
+but not behind a private relay" inconsistency. It is now explicit in
+`session_start.resolved` (`replay_source: local_lane`), not hidden.
 
 **Not done, on purpose.** A per-endpoint `local = true|false` override key:
 `steer_role` and `replay_reasoning` already override each default where the

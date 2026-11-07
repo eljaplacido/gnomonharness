@@ -12,12 +12,8 @@
  *
  * `[endpoints.<name>] steer_role = "user"` sends them as user messages marked
  * `[gnomon] `. A refusal of the system form is answered once, in that form,
- * and remembered for the session. On a remote endpoint the default request is
- * unchanged, byte for byte. Since v0.4.6 a local lane (endpointLocality) sends
- * them as user messages unless it declares `steer_role = "system"`: the M2
- * local templates dropped every late system message (research note 04 §0.6).
- * Every server here is a fake on 127.0.0.1, reached under a hosted-looking
- * name except where the local-lane default is the subject.
+ * and remembered for the session. The default request is unchanged, byte for
+ * byte. Every server here is a fake on 127.0.0.1.
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
@@ -39,12 +35,10 @@ import {
   type ChatMessage,
 } from "./prompt_loop.js";
 import { auditSurface, loadConfig, resolveSteerRole, routeRole, type RouteTarget } from "./config.js";
-import { hostedUrl, restoreFetch } from "./test_support.js";
 
 let servers: Server[] = [];
 const roots: string[] = [];
 afterEach(async () => {
-  restoreFetch();
   for (const s of servers) {
     s.closeAllConnections?.();
     await new Promise<void>((r) => s.close(() => r()));
@@ -75,13 +69,8 @@ async function serve(reply: (body: Record<string, any>, n: number) => Reply) {
   });
   servers.push(server);
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
-  const localUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/chat/completions`;
   return {
-    // A remote-looking host: what this file tests is the system channel and
-    // its refusal, which is what a remote endpoint gets undeclared. A
-    // loopback URL is a local lane, whose default is the user role (below).
-    url: hostedUrl(localUrl),
-    localUrl,
+    url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/chat/completions`,
     bodies,
     raws,
     statuses,
@@ -523,47 +512,29 @@ describe("a turn with no refusal and nothing declared", () => {
   });
 });
 
-describe("a local lane, nothing declared (v0.4.6)", () => {
-  it("routes with steer_role user from the start, and says why; declared system keeps system", async () => {
-    const { localUrl } = await serve(() => answer("ok"));
-    const bare = routeRole(loadConfig(surface(localUrl)), "smol").target;
-    expect(bare).toMatchObject({ steerRole: "user", steerRoleSource: "local_lane" });
-    expect(wireOf(bare).steer_role).toBe("user");
-    const sys = routeRole(loadConfig(surface(localUrl, { endpoint: 'steer_role = "system"' })), "smol").target;
-    expect("steerRole" in sys).toBe(false);
-    const user = routeRole(loadConfig(surface(localUrl, { endpoint: 'steer_role = "user"' })), "smol").target;
-    expect(user).toMatchObject({ steerRole: "user", steerRoleSource: "declared" });
-    for (const u of ["http://10.0.0.5:8080/v1/chat/completions", "http://llama:8080/v1/chat/completions", "http://gx10.local:11434/api/chat"]) {
-      expect(resolveSteerRole(undefined, u), u).toBe("user");
-    }
-    expect(resolveSteerRole(undefined, "https://api.deepseek.com/chat/completions")).toBe("system");
-    expect(resolveSteerRole({ steer_role: "system" }, "http://127.0.0.1:8080/v1")).toBe("system");
-  });
-
-  it("sends the steering as user content, never refused for it, and records each message as delivered", async () => {
-    const { localUrl, bodies } = await serve((body, n) =>
+describe("delivery is recorded (CONTRACTS §39): the channel stays as declared", () => {
+  it("a local lane, nothing declared: system messages, as before, recorded as not known to arrive", async () => {
+    const { url, bodies } = await serve((body, n) =>
       body.messages.filter((m: { role: string }) => m.role === "tool").length < 1 ? readCall(n) : answer("done")
     );
-    const root = surface(localUrl);
-    const rec = await runTask(loadConfig(root), "read f1.txt", { role: "smol", yes: true });
-    expect(rec.code).toBe(0);
-    expect(bodies.every((b) => !late(b))).toBe(true);
-    expect(bodies[1]!.messages.at(-1)).toMatchObject({ role: "user" });
-    expect(bodies[1]!.messages.at(-1)!.content).toMatch(/^\[gnomon\] You have run 1 tool calls/);
-    expect(rec.counters).not.toHaveProperty("steer_role_adapted");
-    expect(turnRecords(root)[0]!.wire.steer_role).toBe("user");
-    const mc = rec.counters.model_calls!;
-    expect(mc.calls[1]).toMatchObject({ via: "user", delivered: true });
-    expect(mc.steer_messages).toEqual([{ i: 2, kind: "nudge", via: "user", delivered: true }]);
-  });
-
-  it("declared system on a local lane: master's system message, recorded as not known to arrive", async () => {
-    const { localUrl, bodies } = await serve((body, n) =>
-      body.messages.filter((m: { role: string }) => m.role === "tool").length < 1 ? readCall(n) : answer("done")
-    );
-    const rec = await runTask(loadConfig(surface(localUrl, { endpoint: 'steer_role = "system"' })), "read f1.txt", { role: "smol", yes: true });
+    const rec = await runTask(loadConfig(surface(url)), "read f1.txt", { role: "smol", yes: true });
     expect(bodies[1]!.messages.at(-1)).toMatchObject({ role: "system" });
     expect(rec.counters.model_calls!.calls[1]).toMatchObject({ via: "system", delivered: false });
     expect(rec.counters.model_calls!.steer_messages).toEqual([{ i: 2, kind: "nudge", via: "system", delivered: false }]);
+  });
+
+  it("steer_role = \"user\" declared on a local lane: user content, recorded as delivered", async () => {
+    const { url, bodies } = await serve((body, n) =>
+      body.messages.filter((m: { role: string }) => m.role === "tool").length < 1 ? readCall(n) : answer("done")
+    );
+    const rec = await runTask(loadConfig(surface(url, { endpoint: 'steer_role = "user"' })), "read f1.txt", { role: "smol", yes: true });
+    expect(bodies[1]!.messages.at(-1)).toMatchObject({ role: "user" });
+    expect(rec.counters.model_calls!.steer_messages).toEqual([{ i: 2, kind: "nudge", via: "user", delivered: true }]);
+  });
+
+  it("the undeclared role is system wherever the endpoint is", () => {
+    for (const u of ["http://127.0.0.1:8080/v1", "http://10.0.0.5:8080/v1", "https://api.deepseek.com/v1"]) {
+      expect(resolveSteerRole({ url: u } as never), u).toBe("system");
+    }
   });
 });

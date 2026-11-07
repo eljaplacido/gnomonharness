@@ -589,9 +589,7 @@ describe("[turn] todo_gate", () => {
   });
 
   it("hands the turn back once, naming the open items; an answer that leaves them open is accepted as exhausted", async () => {
-    // steer_role = "system" declared: the fake is on 127.0.0.1, a local lane,
-    // whose undeclared channel is the user role (CONTRACTS §39).
-    const r = await scripted("openai", { turn: "todo_gate = true\n", endpoint: 'steer_role = "system"\n' }, [TODO, { answer: "done" }, { answer: "done, really" }]);
+    const r = await scripted("openai", { turn: "todo_gate = true\n" }, [TODO, { answer: "done" }, { answer: "done, really" }]);
     expect(r.bodies).toHaveLength(3);
     const last = r.bodies[2]!.messages.at(-1);
     expect(last.role).toBe("system");

@@ -4631,7 +4631,7 @@ export function buildSystemPrompt(
  * One route target's resolved defaults, for `session_start.resolved`: where
  * it is by the one locality rule, whether its reasoning is replayed, and the
  * channel its steering goes out on -- each with the reason. The defaults
- * these settle moved in v0.4.6 (CONTRACTS §39), so the trail says, per
+ * these settle (CONTRACTS §39) depend on where the endpoint is, so the trail says, per
  * session, what each one resolved to rather than leave a reader to re-derive
  * it from the surface and the build.
  */
@@ -4642,10 +4642,10 @@ export interface ResolvedTargetRecord {
   local: boolean;
   /** `on` from the first request; `on_reasoning` from the request after the first tool call answered with reasoning; `off` */
   replay: "on" | "on_reasoning" | "off";
-  /** `declared`; `default` (gnomon's rule); `ollama_route` (Ollama's /api/chat: no reasoning is read there) */
-  replay_source: "declared" | "default" | "ollama_route";
+  /** `declared`; `default` (gnomon's rule, remote); `local_lane` (off by default on a local lane); `ollama_route` (Ollama's /api/chat: no reasoning is read there) */
+  replay_source: "declared" | "default" | "local_lane" | "ollama_route";
   steer_role: "system" | "user";
-  steer_role_source: "declared" | "local_lane" | "default";
+  steer_role_source: "declared" | "default";
 }
 
 export function resolvedTargetRecord(config: GnomonConfig, t: RouteTarget): ResolvedTargetRecord {
@@ -4655,7 +4655,8 @@ export function resolvedTargetRecord(config: GnomonConfig, t: RouteTarget): Reso
   } catch {
     declared = undefined;
   }
-  const steer = steerRoleOf(declared, t.url);
+  const steer = steerRoleOf(declared);
+  const replayDeclared = typeof declared?.replay_reasoning === "boolean";
   return {
     ...(t.endpoint ? { endpoint: t.endpoint } : {}),
     model: t.model,
@@ -4667,7 +4668,9 @@ export function resolvedTargetRecord(config: GnomonConfig, t: RouteTarget): Reso
         ? "default"
         : (t.kind ?? "ollama") === "ollama"
           ? "ollama_route"
-          : "declared",
+          : replayDeclared
+            ? "declared"
+            : "local_lane",
     steer_role: steer.role,
     steer_role_source: steer.source,
   };
@@ -5929,12 +5932,17 @@ async function agenticTurn(
           say(paint(deps.ui, "gray", `  [deadline] ${formatSpan(left)} left of ${formatSpan(d.total_ms)} — noting it`));
         }
         // The wording is `[turn] deadline_note` (long_task_profile.ts):
-        // "plan" is the text §31 always sent, byte for byte.
+        // "plan" is the text §31 always sent, byte for byte. "none" has no
+        // time note (no fraction is crossed), so only a missing output is
+        // said, with no countdown before it.
+        const style = d.style ?? "plan";
         working.push({
           role: "system",
           content:
-            deadlineNoteText(d.style ?? "plan", formatSpan(left), formatSpan(d.total_ms)) +
-            (missing.length > 0 ? ` ${deliverableNote(missing, d.style ?? "plan")}` : ""),
+            style === "none"
+              ? deliverableNote(missing, "continue")
+              : deadlineNoteText(style, formatSpan(left), formatSpan(d.total_ms)) +
+                (missing.length > 0 ? ` ${deliverableNote(missing, style)}` : ""),
         });
       }
     }
@@ -8476,7 +8484,7 @@ export async function runTask(
             notes: turnDeadline.notes,
             source: options.deadline!.source,
             // Present only when declared otherwise than the default.
-            ...(turnDeadline.style === "continue" ? { note: "continue" } : {}),
+            ...(turnDeadline.style && turnDeadline.style !== "plan" ? { note: turnDeadline.style } : {}),
           },
         }
       : {}),

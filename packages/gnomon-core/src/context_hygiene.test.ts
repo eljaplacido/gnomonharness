@@ -139,10 +139,7 @@ function surface(
     join(root, ".gnomon", "config.toml"),
     `[defaults]\nmax_context_tokens = ${opts.window ?? 6000}\nmax_tokens = 2048\n\n` +
       `[turn]\nnudge_after_idle = 4\n\n` +
-      // steer_role = "system": the fake is on 127.0.0.1, a local lane, whose
-      // undeclared channel is the user role since v0.4.6 (CONTRACTS §39).
-      // Declared, these tests keep master's wire for the mechanism they test.
-      `[endpoints.target]\nurl = "${url}"\nkind = "openai"\nstream = false\nsteer_role = "system"\n` +
+      `[endpoints.target]\nurl = "${url}"\nkind = "openai"\nstream = false\n` +
       (opts.extraConfig ?? "")
   );
   writeFileSync(

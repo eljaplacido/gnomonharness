@@ -555,9 +555,7 @@ async function deliverableRun(turn: string, endpoint = "") {
 
 describe("--deadline with deliverable_first = true", () => {
   it("at 40% names both missing outputs; at 70% only the one still missing; the trail records both checks", async () => {
-    // steer_role = "system" declared: the fake is on 127.0.0.1, a local lane,
-    // whose undeclared channel is the user role (CONTRACTS §39, tested below).
-    const r = await deliverableRun("deliverable_first = true\ndeadline_notes = []\ndeadline_margin_ms = 200\nnudge_after_idle = 0", 'steer_role = "system"\n');
+    const r = await deliverableRun("deliverable_first = true\ndeadline_notes = []\ndeadline_margin_ms = 200\nnudge_after_idle = 0");
     expect(r.rec.stop_reason).toBe("answered");
     // The notes, as they went out: system messages on the steering channel.
     const notes = [...new Set(r.raws.flatMap(texts).filter((t) => MISSING.test(t)))];
@@ -586,19 +584,14 @@ describe("--deadline with deliverable_first = true", () => {
     expect(existsSync(join(r.root, "result.txt"))).toBe(true);
   }, 20_000);
 
-  for (const [label, endpoint] of [
-    ['steer_role = "user"', 'steer_role = "user"\n'],
-    ["undeclared on a local lane", ""],
-  ] as const) {
-    it(`${label}: the note goes out as a user message marked [gnomon]`, async () => {
-      const r = await deliverableRun("deliverable_first = true\ndeadline_notes = []\ndeadline_margin_ms = 200\nnudge_after_idle = 0", endpoint);
-      const notes = [...new Set(r.raws.flatMap(texts).filter((t) => MISSING.test(t)))];
-      expect(notes.length).toBe(2);
-      // gnomon's messages in a row share one user message, so the note may follow
-      // another of them; it is the steering channel either way.
-      for (const n of notes) expect(n).toMatch(/^user:\[gnomon\] [\s\S]*Time check: about /);
-    }, 20_000);
-  }
+  it("steer_role = \"user\": the note goes out as a user message marked [gnomon]", async () => {
+    const r = await deliverableRun("deliverable_first = true\ndeadline_notes = []\ndeadline_margin_ms = 200\nnudge_after_idle = 0", 'steer_role = "user"\n');
+    const notes = [...new Set(r.raws.flatMap(texts).filter((t) => MISSING.test(t)))];
+    expect(notes.length).toBe(2);
+    // gnomon's messages in a row share one user message, so the note may follow
+    // another of them; it is the steering channel either way.
+    for (const n of notes) expect(n).toMatch(/^user:\[gnomon\] [\s\S]*Time check: about /);
+  }, 20_000);
 
   it("off under the same deadline: the notes are the plain time notes, nothing named, no record", async () => {
     // Reads past 70% of the script clock, then answers; never told what is missing.

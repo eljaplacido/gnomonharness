@@ -84,21 +84,15 @@ legs = 1
 [audit]
 enabled = true
 
-# steer_role = "system": the chaos endpoint listens on loopback, a local lane,
-# whose undeclared steering channel is the user role (v0.4.6). It stands in
-# for any endpoint, a remote one included, so it keeps the system channel and
-# late_system_dropped keeps measuring what a template that drops it does.
 [endpoints.chaos]
 url = "<chaos-endpoint>"
 kind = "openai"
 stream = false
-steer_role = "system"
 
 [endpoints.chaos_stream]
 url = "<chaos-endpoint>"
 kind = "openai"
 stream = true
-steer_role = "system"
 `;
 
 const ROLES_TOML = `# gnomon chaos -- one role per transport.

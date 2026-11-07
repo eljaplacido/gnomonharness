@@ -12,7 +12,8 @@
  *   what it dropped. "default" declared is master's bytes.
  * - The network refusal states what was refused and why, with no stop cue.
  * - `session_start.resolved`: the one locality rule's verdict, the replay
- *   state and the steering channel, each with its reason.
+ *   state and the steering channel, each with its reason. Local lanes keep
+ *   today's defaults (replay off, system channel) until SW1/LG2 measure them.
  *
  * Every server here is a fake on 127.0.0.1; no model is called. The deadline
  * clock is driven by the script (requests received), never by the runner.
@@ -140,6 +141,7 @@ describe("resolution and the surface audit", () => {
   it("continue fixes the notes at 0.8; plan keeps deadline_notes", () => {
     expect(resolveDeadline({ config: { turn: { deadline_note: "continue" } } } as never)).toMatchObject({ notes: [0.8], style: "continue" });
     expect(resolveDeadline({ config: { turn: { deadline_note: "plan", deadline_notes: [0.3] } } } as never)).toMatchObject({ notes: [0.3], style: "plan" });
+    expect(resolveDeadline({ config: { turn: { deadline_note: "none", deadline_notes: [0.3] } } } as never)).toMatchObject({ notes: [], style: "none" });
   });
 
   it("the unattended profile turns the nudge off unless a number is declared", () => {
@@ -157,9 +159,11 @@ describe("resolution and the surface audit", () => {
   });
 
   it("deadline_notes beside continue, and an unattended profile with nothing to drop, are said, not fatal", () => {
-    expect(problems({ deadline_note: "continue", deadline_notes: [0.5] })).toEqual([
-      expect.objectContaining({ fatal: false, where: expect.stringContaining("deadline_notes") }),
-    ]);
+    for (const note of ["continue", "none"]) {
+      expect(problems({ deadline_note: note, deadline_notes: [0.5] })).toEqual([
+        expect.objectContaining({ fatal: false, where: expect.stringContaining("deadline_notes") }),
+      ]);
+    }
     expect(problems({ prompt_profile: "unattended" }, "be brief\n")).toEqual([
       expect.objectContaining({ fatal: false, where: ".gnomon/system.md" }),
     ]);
@@ -454,6 +458,32 @@ describe("the time note under --deadline (script clock)", () => {
     expect(named).toMatchObject({ named: ["result.txt"], present: ["notes.md"] });
   });
 
+  it("none: no time note at all, the deadline still stops the run's clock as before", async () => {
+    const r = await deadlineRun('deadline_note = "none"\n');
+    expect(r.rec.stop_reason).toBe("answered");
+    expect(r.rec.counters.deadline_notes).toBeUndefined();
+    expect(r.raws.join("")).not.toContain("Time check");
+    expect(r.notes.every((x) => x.notes.length === 0)).toBe(true);
+    expect(r.audit.find((a) => a.kind === "session_start")!.deadline).toMatchObject({ notes: [], note: "none" });
+  });
+
+  it("none with deliverable_first: the missing-output note alone, no countdown, keep improving", async () => {
+    const r = await deadlineRun('deadline_note = "none"\ndeliverable_first = true\n', "", "Write the summary to `result.txt`.");
+    const all = r.raws.join("");
+    expect(all).not.toContain("Time check");
+    expect(all).not.toContain("remain");
+    const first = r.raws.findIndex((raw) => raw.includes("do not exist yet")) + 1;
+    expect(first).toBe(9);
+    const msgs = (JSON.parse(r.raws[first - 1]!).messages as Array<{ role: string; content: string }>).filter((m) =>
+      m.content.includes("do not exist yet")
+    );
+    expect(msgs).toEqual([
+      { role: "system", content: FIXTURE.deadline_note.none.deliverable_note.replace("{paths}", "result.txt") },
+    ]);
+    expect(r.rec.counters.deadline_notes).toBeUndefined();
+    expect(r.rec.counters.deliverable_first_notes).toBeGreaterThanOrEqual(1);
+  });
+
   it("plan with deliverable_first: §35's bytes, the plan sentence and \"then improve it\"", async () => {
     const r = await deadlineRun("deliverable_first = true\n", "", "Write the summary to `result.txt`.");
     const first = r.notes.find((x) => x.notes.length > 0)!;
@@ -518,12 +548,12 @@ describe("session_start.resolved: the locality, replay and steering each run res
     return trail(root).find((a) => a.kind === "session_start")!.resolved;
   }
 
-  it("a local lane: replay waits for reasoning, steering goes as user content", async () => {
+  it("a local lane: replay off and the system channel, today's defaults, each said", async () => {
     const r = await startOf("local");
     expect(r).toEqual({
       routes: {
         smol: {
-          target: { endpoint: "target", model: "m1", local: true, replay: "on_reasoning", replay_source: "default", steer_role: "user", steer_role_source: "local_lane" },
+          target: { endpoint: "target", model: "m1", local: true, replay: "off", replay_source: "local_lane", steer_role: "system", steer_role_source: "default" },
         },
       },
     });
@@ -536,9 +566,11 @@ describe("session_start.resolved: the locality, replay and steering each run res
   });
 
   it("declared values say so; Ollama's /api/chat is off by its route", async () => {
-    const r = await startOf("local", 'replay_reasoning = false\nsteer_role = "system"\n');
-    expect(r.routes.smol.target).toMatchObject({ replay: "off", replay_source: "declared", steer_role: "system", steer_role_source: "declared" });
+    const r = await startOf("local", 'replay_reasoning = true\nsteer_role = "user"\n');
+    expect(r.routes.smol.target).toMatchObject({ replay: "on", replay_source: "declared", steer_role: "user", steer_role_source: "declared" });
+    const off = await startOf("hosted", "replay_reasoning = false\n");
+    expect(off.routes.smol.target).toMatchObject({ local: false, replay: "off", replay_source: "declared" });
     const o = await startOf("local", "", "ollama");
-    expect(o.routes.smol.target).toMatchObject({ replay: "off", replay_source: "ollama_route", steer_role: "user", steer_role_source: "local_lane" });
+    expect(o.routes.smol.target).toMatchObject({ replay: "off", replay_source: "ollama_route", steer_role: "system", steer_role_source: "default" });
   });
 });

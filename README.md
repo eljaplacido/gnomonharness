@@ -732,21 +732,18 @@ v0.4.3 replays only when declared): once one answers a tool call with reasoning 
 that reasoning goes back on every later assistant message. H3 (pre-registered,
 hosted only) adopted it: hidden-test fraction +0.160 [95% +0.042, +0.293],
 capped runs 19 → 14 ([summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
-On `master` after v0.4.5 (unreleased) the same rule holds **wherever the
-endpoint is**: a local lane or a model behind a private relay that returns
-reasoning gets it back too; only Ollama's `/api/chat`, where gnomon reads no
-reasoning, is never sent any. Replay on local lanes is **not measured** (LG1's
-lane returned no reasoning); the choice is recorded per session in
-`session_start.resolved`. `replay_reasoning = false` turns it off anywhere
-([GUIDE §5.2](docs/GUIDE.md), [CONTRACTS §39](docs/CONTRACTS.md)).
+On a **local lane** — a loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local, CGNAT/Tailscale (100.64/10), `*.local` or `host.docker.internal` host, a single-label name, or Ollama's `/api/chat` — it is untested and off unless
+`replay_reasoning = true` is declared, which includes a relay on a private
+address in front of a hosted model. `replay_reasoning = false` turns it off
+anywhere. Each session records what every route resolved to
+(`session_start.resolved`; [GUIDE §5.2](docs/GUIDE.md), [CONTRACTS §39](docs/CONTRACTS.md)).
 
-**Steering on local lanes** (`master`, unreleased): gnomon's own mid-turn
-messages (the idle nudge, the time notes, a failed check) go to a local lane
-as user messages marked `[gnomon]`, because the local chat templates measured
-dropped every late system message (1,754 of 1,754 requests on one lane).
-Remote hosts keep the system role. Each request records `via` and
-`delivered`. A relay on a private address in front of a hosted model counts as
-local: declare `steer_role = "system"` there to keep the hosted channel.
+**Steering delivery is recorded** (`master`, unreleased): each request says
+whether gnomon's mid-turn messages went out as `system` or `user` and whether
+that channel is known to reach the model (`delivered`). The local chat
+templates measured dropped every late system message (1,754 of 1,754 requests
+on one lane); declare `steer_role = "user"` on such a lane. The default stays
+`system` until a study measures the change.
 
 #### Keys
 
@@ -952,7 +949,7 @@ converge_refire = 6               # calls between convergence re-pushes past con
 deadline_notes = [0.5, 0.8]       # gnomon task --deadline: budget fractions that get a time-left note
 deadline_margin_ms = 30000        # gnomon task --deadline: stop this long before it (at most a tenth)
 deliverable_first = false         # gnomon task --deadline: name the task's missing outputs at 40% and 70%
-deadline_note = "plan"            # gnomon task --deadline: "continue" = one keep-going note at 80% (TEMPORARY, for SW1)
+deadline_note = "plan"            # gnomon task --deadline: "continue" = one keep-going note at 80%, "none" = no time note (TEMPORARY, for SW1)
 prompt_profile = "default"        # "unattended": no stop sentences, edge-case/measurement lines, nudge 0
 ```
 
@@ -989,7 +986,7 @@ nothing in the record could say so.
 | `converge_refire` | Calls between convergence re-pushes once `converge_after` is reached. A single "submit what you have" is easy to ignore. |
 | `deadline_notes` | Read only under `gnomon task --deadline`. Fractions of the wall-clock budget, in (0, 1); when the turn has used one, its next request carries one short note of the time left, as a mid-turn system message (a user message marked `[gnomon]` under `steer_role = "user"`). `[]` sends none. |
 | `deadline_margin_ms` | Read only under `gnomon task --deadline`. The turn stops itself this long before the deadline, and a `bash` command's timeout is clamped to end one margin before that, so the model gets the partial output. Capped at a tenth of the budget. |
-| `deadline_note` | **Temporary** (deleted after the SW1 sweep). Read only under `gnomon task --deadline`. `"plan"` (default): the notes above, "Plan the rest of the work, and checking it, to finish inside that." `"continue"`: one note at 80%, "There is enough time left for substantial work; keep going and make sure the required outputs exist."; the deliverable-first note then ends "then keep improving it." [CONTRACTS §39](docs/CONTRACTS.md). |
+| `deadline_note` | **Temporary** (deleted after the SW1 sweep). Read only under `gnomon task --deadline`. `"plan"` (default): the notes above, "Plan the rest of the work, and checking it, to finish inside that." `"continue"`: one note at 80%, "There is enough time left for substantial work; keep going and make sure the required outputs exist."; the deliverable-first note then ends "then keep improving it." `"none"`: no time note at all (the self-stop stays); a missing output is still named, without a countdown. [CONTRACTS §39](docs/CONTRACTS.md). |
 | `prompt_profile` | `"default"`: system.md as written. `"unattended"` (opt-in, declared only, never inferred from a TTY or the environment): drops the scaffold's "Verify in proportion to the task …" and "Once it works … stop." sentences, adds "Test edge cases, then submit" and two measurement lines (reproduce a timed gate literally, cold, with a 2x margin; for black-box parity compare exact strings over many random probes and round fitted constants), and makes `nudge_after_idle` 0 unless declared. For long unattended runs; daily development keeps the default. [CONTRACTS §39](docs/CONTRACTS.md). |
 | `deliverable_first` | Read only under `gnomon task --deadline`; off by default. `true`: the output paths the task text names (an absolute path, or a quoted filename with an extension, after "write", "save", "create", "produce" and the like) are checked at 40% and 70% of the budget, and the ones that do not exist yet are named in that request's time note with "Write a first complete version now, then improve it." Nothing missing, nothing is added. Dependency manifests ("write any dependencies to `requirements.txt`") are not outputs, and a named file that exists when the run starts is not checked. [CONTRACTS §35](docs/CONTRACTS.md). |
 

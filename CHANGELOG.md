@@ -31,57 +31,52 @@ Everything in this section is on master and in no release. The new keys below
 `first_token_timeout_ms`, `[governance]` levels) are **opt-in and unmeasured**:
 the long-task arms that test them (FG1, AS1) were still running when they
 merged, and no result is claimed for any of them yet. With none declared,
-request bodies are master's — except where the long-task tier (a) changes a
-default on purpose (below: replay and steering on local lanes, the network
-refusal's wording).
+request bodies are master's — except the network refusal's wording, which the
+long-task tier (a) changes on purpose (below).
 
-### Changed (default) — long-task tier (a), CONTRACTS §39
+### Changed — long-task tier (a), CONTRACTS §39
 
-Two defaults move, deliberately, under an unchanged surface hash. Each is
-recorded per session (`session_start.resolved`) and restored by one line.
+Local-lane defaults are **unchanged**: replay stays off and steering stays
+`system` on local lanes unless declared. Both were proposed as defaults and
+held back because neither is measured on a local lane (LG1's lane returned no
+reasoning; delivering the idle nudge locally is untested); SW1/LG2 test them.
 
-- **Reasoning replay wherever the endpoint returns reasoning.** One rule, no
-  locality: an OpenAI-shaped endpoint that does not declare
-  `replay_reasoning` gets its reasoning back from the request after it first
-  answers a tool call with reasoning, on a hosted URL, a local lane or behind
-  a private relay alike. Until now a "local lane" predicate kept it off on
-  loopback, private, Tailscale and single-label hosts, so one surface replayed
-  on `api.example.com` and not behind a relay on 10.0.0.5. Evidence: H3
-  (hosted, pre-registered) +0.160 hidden-test fraction [+0.042, +0.293], caps
-  19 → 14; the harness leaderboard's per-call logs (research note 07: 91% vs 0%
-  reasoning dropped, 15 vs 1 long-call timeouts). **Replay on local lanes is
-  not measured** (LG1's lane returned no reasoning, so it never fired there);
-  an endpoint that sends none is sent none. Ollama's `/api/chat` is never sent
-  any. Restore: `replay_reasoning = false`.
-- **Steering on local lanes goes out as user content.** Undeclared
-  `steer_role` is `user` on a local lane and `system` on a remote host. On the
-  three M2 local lanes the chat template dropped every late system message
-  (1,754/1,754, 1,111/1,111, 1,857/1,857; research note 04 §0.6), so the
-  nudges, time notes and failed checks the surface declared never reached the
-  model. Hosted stays `system` (S1: user-role notes 15 vs 19 solved at +35%
-  tokens). Unmeasured as a change: a local lane now actually receives the idle
-  nudge. A relay on a private address in front of a hosted model counts as a
-  local lane: declare `steer_role = "system"` there. Each request records
-  `via` and `delivered`; `counters.model_calls.steer_messages` lists each
-  message once with `{i, kind, via, delivered}`.
 - **One locality rule.** `endpointLocality` (`loopback`/`private`/`remote`)
   replaces three predicates (audit 2026-11-06 #11); `isLoopbackEndpoint`
-  (trust) and `isLocalEndpoint` (listings, a skill trial's billed check, the
-  steering default) are its tiers. `isLocalEndpoint` now also counts 127/8,
-  `*.localhost`, 0/8, link-local, IPv6 private ranges, `host.docker.internal`
-  and single-label names as local; `*.localhost` is not loopback for trust.
-- **The network refusal states what was refused and why.** Under `[sandbox]
-  network = false` a bash network call is refused with what the filter
-  refuses and who can grant network; "Do not look for another route to the
-  network" is gone. It was a stop cue (research note 07: 4–6 such refusals per
-  arm) that also misdescribed the enforcement (`pip download` passes the same
-  filter). Pinned request hashes put master's text back and hold every other
-  byte.
+  (trust), `isLocalEndpoint` (listings, a skill trial's billed check, the
+  `delivered` flag) and `replayLocal` (the replay default: the same host set
+  `isLocalLaneUrl` held) are its tiers. `isLocalEndpoint` now also counts
+  127/8, `*.localhost`, 0/8, link-local, IPv6 private ranges,
+  `host.docker.internal` and single-label names as local; `*.localhost` is not
+  loopback for trust.
+- **Steering delivery is recorded.** Each request records `via` and
+  `delivered` (false for a late system message to a local lane, whose chat
+  templates dropped every one on the three M2 lanes: 1,754/1,754,
+  1,111/1,111, 1,857/1,857, research note 04 §0.6);
+  `counters.model_calls.steer_messages` lists each message once with
+  `{i, kind, via, delivered}`. `steer_role = "user"` remains the opt-in fix.
+- **`session_start.resolved`**: per role, each route's `local`, `replay`
+  (`on`/`on_reasoning`/`off`) and `steer_role`, each with its source
+  (`replay_source: local_lane` marks a local lane off by default, e.g. a
+  relay in front of a hosted model that should declare `replay_reasoning =
+  true`).
+- **The network refusal states what was refused and why** (a default text
+  change). Under `[sandbox] network = false` a bash network call is refused
+  with what the filter refuses and who can grant network; "Do not look for
+  another route to the network" is gone. It was a stop cue (research note 07:
+  4–6 such refusals per arm) that also misdescribed the enforcement (`pip
+  download` passes the same filter). Pinned request hashes put master's text
+  back and hold every other byte.
 
 ### Added — long-task tier (a), opt-in
 
-- **`[turn] deadline_note = "plan" | "continue"`** (**temporary**: deleted
-  after the SW1 sweep, whichever value loses). `"plan"`, the default, is the
+- **`[turn] deadline_note = "plan" | "continue" | "none"`** (**temporary**:
+  deleted after the SW1 sweep, whichever values lose). `"none"` sends no time
+  note at all; the deadline's self-stop stays, and a declared
+  `deliverable_first` names a missing output without a countdown ("…Write a
+  first complete version now, then keep improving it."). It exists because
+  DP1's decision-point replays put the early-stop cue in the countdown, not in
+  the "plan the rest" ending. `"plan"`, the default, is the
   time notes as before, byte for byte. `"continue"` sends one note at 80%:
   "There is enough time left for substantial work; keep going and make sure
   the required outputs exist.", and the deliverable-first note then ends "then
@@ -96,9 +91,6 @@ recorded per session (`session_start.resolved`) and restored by one line.
   fitted constants), and makes `nudge_after_idle` 0 unless declared. Says on
   the trail how many sentences it dropped. H2's null (2 vs 2 of 12) is the
   counter-evidence; SW1's U arm measures it.
-- **`session_start.resolved`**: per role, each route's `local`, `replay`
-  (`on`/`on_reasoning`/`off`) and `steer_role`, each with its source.
-
 ### Fixed — the deliverable extractor (`[turn] deliverable_first`)
 
 - Dependency manifests are no longer named as deliverables ("Write any Python

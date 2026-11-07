@@ -182,16 +182,15 @@ export interface EndpointConfig {
   max_context_tokens?: number | typeof AUTO_WINDOW;
   /**
    * Send each assistant message's reasoning back as `reasoning_content`.
-   * Undeclared: on once the endpoint answers a tool call with reasoning
-   * (replayFieldsOf).
+   * Undeclared: on once a remote endpoint answers a tool call with reasoning;
+   * off on a local lane (replayFieldsOf).
    */
   replay_reasoning?: boolean;
   /**
    * The role gnomon's own mid-conversation messages (nudges, the convergence
    * push, a failed verification, the wrap-up, context notices) are sent in.
-   * `user` sends each as a user message marked `[gnomon] `; `system` as a
-   * system message. Undeclared: `user` on a local lane, `system` elsewhere.
-   * See resolveSteerRole.
+   * `system`, the default, is how they have always gone. `user` sends each as
+   * a user message marked `[gnomon] `. See resolveSteerRole.
    */
   steer_role?: SteerRole;
   /**
@@ -1890,12 +1889,6 @@ export interface RouteTarget {
    */
   steerRole?: SteerRole;
   /**
-   * Why `steerRole` is `user` when the surface did not learn it: `declared`
-   * (`steer_role = "user"`) or `local_lane` (undeclared on a local lane,
-   * resolveSteerRole). Absent exactly when `steerRole` is.
-   */
-  steerRoleSource?: "declared" | "local_lane";
-  /**
    * The reasoning effort sent as `reasoning_effort`, when one is: the role's
    * or the endpoint's (sweep_knobs.ts resolveReasoningEffort). Absent sends
    * none, as before the key existed.
@@ -2108,12 +2101,12 @@ const ENDPOINT_KEYS = new Set([
 ]);
 
 /**
- * The role gnomon's mid-conversation messages go out in for this endpoint,
- * and why.
+ * The role gnomon's mid-conversation messages go out in for this endpoint.
  *
- * Declared wins. Undeclared, a **local lane** (endpointLocality: this machine,
- * the LAN, a tailnet, a container name) gets `user`, and a remote host gets
- * `system`, the bytes every surface sent before the key existed.
+ * Declared wins; anything else is `system`, which is what every surface got
+ * before the key existed, so an existing surface sends the same bytes (Rule
+ * 1). Whether `user` should be the default anywhere is for a benchmark to
+ * decide, not this function.
  *
  * Why the key exists: gnomon's steering arrives as `role: "system"` after the
  * conversation has started, and the common local stacks do not take that.
@@ -2121,47 +2114,35 @@ const ENDPOINT_KEYS = new Set([
  * beginning." (M1, 2026-11: 4 of 16 cells ended at their first nudge). Unsloth's
  * qwen3.6 template under llama.cpp has no branch for a system message after
  * the first two and drops it, so the model never sees the steering at all
- * (rendered offline with jinja2, 2026-11-03). The refusal is caught and
- * answered at run time (prompt_loop.ts, steerAsUser); the silent drop cannot
- * be.
- *
- * Why local lanes default to `user` (v0.4.6): on the three M2 local lanes
- * (2026-11) every request that carried a late system message had it dropped
- * by the chat template -- 1,754 of 1,754, 1,111 of 1,111 and 1,857 of 1,857
- * (research note 04 §0.6). The surface declared steering the model never
- * received. Hosted models keep `system`: S1 (2026-11-03, hosted) measured
- * user-role notes at 15 vs 19 solved for +35% tokens, so the hosted default
- * does not move. A relay on a private address in front of a hosted model is
- * a local lane by URL; declare `steer_role = "system"` there to keep the
- * hosted channel.
+ * (rendered offline with jinja2, 2026-11-03); on the three M2 local lanes
+ * every request that carried a late system message had it dropped (1,754 of
+ * 1,754, 1,111 of 1,111, 1,857 of 1,857; research note 04 §0.6). The refusal
+ * is caught and answered at run time (prompt_loop.ts, steerAsUser); the
+ * silent drop cannot be, which is what declaring `user` is for. A local-lane
+ * default of `user` was considered and left opt-in: delivering the idle nudge
+ * to a local model changes local behaviour no study has measured (LG1's nudge
+ * may never have arrived), and SW1/LG2 test it. Each request records whether
+ * its channel is known to arrive (mediators.ts `delivered`), so the drop is
+ * visible in the record either way.
  */
-export function resolveSteerRole(
-  endpoint: { steer_role?: unknown } | undefined,
-  url?: string
-): SteerRole {
-  return steerRoleOf(endpoint, url).role;
+export function resolveSteerRole(endpoint: { steer_role?: unknown } | undefined): SteerRole {
+  return steerRoleOf(endpoint).role;
 }
 
-/** resolveSteerRole with its reason: `declared`, `local_lane` or `default`. */
+/** resolveSteerRole with its reason: `declared` or `default`. */
 export function steerRoleOf(
-  endpoint: { steer_role?: unknown } | undefined,
-  url?: string
-): { role: SteerRole; source: "declared" | "local_lane" | "default" } {
+  endpoint: { steer_role?: unknown } | undefined
+): { role: SteerRole; source: "declared" | "default" } {
   const v = endpoint?.steer_role;
   if (typeof v === "string" && (STEER_ROLES as readonly string[]).includes(v)) {
     return { role: v as SteerRole, source: "declared" };
   }
-  if (url !== undefined && isLocalEndpoint(url)) return { role: "user", source: "local_lane" };
   return { role: "system", source: "default" };
 }
 
-/** The steering fields of a route target: `steerRole` and its source, only when `user`. */
-export function steerFieldsOf(
-  endpoint: { steer_role?: unknown } | undefined,
-  url: string
-): Pick<RouteTarget, "steerRole" | "steerRoleSource"> {
-  const s = steerRoleOf(endpoint, url);
-  return s.role === "user" ? { steerRole: "user", steerRoleSource: s.source === "declared" ? "declared" : "local_lane" } : {};
+/** The steering fields of a route target: `steerRole`, only when `user` is declared. */
+export function steerFieldsOf(endpoint: { steer_role?: unknown } | undefined): Pick<RouteTarget, "steerRole"> {
+  return steerRoleOf(endpoint).role === "user" ? { steerRole: "user" } : {};
 }
 
 /**
@@ -2211,30 +2192,20 @@ export function resolveReplayReasoning(endpoint: {
  * The replay fields of a route target: `replayReasoning`, why it is on, and
  * whether it may still turn on at run time.
  *
- * ONE rule, whatever the URL (v0.4.6): an OpenAI-shaped endpoint that does not
- * declare `replay_reasoning` gets its reasoning back from the request after it
- * first answers a tool call with reasoning content, for the session. It does
- * not ask where the endpoint is. Until v0.4.5 the same rule applied only to a
- * hosted URL, and a "local lane" predicate (isLocalLaneUrl) kept it off on
- * loopback, private, CGNAT and single-label hosts -- so one surface replayed
- * against `api.example.com` and did not when the same model sat behind a
- * relay on 10.0.0.5 (FG1 had to declare it by hand). An endpoint that never
- * sends reasoning is never sent any, wherever it is.
- *
- * Evidence. H3 (2026-11-06, pre-registered, hosted DeepSeek V4.1 Flash)
- * adopted replay: hidden-test fraction +0.160 [95% +0.042, +0.293], capped 14
- * vs 19 (https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt).
- * The harness leaderboard's per-call logs (research note 07) show the same
- * mechanism across harnesses: the harness that dropped reasoning on 91% of
- * big calls timed out with a >8k-reasoning call 15 times to mini-swe-agent's
- * once. Replay on a local lane is NOT measured: LG1's local lane returned no
- * reasoning field, so it never fired there. Extending the rule to local
- * lanes is a declared choice of this build, recorded on every request
- * (`wire.replay_reasoning_source`) and in `session_start.resolved`;
- * `replay_reasoning = false` restores the old local default.
- *
- * Ollama's /api/chat is not in it: gnomon reads no reasoning from that route
- * (it calls it `thinking`), so the endpoint never "returns reasoning" here.
+ * v0.4.4: undeclared on a REMOTE endpoint (endpointLocality) means "on once the
+ * endpoint shows it reasons". An endpoint that answers a tool call with
+ * reasoning content gets it back on every later assistant message, which every
+ * 2026 open-weights family asks for. H3 (2026-11-06, pre-registered, hosted
+ * DeepSeek V4.1 Flash) adopted it: hidden-test fraction +0.160 [95% +0.042,
+ * +0.293], capped 14 vs 19 (https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt).
+ * H3 measured hosted endpoints only, and LG1's local lane returned no
+ * reasoning, so on a local lane (endpointLocality `loopback` or `private`, a
+ * URL that does not parse, and Ollama's /api/chat) the default is off: replay
+ * there is untested and would grow every prompt. That includes a relay on a
+ * private address in front of a hosted model, which therefore has to declare
+ * `replay_reasoning = true`; SW1/LG2 test whether the local default should
+ * move. `replay_reasoning = true` turns it on anywhere; `false` turns it off.
+ * An endpoint that never sends reasoning is never sent any.
  */
 export function replayFieldsOf(
   endpoint: { url?: string; kind?: EndpointKind; replay_reasoning?: unknown },
@@ -2243,8 +2214,24 @@ export function replayFieldsOf(
   const on = resolveReplayReasoning(endpoint, unclear);
   const declared = typeof endpoint.replay_reasoning === "boolean";
   if (on) return { replayReasoning: true, replayReasoningSource: declared ? "declared" : "default" };
-  if (declared || endpointKind(endpoint, unclear) === "ollama") return { replayReasoning: false };
+  if (declared || endpointKind(endpoint, unclear) === "ollama" || replayLocal(endpoint.url ?? "")) {
+    return { replayReasoning: false };
+  }
   return { replayReasoning: false, replayReasoningAuto: true };
+}
+
+/**
+ * Local for the replay default: endpointLocality's `loopback` or `private`,
+ * and a URL that does not parse (the default can only be less likely there,
+ * never more, as before v0.4.6).
+ */
+export function replayLocal(url: string): boolean {
+  try {
+    if (!new URL(url).hostname) return true;
+  } catch {
+    return true;
+  }
+  return isLocalEndpoint(url);
 }
 
 /**
@@ -4220,9 +4207,9 @@ export function listEndpoints(config: GnomonConfig): string[] {
  *   or session text without a grant -- anyone on the LAN or the tailnet can
  *   listen at a private address (seventh review, L3).
  * - isLocalEndpoint (`loopback` or `private`): the listings' local/cloud mark,
- *   the billed-endpoint check of a skill trial, and the steering channel's
- *   default (resolveSteerRole).
- * - Reasoning replay reads none of them (replayFieldsOf).
+ *   the billed-endpoint check of a skill trial, the reasoning-replay default
+ *   (replayFieldsOf), and whether a late system message is recorded as
+ *   delivered (mediators.ts).
  *
  * Until v0.4.6 there were three predicates with three different host sets
  * (isLocalEndpoint, isLocalLaneUrl, isLoopbackEndpoint; audit 2026-11-06 #11).
@@ -4407,7 +4394,7 @@ export function routeRole(
     maxTokens: resolveMaxTokens(config, roleDef, endpoint),
     ...contextWindowOf(config, endpoint.max_context_tokens, { url, kind, model }),
     ...replayFieldsOf(endpoint),
-    ...steerFieldsOf(endpoint, url),
+    ...steerFieldsOf(endpoint),
     // The sweep knobs (sweep_knobs.ts): each absent unless declared, so an
     // undeclared surface builds the target it always did.
     ...knobsOf(roleDef, endpoint, kind),
@@ -4442,7 +4429,7 @@ export function routeRole(
       ...contextWindowOf(config, fbEndpoint?.max_context_tokens, { url: fbUrl, kind: fbKind, model: fb.model }),
       // By its own URL: the one the fallback is actually sent to.
       ...replayFieldsOf({ ...(fbEndpoint ?? {}), url: fbUrl }, "openai"),
-      ...steerFieldsOf(fbEndpoint, fbUrl),
+      ...steerFieldsOf(fbEndpoint),
       ...knobsOf(roleDef, fbEndpoint, fbKind),
     };
   }
@@ -5165,7 +5152,8 @@ export interface ResolvedDeadline {
   margin_ms: number;
   /**
    * `[turn] deadline_note` (long_task_profile.ts): the note's wording.
-   * "plan", the default, is §31's text; "continue" sends one note at 0.8
+   * "plan", the default, is §31's text; "none" sends no time note (notes is
+   * [], the self-stop stays); "continue" sends one note at 0.8
    * saying to keep going, and `notes` is then [0.8]. Temporary, for SW1.
    */
   style: DeadlineNoteStyle;
@@ -5182,7 +5170,7 @@ export function resolveDeadline(config: GnomonConfig): ResolvedDeadline {
   const m = t?.deadline_margin_ms;
   const margin_ms = typeof m === "number" && isFinite(m) && m >= 0 ? Math.floor(m) : DEADLINE_DEFAULTS.margin_ms;
   const style = resolveDeadlineNoteStyle(config);
-  return { notes: style === "continue" ? [...CONTINUE_NOTE_AT] : notes, margin_ms, style };
+  return { notes: style === "continue" ? [...CONTINUE_NOTE_AT] : style === "none" ? [] : notes, margin_ms, style };
 }
 
 /**
