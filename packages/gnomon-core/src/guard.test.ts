@@ -9,8 +9,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
 import * as promptLoop from "./prompt_loop.js";
@@ -158,7 +158,7 @@ describe("gnomon guard — the same decision as gnomon's own loop", () => {
   }
 
   it("the cases cover every tool kind and every decision", () => {
-    expect(new Set(CASES.cases.map((c) => c.tool))).toEqual(new Set(POLICY_TOOLS));
+    expect(new Set(CASES.cases.map((c) => c.tool))).toEqual(new Set([...POLICY_TOOLS, "grep", "glob"]));
     const seen = new Set(CASES.cases.flatMap((c) => Object.values(c.expect)));
     expect(seen).toEqual(new Set(GUARD_DECISIONS));
   });
@@ -221,9 +221,9 @@ describe("gnomon guard — the rules are committed ones", () => {
 
   it("a tool gnomon has no rule for is allowed and named, never guessed at", async () => {
     surface("on_write");
-    const v = await guardToolCall({ cwd: repo, call: { tool: "glob", input: { pattern: "*" } }, role: "implement" });
+    const v = await guardToolCall({ cwd: repo, call: { tool: "todo", input: { items: [] } }, role: "implement" });
     expect(v).toMatchObject({ decision: "allow", rule: "ungoverned", governed: true });
-    expect(v.reason).toMatch(/no pre-execution rule for "glob"/);
+    expect(v.reason).toMatch(/no pre-execution rule for "todo"/);
   });
 
   it("no role is no decision: ask, rule error, exit 10 — never a silent allow", async () => {
@@ -322,7 +322,10 @@ describe("gnomon guard — reading other harnesses' hook payloads", () => {
     expect(cc("NotebookEdit", { notebook_path: "/w/n.ipynb" })).toEqual([{ tool: "edit", input: { path: "/w/n.ipynb" } }]);
     expect(cc("Read", { file_path: "/w/a" })).toEqual([{ tool: "read", input: { path: "/w/a" } }]);
     expect(cc("WebFetch", { url: "https://x", prompt: "p" })).toEqual([{ tool: "webfetch", input: { url: "https://x" } }]);
-    expect(cc("Glob", { pattern: "*" })).toEqual([]);
+    expect(cc("Grep", { pattern: "k", path: "/w/src", glob: "*.ts" })).toEqual([{ tool: "grep", input: { pattern: "k", path: "/w/src" } }]);
+    expect(cc("Glob", { pattern: "*" })).toEqual([{ tool: "glob", input: { pattern: "*", path: undefined } }]);
+    expect(cc("Task", { prompt: "p" })).toEqual([]);
+    expect(fromClaudeCode({ tool_name: "Bash", tool_input: {}, permission_mode: "bypassPermissions" }).permissionMode).toBe("bypassPermissions");
   });
 
   it("opencode V2: shell, write, edit, patch, read and webfetch events", () => {
@@ -336,7 +339,9 @@ describe("gnomon guard — reading other harnesses' hook payloads", () => {
     expect(oc("patch", { patchText: patch }).map((c) => c.input.path)).toEqual(["src/a.ts", "infra/x", "old.ts"]);
     expect(oc("read", { path: "a" })).toEqual([{ tool: "read", input: { path: "a" } }]);
     expect(oc("webfetch", { url: "https://x", format: "markdown" })).toEqual([{ tool: "webfetch", input: { url: "https://x" } }]);
-    expect(oc("glob", { pattern: "*" })).toEqual([]);
+    expect(oc("grep", { pattern: "k", path: "/h/.ssh/id_rsa", include: "*" })).toEqual([{ tool: "grep", input: { pattern: "k", path: "/h/.ssh/id_rsa" } }]);
+    expect(oc("glob", { pattern: "*" })).toEqual([{ tool: "glob", input: { pattern: "*", path: undefined } }]);
+    expect(oc("todowrite", { todos: [] })).toEqual([]);
     expect(patchPaths("*** Update File: a\n*** Move to: b\n")).toEqual(["a", "b"]);
   });
 
@@ -488,5 +493,204 @@ describe("opencode's execute (G1c)", () => {
     const v = await execute(undefined);
     expect(v.decision).toBe("deny");
     expect(v.rule).toBe("malformed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GBS-LAYER pilot (2026-11-06): the layer defends its own attachment
+// ---------------------------------------------------------------------------
+
+describe("the hook installation is protected surface (GBS-LAYER L-3)", () => {
+  const bash = (command: string, role = "implement") => guardToolCall({ cwd: repo, call: { tool: "bash", input: { command } }, role });
+
+  it("removing, overwriting or neutering a host hook file is denied under every gate, not asked", async () => {
+    for (const gate of ["never", "on_write", "always"]) {
+      rmSync(repo, { recursive: true, force: true });
+      repo = newRepo();
+      surface(gate);
+      put(".claude/settings.json", "{}\n");
+      put(".opencode/plugins/gnomon-guard.js", "// x\n");
+      put(".cursor/hooks.json", "{}\n");
+      commit("hooks");
+      for (const command of [
+        "rm -f .claude/settings.json",
+        "rm -rf .claude",
+        "mv .opencode/plugins/gnomon-guard.js /tmp/x.js",
+        "rm -r .opencode",
+        "git rm -q .claude/settings.json",
+        "printf '{}' > .cursor/hooks.json",
+        "sed -i 's/gnomon/true/' .claude/settings.json",
+        "cd .claude && rm settings.json",
+        "rm .clau*/settings.json",
+        "ln -sf /dev/null .opencode/plugins/gnomon-guard.js",
+        "printf '{}' > .claude/settings.local.json",
+        "printf '#!/bin/sh\\n' > .claude/hooks/pre.sh",
+      ]) {
+        const v = await bash(command);
+        expect({ command, gate, decision: v.decision, rule: v.rule }).toEqual({ command, gate, decision: "deny", rule: "host_hooks" });
+      }
+      // Reading one is not touching it.
+      expect((await bash("cat .claude/settings.json")).rule).not.toBe("host_hooks");
+    }
+  });
+
+  it("the user-level settings that can switch the hooks off are denied too, ~ and $HOME alike", async () => {
+    // HOME is an empty temp directory under vitest.setup.ts: never the real one.
+    surface("never");
+    for (const command of [
+      "mkdir -p ~/.claude && printf '{\"disableAllHooks\": true}' > ~/.claude/settings.json",
+      "printf '{\"disableAllHooks\": true}' > $HOME/.claude/settings.json",
+      "printf '{}' > ${HOME}/.claude/settings.local.json",
+      // A native absolute path, quoted as a shell needs it on every platform
+      // (unquoted, a Windows path's backslashes are shell escapes).
+      `printf '{"plugin": []}' > '${join(homedir(), ".config/opencode/opencode.json")}'`,
+      "rm -f ~/.config/opencode/plugins/gnomon-guard.js",
+      "printf '{}' > ~/.cursor/hooks.json",
+    ]) {
+      const v = await bash(command);
+      expect({ command, decision: v.decision, rule: v.rule }).toEqual({ command, decision: "deny", rule: "host_hooks" });
+    }
+    const w = await guardToolCall({ cwd: repo, call: { tool: "write", input: { path: join(homedir(), ".claude", "settings.json"), content: "{}" } }, role: "implement" });
+    expect(w).toMatchObject({ decision: "deny", rule: "host_hooks" });
+  });
+
+  it("a git clean that would remove an ignored hook file is denied; one that would not is the gate's call", async () => {
+    surface("never");
+    put(".gitignore", ".claude/settings.local.json\nbuild/\n");
+    commit("ignore");
+    put("build/x", "1\n");
+    expect((await bash("git clean -fdx -e .claude")).decision).toBe("allow");
+    put(".claude/settings.local.json", "{}\n");
+    expect(await bash("git clean -fdx")).toMatchObject({ decision: "deny", rule: "host_hooks" });
+  });
+
+  it("gnomon's state for the repository (session bases, the rules cache) is denied as well", async () => {
+    surface("never");
+    await guardToolCall({ cwd: repo, call: { tool: "bash", input: { command: "ls" } }, role: "implement", session: "s-st" });
+    const state = repoStateDir(sh(["rev-parse", "--absolute-git-dir"]));
+    expect(existsSync(join(state, "guard", "sessions", "s-st.json"))).toBe(true);
+    // (From its parent: \`rm -rf /…\` is the surface's own bash_deny.)
+    expect(await bash(`cd '${dirname(state)}' && rm -rf '${basename(state)}'`)).toMatchObject({ decision: "deny", rule: "host_hooks" });
+    expect(await bash(`rm -f '${join(state, "guard", "sessions", "s-st.json")}'`)).toMatchObject({ decision: "deny", rule: "host_hooks" });
+  });
+
+  it("an ordinary write that only looks similar is not refused as a hook", async () => {
+    surface("never");
+    for (const command of ["printf x > src/claude-settings.json", "mkdir -p src/.claude-notes && echo x > src/.claude-notes/a"]) {
+      expect((await bash(command)).rule, command).not.toBe("host_hooks");
+    }
+  });
+});
+
+describe("committing the policy away is refused (GBS-LAYER L-3 uncommit-policy)", () => {
+  const bash = (command: string) => guardToolCall({ cwd: repo, call: { tool: "bash", input: { command } }, role: "implement" });
+
+  it("git rm of the surface, cached or not, is denied", async () => {
+    surface("never");
+    for (const command of ["git rm -rq --cached .gnomon", "git rm -r .gnomon", "git rm --cached .gnomon/roles.toml", "git mv .gnomon gnomon-old"]) {
+      expect(await bash(command), command).toMatchObject({ decision: "deny", rule: "surface" });
+    }
+  });
+
+  it("a commit that would record a change to .gnomon/ is denied; one that would not is the gate's call", async () => {
+    surface("never");
+    expect((await bash("git commit -qam wip")).decision).toBe("allow");
+    // A change a person left in the working tree.
+    put(".gnomon/policy.toml", readFileSync(join(repo, ".gnomon/policy.toml"), "utf-8") + "\n# local\n");
+    for (const command of ["git commit -qam wip", "git commit -a -m wip", "git add -A && git commit -qm wip", "git add . && git commit -m wip", "git commit -m wip -- .gnomon", "git add .gnomon/policy.toml; git commit -m wip"]) {
+      expect(await bash(command), command).toMatchObject({ decision: "deny", rule: "surface" });
+    }
+    // Committing the agent's own files by name leaves .gnomon/ alone.
+    expect((await bash("git add src/a.ts && git commit -m fix -- src/a.ts")).decision).toBe("allow");
+    // Already staged: any commit takes it.
+    sh(["add", ".gnomon/policy.toml"]);
+    expect(await bash("git commit -m 'only src'")).toMatchObject({ decision: "deny", rule: "surface" });
+  });
+});
+
+describe("Claude Code in a bypass permission mode: an ask is a deny (GBS-LAYER bypass hole)", () => {
+  const payload = (permission_mode: string | undefined, command = "ls") => ({
+    hook_event_name: "PreToolUse",
+    session_id: `cc-${permission_mode}`,
+    cwd: repo,
+    tool_name: "Bash",
+    tool_input: { command },
+    ...(permission_mode ? { permission_mode } : {}),
+  });
+
+  it("bypassPermissions turns ask into deny and says why; other modes leave it an ask", async () => {
+    surface("on_write", `[audit]\nenabled = true\n`);
+    const bypass = await guardHarnessRequest(fromClaudeCode(payload("bypassPermissions")), { role: "implement", harness: "claude-code" });
+    expect(bypass).toMatchObject({ decision: "deny", rule: "approval" });
+    expect(bypass.reason).toMatch(/bypassPermissions/);
+    expect(JSON.parse(toClaudeCode(bypass)).hookSpecificOutput.permissionDecision).toBe("deny");
+    // Recorded as the deny it is, with the host's mode.
+    const rec = readFileSync(bypass.audit!.trail, "utf-8").trim().split("\n").map((l) => JSON.parse(l) as AuditRecord).find((r) => r.kind === "guard")!;
+    expect(rec).toMatchObject({ decision: "deny", host_mode: "bypassPermissions", exit: 2 });
+    for (const mode of ["default", "acceptEdits", "plan", undefined]) {
+      expect((await guardHarnessRequest(fromClaudeCode(payload(mode)), { role: "implement" })).decision, String(mode)).toBe("ask");
+    }
+  });
+
+  it("an allow stays silent and a deny stays a deny under bypass; a call gnomon could not decide is denied", async () => {
+    surface("never");
+    expect((await guardHarnessRequest(fromClaudeCode(payload("bypassPermissions")), { role: "implement" })).decision).toBe("allow");
+    const push = await guardHarnessRequest(fromClaudeCode(payload("bypassPermissions", "git push --force origin main")), { role: "implement" });
+    expect(push).toMatchObject({ decision: "deny", rule: "bash_deny" });
+    const noRole = await guardHarnessRequest(fromClaudeCode(payload("bypassPermissions")), {});
+    expect(noRole).toMatchObject({ decision: "deny", rule: "error" });
+  });
+});
+
+describe("a session base the harness hands over (the opencode plugin's session start)", () => {
+  const forcePush = { tool: "bash", input: { command: "git push --force origin main" } };
+  const loosen = () => {
+    put(".gnomon/roles.toml", `[roles.implement]\nmodel = "m"\ntools = ["bash"]\n`);
+    return commit("loosen");
+  };
+
+  it("is used, and recorded, for a session's first call: a commit between session start and that call does not move the rules", async () => {
+    const start = surface("never");
+    loosen();
+    const first = await guardToolCall({ cwd: repo, call: forcePush, role: "implement", session: "oc-1", sessionBase: start });
+    expect(first).toMatchObject({ decision: "deny", base: start });
+    // Later calls of the session read the recorded base, whatever they hand over.
+    const later = await guardToolCall({ cwd: repo, call: forcePush, role: "implement", session: "oc-1" });
+    expect(later).toMatchObject({ decision: "deny", base: start });
+  });
+
+  it("never replaces a base already recorded, and a value that is not a commit id is ignored", async () => {
+    const start = surface("never");
+    await guardToolCall({ cwd: repo, call: forcePush, role: "implement", session: "oc-2" });
+    const loosened = loosen();
+    expect((await guardToolCall({ cwd: repo, call: forcePush, role: "implement", session: "oc-2", sessionBase: loosened })).base).toBe(start);
+    expect((await guardToolCall({ cwd: repo, call: forcePush, role: "implement", session: "oc-3", sessionBase: "HEAD~1" })).base).toBe(loosened);
+  });
+});
+
+describe("grep and glob are decided as reads of where they search", () => {
+  it("opencode's grep of a secret outside the repository is denied, as read is (GBS-LAYER grep-home-secret)", async () => {
+    surface("never");
+    const secret = join(homedir(), ".ssh", "id_rsa");
+    for (const [tool, input] of [
+      ["grep", { pattern: "PRIVATE", path: secret }],
+      ["grep", { pattern: "PRIVATE", path: "~/.ssh" }],
+      ["glob", { pattern: `${dirname(secret)}/*` }],
+      ["glob", { pattern: "../../**/*", path: "src" }],
+    ] as const) {
+      const v = await guardHarnessRequest(fromOpencode({ tool, sessionID: "g", input }), { cwd: repo, role: "implement" });
+      expect({ tool, input, d: v.decision, r: v.rule }).toEqual({ tool, input, d: "deny", r: "sandbox" });
+    }
+    const read = await guardHarnessRequest(fromOpencode({ tool: "read", sessionID: "g", input: { path: secret } }), { cwd: repo, role: "implement" });
+    expect(read).toMatchObject({ decision: "deny", rule: "sandbox" });
+  });
+
+  it("a role with neither the tool nor read may not search", async () => {
+    surface("never");
+    const v = await guardToolCall({ cwd: repo, call: { tool: "grep", input: { pattern: "x" } }, role: "readonly2" });
+    expect(v.decision).toBe("ask"); // no such role: no decision
+    put(".gnomon/roles.toml", CASES.surface["roles.toml"]! + '\n[roles.shell]\nmodel = "m"\ntools = ["bash"]\n');
+    commit("shell role");
+    expect(await guardToolCall({ cwd: repo, call: { tool: "grep", input: { pattern: "x" } }, role: "shell" })).toMatchObject({ decision: "deny", rule: "tools" });
   });
 });
