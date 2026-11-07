@@ -2574,7 +2574,9 @@ write keeps the surface and every record gnomon writes beside one in
 `$XDG_STATE_HOME/gnomon/workdirs/<first 16 hex of sha256(absolute path)>`
 (else `~/.local/state/...`), with a `WORKDIR` file naming the directory, and
 writes nothing in the directory. Loading from the directory (or `--dir` it)
-finds that surface; the directory stays the root the tools work in. "No
+finds that surface; the directory stays the root the tools work in. It stands
+in for `<dir>/.gnomon`, so from the directory itself it wins over an
+ancestor's `.gnomon/` (a subdirectory still walks up as before). "No
 .gnomon/ surface found" names the cause when the directory is not writable.
 
 **Truncation.** The re-ask after an output-limit truncation is once per
