@@ -241,7 +241,7 @@ class LaneCovariates(R.Covariates):
     """run_fg1's per-wave covariates row plus `host` and, on the hub lane, the hub's own samples (hub_*). The gx10's
     load/RAM columns stay as defined (on the hub lane they describe the gx10, where the relays run)."""
 
-    def finish_host(self, host: str, extra: dict) -> None:
+    def finish_host(self, host: str, extra: dict, transport: dict | None = None) -> None:
         self.stop.set()
         self.th.join(timeout=10)
         req1 = R.as1_requests()
@@ -252,7 +252,8 @@ class LaneCovariates(R.Covariates):
                "avail_gb_min": round(min(ram), 1) if ram else None,
                "as1_cells_start": a1[0] if a1 else None, "as1_cells_max": max(a1, default=None),
                "as1_cells_mean": round(sum(a1) / len(a1), 2) if a1 else None,
-               "as1_requests": (req1 - self.req0) if (req1 is not None and self.req0 is not None) else None, **extra}
+               "as1_requests": (req1 - self.req0) if (req1 is not None and self.req0 is not None) else None, **extra,
+               **(transport or {})}
         with _Locked():
             R.COVARIATES.parent.mkdir(parents=True, exist_ok=True)
             with open(R.COVARIATES, "a", encoding="utf-8") as f:
@@ -261,7 +262,9 @@ class LaneCovariates(R.Covariates):
               f"{row['avail_gb_min']} GB, AS1 cells max {row['as1_cells_max']}, AS1 requests {row['as1_requests']}"
               + (f", hub CPU max {extra.get('hub_cpu_max')} mean {extra.get('hub_cpu_mean')}, hub free RAM min "
                  f"{extra.get('hub_free_gb_min')} GB, GPU max {extra.get('hub_gpu_util_max')} %, VRAM max "
-                 f"{extra.get('hub_vram_mb_max')} MB" if extra else "") + lane_tag())
+                 f"{extra.get('hub_vram_mb_max')} MB" if extra else "")
+              + (f", 429 by arm {row.get('wire_429_by_arm')}, lost s {row.get('wire_lost_s_by_arm')}"
+                 if transport else "") + lane_tag())
 
 
 def run_wave(w: dict, args, build, sp: dict, P) -> dict:
@@ -301,7 +304,13 @@ def run_wave(w: dict, args, build, sp: dict, P) -> dict:
     for th in threads:
         th.join()
     extra = mon.finish() if mon else {}
-    cov.finish_host(HOSTS[LANE], extra)
+    try:  # Amendment 5: per-arm 429 counts, calls and seconds lost to failed calls, from the wave's wire logs
+        import transport_fg1 as T
+        transport = T.wave_by_arm(w["id"], R.OUT)
+    except Exception as e:
+        R.say(f"transport covariates for {w['id']} unavailable: {type(e).__name__}: {e}{lane_tag()}")
+        transport = {}
+    cov.finish_host(HOSTS[LANE], extra, transport)
     with _Locked():
         if abort.is_set():
             R.say(f"WAVE ABORTED {w['id']} (hub RAM < {H.GUARD['abort_free_gb']} GB): containers removed "

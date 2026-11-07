@@ -192,6 +192,17 @@ def look(k: int, outcomes: Path) -> tuple[dict, str]:
     stop = all(res["comparisons"][a]["decision"] in ("efficacy", "futility") for a in COMPARISONS)
     res["stop_study"] = stop
     lines += ["", f"STUDY: {'STOP early (both comparisons decided)' if stop else 'CONTINUE (all three arms, plan order)'}"]
+    # Amendment 5: transport sensitivity beside the look. Computed AFTER the decision, with its own seed; it never
+    # feeds the decision or stop_study, and a failure here is reported, never fatal to the look.
+    try:
+        import transport_fg1 as T
+        ts, tl = T.sensitivity(eff, outcomes.parent.parent / "runs", seed=(SEED, k, 5),
+                               label=f" at look {k}")
+        res["transport_sensitivity"] = ts
+        lines += tl
+    except Exception as e:
+        res["transport_sensitivity"] = {"error": f"{type(e).__name__}: {e}"}
+        lines += ["", f"Amendment 5 — transport sensitivity unavailable ({type(e).__name__}: {e}); descriptive only"]
     return res, "\n".join(lines)
 
 

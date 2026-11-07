@@ -632,3 +632,60 @@ guards, copy-back), `apparatus/wiretest_fg1_hub.py`, `apparatus/go_probe_hub.py`
 (end ~Sun 2026-11-08 11:30Z). Two lanes: ~39 waves each plus two barrier idles (≤ ~25 min each) → **~15 h, end ~Sat
 2026-11-07 22:00Z** if the hub's waves take as long as the gx10's (no Go 2× windows on a weekend; Monday's start at
 01:00Z is not reached), plus re-runs. Holds (hub guards, the Go-allowance pause until an account switch) add to this.
+
+## Amendment 5 — 2026-11-07T07:25Z, before interim look 1 (11 of 29 attempt-1 waves scored): transport-handicap fields and a descriptive sensitivity analysis
+
+Written and committed before interim look 1 exists (`interim/` absent; look 1 runs when all 29 attempt-1 waves are
+scored). **The primary analysis is unchanged**: PLAN.json, the arms, the build pin, validity (§6), the re-run rule, the
+decision rule (§8), the interim looks, boundaries, futility rules and final level (A2, A3), the seed and the budget.
+Nothing below can change a valid/invalid call, an existing outcome field, a look's decision or `stop_study`.
+
+**A5.0 Why, and what the author saw.** Upstream (OpenCode Go) answered "429 overloaded" unevenly on the morning of
+2026-11-07: in the re-run wave a1w08 data-anonymization (Addendum 1), C got 18 of its 45 calls as HTTP 429 (06:35:45–
+06:37:53Z, 128 s from the first 429 to the retry that got through) while FG and SH got none. gnomon retried, so the cell
+is valid by §6, but its effective time budget shrank — an arm-asymmetric transport handicap within a wave (the
+benchmark-discipline "transport" check). The thresholds below were proposed by the lead from that transport event, and
+a1w08 is known to meet them; they were not chosen from outcomes. The agent who wrote this amendment saw STATUS.txt
+(whose END lines print each cell's reward, through wave a1w10) and the wire logs' status codes, and ran the new
+sensitivity code over the ledger only to check that it executes (its contrasts were not printed or read).
+
+**A5.1 Per-cell transport fields (`apparatus/transport_fg1.py`).** From the cell's log relay
+(`runs/<cell>/wire/calls.jsonl`): `wire_calls`; `wire_429`; `wire_5xx`; `wire_4xx_other`; `wire_errors` (the relay
+could not reach its upstream); `wire_aborted` (client aborts — neutral, not a failure); `wire_429_share` = 429 / calls;
+`wire_fail_share` = (429 + 5xx + other 4xx + errors) / calls; `wire_lost_s` = for each maximal run of consecutive failed
+calls in start order, the seconds from its first call's start to the start of the next call that did not fail (or to
+the end of its last call if none followed), summed. `run_fg1.score` adds them to every new outcome row
+(`wire_source = "scorer"`); the 30 rows already on the ledger (waves a1w00–a1w08, a1w10) were backfilled under the
+lanes' lock (`transport_fg1.py backfill`, `wire_source = "backfill-a5"`; additive only, asserted). Each covariates row
+gains `wire_429_by_arm`, `wire_calls_by_arm`, `wire_lost_s_by_arm` (the runner at wave end; the 10 existing rows
+backfilled). Totals at writing: C 18 × 429 (128 s lost), FG 0, SH 0; no 5xx, other 4xx or relay errors in any cell.
+
+**A5.2 The sensitivity rule (fixed now).** An arm is **handicapped** in a wave iff `wire_429_share ≥ 0.10` or
+`wire_lost_s ≥ 120`; **clean** iff `wire_429_share < 0.02` and `wire_lost_s < 120`. A wave has an **asymmetric transport
+handicap** iff it has a handicapped arm and a clean arm. Such waves are dropped **for all three arms** (from both
+comparisons); everything else as §8 (effective cells, pairs by (task, attempt) valid in both, the task-cluster
+bootstrap). A wave whose arms are all handicapped (symmetric) is kept; a wave with an arm whose wire log is missing is
+never flagged and is counted as unmeasured. At writing one wave is flagged: a1w08 (C 40 %, 128 s; FG, SH clean).
+
+**A5.3 What is reported, and where.** Beside every interim look (`interim/look{k}.txt` and `.json` key
+`transport_sensitivity`, computed after the decision with its own seed [20261107, k, 5]) and beside the final analysis
+(`summary-fg1.txt`, seed [20261107, 3, 5]): the rule, the flagged waves with the reason, the unmeasured waves, each
+arm's totals (calls, 429, 5xx, other 4xx, relay errors, client aborts, seconds lost, cells handicapped), and for FG − C
+and SH − C the primary contrast **with all waves and without the flagged waves** (pairs, estimate, 95 % task-cluster
+bootstrap CI, bootstrap SE and Z, discordant counts, exact McNemar p). **It is never decision-bearing**, at an interim
+look or at the final: the boundaries, futility rules and the adoption rule read only the primary analysis. A divergence
+between the two is reported as a flag about the apparatus, not as an effect estimate; it does not trigger a re-run (the
+cells are valid by §6). A failure of this section is printed and never stops a look.
+
+**A5.4 Running lanes.** The gx10 lane (pid 402888) and the hub lane (pid 403177) are not restarted. Their scoring and
+covariates code (`run_fg1.py`, `run_fg1_lanes.py`) was imported at start, so the scorer fields and the covariates'
+per-arm counts take effect at the next runner restart; until then rows they write lack the fields, and
+`transport_fg1.fields_of` computes them from the same wire log at analysis time (identical function), and the backfill
+may be re-run at any time (idempotent, additive). The looks and the final analysis import `interim_fg1`,
+`analyze_fg1` and `transport_fg1` lazily at the look, so look 1 in the running lanes already carries this section.
+
+**A5.5 Files.** `apparatus/transport_fg1.py` (new), `apparatus/run_fg1.py` (`_transport` in `score`),
+`apparatus/run_fg1_lanes.py` (covariates per arm), `apparatus/interim_fg1.py` and `apparatus/analyze_fg1.py` (the
+section), `apparatus/test_fg1.py` (+3: the fields and seconds lost, the rule drops only an asymmetric wave and leaves the
+look's decision-bearing output byte-identical, the backfill is additive and idempotent), `OFFLINE-TESTS.txt`
+(39 passed), `ledger/` (backfilled).

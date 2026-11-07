@@ -541,3 +541,90 @@ def test_hub_cell_cmd_matches_the_gx10_harbor_flags():
                  "--ae OPENAI_API_KEY=p2g-relay-placeholder", "FG1_SPEC_SHA256=abc", "GNOMON_REL_BASE=http://100.86.231.23:4759"):
         assert part in s, part
     assert "\r\n" in s
+
+# ------------------------------------------------------------------------------------------------ Amendment 5: transport
+
+import transport_fg1 as T  # noqa: E402
+
+
+def _calls(d, statuses, t0="2026-11-07T06:00:00", step=10):
+    """A calls.jsonl with one call every `step` s; status None = client abort, 'err' = relay error."""
+    import datetime as dt
+    d.mkdir(parents=True, exist_ok=True)
+    base = dt.datetime.fromisoformat(t0)
+    lines = []
+    for i, st in enumerate(statuses):
+        t = (base + dt.timedelta(seconds=i * step)).isoformat() + ".000Z"
+        r = {"n": i + 1, "t": t, "wall_ms": 500}
+        if st is None:
+            r["aborted"] = True
+        elif st == "err":
+            r["error"] = "ECONNRESET"
+        else:
+            r["status"] = st
+        lines.append(json.dumps(r))
+    (d / "calls.jsonl").write_text("\n".join(reversed(lines)) + "\n")  # written at reply end: any order
+
+
+def test_transport_fields_count_429s_and_seconds_lost(tmp_path):
+    _calls(tmp_path / "w", [200, 429, 429, 429, 200, None, 503, 200, 400, "err"])
+    t = T.cell_transport(tmp_path / "w")
+    assert (t["wire_calls"], t["wire_429"], t["wire_5xx"], t["wire_4xx_other"], t["wire_errors"], t["wire_aborted"]) \
+        == (10, 3, 1, 1, 1, 1)
+    # 429 run 10 s -> 40 s (30 s), 503 at 60 s -> 70 s (10 s), 400+err from 80 s to the end of the last call (10.5 s)
+    assert t["wire_lost_s"] == 50.5 and t["wire_429_share"] == 0.3 and t["wire_fail_share"] == 0.6
+    assert T.cell_transport(tmp_path / "missing") is None
+
+
+def test_transport_sensitivity_drops_only_asymmetric_waves_and_never_moves_the_look(tmp_path, monkeypatch):
+    monkeypatch.setattr(IM, "INTERIM_DIR", tmp_path / "interim")
+    rows = _rows({"C": lambda i, a: i == 0, "FG": lambda i, a: i < 4, "SH": lambda i, a: False})
+    (tmp_path / "ledger").mkdir()
+    f = _write(tmp_path / "ledger", rows)  # runs/ resolves to tmp_path / "runs", as ledger/../runs in the study
+    base, _ = IM.look(1, f)  # no wire logs at all: every wave unmeasured, nothing dropped
+    assert base["transport_sensitivity"]["unmeasured_waves"] and not base["transport_sensitivity"]["flagged_waves"]
+    runs = tmp_path / "runs"
+    for r in rows:
+        w, arm = r["wave"], r["arm"]
+        st = [200] * 40
+        if w == "a1w00" and arm == "FG":
+            st = [200] * 22 + [429] * 18                   # 45 % 429s vs clean C and SH: asymmetric -> dropped
+        if w == "a1w01":
+            st = [200] * 30 + [429] * 10                   # every arm 25 %: symmetric -> kept
+        if w == "a1w02" and arm == "C":
+            st = [200] * 39 + [429]                        # 2.5 %, 10 s lost: neither handicapped nor clean
+        _calls(runs / r["cell"] / "wire", st)
+    res, text = IM.look(1, f)
+    ts = res["transport_sensitivity"]
+    assert list(ts["flagged_waves"]) == ["a1w00"] and not ts["unmeasured_waves"]
+    assert ts["arm_totals"]["FG"]["wire_429"] == 28 and ts["arm_totals"]["C"]["wire_429"] == 11
+    assert ts["contrasts"]["FG"]["all"]["n"] == 29 and ts["contrasts"]["FG"]["without_flagged"]["n"] == 28
+    assert "DESCRIPTIVE, never decision-bearing" in text
+    # the decision-bearing part of the look is identical with and without the wire logs
+    strip = lambda r: {k: v for k, v in r.items() if k != "transport_sensitivity"}  # noqa: E731
+    assert json.dumps(strip(res), sort_keys=True) == json.dumps(strip(base), sort_keys=True)
+    # and the final analysis reports it beside the decision
+    AN.main(["--outcomes", str(f), "--out", str(tmp_path / "s.txt")])
+    s = (tmp_path / "s.txt").read_text()
+    assert "Amendment 5 — transport sensitivity at the final" in s and "a1w00 [FG 429 18/40" in s
+
+
+def test_transport_backfill_adds_fields_and_changes_nothing_else(tmp_path):
+    led, runs = tmp_path / "ledger", tmp_path / "runs"
+    led.mkdir()
+    rows = [{"cell": f"fg1-a1w00-{a}-t0", "wave": "a1w00", "arm": a, "valid": a != "SH", "solved": False}
+            for a in R.ARMS]
+    rows.append({"cell": "fg1-a1w01-C-t1", "wave": "a1w01", "arm": "C", "valid": True, "wire_429": 0})  # already has
+    (led / "outcomes.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows))
+    (led / "covariates.jsonl").write_text(json.dumps({"wave": "a1w00", "load1_max": 3.0}) + "\n")
+    _calls(runs / "fg1-a1w00-C-t0" / "wire", [200, 429, 200])
+    _calls(runs / "fg1-a1w00-FG-t0" / "wire", [200, 200])
+    o, c = T.backfill(led, runs, tmp_path / ".lock")
+    assert (o, c) == (2, 1)  # SH has no wire log (left as is), a1w01 already had the fields
+    new = [json.loads(l) for l in (led / "outcomes.jsonl").read_text().splitlines()]
+    for old, n in zip(rows, new):
+        assert {k: n[k] for k in old} == old  # every existing field unchanged, validity included
+    assert new[0]["wire_429"] == 1 and new[0]["wire_source"] == "backfill-a5" and "wire_429" not in new[2]
+    cov = json.loads((led / "covariates.jsonl").read_text())
+    assert cov["wire_429_by_arm"] == {"C": 1, "FG": 0} and cov["load1_max"] == 3.0
+    assert T.backfill(led, runs, tmp_path / ".lock") == (0, 0)  # idempotent

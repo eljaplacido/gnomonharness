@@ -441,7 +441,19 @@ def score(cid: str, arm: str, spec: dict, build: dict, wave: dict) -> dict:
             "finish_gate": FC.gate_stats(record), "go_account": wave.get("go_account"), "go_billing": ga["billing"],
             "list_usd": ga["list_usd"],
             "job_yields": sum(1 for a in aud if a.get("kind") == "job" and a.get("event") == "yield"),
-            "t_end": utc()}
+            "t_end": utc(), **_transport(cid)}
+
+
+def _transport(cid: str) -> dict:
+    """Amendment 5: per-cell 429/5xx/4xx counts and seconds lost to failed calls, from the cell's wire log
+    (transport_fg1.cell_transport). Descriptive only: never touches validity or any other field."""
+    try:
+        import transport_fg1 as T
+        t = T.cell_transport(OUT / cid / "wire")
+        return {**t, "wire_source": "scorer"} if t else {}
+    except Exception as e:  # never let the covariate break scoring
+        say(f"transport fields for {cid} unavailable: {type(e).__name__}: {e}")
+        return {}
 
 
 def load_outcomes() -> list[dict]:

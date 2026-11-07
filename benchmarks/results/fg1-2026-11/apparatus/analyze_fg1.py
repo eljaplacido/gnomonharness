@@ -27,6 +27,9 @@ analysis/summarize.py (exact McNemar on discordant pairs, task-cluster bootstrap
   the same tasks, H3's R1 (v0.4.2 + replay) and AS1's CTL (v0.4.4 + replay), per task matched, and (b) every arm's
   median agent wall time and capped share split by the wave's concurrent AS1 activity and host load
   (ledger/covariates.jsonl). Different builds: a gap is a flag to look at, not an effect estimate.
+- Amendment 5 (descriptive only, never decision-bearing): transport_fg1.sensitivity() — the primary contrasts with and
+  without waves that had an asymmetric transport handicap (an arm with 429 share >= 10 % or >= 120 s lost to failed
+  calls while another arm of the wave had < 2 % and < 120 s), plus per-arm 429/5xx/4xx totals and seconds lost.
 """
 from __future__ import annotations
 
@@ -303,6 +306,11 @@ def main(argv=None) -> int:
         L.append(f"  DECISION {arm}: {'ADOPT as a default' if not why else 'NOT ADOPTED (' + '; '.join(why) + ')'}")
     L += contention_lines(eff, Path(a.outcomes).parent / "covariates.jsonl")
     L += host_lines(eff, Path(a.outcomes).parent.parent / "ORACLE-HOSTS.json")
+    try:  # Amendment 5: descriptive transport sensitivity beside the final analysis; never decision-bearing
+        import transport_fg1 as T
+        L += T.sensitivity(eff, Path(a.outcomes).parent.parent / "runs", seed=(SEED, 3, 5), label=" at the final")[1]
+    except Exception as e:
+        L += ["", f"Amendment 5 — transport sensitivity unavailable ({type(e).__name__}: {e}); descriptive only"]
     text = "\n".join(L)
     print(text)
     Path(a.out).write_text(text + "\n", encoding="utf-8")
