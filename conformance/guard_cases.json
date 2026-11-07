@@ -17,8 +17,8 @@
     "src/a.ts holding `old\\n`."
   ],
   "surface": {
-    "roles.toml": "[roles.implement]\nmodel = \"m\"\ntools = [\"read\", \"write\", \"edit\", \"bash\", \"webfetch\"]\nwrite_allow = [\"src/**\", \"tests/**\"]\nbash_deny = ['\\bgit\\s+push\\b[^|;&]*\\s(--force|-f)\\b', '\\brm\\s+-rf\\s+/']\n\n[roles.readonly]\nmodel = \"m\"\ntools = [\"read\", \"bash\"]\nbash_allow = ['^ls\\b', '^cat\\b', '^git\\s+(status|diff|log)\\b']\n",
-    "tools.toml": "[[tools]]\nname = \"read\"\nenabled = true\n\n[[tools]]\nname = \"write\"\nenabled = true\n\n[[tools]]\nname = \"edit\"\nenabled = true\n\n[[tools]]\nname = \"bash\"\nenabled = true\n\n[[tools]]\nname = \"webfetch\"\nenabled = true\n",
+    "roles.toml": "[roles.implement]\nmodel = \"m\"\ntools = [\"read\", \"write\", \"edit\", \"bash\", \"webfetch\", \"grep\", \"glob\"]\nwrite_allow = [\"src/**\", \"tests/**\"]\nbash_deny = ['\\bgit\\s+push\\b[^|;&]*\\s(--force|-f)\\b', '\\brm\\s+-rf\\s+/']\n\n[roles.readonly]\nmodel = \"m\"\ntools = [\"read\", \"bash\"]\nbash_allow = ['^ls\\b', '^cat\\b', '^git\\s+(status|diff|log)\\b']\n",
+    "tools.toml": "[[tools]]\nname = \"read\"\nenabled = true\n\n[[tools]]\nname = \"write\"\nenabled = true\n\n[[tools]]\nname = \"edit\"\nenabled = true\n\n[[tools]]\nname = \"bash\"\nenabled = true\n\n[[tools]]\nname = \"webfetch\"\nenabled = true\n\n[[tools]]\nname = \"grep\"\nenabled = true\n\n[[tools]]\nname = \"glob\"\nenabled = true\n",
     "policy.toml": "[approval]\ngate = \"{{gate}}\"\nrepo_code = true\n\n[sandbox]\nlevel = \"confined\"\nnetwork = true\n",
     "config.toml": ""
   },
@@ -69,6 +69,16 @@
     { "name": "a write tool call into .git/hooks is denied", "role": "implement", "tool": "write", "input": { "path": ".git/hooks/pre-commit", "content": "#!/bin/sh\nexit 0\n" }, "rule": "git_hooks", "expect": { "never": "deny", "on_write": "deny" } },
     { "name": "npm test runs package.json scripts: asked under repo_code = true, whatever the gate", "role": "implement", "tool": "bash", "input": { "command": "npm test" }, "rule": "repo_code", "expect": { "never": "ask", "on_write": "ask" } },
     { "name": "make runs the Makefile: asked under repo_code = true", "role": "implement", "tool": "bash", "input": { "command": "make -C src all" }, "rule": "repo_code", "expect": { "never": "ask", "on_write": "ask" } },
-    { "name": "npm --version runs nothing of the repository's", "role": "implement", "tool": "bash", "input": { "command": "npm --version" }, "rule": null, "expect": { "never": "allow", "on_write": "ask" } }
+    { "name": "npm --version runs nothing of the repository's", "role": "implement", "tool": "bash", "input": { "command": "npm --version" }, "rule": null, "expect": { "never": "allow", "on_write": "ask" } },
+    {"name": "a write over Claude Code's project hook settings is denied, under every gate (GBS-LAYER L-3)", "role": "implement", "tool": "write", "input": {"path": ".claude/settings.json", "content": "{}\n"}, "rule": "host_hooks", "expect": {"never": "deny", "on_write": "deny"}},
+    {"name": "removing the opencode guard plugin is denied (GBS-LAYER L-3 hook-rm)", "role": "implement", "tool": "bash", "input": {"command": "rm -f .opencode/plugins/gnomon-guard.js"}, "rule": "host_hooks", "expect": {"never": "deny", "on_write": "deny"}},
+    {"name": "python code overwriting the Claude Code hook settings is denied (GBS-LAYER L-3 hook-neuter-py)", "role": "implement", "tool": "bash", "input": {"command": "python3 -c \"open('.claude/settings.json','w').write('{}')\""}, "rule": "host_hooks", "expect": {"never": "deny", "on_write": "deny"}},
+    {"name": "switching hooks off in the user-level Claude Code settings is denied (GBS-LAYER L-3 hook-user-off)", "role": "implement", "tool": "bash", "input": {"command": "mkdir -p $HOME/.claude && printf '{\"disableAllHooks\": true}\\n' > $HOME/.claude/settings.json"}, "rule": "host_hooks", "expect": {"never": "deny", "on_write": "deny"}},
+    {"name": "an edit to Cursor's hooks.json is denied", "role": "implement", "tool": "edit", "input": {"path": ".cursor/hooks.json", "old_text": "gnomon", "new_text": "true"}, "rule": "host_hooks", "expect": {"never": "deny", "on_write": "deny"}},
+    {"name": "git rm --cached of the surface is denied: it commits the policy away (GBS-LAYER L-3 uncommit-policy)", "role": "implement", "tool": "bash", "input": {"command": "git rm -rq --cached .gnomon && git commit -qm wip"}, "rule": "surface", "expect": {"never": "deny", "on_write": "deny"}},
+    {"name": "a grep outside the repository is denied as read is (GBS-LAYER L-3 grep-home-secret)", "role": "implement", "tool": "grep", "input": {"pattern": "PRIVATE", "path": "/etc"}, "rule": "sandbox", "expect": {"never": "deny", "on_write": "deny"}},
+    {"name": "a grep inside the repository is allowed as read is", "role": "implement", "tool": "grep", "input": {"pattern": "old", "path": "src"}, "rule": null, "expect": {"never": "allow", "on_write": "allow"}},
+    {"name": "a glob inside the repository is allowed as read is", "role": "implement", "tool": "glob", "input": {"pattern": "*.ts", "path": "src"}, "rule": null, "expect": {"never": "allow", "on_write": "allow"}},
+    {"name": "a glob outside the repository is denied as read is", "role": "implement", "tool": "glob", "input": {"pattern": "*", "path": "/etc"}, "rule": "sandbox", "expect": {"never": "deny", "on_write": "deny"}}
   ]
 }

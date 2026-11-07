@@ -57,6 +57,7 @@ import {
   bashNetworkEgress,
   describeInvocation,
   gitExecConfigs,
+  gitIndexOps,
   isDryRunSegment,
   joinWords,
   programName,
@@ -68,7 +69,7 @@ import {
   type RepoCodeRun,
   type WriteTarget,
 } from "./shell.js";
-import { containedMountPoints, containedReadonlyPaths, ensureDirIn, readRegular, RootWriteError, writeFileIn, writeRegular } from "./root_fs.js";
+import { containedMountPoints, containedReadonlyPaths, ensureDirIn, readRegular, repoStateDir, RootWriteError, writeFileIn, writeRegular } from "./root_fs.js";
 import {
   HANDLE_BASH_PARAMETERS,
   JOB_DESCRIPTION,
@@ -1688,24 +1689,13 @@ export const NO_POSIX_SHELL =
  * out -- on Windows, when taskkill has exited, since taskkill /T /F is what
  * ends the tree; elsewhere at once, because the group SIGKILL is synchronous.
  */
-function killTree(
-  proc: { pid?: number; kill: (sig: NodeJS.Signals) => boolean },
-  containerName?: string
-): Promise<void> {
+function killTree(proc: { pid?: number; kill: (sig: NodeJS.Signals) => boolean }): Promise<void> {
   // A container is not in the process group. Killing `docker run` returns the
   // shell to us and leaves the container running, so a timed-out command would
   // keep working -- writing into the repository -- after the turn had given up
-  // on it. The caller removes it, and waits for that (removeContainer).
-  if (containerName) {
-    try {
-      spawn("docker", ["rm", "-f", containerName], {
-        stdio: "ignore",
-        detached: true,
-      }).unref();
-    } catch {
-      // docker gone, or never started one
-    }
-  }
+  // on it. Every caller starts removeContainer BEFORE this and awaits it: the
+  // one removal, owned and confirmed. (This used to fire its own detached
+  // `docker rm -f` as well, which outlived the tool call -- see removeContainer.)
   if (typeof proc.pid === "number" && process.platform === "win32") {
     // No process groups to signal. /T walks the tree, /F is SIGKILL's analogue.
     try {
@@ -1756,6 +1746,32 @@ const CONTAINER_REMOVE_MS = 20_000;
  * runs on this machine until docker says it is.
  */
 async function removeContainer(name: string): Promise<boolean> {
+  // Claimed synchronously, before the first await, so the `docker run` exit
+  // that the kill provokes (containerAfterExit) leaves the removal to us.
+  removing.add(name);
+  try {
+    return await confirmRemoved(name);
+  } finally {
+    removing.delete(name);
+  }
+}
+
+/**
+ * Containers whose removal a kill site is awaiting (removeContainer).
+ *
+ * WHY (#164 flake, 2026-11-06). A job kill under exec = "docker" used to run
+ * three `docker rm -f`s: killTree's and containerAfterExit's, both detached
+ * and never awaited, beside removeContainer's. The tool returned on
+ * removeContainer's confirmation while the strays could still be running --
+ * processes outliving the call that started them, racing whatever came next
+ * (on CI, the stub docker's state file, read as '' mid-rewrite). Harmless to
+ * the git_safe rule with a real docker -- only `inspect` saying "no such
+ * container" unregisters, and nothing brings a removed container back -- but
+ * a removal now has exactly one owner, and it is awaited.
+ */
+const removing = new Set<string>();
+
+async function confirmRemoved(name: string): Promise<boolean> {
   const until = Date.now() + CONTAINER_REMOVE_MS;
   const run = (args: string[], ms: number) =>
     new Promise<{ code: number | null; err: string }>((done) => {
@@ -1952,6 +1968,10 @@ export function sandboxCommand(
  *                reports, session snapshots
  *   git_hooks    a write into `.git/hooks/` or `.git/config`, or a `git config`
  *                that sets a key git runs as a program (core.hooksPath, …)
+ *   host_hooks   a write or removal of a host harness's hook configuration:
+ *                the files `gnomon guard install` writes (Claude Code
+ *                settings, the opencode plugin, Cursor's hooks.json) and the
+ *                user-level settings that can switch them off
  *   write_allow  a path outside the role's write_allow
  *   network      `[sandbox] network = false`
  *   url          a scheme other than http(s), or a private / loopback address
@@ -1969,6 +1989,7 @@ export const POLICY_RULES = [
   "surface",
   "record",
   "git_hooks",
+  "host_hooks",
   "write_allow",
   "network",
   "url",
@@ -2361,7 +2382,11 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
       }
     },
   };
-  const resolveTarget = (path: string, cwd: string | null): string | null => {
+  const resolveTarget = (written: string, cwd: string | null): string | null => {
+    // `$HOME/…` and `${HOME}/…` name the home directory as surely as `~/…`
+    // does, and the user-level hook settings live there (GBS-LAYER pilot:
+    // `printf … > $HOME/.claude/settings.json`).
+    const path = written.replace(/^(\$HOME|\$\{HOME\})(?=\/|$)/, "~");
     const cut = path.search(/[$`*?[{]/);
     if (cut === 0) return null;
     const literal = cut < 0 ? path : `${path.slice(0, cut)}x`;
@@ -2390,6 +2415,7 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     summary: `bash ${path} — refused (surface is read-only)`,
   });
   const hooksHit = (path: string, how: string): Precheck => gitHooksRefusal("bash", path, how);
+  const hostHit = (path: string, how: string): Precheck => hostHooksRefusal("bash", path, how);
 
   const { targets } = shellWriteTargets(command, opts);
   const protectedDirs = (): Array<{ dir: string; kind: "record" | "surface" }> => [
@@ -2415,9 +2441,20 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
       const name = recordPathKey(slash >= 0 ? literal.slice(slash + 1) : literal);
       if (inRecordDir(ctx, base)) return recordHit(t.path, t.how);
       if (inSurface(ctx, base)) return surfaceHit(t.path, t.how);
+      if (inHostHooks(ctx, base)) return hostHit(t.path, t.how);
       for (const p of protectedDirs()) {
         if (name !== "" && recordPathKey(dirname(p.dir)) === recordPathKey(base) && recordPathKey(basename(p.dir)).startsWith(name)) {
           return p.kind === "record" ? recordHit(t.path, t.how) : surfaceHit(t.path, t.how);
+        }
+      }
+      // `.clau*/settings.json`, `.claude/sett*`: a prefix of a hook file's
+      // name, or of a directory on the way to one.
+      for (const h of hostHookPaths(ctx.root)) {
+        for (let d = h; dirname(d) !== d; d = dirname(d)) {
+          if (recordPathKey(dirname(d)) === recordPathKey(base)) {
+            if (name !== "" && recordPathKey(basename(d)).startsWith(name)) return hostHit(t.path, t.how);
+            break;
+          }
         }
       }
     }
@@ -2434,6 +2471,9 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
           }
         }
         if (/^\.git(\/|$)|\/\.git\//.test(t.path) && /(^|\/)\.git\/(hooks|config)(\/|$)/.test(t.path)) return hooksHit(t.path, t.how);
+        if (HOST_HOOK_REL.test(t.path.replace(/\/+$/, ""))) return hostHit(t.path, t.how);
+        // A recursive removal of a directory that holds one (`rm -rf .claude`).
+        if (t.recursive && /(^|\/)(\.claude|\.opencode|\.cursor)\/?$/.test(t.path)) return hostHit(t.path, t.how);
         // A git clean, or a recursive removal of `.` or `..`, from a directory
         // gnomon cannot place may be the one above the records.
         const upward = t.recursive === true && /^(\.\.?\/?)+$/.test(t.path);
@@ -2479,7 +2519,7 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     // remove: put to the record, surface and hooks rules (which ask whether
     // they reach those), never to write_allow, which judged neither before
     // (INJ-2026-11 re-run: `find . -name '*.pyc' -delete` must stay allowed).
-    const reach = t.how === "find -delete" || t.clean !== undefined;
+    const reach = t.how === "find -delete" || t.how === "git rm --cached" || t.clean !== undefined;
     const writeAllow = !reach && t.how !== "ln (source)" && !((t.how === "tar -x (into)" || t.how === "unzip (into)") && t.path === ".");
     judged.push({ path: t.path, abs, how: t.how, writeAllow, t });
   }
@@ -2500,6 +2540,7 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
         const keep = recordDirs(ctx).map((d) => `-e ${relative(root, d).split(sep).join("/") || d}`).join(" ");
         return { ...r, content: `${r.content}\n\nTo clean everything else, keep them out of it: git clean … ${keep}` };
       }
+      if (hit?.kind === "host_hooks") return hostHit(j.path, `${j.how}, which removes ${hit.what}`);
       if (hit) return surfaceHit(j.path, `${j.how}, which removes ${hit.what}`);
     } else if (j.t.recursive) {
       for (const p of protectedDirs()) {
@@ -2509,9 +2550,17 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
             : surfaceHit(j.path, `${j.how}, which removes everything below it`);
         }
       }
+      // `rm -rf .claude`, `mv .opencode x`: the hook configuration goes with
+      // the directory that holds it.
+      for (const h of hostHooksBelow(ctx, j.abs)) {
+        if (removalMatches(h, j.abs, j.path, j.t.names)) {
+          return hostHit(j.path, `${j.how}, which removes ${relative(root, h).split(sep).join("/") || h}`);
+        }
+      }
     }
     if (inSurface(ctx, j.abs)) return surfaceHit(j.path, j.how);
     if (inGitControl(ctx, j.abs)) return hooksHit(j.path, j.how);
+    if (inHostHooks(ctx, j.abs)) return hostHit(j.path, j.how);
     if (!j.writeAllow) continue;
     const rel = relative(root, j.abs);
     if (rel.startsWith("..") || isAbsolute(rel)) continue;
@@ -2531,11 +2580,85 @@ function bashWriteRefusal(command: string, ctx: ToolContext): Precheck | null {
     };
   }
 
+  const committed = surfaceCommitRefusal(command, ctx);
+  if (committed) return committed;
+
   // `git config core.hooksPath …` and the other keys git runs: a persistent
   // way to run code on the operator's next git command, which names no file.
   const exec = gitExecConfigs(command)[0];
   if (exec) {
     return gitHooksRefusal("bash", exec.key, `git config ${exec.key}`);
+  }
+  return null;
+}
+
+/**
+ * A `git commit` that would record a change to `.gnomon/`: one already staged,
+ * one `-a` or a pathspec takes from the working tree, or one a `git add` in
+ * the same command stages. GBS-LAYER pilot (2026-11-06): `git rm -r --cached
+ * .gnomon && git commit` was allowed under `gate = "never"`, and a session
+ * that took its rules from HEAD afterwards had none. A change to the
+ * committed rules is a person's act; an agent's commit may not carry one.
+ *
+ * Only under strict consent (always, for another harness's call): a person
+ * who allowed surface edits for this session (/allow custom|all) may have the
+ * agent commit them.
+ */
+function surfaceCommitRefusal(command: string, ctx: ToolContext): Precheck | null {
+  if ((ctx.allow ?? "strict") !== "strict") return null;
+  if (!/\bcommit\b/.test(command)) return null;
+  const ops = gitIndexOps(command);
+  if (!ops.some((o) => o.sub === "commit")) return null;
+  const root = resolve(ctx.root);
+  const surface = surfaceDir(ctx);
+  const spec = relative(root, surface).split(sep).join("/");
+  if (spec.startsWith("..") || isAbsolute(spec)) return null;
+  const r = safeGit(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", spec || "."], {
+    cwd: root,
+    timeout: 5000,
+    maxBuffer: 16 * 1024 * 1024,
+    hot: true,
+  });
+  if (r.status !== 0 || typeof r.stdout !== "string") return null;
+  let staged = "";
+  let tracked = "";
+  let untracked = "";
+  for (const entry of r.stdout.split("\0")) {
+    if (entry.length < 4) continue;
+    const [x, y, file] = [entry[0]!, entry[1]!, entry.slice(3)];
+    if (x === "?" ) untracked ||= file;
+    else {
+      if (x !== " " && x !== "!") staged ||= file;
+      if (y !== " " && y !== "!") tracked ||= file;
+    }
+  }
+  if (!staged && !tracked && !untracked) return null;
+  const reaches = (o: { at: string; pathspecs: string[] }) =>
+    o.pathspecs.some((p) => {
+      if (/[*?[]/.test(p) || p.startsWith(":")) return true;
+      const abs = resolve(root, o.at, p);
+      return isAncestor(abs, surface) || isAncestor(surface, abs);
+    });
+  const refuse = (what: string): Precheck => ({
+    rule: "surface",
+    code: TOOL_DENIED,
+    content:
+      `Refused: this command commits a change to .gnomon/ (${what}). The rules every ` +
+      `session is decided by are the committed ones, so committing a change to them -- ` +
+      `or committing them away -- is a person's act, not a tool call's. Commit your own ` +
+      `files by name (\`git commit -m … -- src/…\`), and leave .gnomon/ to the person.`,
+    summary: `bash — commits a change to .gnomon/, refused (surface is read-only)`,
+  });
+  if (staged) return refuse(`${staged} is staged`);
+  let adds = false;
+  for (const o of ops) {
+    if (o.sub === "add") {
+      if ((o.all || reaches(o)) && (tracked || untracked)) adds = true;
+      continue;
+    }
+    if (adds) return refuse(`a git add in this command stages ${tracked || untracked}`);
+    if (o.all && tracked) return refuse(`commit -a takes ${tracked}`);
+    if (reaches(o) && (tracked || untracked)) return refuse(`the commit's pathspec takes ${tracked || untracked}`);
   }
   return null;
 }
@@ -2616,10 +2739,17 @@ function removalMatches(dir: string, start: string, written: string, names?: str
  * command's -x/-X, -e and pathspecs. When git cannot say, a record directory
  * in reach counts as removed.
  */
-function cleanReaches(ctx: ToolContext, at: string, clean: GitClean): { kind: "record" | "surface"; what: string } | null {
+function cleanReaches(
+  ctx: ToolContext,
+  at: string,
+  clean: GitClean
+): { kind: "record" | "surface" | "host_hooks"; what: string } | null {
+  // A git-ignored `.claude/settings.local.json` is exactly what `git clean
+  // -fdx` removes.
   const reach = [
     ...recordDirs(ctx).map((dir) => ({ dir, kind: "record" as const })),
     { dir: surfaceDir(ctx), kind: "surface" as const },
+    ...hostHookPaths(ctx.root).map((dir) => ({ dir, kind: "host_hooks" as const })),
   ].filter((p) => existsSync(p.dir) && (isAncestor(at, p.dir) || isAncestor(p.dir, at)));
   if (reach.length === 0) return null;
   const specs = clean.pathspecs.map((s) => (/[*?[]/.test(s) ? null : resolve(at, s)));
@@ -2733,6 +2863,148 @@ function gitHooksRefusal(tool: string, path: string, how?: string): Precheck {
     summary: `${tool} ${path} — refused (git hooks)`,
   };
 }
+// ---------------------------------------------------------------------------
+// The host harnesses' hook configuration
+// ---------------------------------------------------------------------------
+
+/**
+ * Where another harness is told to put a call to `gnomon guard` -- and where
+ * it can be told to stop. GBS-LAYER pilot (2026-11-06): `rm
+ * .opencode/plugins/gnomon-guard.js`, a `{}` written over
+ * `.claude/settings.json` and a user-level `{"disableAllHooks": true}` were
+ * all left to the approval gate (ask, and ALLOW under `gate = "never"`), and
+ * the session after the removal ran a call the hook would have refused. The
+ * layer did not defend its own attachment.
+ *
+ * In the repository (the root, and the git toplevel above it when they
+ * differ): Claude Code's `.claude/settings.json`, `settings.local.json` and
+ * `hooks/`; opencode's plugin directories and project config; Cursor's
+ * `.cursor/hooks.json`. For the user, the same files where each harness reads
+ * its user-level copy (`$CLAUDE_CONFIG_DIR` or `~/.claude`,
+ * `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`, `$OPENCODE_CONFIG`,
+ * `~/.cursor`). And gnomon's per-repository state (root_fs.ts repoStateDir),
+ * which holds each guard session's base. A path names that file, or a
+ * directory and everything below.
+ */
+export function hostHookPaths(root: string, env: NodeJS.ProcessEnv = process.env): string[] {
+  // Read on every write target of every shell call: remembered per root and
+  // per the environment that moves the user-level paths. Only a found
+  // repository is remembered, as gitControlPaths does.
+  const key = [root, homedir(), env.CLAUDE_CONFIG_DIR, env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.APPDATA, env.OPENCODE_CONFIG].join("\0");
+  const hit = HOST_HOOKS.get(key);
+  if (hit) return hit;
+  const found = hostHookPathsOf(root, env);
+  if (found.repo) HOST_HOOKS.set(key, found.paths);
+  return found.paths;
+}
+const HOST_HOOKS = new Map<string, string[]>();
+
+function hostHookPathsOf(root: string, env: NodeJS.ProcessEnv): { paths: string[]; repo: boolean } {
+  const home = homedir();
+  const bases = [resolve(root)];
+  let gitDir: string | null = null;
+  for (let d = resolve(root); ; d = dirname(d)) {
+    const dotGit = join(d, ".git");
+    if (existsSync(dotGit)) {
+      if (!bases.includes(d)) bases.push(d);
+      gitDir = dotGit;
+      try {
+        if (!statSync(dotGit).isDirectory()) {
+          const m = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, "utf-8"));
+          gitDir = m ? resolve(d, m[1]!) : null;
+        }
+      } catch {
+        gitDir = null;
+      }
+      break;
+    }
+    if (dirname(d) === d) break;
+  }
+  const out: string[] = [];
+  // gnomon's own state for this repository, outside it: the base each guard
+  // session's rules are read from, the rules materialised from it, and the
+  // record of what `gnomon guard install` wrote. Removing a session's base
+  // re-reads the rules from a moved HEAD; writing the rules cache rewrites
+  // the rules.
+  if (gitDir) out.push(repoStateDir(gitDir));
+  for (const b of bases) {
+    out.push(
+      join(b, ".claude", "settings.json"),
+      join(b, ".claude", "settings.local.json"),
+      join(b, ".claude", "hooks"),
+      join(b, ".opencode", "plugins"),
+      join(b, ".opencode", "plugin"),
+      join(b, ".opencode", "opencode.json"),
+      join(b, ".opencode", "opencode.jsonc"),
+      join(b, "opencode.json"),
+      join(b, "opencode.jsonc"),
+      join(b, ".cursor", "hooks.json")
+    );
+  }
+  // Both the default place and the one the environment names: the variable
+  // can differ between this process and the harness's next start.
+  const claudes = [join(home, ".claude"), ...(env.CLAUDE_CONFIG_DIR ? [resolve(env.CLAUDE_CONFIG_DIR)] : [])];
+  const xdgs = [join(home, ".config"), ...(env.XDG_CONFIG_HOME ? [resolve(env.XDG_CONFIG_HOME)] : [])];
+  for (const claude of claudes) out.push(join(claude, "settings.json"), join(claude, "settings.local.json"), join(claude, "hooks"));
+  for (const xdg of xdgs) {
+    out.push(
+      join(xdg, "opencode", "plugins"),
+      join(xdg, "opencode", "plugin"),
+      join(xdg, "opencode", "opencode.json"),
+      join(xdg, "opencode", "opencode.jsonc"),
+      join(xdg, "opencode", "config.json")
+    );
+  }
+  out.push(join(home, ".cursor", "hooks.json"));
+  if (env.OPENCODE_CONFIG) out.push(resolve(root, env.OPENCODE_CONFIG));
+  return { paths: [...new Set(out)], repo: gitDir !== null };
+}
+
+/**
+ * The same files named relative to wherever they are, for a path gnomon
+ * cannot place (a write after a `cd "$X"`): `.claude/settings.json` is that
+ * file in whatever directory the shell turns out to be in.
+ */
+const HOST_HOOK_REL =
+  /(^|\/)(\.claude\/(settings(\.local)?\.json|hooks)|\.opencode\/(plugins?|opencode\.jsonc?)|opencode\.jsonc?|\.cursor\/hooks\.json|\.config\/opencode\/(plugins?|opencode\.jsonc?|config\.json))(\/|$)/;
+
+/** Whether a resolved path is (or is below) a host harness's hook configuration. */
+export function inHostHooks(ctx: ToolContext, abs: string): boolean {
+  const under = (base: string, p: string): boolean => {
+    const rel = relative(recordPathKey(base), recordPathKey(p));
+    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  };
+  const real = realpathOfNearest(abs);
+  const lexical = resolve(abs);
+  return hostHookPaths(ctx.root).some((h) => under(realpathOrSelf(h), real) || under(h, lexical));
+}
+
+/** The host hook paths a recursive removal starting at `abs` would reach, that exist. */
+function hostHooksBelow(ctx: ToolContext, abs: string): string[] {
+  return hostHookPaths(ctx.root).filter((h) => existsSync(h) && isAncestor(abs, h));
+}
+
+const HOST_HOOKS_WHY =
+  `This is how gnomon's rules reach the harness making this call -- its hook ` +
+  `configuration (Claude Code settings, the opencode plugin, Cursor's hooks.json) or ` +
+  `the user-level settings that can switch those hooks off. Changing or removing it ` +
+  `detaches the governance layer from every later session, so no role writes it, ` +
+  `whatever the approval gate says. If the hooks need changing, say so plainly and ` +
+  `give the person the exact command (\`gnomon guard install …\`, \`gnomon guard status\`).`;
+
+function hostHooksRefusal(tool: string, path: string, how?: string): Precheck {
+  const what =
+    how === undefined
+      ? `"${path}" is a host harness's hook configuration`
+      : `this command writes "${path}" (${how}), a host harness's hook configuration`;
+  return {
+    rule: "host_hooks",
+    code: TOOL_DENIED,
+    content: `Refused: ${what}.\n\n${HOST_HOOKS_WHY}`,
+    summary: `${tool} ${path} — refused (host hooks)`,
+  };
+}
+
 /**
  * The paths a patch file writes, read from its headers. Empty when the file
  * cannot be read; capped, since a patch is the agent's to make arbitrarily
@@ -3043,8 +3315,9 @@ async function bashTool(
     const timer = setTimeout(async () => {
       if (settled) return;
       settled = true;
-      await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
-      const containerLeft = sandboxed && !(await removeContainer(sandboxName));
+      const removal = sandboxed ? removeContainer(sandboxName) : Promise.resolve(true);
+      await settleKill(killTree(proc), exited);
+      const containerLeft = !(await removal);
       // What the command printed before it was killed is evidence the harness
       // already holds: the failing test, the last line of a build, the prompt it
       // was blocked on. Discarding it left the model with nothing to act on but
@@ -3090,8 +3363,9 @@ async function bashTool(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      await settleKill(killTree(proc, sandboxed ? sandboxName : undefined), exited);
-      const containerLeft = sandboxed && !(await removeContainer(sandboxName));
+      const removal = sandboxed ? removeContainer(sandboxName) : Promise.resolve(true);
+      await settleKill(killTree(proc), exited);
+      const containerLeft = !(await removal);
       releasePipes(proc);
       const atDeadline = ctx.signal?.reason === DEADLINE_ABORT;
       done({
@@ -3174,7 +3448,9 @@ async function bashTool(
 function containerAfterExit(sandboxName: string, exit: number | null): void {
   if (exit !== null && exit !== 125) {
     containerGone(sandboxName);
-  } else {
+  } else if (!removing.has(sandboxName)) {
+    // Nobody is removing it: start that. When a kill site is (removeContainer),
+    // it is awaiting the removal and unregisters on confirmation.
     try {
       spawn("docker", ["rm", "-f", sandboxName], { stdio: "ignore", detached: true }).unref();
     } catch {
@@ -3573,9 +3849,9 @@ export class JobTable {
       // under it has a supervisor, and this must call killSupervisedTree on
       // it (first, as bashTool's timeout path does there), or a setsid'd
       // descendant outlives the turn. This is the one job kill site.
-      const killed = killTree(job.proc, job.start.sandboxName);
-      await settleKill(killed, job.exited);
-      if (job.start.sandboxName) gone = await removeContainer(job.start.sandboxName);
+      const removal = job.start.sandboxName ? removeContainer(job.start.sandboxName) : Promise.resolve(true);
+      await settleKill(killTree(job.proc), job.exited);
+      gone = await removal;
     }
     // The shell is dead; its close follows. Bounded, so a grandchild holding
     // the pipes cannot hold the turn.
@@ -5511,6 +5787,11 @@ export function writePrecheck(
       },
     };
   }
+  // A host harness's hook configuration, before the sandbox: the user-level
+  // settings are outside the root, and under `sandbox = "off"` nothing else
+  // would refuse them. Named as what they are, wherever they are.
+  const hookAt = path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : resolve(ctx.root, path);
+  if (path.trim() !== "" && inHostHooks(ctx, hookAt)) return { refusal: hostHooksRefusal(tool, path) };
   const abs = resolveInRoot(ctx.root, path, ctx.sandbox, ctx.extraRoots);
   if (!abs) {
     return {

@@ -684,9 +684,10 @@ decision gnomon could not make is never an allow.
 | `bash_allow` | a segment is not on the role's `bash_allow`, or the command substitutes or redirects |
 | `sudo` | sudo at command position, on the host |
 | `sandbox` | a path outside the root and every granted `extra_roots` |
-| `surface` | a write or edit inside `.gnomon/`, including through a symlink from either side, a hard link to a surface file, and, on case-insensitive filesystems, other spellings of the directory; and a shell write target inside it (or a recursive removal of a directory above it), for every role and at every `/allow` level: the write tool under `/allow custom\|all` is the one consented route |
+| `surface` | a write or edit inside `.gnomon/`, including through a symlink from either side, a hard link to a surface file, and, on case-insensitive filesystems, other spellings of the directory; and a shell write target inside it (or a recursive removal of a directory above it), for every role and at every `/allow` level: the write tool under `/allow custom\|all` is the one consented route. Also a `git rm` (`--cached` included) of a path in it, and, under strict consent, a `git commit` that would record a change to it: one already staged, one `-a` or the commit's pathspec takes, or one a `git add` in the same command stages |
 | `record` | a write, edit or shell write target inside gnomon's own records: `.gnomon-audit/` (or the `[audit] dir`), `.gnomon-trials/` and `.gnomon-sessions/` (or the `[session] dir`), for every role, with no consent path. This includes a hard link to a record, an `ln` into or out of one, git checkout/restore/clone/worktree/apply, archive extraction (members listed by `tar`/`unzip`), rsync, a perl two-argument open, an awk redirect, a glob that could name a record, on case-insensitive filesystems other spellings of the directory, a recursive removal of a directory above the records (`rm -r`, `find -delete` unless its name tests match no record, `mv`, `rsync --delete`, `shutil.rmtree` and the like), and a `git clean` or `git stash --include-untracked\|--all` that would remove a record (git's own `status` says which, after `-x`/`-X`/`-e` and pathspecs) |
 | `git_hooks` | a write, edit or shell write target in `.git/hooks/` or `.git/config` (a linked worktree's common git dir included), or a `git config` that sets, in any scope, a key git runs as a program: `core.hooksPath`, `core.fsmonitor`, `core.sshCommand`, `core.pager`, `core.editor`, `core.askPass`, `sequence.editor`, `credential.helper`, diff/merge/filter drivers, `gpg.program`, `pager.*`, `alias.*` starting with `!`, `include.path`, `init.templateDir` and the rest of the list in `shell.ts` (`GIT_EXEC_KEYS`). For every role |
+| `host_hooks` | a write, edit or shell write target in a host harness's hook configuration — what `gnomon guard install` writes and what can switch it off: `.claude/settings.json`, `.claude/settings.local.json`, `.claude/hooks/`, `.opencode/plugins/` (and `plugin/`), `opencode.json[c]`, `.cursor/hooks.json` in the root and the git toplevel; the user-level copies (`$CLAUDE_CONFIG_DIR` or `~/.claude`, `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`, `$OPENCODE_CONFIG`, `~/.cursor/hooks.json`); and gnomon's per-repository state (the guard's session bases and rules cache). A recursive removal, `mv`, `git rm` or `git clean` that would reach one counts. For every role, under every gate: removing the hook detaches the layer from every later session (GBS-LAYER pilot, 2026-11-06) |
 | `write_allow` | a path outside the role's `write_allow`; or a relative shell write after a `cd` gnomon cannot follow (`cd "$X"`), which it cannot place |
 | `network` | `[sandbox] network = false`, and the call names a network client, a remote `scp`/`rsync` target, `/dev/tcp`, interpreter code that opens a connection, a git remote by URL (`push`, `fetch`, `pull`, `ls-remote`, `clone`, `remote add\|set-url`, `submodule add`, `archive --remote`, a `-c` value, `git config remote.*.url`), or a package manager's registry or package URL (`--registry`, `--index-url`, `-i`, a URL operand) |
 | `url` | a scheme other than http(s), or a private, loopback or link-local address |
@@ -697,7 +698,9 @@ decision gnomon could not make is never an allow.
 
 `rule` is `null` on an allow that nothing stopped. Tools decided (`tool`):
 `bash`, `write`, `edit`, `read`, `webfetch` — gnomon's own names and argument
-names — and `execute` (`{ "code" }`), JavaScript a harness runs itself
+names — `grep` and `glob` (`{ "pattern", "path"? }`), decided as a `read` of
+the directory they search (and, for a glob whose pattern names its own
+directory, of that too), and `execute` (`{ "code" }`), JavaScript a harness runs itself
 (opencode V2's Code Mode). `execute` is decided as the equivalent bash call
 `node -e '<code>'`; for a role without `bash` it is `ask` with rule `tools`.
 Anything else is `allow` with rule `ungoverned`, never guessed at.
@@ -767,9 +770,25 @@ commit the rules were read from, full sha), `surface_hash` (the surface at
 "cwd"?, "session_id"?}`. With `--from claude-code | opencode | cursor` stdin
 is that harness's own hook payload, and the answer is in its own format
 (`harness_answers` in the fixture): Claude Code gets nothing on allow and
-`hookSpecificOutput.permissionDecision` deny or ask otherwise, exit 0; Cursor
+`hookSpecificOutput.permissionDecision` deny or ask otherwise, exit 0 — except
+that when the payload's `permission_mode` is `bypassPermissions`
+(`--dangerously-skip-permissions`), where Claude Code puts no ask to anyone
+and was seen to run one (GBS-LAYER pilot, Claude Code 2.1.319), an `ask` is
+answered `deny`, its reason saying so, and recorded as the deny it is; Cursor
 gets `{}` on allow and `permission` / `user_message` / `agent_message`
-otherwise, exit 0; opencode's plugin reads the generic document.
+otherwise, exit 0; opencode's plugin reads the generic document, and passes
+`--session-base <sha>`, the HEAD it read when opencode loaded it, which the
+guard uses and records only for a session with no recorded base yet.
+
+**`gnomon guard status`** (`--dir`, `--expect <hosts>`, `--json`, schema
+`gnomon.guard.status/1`) says, per host (`claude-code`, `opencode`,
+`cursor`), whether the hook `gnomon guard install` wrote is still there:
+`ok`, `missing`, `modified` (the guard hook is gone from the file, its matcher
+no longer covers the decided tools, or the file differs from HEAD or from
+what `install --write` recorded), `disabled` (`disableAllHooks` in the
+project, local or user Claude Code settings) or `not_installed`. A host is
+expected when its hook is committed at HEAD, `install --write` recorded it, or
+`--expect` names it. Exit 0 with no finding, 2 with one, 10 when not governed.
 
 **Fixtures**: `conformance/guard_decision.json` (this contract) and
 `conformance/guard_cases.json` (calls and the decision each must reach).

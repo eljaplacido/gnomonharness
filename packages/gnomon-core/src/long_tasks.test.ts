@@ -345,12 +345,13 @@ describe("--deadline: the run stops itself with a final record (TB1)", () => {
     expect(budget).toBeGreaterThan(1500);
     expect(budget).toBeLessThanOrEqual(2500);
     expect(rec.stop_detail!.margin_ms).toBe(Math.floor(budget / 10));
-    // Stopped by the deadline, not by waiting out the 30 s sleep. Structural,
-    // not a wall-time race: the stop's latency on a loaded runner is not the
-    // property (CI measured 2525 ms against a 2500 ms bound). A timer never
-    // fires early, so the lower bound holds on any machine; the upper one only
-    // has to tell "stopped" from "waited 30 s".
-    expect(took).toBeLessThan(15_000);
+    // Stopped by the deadline, not by the 30 s sleep finishing: the stop
+    // comes from the deadline timer (stop_reason above) and the sleep was
+    // killed at its clamped timeout (tool_log below). Not `took < 2500`:
+    // how long the wind-down after the timer takes is the runner's speed,
+    // not the harness's decision -- a hosted Windows runner's taskkill took
+    // it to 2750 ms (#166). The timer cannot fire early, so the floor holds.
+    expect(took).toBeLessThan(30_000);
     expect(took).toBeGreaterThanOrEqual(2000);
     expect(rec.output).toMatch(/Stopped at the deadline/);
     expect(rec.volatile.deadline).toMatchObject({ budget_ms: budget, source: "flag" });
