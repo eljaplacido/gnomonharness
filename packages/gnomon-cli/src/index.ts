@@ -2729,7 +2729,7 @@ Commands:
     --install-hook claude-code prints the SessionStart + Stop hooks that
     run this on every Claude Code session (it edits nothing).
 
-  guard --tool <bash|write|edit|read|webfetch> --input <json> [--role <r> | --agent <a>]
+  guard --tool <bash|write|edit|read|webfetch|grep|glob|execute> --input <json> [--role <r> | --agent <a>]
   guard --from claude-code|opencode|cursor|generic  (the call on stdin)
     Decide one tool call another harness is about to make, before it runs,
     by this surface's rules as committed (the session's recorded base, else
@@ -2741,6 +2741,10 @@ Commands:
   guard install claude-code|opencode|cursor [--write]
     Print the hook (Claude Code PreToolUse, an opencode 2.2 plugin, Cursor
     hooks.json), or with --write add it to this project's own config.
+  guard status [--expect claude-code,opencode,cursor] [--json] [--dir <path>]
+    Per host: the hook ok, missing, modified (differs from HEAD or from what
+    install --write recorded), disabled (disableAllHooks) or not installed.
+    Exit 0 no finding, 2 a finding, 10 no .gnomon/ governs the directory.
 
   dashboard [--port <n>] [--no-open] [--dir <path>]
     A command center in the browser: projects, sessions as a timeline, what
@@ -2809,7 +2813,15 @@ Getting started in a project:
   gnomon launch
 
 Environment:
-  GNOMON_BIN_OVERRIDE     Path to gnomon binary (for testing)
+  GNOMON_BIN_OVERRIDE     Directory holding the native binaries (a release
+                          archive unpacked by hand, or a test build)
+  GNOMON_BUILD            The build string records name (a release archive's
+                          GNOMON_BUILD file), instead of version+commit
+  GNOMON_SHELL            The POSIX shell bash runs through (Windows, when Git
+                          for Windows' bash is not where gnomon looks)
+  GNOMON_MODEL_URL        Send every model call to this URL instead of the
+                          declared endpoint's. Machine-scoped: not in the
+                          surface hash, so replay cannot reproduce it
   GNOMON_NO_UPDATE_CHECK  Set to 1 to never look for a newer release
   GNOMON_DEADLINE         \`gnomon task --deadline\` when the flag is absent:
                           seconds from now, or an ISO 8601 time with a zone.

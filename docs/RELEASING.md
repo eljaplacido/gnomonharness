@@ -202,7 +202,12 @@ registry for each of the four packages before anything is downloaded:
 | missing for any | not set | stops, naming the four packages and the exact fields to enter |
 
 Measured: v0.3.3 and v0.4.0 both stopped at the old "Require NPM_TOKEN" step,
-because no secret was set, so the registry is still at 0.3.2.
+because no secret was set, so the registry is still at 0.3.2. As of 2026-11-07
+that is unchanged: GitHub's Latest is v0.4.3, v0.4.4 and v0.4.5 are drafts
+nobody has published, and trusted publishing (below) is still waiting on the
+maintainer's npmjs.com sign-in. Until it is done, the installer reaches every
+release after 0.3.2 through the release's own tarballs, and a bare
+`npm i -g gnomon-harness` installs 0.3.2.
 
 **One-time setup on npmjs.com (the maintainer).** All four packages exist
 since 0.3.2, which is the precondition. Signed in to npmjs.com as a maintainer

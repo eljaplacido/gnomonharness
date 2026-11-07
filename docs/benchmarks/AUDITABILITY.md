@@ -181,6 +181,13 @@ file is defeated, as documented. The anchor does not depend on any key gnomon
 holds. **B1:** the newest anchored checkpoint going missing is reported as a
 rollback (unit tests in `anchor.test.ts`).
 
+**Later, under the GBS-AUDIT 0.1 run on v0.4.1**
+([gbs-2026-11-04/audit](../../benchmarks/results/gbs-2026-11-04/audit/README.md)):
+0/48 false positives, but a correctly forged append after the seal (I1) was
+printed `NOT SEALED` and exited 0 in every configuration. v0.4.2 (#149) makes
+`gnomon audit verify` fail an append after a seal; that fix has not been
+re-measured under the spec.
+
 ## 9. Versioning
 
 This document is versioned. A change to the taxonomy, the scoring or the

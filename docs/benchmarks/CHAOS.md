@@ -2,7 +2,9 @@
 
 **Status: draft 0.1, proposed 2026-11-03.** Reference implementation:
 `gnomon chaos` (scorecard schema `gnomon.chaos/1`, [CONTRACTS.md §20](../CONTRACTS.md)).
-First results: [benchmarks/chaos/](../../benchmarks/chaos/README.md).
+First results: [benchmarks/chaos/](../../benchmarks/chaos/README.md). Pre-registered
+run on gnomon v0.4.1: [gbs-2026-11-04/chaos](../../benchmarks/results/gbs-2026-11-04/chaos/README.md)
+(17/20 faults announced; arm R conformant as written).
 
 ## 1. The question
 

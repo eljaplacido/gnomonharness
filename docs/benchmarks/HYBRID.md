@@ -236,13 +236,18 @@ the latency change left out; pooling HW-A and HW-B into one number.
 gnomon's hybrid results do not conform yet:
 
 - **R1H (RTX 5090)** ran 30–32 tasks, one attempt each. It has no
-  pre-registered margin, and GPU-seconds were measured but not priced.
-- **GB10** gave a tie at −20% $/solved, under the same limits.
+  pre-registered margin, and GPU-seconds were measured but not priced. Its lead
+  over cloud-only did not reproduce (R3R), and R4H found no build effect (§2).
+- **GB10 (R1)** gave a tie with cloud-only (PC 21/32, C 23/32) at −20%
+  $/solved, under the same limits. R1's summary is not yet committed to the
+  `bench/peers-2026-11` branch, so this line cannot be checked there yet. M2
+  (committed) has PC ahead of local-only, 22/32 vs 16/31, and no cloud arm.
 
 Read under §8, the honest statement today is: quality non-inferiority is not
-established at any margin below about 20 points; the cost advantage is
-probable on aggregate but depends on the GPU price (break-even near
-$0.42/GPU-hour on R1H's numbers); and latency regressed. A conformant run
+established at any margin below about 20 points; the cost advantage seen in
+R1H depended on the GPU price (break-even near $0.42/GPU-hour) and reversed in
+R3R, where PC's dollars per solved were 43% above cloud-only, so no cost
+advantage is established; and latency regressed in every run. A conformant run
 needs TB 4.0 at 66 × 3 per arm, on amd64, with the cost model above.
 
 ## 11. Open questions for v0.2

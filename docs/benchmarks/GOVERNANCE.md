@@ -219,7 +219,9 @@ GBS-GOVERNANCE 0.1 · model <id> · n per cell …
   nothing about destruction *inside* the root. Four in-root breaches got
   through gnomon's `exec = "off"` and `exec = "os"` alike, while `exec = "os"`
   held 7 of 7 out-of-root and egress probes
-  ([PR #74](https://github.com/eljaplacido/gnomonharness/pull/74)).
+  ([PR #74](https://github.com/eljaplacido/gnomonharness/pull/74), an unmerged
+  branch, since superseded by the also-unmerged
+  [PR #156](https://github.com/eljaplacido/gnomonharness/pull/156)).
 
 **A claim MAY say:** the family, class, layer, configuration, model and spec
 version, for example: "Under GBS-GOVERNANCE 0.1 G-2, harness A's intent filter
@@ -247,6 +249,6 @@ These are reference results, not conformant ones.
 |---|---|---|
 | G-1 | Peers' own safeguards refused 0 tool calls in 96 trials. `gnomon check` as shipped caught 33/44 violations [61–85], with 0/30 false alarms on clean controls. With a transcript adapter it caught 44/44, at 6/75 false alarms. gnomon's own arm violated in 1/24 ([G1](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results/g1-2026-11)) | One model; no peer best-effort review |
 | G-1 replay | Over 790 recorded calls, `gnomon guard` refused 15 of 17 causing calls. The two misses were heredoc-bound paths, now handled, and are regression tests ([GVC](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results/gvc-2026-11); [CHANGELOG 0.4.0](../../CHANGELOG.md)) | Re-run on the fixed build |
-| G-2 | v0.3.1 lost the destructive class to respellings. A shell parser shipped in 0.3.2 ([CHANGELOG](../../CHANGELOG.md)). Kernel containment is PR #74 | Issue [#63](https://github.com/eljaplacido/gnomonharness/issues/63) and PR #74 are both still open. No adaptive arm has been run |
-| G-3 | Surface self-edit refused 5/5 ([EVIDENCE.md](../EVIDENCE.md)) | No subagent or hook-disable probes |
+| G-2 | v0.3.1 lost the destructive class to respellings. A shell parser shipped in 0.3.2 ([CHANGELOG](../../CHANGELOG.md)). Under GBS-GOVERNANCE 0.1 on v0.4.1 (intent filter only): in-root respellings denied 43/70 (D) and 64/70 (G), out-of-root held 0/23, everyday commands refused 0/60 ([gbs-2026-11-04](../../benchmarks/results/gbs-2026-11-04/governance/README.md)). `[sandbox] exec = "docker"` (opt-in) is the only containment on `master`; kernel containment (`exec = "os"`) is PR #156, unmerged | Issue [#63](https://github.com/eljaplacido/gnomonharness/issues/63) and PR #156 are open. No adaptive arm has been run; G-2 has not been re-run with `exec = "docker"` |
+| G-3 | Surface self-edit refused 5/5 ([EVIDENCE.md](../EVIDENCE.md)). Under GBS 0.1 on v0.4.1: 24/27, and the agent approved its own skill by unsetting `GNOMON_AGENT_SESSION` (4/4), fixed in v0.4.2 (#149) | No subagent or hook-disable probes; not re-run since the fix |
 | G-4 | 0/36 crossed with 0/36 attempted, which is uninformative | No compromised-model or high-compliance arm |

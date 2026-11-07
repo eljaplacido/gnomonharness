@@ -36,6 +36,11 @@ cite these numbers as a harness ranking.**
 >
 > Read [BENCHMARK-POSTMORTEM.md](BENCHMARK-POSTMORTEM.md) before citing
 > anything here.
+>
+> **Not updated for the 2026-11 campaigns.** This document covers August and
+> September 2026. The Terminal-Bench 4.0, hybrid and GBS results of November
+> 2026 are in [EVIDENCE.md](EVIDENCE.md#2026-11-campaigns) and
+> [benchmarks/FINDINGS-2026-11-04.md](benchmarks/FINDINGS-2026-11-04.md).
 
 This document records a first pass at measuring gnomon against comparable
 open-source coding harnesses, run on one machine over one day. It is published

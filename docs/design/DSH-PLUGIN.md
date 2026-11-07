@@ -1,7 +1,8 @@
 # Design: gnomon governance for DeepSeek Harness
 
-Status: **proposal**, 2026-11-01. Nothing here is implemented. The release
-freeze holds at 0.3.3.
+Status: **proposal**, 2026-11-01. Nothing here is implemented. (Still true
+on `master` at 2026-11-07. The 0.3.3 release freeze this line used to cite has
+since ended; releases continued through v0.4.3.)
 
 ## The question
 

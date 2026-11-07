@@ -208,8 +208,11 @@ figure. Pooling platforms.
 | Same | 157 / 170 / 182 ms wall | v0.3.2 / v0.3.3 / master, n = 30 | [audit 2026-11-01, row 23](../AUDIT-2026-11-01.md) |
 | Per tool turn, 20,000-file git repository | 81 ms (first run), 126 ms (second, under load), from 244–260 ms before the git-backed stamp | n = 3 per size | [CHANGELOG 0.3.2](../../CHANGELOG.md) |
 | One turn on Windows | 335 → 209 ms wall | 0.4.0 git-call change, n = 20 paired | [CHANGELOG 0.4.0](../../CHANGELOG.md) |
+| S1 cold process, d = 0, under GBS-OVERHEAD 0.1 | 248.8 ms CPU per trial; **+126.0 ms CPU over the null harness** [123.5, 130.8]; harness wall +71.7 ms; mediation slice M = 0.20 ms in-process | v0.4.1 release, 20 paired rounds, Linux aarch64 (GB10), load median 2.4 | [gbs-2026-11-04/overhead](../../benchmarks/results/gbs-2026-11-04/overhead/README.md) |
 
-None of these conforms to v0.1:
+None of the rows above the last conforms to v0.1, and the last conforms only
+partially (its component breakdown is partial and S2 was not run). For the
+others:
 
 - there are no component spans;
 - S3 ran at n = 3;
@@ -217,9 +220,11 @@ None of these conforms to v0.1:
 - there is no null-harness floor;
 - every figure is a whole invocation.
 
-gnomon's mediation slice (guard plus record write) has never been measured on
-its own. Until it is, gnomon's numbers must not be set beside the 8.3 ms
-figure.
+gnomon's mediation slice was first measured on its own in the GBS 0.1 run:
+M = 0.20 ms median for an edit call, in-process, on v0.4.1. That slice is the
+only gnomon number of the right kind to set beside the 8.3 ms figure, and even
+then as a juxtaposition, not a comparison, while the paper's conditions are
+unstated. The whole-invocation numbers above must not be set beside it.
 
 ## 9. Open questions for v0.2
 

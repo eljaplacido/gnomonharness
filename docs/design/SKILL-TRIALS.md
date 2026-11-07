@@ -1,7 +1,12 @@
 # Design: governed skill trials
 
-Status: **proposal**, 2026-11-01. Nothing here is implemented. The release
-freeze holds at 0.3.3; whatever lands from this goes to `master` unreleased.
+Status: **proposal**, 2026-11-01; **steps 1 to 4 of the implementation plan
+are built** (checked against `master`, 2026-11-07): `skill_accept`/`skill_reject`
+audit records (CONTRACTS.md §11), `gnomon skill trial` (§13), `accept --evidence`
+with `require_trial`, and `gnomon skill mine` (§12), all released in v0.4.0.
+Steps 5 (`supersedes`, `retire`, `review_after`, drift warnings) and 6 (replay
+tasks) are not. The ST0 to ST2 benchmarks below have not been run. The 0.3.3
+release freeze this line used to cite has ended.
 
 ## The question
 

@@ -48,18 +48,6 @@ still works if you prefer it.
 
 ## 2. Install
 
-### From npm
-
-```bash
-npm i -g gnomon-harness
-```
-
-The package is `gnomon-harness` and the command is `gnomon` (the name `gnomon`
-on npm belongs to an unrelated logging utility). That is enough for `launch`,
-`prompt`, `task`, `acp` and `init`; the one-liner below also installs the
-native binaries `surface`, `enumerations`, `session`, `apply` and `simulate`
-need.
-
 ### The one-liner — any machine with Node
 
 ```bash
@@ -73,12 +61,13 @@ irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/i
 ```
 
 Then `cd my-project && gnomon launch`. No registry account, no clone, no pnpm,
-no Rust, no sudo.
+no Rust, no sudo. This is the recommended route: it installs the latest
+published GitHub release (v0.4.3 as of 2026-11-07).
 
 What it does: checks for Node ≥ 20 (if it is missing or old it prints the exact
 command for your OS — NodeSource, Homebrew, nvm, winget — and stops; it never
 installs Node as root on its own), resolves the latest release
-(`GNOMON_VERSION=0.4.5` pins one), installs the npm package, and puts the native
+(`GNOMON_VERSION=0.4.3` pins one), installs the npm package, and puts the native
 binaries in `~/.local/share/gnomon/bin` (`%LOCALAPPDATA%\gnomon\bin` on Windows),
 where `surface`, `enumerations`, `session`, `apply` and `simulate` find them
 with no environment variable. Every download is checked against the release's
@@ -95,30 +84,41 @@ package fails in dpkg while the distro's `npm` and `libnode-dev` are installed.
 ### By hand — the same packages, no script
 
 ```bash
-V=0.4.5
+V=0.4.3
 B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz \
          $B/gnomon-tui-$V.tgz  $B/gnomon-harness-$V.tgz
 ```
 
 ```powershell
-$V="0.4.5"
+$V="0.4.3"
 $B="https://github.com/eljaplacido/gnomonharness/releases/download/v$V"
 npm i -g "$B/gnomon-core-$V.tgz" "$B/gnomon-natives-$V.tgz" "$B/gnomon-tui-$V.tgz" "$B/gnomon-harness-$V.tgz"
 ```
 
-Two blocks because they have to be: `V=0.4.5` is not an assignment in
+Two blocks because they have to be: `V=0.4.3` is not an assignment in
 PowerShell and `\` is not its line continuation. The four are one package split
 up — `gnomon-harness` is the CLI and the other three its libraries — so npm
 needs all four URLs; from the registry, one name is enough (below). This
 route does not fetch the native binaries; see
 [Prebuilt binaries](#prebuilt-binaries--if-you-would-rather-not-install-rust).
 
-From the registry the same four are one command, `npm i -g gnomon-harness`,
-because npm resolves the three libraries by name. The installer uses the
-registry whenever the release it is installing is there, and these tarballs
-when it is not (an older pinned release). Each release's npm packages are the
-release's own tarballs, published byte for byte when the release is.
+### From npm — currently behind
+
+```bash
+npm i -g gnomon-harness
+```
+
+The package is `gnomon-harness` and the command is `gnomon` (the name `gnomon`
+on npm belongs to an unrelated logging utility). **The registry copy is 0.3.2**
+(2026-11-07): releases after it have not been published to npm yet, so this
+installs a version three minor releases behind the installer's. Prefer the
+one-liner above. From the registry the four packages are one name because npm
+resolves the three libraries by name; the installer uses the registry only
+when the release it is installing is there, and the release's own tarballs
+otherwise, which is how it installs 0.4.x today. The registry route also does
+not fetch the native binaries `surface`, `enumerations`, `session`, `apply` and
+`simulate` need.
 
 Everything below is the from-source path — for working ON gnomon, or for
 running the version in your own checkout.
@@ -309,9 +309,12 @@ Tools (implement): bash, compute, edit, glob, grep, note, read, todo, write
    `/models`, which writes the file that routes each role. By hand, edit the
    profile your `role_profile` names (`.gnomon/profiles/local_first.toml` in a
    scaffolded project), because it is merged over `.gnomon/roles.toml`.
-2. **Ignore the run dirs.** Add `.gnomon-sessions/`, `.gnomon-audit/`,
-   `.gnomon-jobs/` and `.gnomon-out/` to your
-   `.gitignore`.
+2. **Check the run dirs are ignored.** `init` (and `launch`, when it creates
+   the surface) appends gnomon's machine-local directories to `.gitignore`:
+   `.gnomon-sessions/`, `.gnomon-audit/`, `.gnomon-out/`, `.gnomon-jobs/`,
+   `.gnomon-loops/`, `.gnomon-shadow/`, `.gnomon-skills/` and
+   `.gnomon-trials/`. Add them by hand only for a surface you copied in
+   another way.
 
 ## 5. Your first task
 
