@@ -260,7 +260,7 @@ describe.skipIf(!posix)("in a run: the container profile relaxes the environment
   const steps = (tmp: string): Step[] => [
     ["bash", { command: "curl -s --max-time 1 http://example.invalid/ ; echo net-ran" }],
     ["write", { path: join(tmp, "checker.py"), content: "print(1)\n" }],
-    ["bash", { command: 'echo "env=$PAGER,$TQDM_DISABLE,$PIP_PROGRESS_BAR shell=${BASH_VERSION:+bash}"' }],
+    ["bash", { command: 'echo "env=$PAGER,$TQDM_DISABLE,$PIP_PROGRESS_BAR shell=${0##*/}"' }],
     ["write", { path: ".gnomon/policy.toml", content: "[sandbox]\nlevel = \"off\"\n" }],
     ["write", { path: "/var/lib/gnomon-cn-outside-not-tmp.txt", content: "x" }],
   ];
@@ -273,7 +273,7 @@ describe.skipIf(!posix)("in a run: the container profile relaxes the environment
     expect(r.result(1)).not.toMatch(/Refused/);
     expect(readFileSync(join(tmp, "checker.py"), "utf-8")).toBe("print(1)\n");
     const shell = containerShell();
-    expect(r.result(2)).toContain(`env=cat,1,off shell=${shell === "/bin/bash" ? "bash" : ""}`);
+    expect(r.result(2)).toContain(`env=cat,1,off shell=${shell === "/bin/bash" ? "bash" : "sh"}\n`);
     // Integrity stays: the surface and a path outside the root that is not scratch.
     expect(r.result(3)).toMatch(/Refused/);
     expect(readFileSync(join(r.root, ".gnomon", "policy.toml"), "utf-8")).toContain('profile = "container"');
@@ -299,7 +299,7 @@ describe.skipIf(!posix)("in a run: the container profile relaxes the environment
     expect(r.result(1)).toMatch(/Refused|outside/);
     expect(existsSync(join(tmp, "checker.py"))).toBe(false);
     expect(r.result(2)).not.toContain("env=cat,1,off");
-    expect(r.result(2)).toContain("shell=\n");
+    expect(r.result(2)).toContain("shell=sh\n");
     expect(r.tools.map((t) => t.function.name)).not.toContain("job");
     expect(r.tools.find((t) => t.function.name === "bash")!.function.description).toBe(SCAFFOLD_SH_SENTENCE);
     const start = r.audit.find((a) => a.kind === "session_start")!;
