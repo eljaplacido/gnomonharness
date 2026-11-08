@@ -2408,10 +2408,10 @@ a finish hook, a structured checklist, a read-only auditor sub-agent.
 
 | key | default | meaning |
 |---|---|---|
-| `completion_gate` | `off` | `off`, `checklist` or `review`. Anything else is reported by the surface audit and runs as `off` |
+| `completion_gate` | `off` | `off`, `checklist`, `review` or `review_only`. Anything else is reported by the surface audit and runs as `off` |
 | `completion_rounds` | `3` | hand-backs per turn, at most. `0` never hands back |
 | `completion_min_remaining` | `0.2` | skip the gate when less than this fraction of the budget is left |
-| `completion_reviewer` | `verifier` | the role `review` runs. A name that is not a role is fatal under `review` |
+| `completion_reviewer` | `verifier` | the role `review` and `review_only` run. A name that is not a role is fatal under either |
 
 **Modes.**
 - `off`: nothing below runs. The request bodies a turn sends are
@@ -2435,6 +2435,12 @@ a finish hook, a structured checklist, a read-only auditor sub-agent.
   does not apply. If the worktree moved while it ran, or its turn failed, its
   findings are not used; that is announced, counted as `review_failures`, and
   recorded as `review_failed`.
+- `review_only`: `review` without the checklist round. The first answer of a
+  turn that changed the worktree goes straight to the reviewer; no check is
+  demanded. It exists so the reviewer can be measured as one mechanism.
+- In stage 2 or later of a `[chain]`, the task text the reviewer is given is
+  the request only: the part of the stage input from
+  `\n\n---\nThe previous stage (` on (the earlier stage's report) is cut.
 
 **Superseded** by the finish gate (§33): with `finish_gate = "v2"` declared,
 this gate does not run and `counters.completion_gate` is absent.
@@ -2455,9 +2461,9 @@ answer, as the `[verify]` hand-back is, and every step after it counts against
    steps left of `max_steps_total` and, when the caller passes a run deadline
    (`TurnDeps.deadline = { total_ms, started_at }`, the shape `gnomon task
    --deadline` uses), the time left of it;
-3. no round yet: `checklist`;
+3. no round yet, and the mode is not `review_only`: `checklist`;
 4. a check was demanded and no bash command ran since: `no_check`;
-5. `review` mode and no review yet: `review`, which hands back when it has
+5. `review` or `review_only` mode and no review yet: `review`, which hands back when it has
    findings and otherwise accepts as `passed`;
 6. otherwise accept, `passed`.
 

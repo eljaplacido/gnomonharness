@@ -14,6 +14,7 @@ import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
+import { chainStageInput } from "./completion_gate.js";
 import { loadConfig, resolveUi } from "./config.js";
 import * as promptLoop from "./prompt_loop.js";
 
@@ -281,6 +282,34 @@ describe("completion gate: review", () => {
     });
     expect(gate.map((g) => g.action)).toEqual(["checklist", "review", "accept"]);
     expect(gate[1]).toMatchObject({ findings: 1 });
+  });
+
+  it("review_only: the first done goes straight to the reviewer, which sees the request and not a chain stage's plan", async () => {
+    const task = chainStageInput(TASK, "advisor_plan", "PLAN-MARK: write 42, then check it");
+    const { bodies, reviewerBodies, result, gate } = await turn(
+      [[wr("/app/out.txt")], "done MAIN-ANSWER-MARK", "fixed the newline"],
+      {
+        task,
+        verify: { completion_gate: "review_only", completion_reviewer: "reviewer", completion_rounds: 1 },
+        reviewerRole: { tools: ["read", "grep"] },
+        reviewer: ["- /app/out.txt has no trailing newline"],
+      }
+    );
+    // The main turn saw the plan; the reviewer saw only the request.
+    expect(bodies[0]).toContain("PLAN-MARK");
+    const first = JSON.stringify(reviewerBodies[0].messages);
+    expect(first).toContain("Write /app/out.txt containing 42");
+    expect(first).not.toContain("PLAN-MARK");
+    expect(first).not.toContain("MAIN-ANSWER-MARK");
+    // No checklist: one hand-back, the findings.
+    const backs = handBacks(bodies);
+    expect(backs).toHaveLength(1);
+    expect(backs[0]).toContain("no trailing newline");
+    expect(result.content).toBe("fixed the newline");
+    expect(result.counters.completion_gate).toMatchObject({
+      mode: "review_only", rounds: 1, checks: 0, reviews: 1, findings: 1, outcome: "passed",
+    });
+    expect(gate.map((g) => g.action)).toEqual(["review", "accept"]);
   });
 
   it("bash reaches the reviewer only with a bash_allow", async () => {

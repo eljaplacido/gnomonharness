@@ -18,6 +18,9 @@ import {
   reviewerToolNames,
   taskTextOf,
   changedPaths,
+  chainStageInput,
+  withoutChainCarry,
+  CHAIN_CARRY,
   COMPLETION_GATE_MODES,
   COMPLETION_GATE_ACTIONS,
   COMPLETION_GATE_OUTCOMES,
@@ -114,7 +117,7 @@ describe("findings", () => {
 });
 
 describe("the decision", () => {
-  const g = (mode: "checklist" | "review", max_rounds = 3, min_remaining = 0.2): ResolvedCompletionGate => ({
+  const g = (mode: "checklist" | "review" | "review_only", max_rounds = 3, min_remaining = 0.2): ResolvedCompletionGate => ({
     mode, max_rounds, min_remaining, reviewer: "verifier",
   });
   const s0 = { rounds: 0, checkRequired: false, checksSince: 0, reviewed: false };
@@ -139,6 +142,48 @@ describe("the decision", () => {
     expect(nextGateStep(g("checklist", 1), { ...s0, rounds: 1, checkRequired: true }, ok)).toEqual({ act: "accept", outcome: "exhausted" });
     expect(nextGateStep(g("checklist", 0), s0, ok)).toEqual({ act: "accept", outcome: "exhausted" });
     expect(nextGateStep(g("review", 1), { ...s0, rounds: 1, checkRequired: true, checksSince: 1 }, ok)).toEqual({ act: "accept", outcome: "exhausted" });
+  });
+  it("review_only goes straight to the reviewer: no checklist, no check demanded", () => {
+    expect(nextGateStep(g("review_only"), s0, ok)).toEqual({ act: "review" });
+    // canCheck does not matter: nothing asked for a check.
+    expect(nextGateStep(g("review_only"), s0, { ...ok, canCheck: false })).toEqual({ act: "review" });
+    // Findings handed back (rounds 1, reviewed): the next end is accepted.
+    const reviewed = { ...s0, rounds: 1, reviewed: true };
+    expect(nextGateStep(g("review_only"), reviewed, ok)).toEqual({ act: "accept", outcome: "passed" });
+    // One round is enough for review_only, and it passes.
+    expect(nextGateStep(g("review_only", 1), reviewed, ok)).toEqual({ act: "accept", outcome: "passed" });
+    // No round left before the review ran: exhausted, as for review.
+    expect(nextGateStep(g("review_only", 0), s0, ok)).toEqual({ act: "accept", outcome: "exhausted" });
+    // Not enough budget left: skipped, never reviewed.
+    expect(nextGateStep(g("review_only"), s0, { ...ok, budgetLeft: 0.1 })).toEqual({ act: "accept", outcome: "skipped_budget" });
+  });
+  it("adding review_only moved none of the other modes' decisions", () => {
+    // Every state the three earlier modes can reach, decided by the rule as it
+    // stood before review_only existed, written out here independently.
+    const before = (mode: "checklist" | "review", max: number, s: typeof s0, o: typeof ok) => {
+      const unmet = s.rounds === 0 || (s.checkRequired && o.canCheck && s.checksSince === 0) || (mode === "review" && !s.reviewed);
+      if (s.rounds >= max) return { act: "accept", outcome: unmet ? "exhausted" : "passed" };
+      if (unmet && o.budgetLeft < 0.2) return { act: "accept", outcome: "skipped_budget" };
+      if (s.rounds === 0) return { act: "checklist" };
+      if (s.checkRequired && o.canCheck && s.checksSince === 0) return { act: "no_check" };
+      if (mode === "review" && !s.reviewed) return { act: "review" };
+      return { act: "accept", outcome: "passed" };
+    };
+    let n = 0;
+    for (const mode of ["checklist", "review"] as const)
+      for (const max of [0, 1, 3])
+        for (const rounds of [0, 1, 2, 3])
+          for (const checkRequired of [false, true])
+            for (const checksSince of [0, 1])
+              for (const reviewed of [false, true])
+                for (const budgetLeft of [0.1, 0.9])
+                  for (const canCheck of [false, true]) {
+                    const s = { rounds, checkRequired, checksSince, reviewed };
+                    const o = { budgetLeft, canCheck };
+                    expect(nextGateStep(g(mode, max), s, o)).toEqual(before(mode, max, s, o));
+                    n++;
+                  }
+    expect(n).toBe(768);
   });
   it("skips when less than min_remaining of the budget is left", () => {
     expect(nextGateStep(g("checklist"), s0, { ...ok, budgetLeft: 0.19 })).toEqual({ act: "accept", outcome: "skipped_budget" });
@@ -186,6 +231,16 @@ describe("the surface", () => {
     expect(auditCompletionGate(cfg({ completion_gate: "checklist", completion_min_remaining: 2 }))[0].fatal).toBe(false);
   });
 
+  it("review_only resolves, and its reviewer is audited as review's is", () => {
+    expect(resolveCompletionGate(cfg({ completion_gate: "review_only", completion_reviewer: "advisor" })).mode).toBe("review_only");
+    const missing = auditCompletionGate(cfg({ completion_gate: "review_only", completion_reviewer: "advisor" }, { implement: {} }));
+    expect(missing).toEqual([expect.objectContaining({ fatal: true, where: ".gnomon/policy.toml [verify] completion_reviewer" })]);
+    expect(missing[0].problem).toContain('completion_gate = "review_only"');
+    expect(auditCompletionGate(cfg({ completion_gate: "review_only" }, {
+      verifier: { tools: ["read", "grep", "bash"], bash_allow: ["^pytest\\b"] },
+    }))).toEqual([]);
+  });
+
   it("the surface audit names a misspelt mode", () => {
     const problems = auditSurface({ ...cfg({ completion_gate: "reveiw" }), gnomonDir: "/nonexistent/.gnomon" } as any);
     expect(problems.some((p) => /completion_gate/.test(p.where + p.problem))).toBe(true);
@@ -203,6 +258,17 @@ describe("helpers", () => {
     expect(taskTextOf([{ role: "user", content: "old" }, { role: "assistant", content: "x" }, { role: "user", content: "new" }])).toBe("new");
     expect(taskTextOf([{ role: "user", content: [{ type: "text", text: "a" }, { type: "image_url" }, { type: "text", text: "b" }] }])).toBe("a\nb");
     expect(taskTextOf([{ role: "system", content: "s" }])).toBe("");
+  });
+  it("in a chain, the task is the request without the previous stage's report", () => {
+    const staged = chainStageInput("Fix the parser.", "advisor_plan", "1. Read parse.py\n---\n2. Fix it");
+    expect(staged.startsWith("Fix the parser." + CHAIN_CARRY)).toBe(true);
+    expect(staged).toContain("The previous stage (advisor_plan) reported:\n1. Read parse.py");
+    expect(taskTextOf([{ role: "user", content: staged }])).toBe("Fix the parser.");
+    expect(taskTextOf([{ role: "user", content: [{ type: "text", text: staged }] }])).toBe("Fix the parser.");
+    // A request that merely contains a horizontal rule is left whole.
+    const plain = "Do A.\n\n---\nThen do B.";
+    expect(withoutChainCarry(plain)).toBe(plain);
+    expect(taskTextOf([{ role: "user", content: plain }])).toBe(plain);
   });
   it("changed paths come from two snapshots, or are unknown", () => {
     const before = { tracked: new Map([["a.ts", [1, 0]], ["gone.ts", [0, 1]]]), untracked: new Map([["keep.txt", 1]]) };
