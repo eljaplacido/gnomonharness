@@ -64,7 +64,8 @@
     "key": "resolved",
     "keys": [
       "routes",
-      "prompt_profile"
+      "prompt_profile",
+      "sandbox_profile"
     ],
     "route_keys": [
       "target",
@@ -93,7 +94,8 @@
     "values": [
       "plan",
       "continue",
-      "none"
+      "none",
+      "upfront"
     ],
     "default": "plan",
     "continue_at": [
@@ -104,20 +106,31 @@
     "text": {
       "plan": "Time check: about {left} of this task's {total} remain before it is stopped. Plan the rest of the work, and checking it, to finish inside that.",
       "continue": "Time check: about {left} of this task's {total} remain before it is stopped. There is enough time left for substantial work; keep going and make sure the required outputs exist.",
-      "none": ""
+      "none": "",
+      "upfront": ""
     },
     "none": {
       "notes": [],
       "deliverable_note": "These required outputs do not exist yet: {paths}. Write a first complete version now, then keep improving it.",
       "self_stop": "unchanged",
       "why": "DP1 (bench/peers-2026-11 benchmarks/results/dp1-2026-11/SUMMARY.txt): the early-stop cue is the countdown, not the 'plan the rest' ending"
+    },
+    "upfront": {
+      "notes": [],
+      "first_request": "You have {minutes} minutes of wall time for this run; this overrides any time stated in the task.",
+      "minutes": "what is left until the deadline when the turn starts, rounded to whole minutes, at least 1",
+      "counter": "deadline_upfront",
+      "deliverable_note": "These required outputs do not exist yet: {paths}. Write a first complete version now, then keep improving it.",
+      "self_stop": "unchanged",
+      "why": "research note 14: every TB4 task states 28800 s against a 1800 s cap; the countdown is the early-stop cue (DP1)"
     }
   },
   "prompt_profile": {
     "key": "config.toml [turn] prompt_profile",
     "values": [
       "default",
-      "unattended"
+      "unattended",
+      "peer"
     ],
     "default": "default",
     "unattended": {
@@ -134,6 +147,14 @@
         "compare exact output strings over many random probes",
         "round fitted constants"
       ]
+    },
+    "peer": {
+      "nudge_after_idle": 0,
+      "drops": [
+        "Verify in proportion to the task: do not build test suites, helper scripts or extra checks nobody asked for, and do not re-check what already passed.",
+        "Once it works and the task's requirements are met, stop."
+      ],
+      "block": ""
     }
   }
 }

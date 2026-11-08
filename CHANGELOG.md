@@ -34,6 +34,31 @@ merged, and no result is claimed for any of them yet. With none declared,
 request bodies are master's — except the network refusal's wording, which the
 long-task tier (a) changes on purpose (below).
 
+### Added — SW1 arms T and PF (opt-in, unmeasured), CONTRACTS §39, §40
+
+Nothing changes unless declared; daily-dev defaults are untouched.
+
+- **`[turn] deadline_note = "upfront"`**: under `--deadline`, the first request
+  says "You have N minutes of wall time for this run; this overrides any time
+  stated in the task." once, and no countdown note follows. The deadline
+  self-stop, bash clamp and margin are unchanged. Research note 14: TB4 tasks
+  state 28,800 s against a 1,800 s cap. `counters.deadline_upfront`,
+  `session_start.deadline.note = "upfront"`.
+- **`[turn] prompt_profile = "peer"`**: drops the scaffold's "Verify in
+  proportion …" and "Once it works … stop." sentences and the idle nudge, adds
+  nothing. Provider sampling was already declarable
+  (`[endpoints.<name>] sampling = "provider"`).
+- **`[sandbox] profile = "container"`** (policy.toml), for a run inside a
+  disposable container that is already the sandbox: the network filter follows
+  the container; the file tools may use the system temp directories (as
+  #171's shell rule does); bash runs under `/bin/bash` when present; the soft
+  shell is on unless bash declares `soft_timeout`; a timed-out command may be
+  re-run; `PAGER=cat`, `TQDM_DISABLE=1`, `PIP_PROGRESS_BAR=off`. Surface,
+  record, hook, secret, CI and other outside-root protections stay; timeouts
+  still kill the process group. Pinned at session start;
+  `session_start.resolved.sandbox_profile` = `{name, relaxed, kept, shell}`.
+  Research note 15.
+
 ### Changed — long-task tier (a), CONTRACTS §39
 
 Local-lane defaults are **unchanged**: replay stays off and steering stays

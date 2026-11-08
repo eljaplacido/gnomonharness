@@ -26,6 +26,7 @@
  * setting resolves to, what the `job` tool takes, and how a result is framed.
  */
 import type { GnomonConfig } from "./config.js";
+import { resolveSandboxProfile } from "./sandbox_profile.js";
 
 /** tools.toml `[[tools]] name = "bash"` → `soft_timeout`. */
 export const SOFT_TIMEOUT_MODES = ["kill", "handle"] as const;
@@ -74,9 +75,14 @@ export type JobEvent = (typeof JOB_EVENTS)[number];
 export const JOB_KILL_REASONS = ["model", "turn_end", "cancelled"] as const;
 export type JobKillReason = (typeof JOB_KILL_REASONS)[number];
 
-/** The mode this surface declares; anything but `handle` is `kill`. */
+/**
+ * The mode this surface declares; anything but `handle` is `kill`. Under
+ * `[sandbox] profile = "container"` (sandbox_profile.ts) an undeclared
+ * soft_timeout is `handle`; a declared one still wins.
+ */
 export function resolveSoftTimeout(config: GnomonConfig): SoftTimeoutMode {
   const decl = (config.tools?.tools ?? []).find((t) => t.name === "bash") as { soft_timeout?: unknown } | undefined;
+  if (decl?.soft_timeout === undefined && resolveSandboxProfile(config) === "container") return "handle";
   return decl?.soft_timeout === "handle" ? "handle" : "kill";
 }
 

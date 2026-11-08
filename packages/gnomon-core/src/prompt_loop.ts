@@ -104,7 +104,8 @@ import {
 } from "./tools.js";
 import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
 import { StallSignals, type StallSignalCounters } from "./stall_signals.js";
-import { JobTable } from "./tools.js";
+import { JobTable, scratchDirs } from "./tools.js";
+import { resolveSandboxProfile, sandboxProfileRecord } from "./sandbox_profile.js";
 import { JOB_TOOL, resolveSoftTimeout } from "./soft_shell.js";
 import {
   resolveCompletionGate,
@@ -186,6 +187,7 @@ import {
   applyPromptProfile,
   deadlineNoteText,
   promptProfileBlock,
+  upfrontBudgetText,
   resolvePromptProfile,
   type DeadlineNoteStyle,
 } from "./long_task_profile.js";
@@ -4226,6 +4228,11 @@ export interface TurnCounters {
    */
   deadline_notes?: number;
   /**
+   * 1 when `[turn] deadline_note = "upfront"` stated the budget in the turn's
+   * first request (long_task_profile.ts upfrontBudgetText). Absent otherwise.
+   */
+  deadline_upfront?: number;
+  /**
    * Time notes that named outputs the task asks for and that did not exist
    * yet (`[turn] deliverable_first`, deliverable_first.ts). Absent when none were.
    */
@@ -4696,11 +4703,15 @@ export function resolvedSessionRecord(config: GnomonConfig, roles: string[]): Re
     }
   }
   const profile = resolvePromptProfile(config);
+  const sandboxProfile = sandboxProfileRecord(config);
   return {
     routes,
     ...(profile !== "default"
       ? { prompt_profile: { name: profile, dropped: applyPromptProfile(config.system.content ?? "", profile).dropped } }
       : {}),
+    // `[sandbox] profile = "container"`: which protections it relaxed and
+    // which it kept. Absent under "default".
+    ...(sandboxProfile ? { sandbox_profile: sandboxProfile } : {}),
   };
 }
 
@@ -4917,7 +4928,9 @@ async function agenticTurn(
   const sandbox: SandboxLevel = state.sandbox ?? pinned.level;
 
   // Session grant wins over the declared default; the surface is unchanged.
-  const declaredNetwork = pinned.network;
+  // `[sandbox] profile = "container"` (sandbox_profile.ts, pinned at the
+  // start): the network follows the container, so the filter is off.
+  const declaredNetwork = pinned.container ? true : pinned.network;
   const network = state.network ?? declaredNetwork;
   const packageIndex = resolvePackageIndex(config);
   const editVariant = resolveEditVariant(config);
@@ -4960,7 +4973,12 @@ async function agenticTurn(
     sandbox,
     // Declared in policy.toml, hashed with the surface. A grant that does not
     // move the surface hash would be a grant nobody could audit.
-    extraRoots: pinned.extraRoots,
+    // The container profile adds the system temp directories, the scratch
+    // #171's outside_root already lets bash write (sandbox_profile.ts).
+    extraRoots: pinned.container
+      ? [...pinned.extraRoots, ...scratchDirs().filter((d) => !pinned.extraRoots.includes(d))]
+      : pinned.extraRoots,
+    ...(pinned.container ? { containerNative: true } : {}),
     taskAllow: config.roles[role]?.task_allow,
     // Where bash runs. "off" by default, so nothing moves unless a surface
     // asks for it -- and, once the session has started, only ever tighter.
@@ -5876,6 +5894,8 @@ async function agenticTurn(
 
   // `--deadline`: the next fraction of the budget whose note is still unsent.
   let deadlineNoteNext = 0;
+  // `[turn] deadline_note = "upfront"`: whether the budget has been stated.
+  let upfrontSaid = false;
   // `[turn] deliverable_first`: the next DELIVERABLE_FIRST_AT fraction unchecked.
   let deliverableNext = 0;
   const deliverables = depth === 0 && stopClock ? deps.deliverables : undefined;
@@ -5893,6 +5913,19 @@ async function agenticTurn(
     // fractions to the same note: at each, the outputs the task names that
     // do not exist yet are listed in it. Nothing missing, nothing is added,
     // so a turn that wrote its outputs early sees only the time notes.
+    // `[turn] deadline_note = "upfront"` (long_task_profile.ts): the real
+    // budget, once, on the first request of the turn a person asked for, on
+    // the same steering channel; no countdown follows (`notes` is []). The
+    // time is what is left until the deadline as this turn starts, which is
+    // the whole budget for a single-role task and what remains for a later
+    // chain stage.
+    if (depth === 0 && stopClock && stopClock.style === "upfront" && !upfrontSaid) {
+      upfrontSaid = true;
+      const leftMs = Math.max(0, stopClock.at - (deps.clock ?? Date.now)());
+      counters.deadline_upfront = 1;
+      say(paint(deps.ui, "gray", `  [deadline] ${formatSpan(leftMs)} of wall time — stated once, up front`));
+      working.push({ role: "system", content: upfrontBudgetText(leftMs) });
+    }
     if (depth === 0 && stopClock) {
       const d = stopClock;
       const now = (deps.clock ?? Date.now)();
@@ -5939,7 +5972,7 @@ async function agenticTurn(
         working.push({
           role: "system",
           content:
-            style === "none"
+            style === "none" || style === "upfront"
               ? deliverableNote(missing, "continue")
               : deadlineNoteText(style, formatSpan(left), formatSpan(d.total_ms)) +
                 (missing.length > 0 ? ` ${deliverableNote(missing, style)}` : ""),
@@ -11963,7 +11996,11 @@ export async function runPromptLoop(
     const sandboxLevel = resolveSandboxLevel(config);
     const networkDeclared =
       (policy.sandbox as { network?: boolean } | undefined)?.network;
-    if (sandboxLevel !== "off" && networkDeclared === false) {
+    if (resolveSandboxProfile(config) === "container") {
+      console.log(
+        paint(ui, "yellow", '  note: [sandbox] profile = "container" — network, /tmp, bash and the soft shell follow the container; integrity refusals stay')
+      );
+    } else if (sandboxLevel !== "off" && networkDeclared === false) {
       // One line. It printed four on every launch, which is a wall nobody
       // reads by the third session; the substance fits in one, and `/network`
       // and `gnomon explain` carry the long form for whoever asks.

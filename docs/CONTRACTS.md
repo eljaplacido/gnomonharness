@@ -3399,7 +3399,7 @@ and R2's vpp `curl` at 45 s, received "do not look for another route", while
 - The turn record's `wire` keeps `replay_reasoning`/`replay_reasoning_source`
   and `steer_role` as §31 and §32 define them.
 
-**`[turn] deadline_note = "plan" | "continue" | "none"`** — **temporary**: it
+**`[turn] deadline_note = "plan" | "continue" | "none" | "upfront"`** — **temporary**: it
 exists so SW1 can test the time note against its alternatives on one build,
 and the losing values are deleted after SW1. Read only under `--deadline`.
 
@@ -3408,11 +3408,15 @@ and the losing values are deleted after SW1. Read only under `--deadline`.
 | `plan` (default) | `[turn] deadline_notes` (default `[0.5, 0.8]`) | `Time check: about … of this task's … remain before it is stopped. Plan the rest of the work, and checking it, to finish inside that.` — §31's bytes |
 | `continue` | one, at `0.8`; a declared `deadline_notes` is not read (said, not fatal) | `Time check: about … of this task's … remain before it is stopped. There is enough time left for substantial work; keep going and make sure the required outputs exist.` |
 | `none` | none (`notes` is `[]`); a declared `deadline_notes` is not read (said, not fatal). The self-stop at the deadline, the bash clamp and the margin are unchanged | no time note. With `deliverable_first`, a missing output is said alone, with no countdown: `These required outputs do not exist yet: <paths>. Write a first complete version now, then keep improving it.` |
+| `upfront` | none mid-run (`notes` is `[]`; a declared `deadline_notes` is not read, said, not fatal). Once, on the first request of the turn a person asked for (each chain stage's first request), on the steering channel: `You have <N> minutes of wall time for this run; this overrides any time stated in the task.`, N the time left until the deadline as the turn starts, whole minutes, at least 1. Self-stop, clamp and margin unchanged; `counters.deadline_upfront` is 1 | the deliverable-first note as under `none` |
 
 Under `continue` the deliverable-first note (§35) ends `then keep improving
 it.` instead of `then improve it.`, and is appended to the continue sentence,
-never to the plan one. `session_start.deadline` carries `note` (`continue` or
-`none`) only when it is not `plan`. `none` exists because DP1's decision-point
+never to the plan one. `session_start.deadline` carries `note` (`continue`, `none` or
+`upfront`) only when it is not `plan`. `upfront` exists because every TB4 task
+states "You have 28800 seconds" while the run's cap is 1,800 s (research note
+14): without a deadline the model plans for 8 h, and with the countdown it
+answers early at the first note; SW1's T arm measures it. `none` exists because DP1's decision-point
 replays (`benchmarks/results/dp1-2026-11/SUMMARY.txt` on `bench/peers-2026-11`)
 put the early-stop cue in the countdown itself ("about N of 29m remain"), not
 in the "plan the rest" ending: swapping the ending to `continue` barely
@@ -3423,7 +3427,7 @@ never-solved tasks, while the three opencode solves of those tasks landed at
 same sentence (research note 13, finding 2). Unmeasured as a change: SW1's P
 arm measures it.
 
-**`[turn] prompt_profile = "default" | "unattended"`.** Declared only, never
+**`[turn] prompt_profile = "default" | "unattended" | "peer"`.** Declared only, never
 inferred from a TTY, the environment or the command that started gnomon
 (Rule 1). `default` is system.md as written. `unattended`:
 - drops the scaffold's "Verify in proportion to the task: do not build test
@@ -3438,6 +3442,12 @@ inferred from a TTY, the environment or the command that started gnomon
   black-box parity, exact output strings over many random probes and fitted
   constants rounded to the exact values they stand for;
 - makes `nudge_after_idle` 0 unless it is declared.
+
+`peer` drops the same two sentences and makes `nudge_after_idle` 0 the same
+way, and adds nothing: opencode's and mini-swe-agent's prompts carry no stop
+or verify-economy text and no unattended block (research note 16). Sampling
+for such a run is already declarable: `[endpoints.<name>] sampling =
+"provider"` sends no temperature and no top_p (§32).
 
 Why: the daily-dev sentences were validated on short tasks (lean-2026-11, 37
 vs 34/48) and stay there; on long tasks every winning harness has no stop cue
@@ -3458,3 +3468,48 @@ text, which the tests put back to master's before hashing (`test_support.ts`
 **Fixture**: `conformance/long_task_profile.json`;
 `packages/gnomon-core/src/long_task_profile.test.ts` asserts the code equals
 it and that this section names its keys, values and fields.
+
+## 40. Container-native sandbox profile — `[sandbox] profile = "container"`, `v: 1`
+
+**Why.** gnomon's defaults are an attended developer's sandbox. Inside a
+disposable container that is already the sandbox (a benchmark task image, a
+CI job) they stand a second sandbox between the model and the one it has.
+Research note 15 (2026-11-08, 365 gnomon cells, post hoc): cells where gnomon
+refused or killed something solved 1 of 39 where 6.2 were expected
+(within-task permutation, p = 0.001); the file tools' refusal of `/tmp` alone
+0 of 21 vs 4.4. opencode and mini-swe-agent hand the model the container as
+it is. Unmeasured as a change: SW1's CN and PF arms measure it.
+
+**The key.** `.gnomon/policy.toml` `[sandbox] profile = "default" |
+"container"`. Declared only, never inferred from `/.dockerenv`, cgroups, an
+environment variable or the command that started gnomon (Rule 1). A value
+outside the enumeration is fatal. In `BLOCK_KEYS`. The session pins it at
+start (`sandbox_pin.ts`): a reload that turns it on is a loosening, not
+applied and reported; one that turns it off is applied.
+
+**What `container` relaxes** (`relaxed`, in this order):
+
+| name | default | under `container` |
+|---|---|---|
+| `network` | `[sandbox] network = false` refuses webfetch and bash network clients | the network follows the container: neither is refused, whatever `network` says |
+| `file_tools_scratch` | read/write/edit/glob/grep refuse paths outside the root and `extra_roots` | the system temp directories (`tmpdir()`, `/tmp`, `/var/tmp`) are added, the scratch §38's `outside_root` already lets bash write |
+| `shell_bash` | `/bin/sh` | `/bin/bash` when it exists, else `/bin/sh`; the scaffold's "Execute a POSIX sh command (/bin/sh, not bash: …)." opening of the bash description becomes "Execute a bash command (/bin/bash)." (a surface's own text is kept) |
+| `soft_shell` | bash `soft_timeout = "kill"` | `"handle"` (§34) unless bash declares `soft_timeout`; listed only when it applied |
+| `timeout_rerun_refusal` | a command that timed out is refused for the rest of the turn | not refused |
+| `command_env` | — | `PAGER=cat`, `TQDM_DISABLE=1`, `PIP_PROGRESS_BAR=off` in every bash command's environment |
+
+**What it keeps** (`kept`): `surface`, `record`, `git_hooks`, `host_hooks`,
+`secret_path`, `ci_path`, `outside_root` (other than the temp directories),
+`bash_deny`, `sudo`, `approval`, and `timeout_kill_process_group`: a command
+killed at a timeout, the deadline or a cancel is killed with its whole
+process group, as before.
+
+**What the record says.** `session_start.resolved.sandbox_profile`: `{name,
+relaxed, kept, shell}`, `shell` the path commands run under. Absent under
+`default`. `gnomon guard` reads the profile as the loop does.
+
+**What must not change.** With the key absent or `default`, every request
+body, tool schema and command environment is master's.
+
+**Fixture**: `conformance/sandbox_profile.json`;
+`packages/gnomon-core/src/sandbox_profile.test.ts` asserts the code equals it.

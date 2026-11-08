@@ -35,6 +35,7 @@ import {
   resolveSandboxLevel,
 } from "./config.js";
 import type { SandboxLevel } from "./tools.js";
+import { resolveSandboxProfile } from "./sandbox_profile.js";
 import { realpathSync } from "node:fs";
 
 export interface SandboxPin {
@@ -42,6 +43,12 @@ export interface SandboxPin {
   /** `[sandbox] network` as declared (undefined when absent). */
   network: boolean | undefined;
   extraRoots: string[];
+  /**
+   * `[sandbox] profile = "container"` (sandbox_profile.ts) at the start. It
+   * relaxes the network filter and the file tools' roots, so a reload may
+   * turn it off (a tightening) but never on.
+   */
+  container: boolean;
   /** resolveExec with no role: what a role without its own `exec` gets. */
   defaultExec: ResolvedExec;
   /** Per role, as pinned (and ratcheted). */
@@ -93,6 +100,7 @@ export function pinSandbox(config: GnomonConfig): SandboxPin {
     level: resolveSandboxLevel(config),
     network: declaredNetwork(config),
     extraRoots: resolveExtraRoots(config),
+    container: resolveSandboxProfile(config) === "container",
     defaultExec: resolveExec(config),
     roles,
     real: new Map(),
@@ -134,6 +142,8 @@ export interface PinnedSandbox {
   level: SandboxLevel;
   network: boolean | undefined;
   extraRoots: string[];
+  /** Whether the container profile is in force (pinned; see SandboxPin.container). */
+  container: boolean;
   exec: ResolvedExec;
   /** What the surface asked for that was NOT applied, for the operator. */
   loosened: string[];
@@ -158,6 +168,12 @@ export function applySandboxPin(pin: SandboxPin, config: GnomonConfig, role: str
     network = pin.network;
   }
 
+  let container = resolveSandboxProfile(config) === "container";
+  if (container && !pin.container) {
+    loosened.push('profile = "container" (pinned: "default")');
+    container = false;
+  }
+
   const freshRoots = resolveExtraRoots(config);
   const added = freshRoots.filter((r) => !pin.extraRoots.includes(r));
   if (added.length > 0) loosened.push(`extra_roots += ${added.join(", ")}`);
@@ -171,12 +187,14 @@ export function applySandboxPin(pin: SandboxPin, config: GnomonConfig, role: str
 
   pin.level = level;
   pin.network = network;
+  pin.container = container;
   pin.extraRoots = extraRoots;
   pin.roles.set(role, t.exec);
   return {
     level,
     network,
     extraRoots: pinnedReal(pin, extraRoots),
+    container,
     exec: t.exec,
     loosened,
   };
@@ -191,6 +209,7 @@ export function describeLoosening(pin: SandboxPin, config: GnomonConfig): string
     level: pin.level,
     network: pin.network,
     extraRoots: [...pin.extraRoots],
+    container: pin.container,
     defaultExec: pin.defaultExec,
     roles: new Map(pin.roles),
     real: new Map(pin.real),

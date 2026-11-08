@@ -2,12 +2,15 @@
  * Two declared opt-ins for unattended long tasks (docs/CONTRACTS.md §39,
  * conformance/long_task_profile.json):
  *
- * - `[turn] deadline_note = "plan" | "continue" | "none"`: the wording and timing of the
- *   `--deadline` time note. TEMPORARY: it exists so the SW1 sweep can test
+ * - `[turn] deadline_note = "plan" | "continue" | "none" | "upfront"`: the wording and
+ *   timing of the `--deadline` time note. `upfront` states the real budget once,
+ *   in the first request, and sends no countdown. TEMPORARY: it exists so the SW1 sweep can test
  *   one wording against the other on one build, and the losing value is
  *   deleted after SW1 (research note convergence-synthesis-2026-11-07 §5a a6).
- * - `[turn] prompt_profile = "default" | "unattended"`: the scaffold's daily-dev
- *   stop sentences out, the long-task lines in, the idle nudge off.
+ * - `[turn] prompt_profile = "default" | "unattended" | "peer"`: the scaffold's
+ *   daily-dev stop sentences out and the idle nudge off; `unattended` also adds
+ *   the long-task lines, `peer` adds nothing (opencode's and mini's prompts
+ *   carry no stop or verify-economy text; research note 16).
  *
  * Both are declared in `.gnomon/config.toml`, so both move the surface hash.
  * Neither is ever inferred from a TTY, an environment variable or the command
@@ -44,10 +47,10 @@
  */
 import type { GnomonConfig } from "./config.js";
 
-export const DEADLINE_NOTE_STYLES = ["plan", "continue", "none"] as const;
+export const DEADLINE_NOTE_STYLES = ["plan", "continue", "none", "upfront"] as const;
 export type DeadlineNoteStyle = (typeof DEADLINE_NOTE_STYLES)[number];
 
-export const PROMPT_PROFILES = ["default", "unattended"] as const;
+export const PROMPT_PROFILES = ["default", "unattended", "peer"] as const;
 export type PromptProfile = (typeof PROMPT_PROFILES)[number];
 
 /** Where the single "continue" note goes: 80% of the budget used. */
@@ -60,10 +63,12 @@ export const CONTINUE_NOTE_AT: readonly number[] = [0.8];
  * countdown): DP1's decision-point replays put the early-stop cue in the
  * countdown itself ("about N of 29m remain"), not in the "plan the rest"
  * ending, and swapping the ending to `continue` barely changed it. Never
- * called for `none`; given it, it returns "".
+ * called for `none`; given it, it returns "". `upfront` sends no mid-run
+ * note either (its one statement is `upfrontBudgetText`, in the first
+ * request), so it returns "" too.
  */
 export function deadlineNoteText(style: DeadlineNoteStyle, left: string, total: string): string {
-  if (style === "none") return "";
+  if (style === "none" || style === "upfront") return "";
   const head = `Time check: about ${left} of this task's ${total} remain before it is stopped. `;
   return style === "continue"
     ? head + `There is enough time left for substantial work; keep going and make sure the required outputs exist.`
@@ -71,7 +76,24 @@ export function deadlineNoteText(style: DeadlineNoteStyle, left: string, total: 
 }
 
 /**
- * The scaffold sentences the unattended profile drops, matched across any
+ * `deadline_note = "upfront"`: the run's real wall-time budget, said once, on
+ * the first request of the turn a person asked for. Research note 14: every
+ * TB4 task says "You have 28800 seconds" while the cap is 1,800 s, so without
+ * a deadline the model plans for 8 h and is cut off, and with the countdown
+ * it answers 8-13 min early at the first note. This states the real number
+ * before any work is planned and sends no countdown after it. Whole minutes,
+ * rounded, at least 1.
+ */
+export function upfrontBudgetText(totalMs: number): string {
+  const minutes = Math.max(1, Math.round(totalMs / 60_000));
+  return (
+    `You have ${minutes} minute${minutes === 1 ? "" : "s"} of wall time for this run; ` +
+    `this overrides any time stated in the task.`
+  );
+}
+
+/**
+ * The scaffold sentences the unattended and peer profiles drop, matched across any
  * line wrapping (the scaffold wraps at 76 columns; an edited system.md may
  * not). Each takes the whitespace before it, so the bullet it ended still
  * ends cleanly. Text that is not the scaffold's is left alone: a surface that
@@ -99,16 +121,16 @@ export const UNATTENDED_BLOCK =
   "many random probes, not an error measure on a few rows, and round fitted constants to the exact " +
   "values they stand for.";
 
-/** `[turn] deadline_note`, resolved: "plan" unless "continue" is declared. */
+/** `[turn] deadline_note`, resolved: "plan" unless another style is declared. */
 export function resolveDeadlineNoteStyle(config: GnomonConfig): DeadlineNoteStyle {
   const v = turnOf(config)?.deadline_note;
-  return v === "continue" || v === "none" ? v : "plan";
+  return v === "continue" || v === "none" || v === "upfront" ? v : "plan";
 }
 
-/** `[turn] prompt_profile`, resolved: "default" unless "unattended" is declared. */
+/** `[turn] prompt_profile`, resolved: "default" unless another profile is declared. */
 export function resolvePromptProfile(config: GnomonConfig): PromptProfile {
   const v = turnOf(config)?.prompt_profile;
-  return v === "unattended" ? "unattended" : "default";
+  return v === "unattended" || v === "peer" ? v : "default";
 }
 
 /**
@@ -116,7 +138,7 @@ export function resolvePromptProfile(config: GnomonConfig): PromptProfile {
  * many scaffold sentences it dropped. "default" returns the text unchanged.
  */
 export function applyPromptProfile(text: string, profile: PromptProfile): { text: string; dropped: number } {
-  if (profile !== "unattended") return { text, dropped: 0 };
+  if (profile === "default") return { text, dropped: 0 };
   let dropped = 0;
   let out = text;
   for (const re of UNATTENDED_DROPS) {
@@ -128,7 +150,10 @@ export function applyPromptProfile(text: string, profile: PromptProfile): { text
   return { text: out, dropped };
 }
 
-/** The block appended for a profile: "" for "default", so the prompt is the one it always was. */
+/**
+ * The block appended for a profile: "" for "default", so the prompt is the one
+ * it always was, and "" for "peer", which only removes.
+ */
 export function promptProfileBlock(profile: PromptProfile): string {
   return profile === "unattended" ? `\n\n${UNATTENDED_BLOCK}` : "";
 }
@@ -150,17 +175,17 @@ export function auditLongTaskProfile(
   if (note !== undefined && !(DEADLINE_NOTE_STYLES as readonly unknown[]).includes(note)) {
     out.push({
       where: ".gnomon/config.toml [turn] deadline_note",
-      problem: `deadline_note = ${JSON.stringify(note)} is not "plan", "continue" or "none". Refused rather than run with a time note the surface did not ask for.`,
-      fix: 'deadline_note = "continue" (one note at 0.8: keep going), "none" (no time note), or "plan" (the default).',
+      problem: `deadline_note = ${JSON.stringify(note)} is not "plan", "continue", "none" or "upfront". Refused rather than run with a time note the surface did not ask for.`,
+      fix: 'deadline_note = "continue" (one note at 0.8: keep going), "none" (no time note), "upfront" (the budget said once, in the first request), or "plan" (the default).',
       fatal: true,
     });
-  } else if ((note === "continue" || note === "none") && t?.deadline_notes !== undefined) {
+  } else if ((note === "continue" || note === "none" || note === "upfront") && t?.deadline_notes !== undefined) {
     out.push({
       where: ".gnomon/config.toml [turn] deadline_notes",
       problem:
         note === "continue"
           ? `deadline_notes is not read under deadline_note = "continue": that style sends one note, at ${CONTINUE_NOTE_AT.join(", ")} of the budget.`
-          : `deadline_notes is not read under deadline_note = "none": that style sends no time note.`,
+          : `deadline_notes is not read under deadline_note = ${JSON.stringify(note)}: that style sends no countdown note.`,
       fix: 'Remove deadline_notes, or use deadline_note = "plan".',
       fatal: false,
     });
@@ -169,18 +194,18 @@ export function auditLongTaskProfile(
   if (profile !== undefined && !(PROMPT_PROFILES as readonly unknown[]).includes(profile)) {
     out.push({
       where: ".gnomon/config.toml [turn] prompt_profile",
-      problem: `prompt_profile = ${JSON.stringify(profile)} is not "default" or "unattended". Refused rather than run with a prompt the surface did not ask for.`,
-      fix: 'prompt_profile = "unattended" (long unattended runs), or "default".',
+      problem: `prompt_profile = ${JSON.stringify(profile)} is not "default", "unattended" or "peer". Refused rather than run with a prompt the surface did not ask for.`,
+      fix: 'prompt_profile = "unattended" (long unattended runs), "peer" (the stop sentences out, nothing added), or "default".',
       fatal: true,
     });
-  } else if (profile === "unattended") {
+  } else if (profile === "unattended" || profile === "peer") {
     const system = (config as { system?: { content?: string } }).system?.content ?? "";
-    if (applyPromptProfile(system, "unattended").dropped === 0) {
+    if (applyPromptProfile(system, profile).dropped === 0) {
       out.push({
         where: ".gnomon/system.md",
         problem:
-          `prompt_profile = "unattended" drops the scaffold's "Verify in proportion to the task ..." and ` +
-          `"Once it works ... stop." sentences, and this system.md has neither, so only the profile's own lines are added.`,
+          `prompt_profile = "${profile}" drops the scaffold's "Verify in proportion to the task ..." and ` +
+          `"Once it works ... stop." sentences, and this system.md has neither, so ${profile === "peer" ? "the profile changes nothing but the idle nudge" : "only the profile's own lines are added"}.`,
         fix: "Nothing, if the stop sentences were removed on purpose.",
         fatal: false,
       });

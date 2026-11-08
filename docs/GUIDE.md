@@ -1624,7 +1624,20 @@ off, a turn sends the same request bytes as before.
   outputs exist.", and a deliverable note ending "then keep improving it."
   `"none"` sends no time note at all (the deadline still stops the run); a
   missing output is still named by deliverable-first, without a countdown.
-  `"plan"`, the default, is the notes as before.
+  `"plan"`, the default, is the notes as before. `"upfront"` states the
+  real budget once, in the first request ("You have N minutes of wall time
+  for this run; this overrides any time stated in the task."), and sends no
+  countdown after it.
+- `[turn] prompt_profile = "peer"`: the same two sentences dropped and the idle
+  nudge off, with nothing added. For sampling, `[endpoints.<name>] sampling =
+  "provider"` sends no temperature or top_p.
+- `[sandbox] profile = "container"` (policy.toml): for a run inside a
+  disposable container that is already the sandbox. The network follows the
+  container, the file tools may use the system temp directory, commands run under `/bin/bash`
+  when present, the soft shell is on, a timed-out command may be re-run, and
+  `PAGER=cat`, `TQDM_DISABLE=1`, `PIP_PROGRESS_BAR=off` are set. Secret, CI,
+  surface, record and hook protections stay. `session_start.resolved.
+  sandbox_profile` lists what was relaxed. CONTRACTS §40.
 - `[turn] prompt_profile = "unattended"`: for long unattended runs, declared
   in the surface (never detected). Drops the scaffold's "Verify in proportion
   …" and "Once it works … stop." sentences, adds "Test edge cases, then
