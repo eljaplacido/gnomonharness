@@ -1544,6 +1544,13 @@ run deadline, when one is given) is left. Each round is in
 ([CONTRACTS.md §30](CONTRACTS.md)). It costs steps and tokens on every turn
 that changes files.
 
+`"review_only"` (#175, `master` only) is the reviewer without the checklist
+round: the first answer of a turn that changed the worktree goes straight to
+the reviewer, and no check command is demanded first. In stage 2 or later of a
+`[chain]`, the reviewer sees the request alone, not the previous stage's
+report. It was added for HX1 (a stronger reviewer model at two decision
+points), which is still running; no result is claimed for it.
+
 **Measured so far, it has not helped.** On a hosted model (H4-lite,
 deepseek-v4.1-flash, 1,800 s cap) `"review"` *lowered* the hidden-test
 fraction by 0.10 (95% CI −0.21 to −0.01), doubled capped cells (4 → 8) and
@@ -1566,11 +1573,16 @@ completion_min_remaining = 0.2    # skip with less than a fifth of the budget le
 completion_reviewer = "verifier"  # a read-only role (no write/edit; a bash_allow)
 ```
 
-**Opt-in, and not yet measured: the finish gate, deliverable-first notes,
+**Opt-in, and not shown to help: the finish gate, deliverable-first notes,
 the first-token watchdog and the soft-timeout shell.** These four merged on
-2026-11-06/07 for long tasks and are in no release yet. None has a benchmark result yet: the FG1 and AS1
-runs that test them are still in progress, so treat them as hypotheses to try,
-not as improvements, and leave them off unless you are measuring them.
+2026-11-06/07 for long tasks and are in no published release yet. FG1
+(pre-registered, 2026-11-08) adopted neither the finish gate (7 vs 5 solves of
+87, not shown) nor the soft shell (11 vs 5, ahead but not shown); the
+deliverable-first note and the watchdog have no result of their own. Treat
+them as hypotheses to try, not as improvements, and leave them off unless you
+are measuring them. AS1's screen chose `--deadline` itself, and SW1 found
+`deadline_note = "upfront"` matched `--deadline` + `deliverable_first` on
+solves at lower spend and wall time ([EVIDENCE](EVIDENCE.md)).
 
 **Opt-in: the finish gate (`finish_gate = "v2"`).** Built for long tasks,
 and it supersedes the completion gate and the todo gate: with it on, they do

@@ -25,19 +25,23 @@ reviews.
 the line` says what moved; `update files` and `address feedback` say nothing a
 reader can use six months later. Present tense, one concern per commit.
 
-**Pushing.** `git push -u origin <branch>` the first time. `git push --force`
-and pushing straight to `main`/`master`/`release` are refused by `bash_deny`
-in roles.toml — that guardrail is local to this agent, and it is not a
-substitute for branch protection on the remote, which is the control that
-binds everyone.
+**Pushing.** `git push -u origin <branch>` the first time. Every force push
+(`--force`, `-f` and `--force-with-lease` alike) and pushing straight to
+`main`/`master`/`release` are refused by `bash_deny` in roles.toml — that
+guardrail is local to this agent, and it is not a substitute for branch
+protection on the remote, which is the control that binds everyone.
 
-If a rebase genuinely needs a rewrite, use `--force-with-lease` on your own
-branch and say so in the pull request. Never on a shared one.
+If a rebase genuinely needs a rewrite of a pushed branch, do not look for a
+way around the deny: push the rewrite to a new branch, or ask a person to run
+the force push, and say so in the pull request.
 
 **Opening a pull request** — `gh` is authenticated outside gnomon (see
 [[authenticated-tools]]):
 
-    gh pr create --fill --base main --head <branch>
+    gh pr create --fill --base master --head <branch>
+
+This repository's default branch is `master`; elsewhere, use the branch
+`git remote show origin` names as HEAD.
 
 State what changed and how it was verified. If the suite did not run, say
 that; a pull request that implies tests passed when they were not run is worse

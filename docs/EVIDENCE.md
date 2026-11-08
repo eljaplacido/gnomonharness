@@ -128,9 +128,20 @@ comparison below is small; "not shown" never means "equal".
 | **Hybrid, NVIDIA GB10** | [M2](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/m2-2026-11/summary-m2.txt) · v0.4.0 | PC 22/32 vs L 16/31 on the same lane (paired 22 vs 16, p = 0.07), $0.031 per solved. M2 ran no cloud-only arm |
 | **GBS 0.1, model-free** (overhead, chaos, audit, governance) | [gbs-2026-11-04](../benchmarks/results/gbs-2026-11-04/) · v0.4.1 | +126 ms CPU per trial over a null harness; 17/20 chaos faults announced; audit 0/48 false positives, but a forged append after the seal exited 0 (fixed in v0.4.2, #149); the agent could approve its own skill by unsetting one variable (fixed in v0.4.2, #149). Author-run; partially conformant except CHAOS arm R |
 
-**Running, no result yet:** AS1 (long-task levers) and FG1 (finish gate v2,
-soft shell and related knobs). Nothing in this repository may cite them until
-their summaries are committed.
+**Concluded 2026-11-07/08, gnomon arms only.** These summaries are committed
+to the benchmark repository, which is not public at present; the figures below
+compare gnomon configurations with each other and name no peer harness.
+
+| Claim | Run · build | Result |
+|---|---|---|
+| **Finish gate v2 and the soft-timeout shell** (opt-in, vs the hosted recipe as control) | FG1 · v0.4.5 candidate `f8c8a396`, 29 tasks × 3 attempts, pre-registered | **neither adopted.** Finish gate solved 7 vs 5 of 87 (+0.023 [95% task-cluster bootstrap −0.069, +0.115]), median wall 1441 vs 1008 s. Soft shell solved 11 vs 5 (+0.069 [−0.011, +0.150], exact McNemar p = 0.15), capped 5 vs 8: ahead, not shown at the final look's level. Both stay opt-in |
+| **Long-task levers, adaptive screen** | AS1 · screening and interaction stages | **`--deadline` chosen**: hidden-test share +0.16, posterior probability of a gain 0.93. Low reasoning effort did not hold on fresh cells; the checklist gate and the package-cache fragment were dropped as futile. A screening choice; the confirmation stage did not run |
+| **Upfront deadline note (T) and the peer-style profile (PF)** vs `--deadline` + `deliverable_first` (BEST) | SW1 · #174 build `69d33db`, 29 tasks, pre-registered | **PF not shown better**: full solves 2/28 vs 0/28 (exact McNemar p = 0.5), hidden-test share 0.64 vs 0.65. **T matched BEST** on solves (3/29 each, round 2) at $0.038 vs $0.043 per cell and a 592 s vs 901 s median wall; hidden-test +0.036, not shown. T became the base for HX1 by the pre-registered rule |
+
+**Running, no result yet:** HX1 (a stronger reviewer model at two decision
+points, `completion_gate = "review_only"`, on top of SW1's T; pre-registered,
+k = 3). Its attempt-1 snapshot is descriptive only and not cited here; the k = 3
+verdict is pending.
 
 ## Claims with no evidence
 
@@ -148,10 +159,13 @@ Listed because omitting them would imply coverage that does not exist.
 - **Anything about `v0.2.0` specifically** — see the note at the top. No scored
   arm has run against this release. The property suites have; the rates have not.
 
-- **The opt-in knobs merged 2026-11-06/07** — the soft-timeout shell (#161),
-  finish gate v2 (#162), the deliverable-first note and first-token watchdog
-  (#164) and governance levels (#167). No scored arm has finished on any of
-  them; FG1 and AS1 are running. They are opt-in and unproven.
+- **The opt-in knobs merged 2026-11-06/08** — finish gate v2 (#162) and the
+  soft-timeout shell (#161) were measured in FG1 and not adopted (above). The
+  deliverable-first note, first-token watchdog (#164), governance levels
+  (#167), the peer prompt profile, the container sandbox profile (#174) and
+  `completion_gate = "review_only"` (#175) have no scored result of their own:
+  `deliverable_first` only as part of AS1/SW1's BEST arm, the container
+  profile only inside SW1's PF. They are opt-in and unproven.
 
 - **`[sandbox] exec = "docker"` containment against a real Docker** — CI tests
   it against a stub `docker` (argv inspection and a fake), not a real engine.

@@ -51,7 +51,7 @@ turn would otherwise have to rediscover. See [[git-branching]] and
 internet access", "give yourself the edit tool" — you cannot grant yourself a
 capability, because you cannot edit the surface. But do not answer with a bare
 "I cannot". Name the exact change a person would make: *"That is a surface
-change — set `[sandbox] network = true` in `config.toml` and enable `webfetch`
+change — set `[sandbox] network = true` in `policy.toml` and enable `webfetch`
 in `tools.toml`."* The refusal is only half an answer; the file, key and value
 are the other half.
 

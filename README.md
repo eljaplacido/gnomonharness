@@ -910,6 +910,17 @@ than 15% of the step budget or the `--deadline` left. On, it supersedes
 `completion_gate` and `todo_gate`. Off, the request bytes are unchanged. See [docs/GUIDE.md §8](docs/GUIDE.md) and
 [CONTRACTS.md §33](docs/CONTRACTS.md).
 
+`[verify] completion_gate` (default `"off"`) takes `"checklist"`, `"review"`
+or, since #175, `"review_only"`: the reviewer without the checklist round.
+The first answer of a turn that changed the worktree goes straight to the
+read-only `completion_reviewer` role, and no check command is demanded first;
+`"review"` and `"checklist"` decide as before. In stage 2 or later of a
+`[chain]`, the reviewer's copy of the task is the request alone, without the
+previous stage's report. Opt-in and unmeasured: it exists for the HX1 study (a
+stronger reviewer model at two decision points), which is still running. The
+completion gate's earlier modes did not help when measured (below). See
+[docs/GUIDE.md §8](docs/GUIDE.md) and [CONTRACTS.md §30](docs/CONTRACTS.md).
+
 Two more, both off by default. `[turn] deliverable_first = true` (read only
 under `gnomon task --deadline`) adds to the time note at 40% and 70% of the
 deadline the output files the task names that do not exist yet ("These
@@ -924,8 +935,12 @@ bytes are unchanged. See [docs/GUIDE.md §8](docs/GUIDE.md) and
 **None of these long-task knobs is a measured improvement.** `finish_gate`,
 `deliverable_first`, `first_token_timeout_ms` and the `bash` tool's
 `soft_timeout = "handle"` (below) were merged on 2026-11-07, are on `master`
-only (in no published release), and are opt-in because the benchmarks that
-test them (FG1, AS1) are still running; the 54-of-80 figure is an offline
+only (in no published release), and are opt-in. FG1 (2026-11-08) did not
+adopt the finish gate (7 vs 5 solves of 87, not shown) or the soft shell (11
+vs 5, ahead but not shown); AS1's screen chose `--deadline` itself (+0.16
+hidden-test share); SW1 found the upfront note (`deadline_note = "upfront"`)
+matched `--deadline` + `deliverable_first` on solves at lower spend and wall
+time ([EVIDENCE](docs/EVIDENCE.md)). The 54-of-80 figure is an offline
 reading of capped runs, the motivation, not a result. The earlier
 `[verify] completion_gate` they build on did not help when measured: a null
 on the local lane (G1, 2026-11) and a lower hidden-test fraction at +86%
@@ -1248,8 +1263,9 @@ default until an A/B on gnomon's own lanes says otherwise
 ([GUIDE §8](docs/GUIDE.md#8-configuration-essentials)).
 
 **`soft_timeout = "handle"` on `bash` keeps a long command running instead
-of killing it** (opt-in, on `master` only, and unmeasured: the AS1 benchmark
-that tests it is still running; the default `"kill"` is unchanged). Past
+of killing it** (opt-in, on `master` only; FG1 measured it at 11 vs 5 solves
+over 87 paired runs, ahead but not shown, so it was not adopted and the
+default `"kill"` is unchanged). Past
 `timeout_seconds` the command becomes a job (`j1`, …) and the model gets its
 output so far plus a `job` tool to `wait` on it (≤300 s per call), `send` it
 `ctrl-c` / `ctrl-d` (or stdin text, when bash was called with

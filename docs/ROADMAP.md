@@ -259,3 +259,38 @@ Ordered by what a day of real use runs into first.
       audit.ts 94%, config.ts 92.6%, render.ts 93.3%, tools.ts 82%. That the
       least-tested file is the control loop is worth stating plainly: it is
       where most of the 2026-08-31 audit's defects were found.
+
+## 2026-11 — where the long-task and governance work stands
+
+Done on `master` (in the v0.4.5 release candidate, #161–#175): shared
+governance levels, protected paths and `outside_root`; the `exec = "docker"`
+security fix; reasoning replay as the hosted default (H3, +16 points of
+hidden tests); and the long-task knobs, all opt-in. Measured since: FG1 did not
+adopt the finish gate or the soft-timeout shell; AS1's screen chose
+`--deadline`; SW1 found the upfront deadline note matched `--deadline` +
+`deliverable_first` on solves at lower spend and wall time. HX1 (a stronger
+reviewer at two decision points) is running. Results are read in
+[EVIDENCE.md](EVIDENCE.md).
+
+Candidates for the next round, each to be pre-registered and measured before
+it becomes a default:
+
+- [ ] **Finish the last mile.** Long-task runs now pass most hidden tests
+      (about two thirds) but rarely all of them; the gap between partial and
+      full solves is where the remaining work is, not in starting faster.
+- [ ] **A cheap, guarded reviewer.** The completion gate's reviewer helped
+      nothing when it was slow and unbounded (H4-lite: +86% spend, more
+      capped runs). A reviewer that is cheap, sees the deadline and has a hard
+      time and cost guard is the version worth testing; HX1's verdict decides
+      whether a stronger reviewer pays for itself at all.
+- [ ] **A timeout yields a handle.** A command that outlives its timeout is
+      moved to the background with a handle and a completion notice instead
+      of being killed — a refinement of the soft-timeout shell, which FG1 found
+      ahead but not shown.
+- [ ] **A microVM exec backend (Cube or similar).** A third `exec` value
+      beside `off` and `docker`, for running an untrusted model with a kernel
+      boundary of its own; the kernel sandbox `exec = "os"` (#156) is still
+      unmerged.
+- [ ] **Governance PRs 2, 4–11** from the shared-governance design note:
+      `advisory` check levels, post-tool records, attribution, `[extends]` /
+      policy pull, adapters for more hosts.
