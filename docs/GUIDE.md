@@ -1560,7 +1560,7 @@ and a run deadline, so the gate is skipped near the end of the budget.
 ```toml
 # policy.toml: inside the existing [verify] block
 [verify]
-completion_gate = "checklist"     # "off" (default), "checklist", or "review" (see above)
+completion_gate = "checklist"     # "off" (default), "checklist", "review" or "review_only" (see above)
 completion_rounds = 3             # hand-backs per turn, at most
 completion_min_remaining = 0.2    # skip with less than a fifth of the budget left
 completion_reviewer = "verifier"  # a read-only role (no write/edit; a bash_allow)

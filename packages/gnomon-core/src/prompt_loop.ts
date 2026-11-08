@@ -117,6 +117,7 @@ import {
   renderFindings,
   reviewerInstruction,
   reviewerToolNames,
+  chainStageInput,
   parseFindings,
   taskTextOf,
   changedPaths,
@@ -8697,7 +8698,7 @@ export async function runTask(
         const stageRole = chain[i];
         const stageRoute = routeRole(config, stageRole);
         const stageInput = carried
-          ? `${input}\n\n---\nThe previous stage (${chain[i - 1]}) reported:\n${carried}`
+          ? chainStageInput(input, chain[i - 1]!, carried)
           : input;
         const stageState: PromptState = { config, exchanges: [], currentRole: stageRole };
         stageState.mcp = state.mcp;
@@ -10777,7 +10778,7 @@ export async function runSessionTurn(
         const stageRole = turnChain[i];
         const stageRoute = routeRole(config, stageRole);
         const stageInput = carriedAnswer
-          ? `${cleanedInput}\n\n---\nThe previous stage (${turnChain[i - 1]}) reported:\n${carriedAnswer}`
+          ? chainStageInput(cleanedInput, turnChain[i - 1]!, carriedAnswer)
           : cleanedInput;
         // The stage sees the conversation so far plus its own instruction;
         // it does NOT see the previous stage's tool calls, only what that

@@ -34,6 +34,16 @@ merged, and no result is claimed for any of them yet. With none declared,
 request bodies are master's — except the network refusal's wording, which the
 long-task tier (a) changes on purpose (below).
 
+### Added — `completion_gate = "review_only"` (opt-in, unmeasured), CONTRACTS §30
+
+- `[verify] completion_gate = "review_only"`: the reviewer without the checklist round. The first answer of a turn
+  that changed the worktree goes straight to `completion_reviewer`; no check command is demanded. `review` and
+  `checklist` decide exactly as before (a table test pins all 768 states). For the HX1 study (a stronger reviewer
+  model at two decision points), where the checklist would be a second mechanism; the checklist alone screened
+  futile in AS1.
+- In stage 2 or later of a `[chain]`, the reviewer's "task, verbatim" is the request only: the previous stage's
+  report (`\n\n---\nThe previous stage (…`) is cut, so a reviewer is not anchored on a planner's reading.
+
 ### Added — SW1 arms T and PF (opt-in, unmeasured), CONTRACTS §39, §40
 
 Nothing changes unless declared; daily-dev defaults are untouched.

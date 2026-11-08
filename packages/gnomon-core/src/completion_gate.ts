@@ -33,8 +33,18 @@
  */
 import type { GnomonConfig } from "./config.js";
 
-export const COMPLETION_GATE_MODES = ["off", "checklist", "review"] as const;
+export const COMPLETION_GATE_MODES = ["off", "checklist", "review", "review_only"] as const;
 export type CompletionGateMode = (typeof COMPLETION_GATE_MODES)[number];
+
+/**
+ * Whether a mode runs the reviewer. `review_only` is `review` without the
+ * checklist round: the first answer goes straight to the reviewer. It exists
+ * so the reviewer can be measured on its own -- `review` is two mechanisms,
+ * and the checklist alone screened futile (AS1, 2026-11).
+ */
+export function isReviewMode(mode: CompletionGateMode): boolean {
+  return mode === "review" || mode === "review_only";
+}
 
 /** What the gate did at one end of the turn. */
 export const COMPLETION_GATE_ACTIONS = ["checklist", "no_check", "review", "accept"] as const;
@@ -90,7 +100,7 @@ export function resolveCompletionGate(config: GnomonConfig): ResolvedCompletionG
   const v = (config.policy as { verify?: Record<string, unknown> } | undefined)?.verify ?? {};
   const raw = v.completion_gate;
   const mode: CompletionGateMode =
-    raw === "checklist" || raw === "review" ? raw : "off";
+    raw === "checklist" || raw === "review" || raw === "review_only" ? raw : "off";
   const rounds =
     typeof v.completion_rounds === "number" && Number.isFinite(v.completion_rounds)
       ? Math.max(0, Math.floor(v.completion_rounds))
@@ -153,12 +163,12 @@ export function auditCompletionGate(config: GnomonConfig): CompletionGateProblem
       fatal: false,
     });
   }
-  if (g.mode !== "review") return out;
+  if (!isReviewMode(g.mode)) return out;
   const role = config.roles?.[g.reviewer];
   if (!role) {
     out.push({
       where: `${where} completion_reviewer`,
-      problem: `completion_gate = "review" names reviewer "${g.reviewer}", which is not a role in this surface, so no review can run.`,
+      problem: `completion_gate = "${g.mode}" names reviewer "${g.reviewer}", which is not a role in this surface, so no review can run.`,
       fix: `Declared roles: ${Object.keys(config.roles ?? {}).sort().join(", ")}. Set completion_reviewer to a read-only one.`,
       fatal: true,
     });
@@ -489,15 +499,17 @@ export function nextGateStep(
   s: CompletionGateState,
   opts: { budgetLeft: number; canCheck: boolean }
 ): CompletionGateStep {
+  // `review_only` has no checklist round, so round 0 is not a condition of its own.
+  const checklistDue = s.rounds === 0 && g.mode !== "review_only";
   const unmet =
-    s.rounds === 0 ||
+    checklistDue ||
     (s.checkRequired && opts.canCheck && s.checksSince === 0) ||
-    (g.mode === "review" && !s.reviewed);
+    (isReviewMode(g.mode) && !s.reviewed);
   if (s.rounds >= g.max_rounds) return { act: "accept", outcome: unmet ? "exhausted" : "passed" };
   if (unmet && opts.budgetLeft < g.min_remaining) return { act: "accept", outcome: "skipped_budget" };
-  if (s.rounds === 0) return { act: "checklist" };
+  if (checklistDue) return { act: "checklist" };
   if (s.checkRequired && opts.canCheck && s.checksSince === 0) return { act: "no_check" };
-  if (g.mode === "review" && !s.reviewed) return { act: "review" };
+  if (isReviewMode(g.mode) && !s.reviewed) return { act: "review" };
   return { act: "accept", outcome: "passed" };
 }
 
@@ -551,16 +563,40 @@ export function taskTextOf(messages: ReadonlyArray<{ role: string; content?: unk
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
     if (m.role !== "user") continue;
-    if (typeof m.content === "string") return m.content;
+    if (typeof m.content === "string") return withoutChainCarry(m.content);
     if (Array.isArray(m.content)) {
-      return m.content
-        .map((p) => (p && typeof p === "object" && typeof (p as { text?: unknown }).text === "string" ? (p as { text: string }).text : ""))
-        .filter(Boolean)
-        .join("\n");
+      return withoutChainCarry(
+        m.content
+          .map((p) => (p && typeof p === "object" && typeof (p as { text?: unknown }).text === "string" ? (p as { text: string }).text : ""))
+          .filter(Boolean)
+          .join("\n")
+      );
     }
     return "";
   }
   return "";
+}
+
+/**
+ * Where a `[chain]` stage's input stops being the request and starts being
+ * the previous stage's report. One constant, used where the stage input is
+ * built (prompt_loop.ts) and here.
+ */
+export const CHAIN_CARRY = "\n\n---\nThe previous stage (";
+
+/** The chain stage input as stage `i` builds it: the request, then the carry. */
+export function chainStageInput(input: string, previousRole: string, carried: string): string {
+  return `${input}${CHAIN_CARRY}${previousRole}) reported:\n${carried}`;
+}
+
+/**
+ * The request alone. In stage 2 of a chain the last user message is the
+ * request plus the previous stage's report; a reviewer handed that as "the
+ * task, verbatim" would be anchored on the reading it is meant to check.
+ */
+export function withoutChainCarry(text: string): string {
+  const at = text.indexOf(CHAIN_CARRY);
+  return at < 0 ? text : text.slice(0, at);
 }
 
 /**

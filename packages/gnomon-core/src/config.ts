@@ -431,7 +431,7 @@ export interface Policy {
      * check that can never pass cannot spend the budget in a circle.
      */
     max_rounds?: number;
-    /** The completion gate (completion_gate.ts): "off", "checklist" or "review". */
+    /** The completion gate (completion_gate.ts): "off", "checklist", "review" or "review_only". */
     completion_gate?: string;
     completion_rounds?: number;
     completion_min_remaining?: number;
