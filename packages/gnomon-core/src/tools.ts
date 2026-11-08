@@ -90,6 +90,12 @@ import {
   type JobEvent,
   type JobKillReason,
 } from "./soft_shell.js";
+import {
+  CONTAINER_ENV,
+  containerBashDescription,
+  containerShell,
+  resolveSandboxProfile,
+} from "./sandbox_profile.js";
 import type { ChildProcess } from "node:child_process";
 
 /**
@@ -449,6 +455,7 @@ export function buildToolSet(
   const readWindow = toolMaxLines(config, "read");
   const editVariant = resolveEditVariant(config);
   const handle = resolveSoftTimeout(config) === "handle";
+  const container = resolveSandboxProfile(config) === "container";
 
   for (const tool of declaredTools(config)) {
     // Not a declarable tool (soft_shell.ts). Unimplemented, as on master,
@@ -470,11 +477,18 @@ export function buildToolSet(
       unimplemented.push(tool.name);
       continue;
     }
+    // `[sandbox] profile = "container"` runs bash under /bin/bash where it
+    // exists, so the scaffold's "/bin/sh, not bash" sentence is replaced
+    // (sandbox_profile.ts); any other description is the surface's own.
+    const description =
+      tool.name === "bash" && container
+        ? containerBashDescription(tool.description ?? tool.name, containerShell())
+        : (tool.description ?? tool.name);
     schemas.push({
       type: "function",
       function: {
         name: tool.name,
-        description: tool.description ?? tool.name,
+        description,
         parameters,
       },
     });
@@ -1056,6 +1070,19 @@ export function agentEnv(session: string | undefined, base: NodeJS.ProcessEnv = 
   return { ...base, [AGENT_SESSION_ENV]: session || `pid-${process.pid}` };
 }
 
+/**
+ * A bash command's environment: agentEnv, plus CONTAINER_ENV (PAGER=cat,
+ * TQDM_DISABLE=1, PIP_PROGRESS_BAR=off) under `[sandbox] profile =
+ * "container"`. Pagers and progress bars write for a terminal nobody watches.
+ */
+export function commandEnv(
+  ctx: Pick<ToolContext, "agentSession" | "containerNative">,
+  base: NodeJS.ProcessEnv = process.env
+): NodeJS.ProcessEnv {
+  const env = agentEnv(ctx.agentSession, base);
+  return ctx.containerNative ? { ...env, ...CONTAINER_ENV } : env;
+}
+
 export interface ToolContext {
   /** Needed by `skill`, which writes inside .gnomon/ */
   config?: GnomonConfig;
@@ -1172,6 +1199,13 @@ export interface ToolContext {
   delegate?: Delegate;
   /** Whether tools may reach the network. From `[sandbox] network`. */
   network?: boolean;
+  /**
+   * `[sandbox] profile = "container"` (sandbox_profile.ts), as the session
+   * pinned it: bash runs under /bin/bash when present, with CONTAINER_ENV,
+   * and a command that timed out may be run again. The network and /tmp
+   * relaxations arrive as `network` and `extraRoots`. Absent: as before.
+   */
+  containerNative?: boolean;
   /**
    * `[sandbox] allow_package_index` (sweep_knobs.ts resolvePackageIndex):
    * hosts a bash command may name under `network = false` to download
@@ -2919,7 +2953,7 @@ function outsideWriteAllowed(ctx: ToolContext, realRoot: string, real: string): 
 }
 
 /** The system's temp directories, real paths: scratch space a shell may write. */
-function scratchDirs(): string[] {
+export function scratchDirs(): string[] {
   const dirs = [tmpdir()];
   if (process.platform !== "win32") dirs.push("/tmp", "/var/tmp");
   const out: string[] = [];
@@ -3738,8 +3772,12 @@ async function bashTool(
   // second 120s buys exactly the information the first one did. Refuse it
   // instead, and say what would work -- a declared refusal, at no wall cost,
   // rather than a fourth identical stall.
+  // Not under the container profile (sandbox_profile.ts): the container is
+  // the model's to spend, a re-run may follow a change outside the command
+  // text (a rebuilt binary, a warmed cache), and the soft shell is on there,
+  // so a long command is usually handed back as a job rather than killed.
   const commandKey = command.trim().replace(/\s+/g, " ");
-  if (ctx.timedOutCommands?.has(commandKey)) {
+  if (!ctx.containerNative && ctx.timedOutCommands?.has(commandKey)) {
     return {
       code: TOOL_FAILED,
       content:
@@ -3825,7 +3863,8 @@ async function bashTool(
   const sandboxed = spawned !== command;
 
   // Refused, not silently run under a different language. See posixShell().
-  const shellBin = posixShell();
+  // The container profile prefers /bin/bash where it exists (sandbox_profile.ts).
+  const shellBin = (ctx.containerNative ? containerShell() : null) ?? posixShell();
   if (shellBin === null) {
     return {
       code: TOOL_FAILED,
@@ -3860,7 +3899,7 @@ async function bashTool(
     const proc = spawn(shellBin, ["-c", spawned], {
       cwd: ctx.root,
       // The marker that says the agent is running this (AGENT_SESSION_ENV).
-      env: agentEnv(ctx.agentSession),
+      env: commandEnv(ctx),
       // stdin closed, stdout/stderr piped. An inherited stdin pipe that nobody
       // ever writes to makes any command that reads stdin block until the tool
       // timeout kills it -- `cat` with no argument, an npm prompt, a git
@@ -3910,7 +3949,7 @@ async function bashTool(
       // So the next identical call is refused for free rather than stalling.
       // Not when the deadline cut it short: the command may well fit the
       // ordinary limit, and the refusal would quote a limit it never had.
-      if (!clamped) ctx.timedOutCommands?.add(commandKey);
+      if (!clamped && !ctx.containerNative) ctx.timedOutCommands?.add(commandKey);
       done({
         code: TOOL_FAILED,
         worktree_changed: movedTree,
@@ -4329,7 +4368,7 @@ export class JobTable {
     }
     const proc = spawn(s.shellBin, ["-c", s.spawned], {
       cwd: ctx.root,
-      env: agentEnv(ctx.agentSession),
+      env: commandEnv(ctx),
       // stdin closed, as in kill mode, unless the call asked for
       // `interactive: true`: then a pipe `job send` writes to.
       stdio: [s.interactive ? "pipe" : "ignore", "pipe", "pipe"],

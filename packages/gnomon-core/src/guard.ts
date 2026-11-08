@@ -71,11 +71,13 @@ import { harnessBuild } from "./build.js";
 import {
   POLICY_TOOLS,
   buildToolSet,
+  scratchDirs,
   toolCallPolicy,
   type PolicyDecision,
   type PolicyRule,
   type ToolContext,
 } from "./tools.js";
+import { resolveSandboxProfile } from "./sandbox_profile.js";
 
 // ---------------------------------------------------------------------------
 // The contract
@@ -632,6 +634,7 @@ export async function decide(
   // The committed revision's protected-path lists, beside its levels: absent
   // with them. A list of the wrong shape throws, like a level.
   const protectedPaths = resolveProtectedPaths(config, governance);
+  const container = resolveSandboxProfile(config) === "container";
   const ctx: ToolContext = {
     ...(governance ? { governance } : {}),
     ...(protectedPaths ? { protectedPaths } : {}),
@@ -641,9 +644,16 @@ export async function decide(
     writeAllow: roleDef?.write_allow,
     root: where.project,
     sandbox: resolveSandboxLevel(config),
-    extraRoots: resolveExtraRoots(live),
+    // `[sandbox] profile = "container"` (sandbox_profile.ts), as the loop
+    // reads it: the network follows the container, and the file tools may
+    // use the system temp directories.
+    ...(container
+      ? { extraRoots: [...resolveExtraRoots(live), ...scratchDirs()], network: true, containerNative: true }
+      : {
+          extraRoots: resolveExtraRoots(live),
+          network: (config.policy?.sandbox as { network?: boolean } | undefined)?.network,
+        }),
     exec: resolveExec(config, role),
-    network: (config.policy?.sandbox as { network?: boolean } | undefined)?.network,
     // `[sandbox] allow_package_index` (sweep_knobs.ts), as the loop reads it.
     ...((hosts) => (hosts.length > 0 ? { packageIndex: hosts } : {}))(resolvePackageIndex(config)),
     gate: resolveApprovalGate(config),

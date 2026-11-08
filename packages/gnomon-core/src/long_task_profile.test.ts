@@ -34,8 +34,10 @@ import {
   UNATTENDED_BLOCK,
   applyPromptProfile,
   deadlineNoteText,
+  promptProfileBlock,
   resolveDeadlineNoteStyle,
   resolvePromptProfile,
+  upfrontBudgetText,
 } from "./long_task_profile.js";
 import { NETWORK_REFUSAL_TAIL, bashPrecheck } from "./tools.js";
 import { hostedUrl, restoreFetch, withMasterRefusal } from "./test_support.js";
@@ -572,5 +574,102 @@ describe("session_start.resolved: the locality, replay and steering each run res
     expect(off.routes.smol.target).toMatchObject({ local: false, replay: "off", replay_source: "declared" });
     const o = await startOf("local", "", "ollama");
     expect(o.routes.smol.target).toMatchObject({ replay: "off", replay_source: "ollama_route", steer_role: "system", steer_role_source: "default" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SW1 arms T and PF: deadline_note = "upfront", prompt_profile = "peer",
+// provider sampling
+// ---------------------------------------------------------------------------
+
+describe('deadline_note = "upfront"', () => {
+  it("the text: whole minutes of the real budget, at least one, overriding the task's", () => {
+    expect(upfrontBudgetText(1_740_000)).toBe(
+      FIXTURE.deadline_note.upfront.first_request.replace("{minutes}", "29")
+    );
+    expect(upfrontBudgetText(30_000)).toBe(
+      "You have 1 minute of wall time for this run; this overrides any time stated in the task."
+    );
+    expect(deadlineNoteText("upfront", "13m", "29m")).toBe("");
+  });
+
+  it("resolves to no countdown fractions, and a declared deadline_notes beside it is said, not fatal", () => {
+    const cfg = (turn: Record<string, unknown>) => ({ config: { turn } }) as never;
+    expect(resolveDeadline(cfg({ deadline_note: "upfront" }))).toMatchObject({ notes: [], style: "upfront" });
+    expect(resolveDeadline(cfg({ deadline_note: "upfront", deadline_notes: [0.5] })).notes).toEqual([]);
+    const surface = {
+      gnomonDir: "/x/.gnomon",
+      config: { turn: { deadline_note: "upfront", deadline_notes: [0.5] }, endpoints: { e: { url: "https://x.example/v1/chat/completions", kind: "openai" } } },
+      roles: { r: { model: "m", endpoint: "e" } },
+      system: { content: "be brief\n" },
+    } as never;
+    const p = auditSurface(surface).filter((x) => /deadline_note/.test(x.where));
+    expect(p.map((x) => x.fatal)).toEqual([false]);
+  });
+
+  it("states the budget once, in the first request, on the steering channel; no countdown after it", async () => {
+    const r = await deadlineRun('deadline_note = "upfront"\n');
+    expect(r.rec.stop_reason).toBe("answered");
+    const text = upfrontBudgetText(100_000);
+    expect(text).toBe("You have 2 minutes of wall time for this run; this overrides any time stated in the task.");
+    const first = JSON.parse(r.raws[0]!).messages as Array<{ role: string; content: string }>;
+    expect(first.map((m) => m.role)).toEqual(["system", "user", "system"]);
+    expect(first[2]!.content).toBe(text);
+    // Said once: the last request carries it once, as history, and nothing else about time.
+    const last = r.raws.at(-1)!;
+    expect(last.split(text).length - 1).toBe(1);
+    expect(r.raws.join("")).not.toContain("Time check");
+    expect(r.rec.counters.deadline_notes).toBeUndefined();
+    expect(r.rec.counters.deadline_upfront).toBe(1);
+    expect(r.audit.find((a) => a.kind === "session_start")!.deadline).toMatchObject({ notes: [], note: "upfront" });
+  });
+
+  it("with deliverable_first: the missing-output note alone, no countdown, keep improving", async () => {
+    const r = await deadlineRun('deadline_note = "upfront"\ndeliverable_first = true\n', "", "Write the summary to `result.txt`.");
+    const all = r.raws.join("");
+    expect(all).not.toContain("Time check");
+    expect(all).toContain(FIXTURE.deadline_note.upfront.deliverable_note.replace("{paths}", "result.txt"));
+  });
+});
+
+describe('prompt_profile = "peer"', () => {
+  it("drops the two stop sentences of the scaffold, adds nothing, and turns the nudge off unless declared", () => {
+    const scaffold = scaffoldSystemMd();
+    const peer = applyPromptProfile(scaffold, "peer");
+    expect(peer.dropped).toBe(2);
+    expect(peer.text).toBe(applyPromptProfile(scaffold, "unattended").text);
+    for (const d of FIXTURE.prompt_profile.peer.drops) expect(peer.text.replace(/\s+/g, " ")).not.toContain(d);
+    expect(promptProfileBlock("peer")).toBe(FIXTURE.prompt_profile.peer.block);
+    expect(resolvePromptProfile({ config: { turn: { prompt_profile: "peer" } } } as never)).toBe("peer");
+    expect(resolveLoop({ config: { turn: { prompt_profile: "peer" } } } as never).nudge_after_idle).toBe(
+      FIXTURE.prompt_profile.peer.nudge_after_idle
+    );
+    expect(resolveLoop({ config: { turn: { prompt_profile: "peer", nudge_after_idle: 7 } } } as never).nudge_after_idle).toBe(7);
+  });
+
+  it("in a run: the system prompt is system.md less the sentences, no block; the trail names the profile", async () => {
+    const r = await scripted("openai", 'prompt_profile = "peer"\n');
+    const d = await scripted("openai", "");
+    const sys = JSON.parse(r.raws[0]!).messages[0].content as string;
+    expect(sys).toBe(JSON.parse(d.raws[0]!).messages[0].content);
+    expect(sys).not.toContain("## Unattended run");
+    const start = r.audit.find((a) => a.kind === "session_start")!;
+    expect(start.resolved.prompt_profile).toEqual({ name: "peer", dropped: 0 });
+  });
+});
+
+describe("arm PF: upfront + peer + provider sampling in one run", () => {
+  it("no temperature or top_p on the wire, the budget up front, no countdown, peer on the trail", async () => {
+    const r = await deadlineRun('deadline_note = "upfront"\nprompt_profile = "peer"\n', 'sampling = "provider"\n');
+    for (const raw of r.raws) {
+      const body = JSON.parse(raw);
+      expect(body).not.toHaveProperty("temperature");
+      expect(body).not.toHaveProperty("top_p");
+    }
+    expect(JSON.parse(r.raws[0]!).messages[2].content).toBe(upfrontBudgetText(100_000));
+    expect(r.raws.join("")).not.toContain("Time check");
+    const start = r.audit.find((a) => a.kind === "session_start")!;
+    expect(start.resolved.prompt_profile).toEqual({ name: "peer", dropped: 0 });
+    expect(start.deadline).toMatchObject({ note: "upfront" });
   });
 });

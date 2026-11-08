@@ -22,6 +22,7 @@ import { harnessBuild } from "./build.js";
 import { AUTO_WINDOW, rememberedWindow, type ContextSource } from "./context_window.js";
 import { COMPLETION_GATE_MODES, auditCompletionGate } from "./completion_gate.js";
 import { auditSoftShell } from "./soft_shell.js";
+import { auditSandboxProfile } from "./sandbox_profile.js";
 import { auditDeliverableFirst } from "./deliverable_first.js";
 import {
   CONTINUE_NOTE_AT,
@@ -2680,7 +2681,7 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "finish_gate",
     ],
   ],
-  ["policy.toml", "sandbox", ["level", "network", "exec", "image", "extra_roots", "allow_package_index", "filesystem"]],
+  ["policy.toml", "sandbox", ["level", "network", "exec", "image", "extra_roots", "allow_package_index", "filesystem", "profile"]],
   ["policy.toml", "approval", ["gate", "repo_code", "after_refusal", "after_refusal_calls", "modes", "default"]],
   // resolveLevels (governance.ts). A value outside the enumeration is fatal
   // (auditGovernance); an unknown key is warned here like any other.
@@ -3253,6 +3254,7 @@ problems.push(...auditSweepKnobs(config, (ep) => endpointKind(ep)));
 problems.push(...auditSoftShell(config));
 problems.push(...auditDeliverableFirst(config));
 problems.push(...auditLongTaskProfile(config));
+problems.push(...auditSandboxProfile(config));
 
 // [shadow] is log-only, so nothing in it is fatal: a shadow that cannot run
 // changes nothing about the run. What it can do is look like it is recording
@@ -5118,11 +5120,11 @@ export function resolveLoop(config: GnomonConfig): ResolvedLoop {
     stall_repeats: Math.max(1, Math.floor(num(l?.stall_repeats, d.stall_repeats))),
     // 0 is off, as 0 is "never" for read_only_converge_after.
     // Any other number is "calls since the last one", floored at 1.
-    // `[turn] prompt_profile = "unattended"` (long_task_profile.ts) makes the
-    // undeclared value 0: no winning long-task harness nudges (research note
+    // `[turn] prompt_profile = "unattended"` or `"peer"` (long_task_profile.ts)
+    // makes the undeclared value 0: no winning long-task harness nudges (research note
     // 07). A declared number still wins.
     nudge_after_idle: ((n) => (n === 0 ? 0 : Math.max(1, Math.floor(n))))(
-      num(l?.nudge_after_idle, resolvePromptProfile(config) === "unattended" ? 0 : d.nudge_after_idle)
+      num(l?.nudge_after_idle, resolvePromptProfile(config) !== "default" ? 0 : d.nudge_after_idle)
     ),
     // "Calls since the last one", so 0 would fire on every single call and
     // turn a push into a wall of system messages.
@@ -5154,7 +5156,8 @@ export interface ResolvedDeadline {
    * `[turn] deadline_note` (long_task_profile.ts): the note's wording.
    * "plan", the default, is §31's text; "none" sends no time note (notes is
    * [], the self-stop stays); "continue" sends one note at 0.8
-   * saying to keep going, and `notes` is then [0.8]. Temporary, for SW1.
+   * saying to keep going, and `notes` is then [0.8]; "upfront" states the
+   * budget once in the first request and `notes` is []. Temporary, for SW1.
    */
   style: DeadlineNoteStyle;
 }
@@ -5170,7 +5173,11 @@ export function resolveDeadline(config: GnomonConfig): ResolvedDeadline {
   const m = t?.deadline_margin_ms;
   const margin_ms = typeof m === "number" && isFinite(m) && m >= 0 ? Math.floor(m) : DEADLINE_DEFAULTS.margin_ms;
   const style = resolveDeadlineNoteStyle(config);
-  return { notes: style === "continue" ? [...CONTINUE_NOTE_AT] : style === "none" ? [] : notes, margin_ms, style };
+  return {
+    notes: style === "continue" ? [...CONTINUE_NOTE_AT] : style === "none" || style === "upfront" ? [] : notes,
+    margin_ms,
+    style,
+  };
 }
 
 /**
