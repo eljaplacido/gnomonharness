@@ -16,36 +16,29 @@ a reviewer who reads this page first discounts every number after it. It was
 still here for five days after that was written. This is the correction.
 
 What is actually true: gnomon **has** been run against Terminal-Bench, several
-times, and **the task-completion result is null**. On equal terms against
-opencode — same 34 paired tasks, same model, same clock, same night — 50.0% against
-47.1%, McNemar **p = 1.0000**
-([peer-opencode-2026-09-02](../benchmarks/results/peer-opencode-2026-09-02/README.md)).
+times. Comparisons with other harnesses are being finalized and are not published at present.
+Earlier v0.2-era comparisons are withdrawn and must not be quoted.
 The role chain, the model tier and the timeout-retry instruction each measured
 null as well. No score on any public suite supports a claim that this harness
 completes more tasks than another one, and none is made here.
 
-**That tie is from v0.2 and is not the current picture.** P2G41 (2026-11-05,
-pre-registered, 29 Terminal-Bench tasks, deepseek-v4.1-flash via OpenCode Go,
-1,800 s cap, k = 1) ran gnomon v0.4.1 against opencode. With its **release
-defaults gnomon trailed: 0/28 solved against opencode's 6/29**, solve-rate
-difference −0.179 (95% CI −0.321 to −0.036), hidden-test fraction −0.221. With
-the hosted recipe (B41) it solved 3 against opencode's 5 on 28 paired tasks
-(−0.071, CI −0.250 to +0.107: no difference shown, parity not shown), and
-reached parity on the fraction of hidden tests passed (+0.050, CI −0.097 to
-+0.205)
-([P2G41 summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/p2g41-2026-11/summary-p2g41.txt)).
-So on a hosted model the defaults cost task completion, and the recipe
-recovers partial credit but has not shown parity on solves.
+**Long hosted-model tasks.** P2G41 (2026-11-05, pre-registered, 29
+Terminal-Bench tasks, deepseek-v4.1-flash via OpenCode Go, 1,800 s cap, k = 1)
+ran gnomon v0.4.1 with its **release defaults: 0/28 solved**, hidden-test
+fraction 0.31. With the hosted recipe (B41) it solved 3/28 and passed 0.58 of
+hidden tests (+27.1 points [+13.2, +42.3]). So on a hosted model the defaults
+cost task completion, and the recipe recovers partial credit; full solves stay
+rare.
 
 One part of that recipe has since become a default. H3 (2026-11-06,
 pre-registered, the same 29 tasks and model, gnomon v0.4.2) tested reasoning
 replay alone: hidden-test fraction +0.160 (95% CI +0.042 to +0.293) and 5 fewer
 capped tasks, which met the pre-registered rule, while solves were 2 against 1
 (too few discordant tasks to tell)
-([H3 summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+(H3 summary; see [EVIDENCE](EVIDENCE.md)).
 Replay for hosted endpoints is on by default on `master` and in the v0.4.4
 release notes, which are a draft: the newest published release, v0.4.3, does
-not have it. No peer comparison has been run on that build.
+not have it.
 
 That is the finding, not a disappointment: at this model tier the harness is not
 the bottleneck on task completion, so the properties below — determinism,
@@ -187,15 +180,13 @@ That evaluation suite now exists, and it is the reason the top of this document
 changed. What would change *this* section is a **powered** peer comparison:
 every arm run to date is sized to detect roughly a 10pp difference. The v0.2
 arms all came back null, which rules out a large difference and says nothing
-about a small one; a run that could separate 50.0% from 47.1% needs several
-hundred paired tasks, not 34. The one later peer arm, P2G41 on v0.4.1, was not
-null for the release defaults (they trailed opencode, above), and with the
-hosted recipe it showed neither a difference nor parity on solves.
+about a small one; separating a few points needs several hundred paired
+tasks, not 34. Comparisons with other harnesses are being finalized and are not published at present.
 
 So the honest claim remains about *design properties that are testable* —
 determinism, capability boundaries, disclosure, auditability — measured
 exhaustively rather than sampled. The difference from the earlier version of
 this paragraph is that task success rates have now been measured, repeatedly:
-"no difference" on v0.2, and on v0.4.1 a deficit for the defaults on a hosted
-model that the recipe narrowed without closing. That is a result, and it is why
+on v0.4.1 the release defaults solved none of 28 long hosted tasks, and the
+recipe recovered partial credit without making full solves common. That is a result, and it is why
 this document leads with the properties.

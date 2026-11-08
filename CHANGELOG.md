@@ -52,7 +52,7 @@ those commands wrote. That is fixed in this release (Security, below).
 - **Reasoning replay is on for a hosted endpoint that returns reasoning**,
   adopted under H3's pre-registered rule: hidden-test fraction +0.160 [95%
   bootstrap +0.042, +0.293], capped runs 19 → 14
-  ([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+  ([EVIDENCE](docs/EVIDENCE.md)).
   Local lanes stay off unless they declare it.
 - **Under `exec = "docker"`**: the model cannot edit `.gnomon/*.toml`, leaving
   docker needs `--trust-exec-downgrade`, and keys to non-loopback local
@@ -170,7 +170,7 @@ result is claimed for it.
   2026-11-06): replay alone (R1) against the 0.4.2 defaults (R0) raised the
   hidden-test fraction by +0.160 [95% bootstrap +0.042, +0.293] and cut
   capped runs from 19 to 14; both arms of the decision rule met, verdict
-  ADOPT ([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+  ADOPT ([EVIDENCE](docs/EVIDENCE.md)).
   The rest of H3's hosted recipe (a 1M window, nudge off) added +0.017
   [−0.095, +0.138] on top of replay: not shown, so not a default.
 
@@ -207,7 +207,7 @@ result is claimed for it.
   tokens [95% 1.04, 2.15], past its 1.20 guard: verdict "regresses". The
   mechanism was the nudge (0.4.2 sent 547 nudged requests, the candidate 0);
   replay never fired, because that lane returns no reasoning field
-  ([summary-lg1.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/lg1-2026-11/summary-lg1.txt)).
+  ([summary-lg1.txt](docs/EVIDENCE.md)).
   New: a declared `nudge_after_idle = 0` turns the nudge off (it used to be
   floored to 1, a nudge on every idle call).
 
