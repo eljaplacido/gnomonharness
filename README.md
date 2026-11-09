@@ -93,8 +93,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3215 TypeScript tests (2682 core, 508 cli, 18
-> natives, 7 tui) and 63 Rust tests — **3278 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3224 TypeScript tests (2691 core, 508 cli, 18
+> natives, 7 tui) and 63 Rust tests — **3287 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -993,7 +993,7 @@ nothing in the record could say so.
 | `prompt_profile` | `"default"`: system.md as written. `"unattended"` (opt-in, declared only, never inferred from a TTY or the environment): drops the scaffold's "Verify in proportion to the task …" and "Once it works … stop." sentences, adds "Test edge cases, then submit" and two measurement lines (reproduce a timed gate literally, cold, with a 2x margin; for black-box parity compare exact strings over many random probes and round fitted constants), and makes `nudge_after_idle` 0 unless declared. `"peer"`: the same two sentences dropped and the nudge 0, nothing added. For long unattended runs; daily development keeps the default. [CONTRACTS §39](docs/CONTRACTS.md). |
 | `deliverable_first` | Read only under `gnomon task --deadline`; off by default. `true`: the output paths the task text names (an absolute path, or a quoted filename with an extension, after "write", "save", "create", "produce" and the like) are checked at 40% and 70% of the budget, and the ones that do not exist yet are named in that request's time note with "Write a first complete version now, then improve it." Nothing missing, nothing is added. Dependency manifests ("write any dependencies to `requirements.txt`") are not outputs, and a named file that exists when the run starts is not checked. [CONTRACTS §35](docs/CONTRACTS.md). |
 | `continue_after_answer` | Read only under `gnomon task --deadline`; off by default (opt-in, unmeasured). `true`: an answer given with at least `continue_min_remaining` (default 1/3) of the budget left, after every gate accepted it, becomes a checkpoint — the working tree is copied outside the root (nothing is written into it) — and the model gets one message: "Your result is saved as a checkpoint. About N minutes remain. Run the task's checks or tests, … If you make it worse, it will be restored." No countdown follows. At the run's end the final tree is scored with `checkpoint_check` (else the last test command that passed in the turn) and the checkpoint is restored if the final scores worse; with no check the final is kept, unverified. Audit kind `checkpoint`. [CONTRACTS §41](docs/CONTRACTS.md). |
-| `continue_min_remaining`, `checkpoint_check`, `continue_message` | See `continue_after_answer`; `continue_message` (a non-empty string, `{minutes}` = minutes left) replaces the continuation text; declared without it they do nothing (a warning). |
+| `continue_min_remaining`, `checkpoint_check`, `continue_message`, `continue_max_rounds`, `continue_until_s` | See `continue_after_answer`; `continue_max_rounds` (1 to 20, default 1) lets each later answer take a new checkpoint (only if the check scores it no worse) and send the continuation again, until the rounds are used or `continue_until_s` seconds or fewer remain; `continue_message` (a non-empty string, `{minutes}` = minutes left) replaces the continuation text; declared without it they do nothing (a warning). |
 
 Values are floored where a zero would mean the opposite of what it reads:
 `max_run_notes = 0` would keep *every* note (`slice(-0)` returns the whole

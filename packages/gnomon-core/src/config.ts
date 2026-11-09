@@ -2654,6 +2654,8 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "continue_min_remaining",
       "checkpoint_check",
       "continue_message",
+      "continue_max_rounds",
+      "continue_until_s",
     ],
   ],
   [

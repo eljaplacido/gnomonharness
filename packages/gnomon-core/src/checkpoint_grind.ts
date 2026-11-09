@@ -53,9 +53,13 @@ import { STALL_SIGNAL_PATTERNS } from "./stall_signals.js";
 /** Default share of the deadline budget that must remain for the continuation. */
 export const CONTINUE_MIN_REMAINING_DEFAULT = 1 / 3;
 
+/** Upper bound of `[turn] continue_max_rounds` (a larger value is a typo, refused). */
+export const CONTINUE_MAX_ROUNDS_LIMIT = 20;
+
 /** The audit kind's `event` values, in the order a run can write them. */
 export const CHECKPOINT_EVENTS = [
   "checkpoint",
+  "checkpoint_round",
   "checkpoint_skipped",
   "checkpoint_restored",
   "checkpoint_kept",
@@ -89,6 +93,10 @@ export interface ResolvedCheckpointGrind {
   check?: string;
   /** `[turn] continue_message`, when declared: the continuation text, `{minutes}` replaced by the minutes left. */
   message?: string;
+  /** `[turn] continue_max_rounds`, when declared (an integer >= 1; absent = 1, one continuation). */
+  max_rounds?: number;
+  /** `[turn] continue_until_s`, when declared: no further continuation once this many seconds or fewer remain. */
+  until_s?: number;
 }
 
 function turnOf(config: GnomonConfig): Record<string, unknown> | undefined {
@@ -101,11 +109,15 @@ export function resolveCheckpointGrind(config: GnomonConfig): ResolvedCheckpoint
   const m = t?.continue_min_remaining;
   const c = t?.checkpoint_check;
   const msg = t?.continue_message;
+  const mr = t?.continue_max_rounds;
+  const us = t?.continue_until_s;
   return {
     on: t?.continue_after_answer === true,
     min_remaining: typeof m === "number" && m > 0 && m < 1 ? m : CONTINUE_MIN_REMAINING_DEFAULT,
     ...(typeof c === "string" && c.trim() ? { check: c.trim() } : {}),
     ...(typeof msg === "string" && msg.trim() ? { message: msg.trim() } : {}),
+    ...(typeof mr === "number" && Number.isInteger(mr) && mr >= 1 && mr <= CONTINUE_MAX_ROUNDS_LIMIT ? { max_rounds: mr } : {}),
+    ...(typeof us === "number" && Number.isFinite(us) && us > 0 ? { until_s: us } : {}),
   };
 }
 
@@ -153,9 +165,27 @@ export function auditCheckpointGrind(
       fatal: true,
     });
   }
-  if (v !== true && (m !== undefined || c !== undefined || msg !== undefined)) {
+  const mr = t?.continue_max_rounds;
+  if (mr !== undefined && !(typeof mr === "number" && Number.isInteger(mr) && mr >= 1 && mr <= CONTINUE_MAX_ROUNDS_LIMIT)) {
     out.push({
-      where: ".gnomon/config.toml [turn] checkpoint_check / continue_min_remaining / continue_message",
+      where: ".gnomon/config.toml [turn] continue_max_rounds",
+      problem: `continue_max_rounds = ${JSON.stringify(mr)} is not an integer from 1 to ${CONTINUE_MAX_ROUNDS_LIMIT}.`,
+      fix: "continue_max_rounds = 5 (the default is 1: one continuation)",
+      fatal: true,
+    });
+  }
+  const us = t?.continue_until_s;
+  if (us !== undefined && !(typeof us === "number" && Number.isFinite(us) && us > 0)) {
+    out.push({
+      where: ".gnomon/config.toml [turn] continue_until_s",
+      problem: `continue_until_s = ${JSON.stringify(us)} is not a positive number of seconds.`,
+      fix: "continue_until_s = 180",
+      fatal: true,
+    });
+  }
+  if (v !== true && (m !== undefined || c !== undefined || msg !== undefined || mr !== undefined || us !== undefined)) {
+    out.push({
+      where: ".gnomon/config.toml [turn] checkpoint_check / continue_min_remaining / continue_message / continue_max_rounds / continue_until_s",
       problem: "declared without continue_after_answer = true, so it does nothing.",
       fix: "continue_after_answer = true, or remove the key",
       fatal: false,
@@ -232,6 +262,22 @@ export function scoreWorse(ckpt: CheckScore, final: CheckScore): boolean {
   if (ckpt.exit === 0 && final.exit !== 0) return true;
   if (ckpt.passed !== undefined && final.passed !== undefined && final.passed < ckpt.passed) return true;
   return false;
+}
+
+/**
+ * One more round (`continue_max_rounds` > 1): the answer's tree, scored by the same check, against the best checkpoint so far.
+ * `new_best` when it scores at least as well (it becomes the checkpoint); `kept_best` when it scores worse or the check could not
+ * run on it (the best stays, the end decision will compare the best with the final tree); `unverified_new` when there is no usable
+ * check at all (every round takes a new checkpoint; the end keeps the final, unverified).
+ */
+export function roundDecision(
+  best: CheckScore | undefined,
+  now: CheckScore | undefined,
+  hasCheck: boolean
+): "new_best" | "kept_best" | "unverified_new" {
+  if (!hasCheck || !best || !checkUsable(best)) return "unverified_new";
+  if (!now || !checkUsable(now)) return "kept_best";
+  return scoreWorse(best, now) ? "kept_best" : "new_best";
 }
 
 /** A check whose result at the checkpoint says nothing: it could not run. */

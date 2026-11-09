@@ -153,6 +153,7 @@ import {
   passCount,
   resolveCheckpointGrind,
   restoreCheckpoint,
+  roundDecision,
   takeCheckpoint,
   type CheckScore,
   type CheckSource,
@@ -3426,6 +3427,8 @@ export interface CheckpointCounters {
    */
   outcome: "not_reached" | "skipped" | "continued" | "restored" | "kept" | "kept_unverified";
   check_source?: CheckSource;
+  /** Continuations sent, when `[turn] continue_max_rounds` > 1 (absent otherwise). */
+  rounds?: number;
   /** Seconds of the budget left when the checkpoint was taken */
   left_s?: number;
 }
@@ -5304,7 +5307,9 @@ async function agenticTurn(
     check?: { command: string; source: CheckSource };
     score?: CheckScore;
     checkMs?: number;
-  } = { phase: "waiting" };
+    /** Continuations sent so far (`continue_max_rounds`; 1 after the first checkpoint). */
+    rounds: number;
+  } = { phase: "waiting", rounds: 0 };
   // The most recent test command the model ran with exit 0 in this turn.
   let lastPassingTest: string | undefined;
   if (grindOn) counters.checkpoint = { v: 1, outcome: "not_reached" };
@@ -5378,6 +5383,7 @@ async function agenticTurn(
       ...(grindState.score ? { checkpoint_score: grindState.score } : {}),
       ...(final ? { final_score: final } : {}),
       ...(why ? { why } : {}),
+      ...((grind?.max_rounds ?? 1) > 1 ? { rounds: grindState.rounds } : {}),
     };
     if (verdict === "checkpoint_restored") {
       const r = restoreCheckpoint(cp);
@@ -7097,6 +7103,61 @@ async function agenticTurn(
         // the answer: the answer's tree is the checkpoint. Once per run.
         if (!grindOn) return null;
         if (grindState.phase === "continued") {
+          // `continue_max_rounds` > 1: while rounds are left and time remains, this answer's tree is scored against the best checkpoint
+          // and the continuation is sent again; otherwise the run ends as it always did (the best checkpoint vs the final tree).
+          const maxRounds = grind!.max_rounds ?? 1;
+          const dd = stopClock!;
+          const leftNowMs = Math.max(0, dd.stopAt - (deps.clock ?? Date.now)());
+          const timeOk =
+            grind!.until_s !== undefined ? leftNowMs / 1000 > grind!.until_s : leftNowMs / Math.max(1, dd.total_ms) >= grind!.min_remaining;
+          if (maxRounds > 1 && grindState.rounds < maxRounds && timeOk && result.code === 0 && !emptyTerminus && lastFinishReason !== "length") {
+            const cc = counters.checkpoint!;
+            let now: CheckScore | undefined;
+            if (grindState.check) {
+              deps.progress.stop();
+              now = await runGrindCheck(grindState.check.command, dd.stopAt - dd.marginMs);
+            }
+            let decision = roundDecision(grindState.score, now, grindState.check !== undefined);
+            let ncp: TreeCheckpoint | undefined;
+            let why: string | undefined;
+            if (decision !== "kept_best") {
+              const t = takeCheckpoint(workRootOf(state.config));
+              if ("skipped" in t) {
+                decision = "kept_best";
+                why = t.skipped;
+              } else ncp = t;
+            }
+            if (ncp) {
+              dropCheckpoint(grindState.cp!);
+              grindState.cp = ncp;
+              if (now) grindState.score = now;
+            }
+            grindState.rounds++;
+            cc.rounds = grindState.rounds;
+            deps.audit?.write("checkpoint", {
+              event: "checkpoint_round",
+              role,
+              step: steps,
+              round: grindState.rounds,
+              decision,
+              ...(why ? { why } : {}),
+              content_hash: grindState.cp!.hash,
+              left_ms: leftNowMs,
+              check_source: grindState.check?.source ?? "none",
+              ...(grindState.score ? { best_score: grindState.score } : {}),
+              ...(now ? { round_score: now } : {}),
+            });
+            say(
+              paint(deps.ui, "cyan", `  ⚙ checkpoint`) +
+                paint(deps.ui, "gray", ` round ${grindState.rounds}: ${decision}; ${formatSpan(leftNowMs)} left — continuing`)
+            );
+            toolLog.push(`checkpoint — round ${grindState.rounds} ${decision}`);
+            return {
+              stage: "checkpoint",
+              role: "user",
+              content: STEER_PREFIX + continuationText(leftNowMs, dd.style !== "none", grind?.message),
+            };
+          }
           await finishCheckpoint("answer");
           return null;
         }
@@ -7113,7 +7174,7 @@ async function agenticTurn(
         const now = (deps.clock ?? Date.now)();
         const leftMs = Math.max(0, d.stopAt - now);
         const share = leftMs / Math.max(1, d.total_ms);
-        if (share < grind!.min_remaining) {
+        if (share < grind!.min_remaining || (grind!.until_s !== undefined && leftMs / 1000 <= grind!.until_s)) {
           grindState.phase = "done";
           return null;
         }
@@ -7138,6 +7199,8 @@ async function agenticTurn(
         grindState.check = check;
         grindState.score = score;
         grindState.phase = "continued";
+        grindState.rounds = 1;
+        if ((grind!.max_rounds ?? 1) > 1) cc.rounds = 1;
         cc.outcome = "continued";
         cc.check_source = check?.source ?? "none";
         cc.left_s = Math.round(leftMs / 1000);

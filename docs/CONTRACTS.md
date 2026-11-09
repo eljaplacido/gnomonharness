@@ -3520,7 +3520,7 @@ body, tool schema and command environment is master's.
 **Fixture**: `conformance/sandbox_profile.json`;
 `packages/gnomon-core/src/sandbox_profile.test.ts` asserts the code equals it.
 
-## 41. Checkpoint, then grind — `[turn] continue_after_answer`, `continue_min_remaining`, `checkpoint_check`, `continue_message`, audit kind `checkpoint`, `counters.checkpoint`, `v: 1`
+## 41. Checkpoint, then grind — `[turn] continue_after_answer`, `continue_min_remaining`, `checkpoint_check`, `continue_message`, `continue_max_rounds`, `continue_until_s`, audit kind `checkpoint`, `counters.checkpoint`, `v: 1`
 
 **Why.** Under a real budget the model often answers with a third or more of
 it unused (FG1, CF1: answers 9-13 minutes early; research note 12 §1). An
@@ -3534,6 +3534,8 @@ improved tree scores worse on a visible check, the best-so-far is restored.
 | `continue_min_remaining` | a fraction in (0, 1) | `1/3` |
 | `checkpoint_check` | a shell command | the most recent test command the model ran with exit 0 in this turn |
 | `continue_message` | a non-empty string; `{minutes}` is replaced by the minutes left (at least 1) | the continuation text below |
+| `continue_max_rounds` | an integer 1 to 20 | `1`: one continuation, as before |
+| `continue_until_s` | a positive number of seconds | the first checkpoint and later rounds need `continue_min_remaining` of the budget; with it, more than this many seconds left |
 
 **Validation.** A non-boolean `continue_after_answer`, a
 `continue_min_remaining` outside (0, 1), an empty or non-string
@@ -3579,6 +3581,16 @@ event or counter is written (`checkpoint_grind.test.ts`).
   that holds `{minutes}` is dropped. Under `deadline_note = "none"` the minutes sentence is left out. After it
   no countdown note (§31, §39) is sent; a deliverable-first note (§35) can
   still name a missing output, alone.
+- **Rounds** (`continue_max_rounds` > 1; at 1 nothing below happens and the record is unchanged). While fewer than `continue_max_rounds`
+  continuations have been sent and more than `continue_until_s` seconds remain (with `continue_until_s` absent: at least
+  `continue_min_remaining` of the budget; with it declared the first checkpoint needs more than that many seconds too), each accepted
+  answer is scored by the same check and compared with the best checkpoint so far. Not worse: the tree becomes the new best checkpoint
+  (the old store is dropped); worse, or the check could not run on it: the best stays; no usable check at all: every round takes a
+  new checkpoint and the end keeps the final tree, unverified. The continuation is sent again. Audit `checkpoint` event
+  `checkpoint_round`: `round` (continuations sent so far), `decision` (`new_best`, `kept_best`, `unverified_new`), `why` (a skipped
+  snapshot keeps the best), `content_hash` (of the best), `left_ms`, `check_source`, `best_score`, `round_score`.
+  `counters.checkpoint.rounds` counts the continuations; the end events carry `rounds`. The end decision below compares the best
+  checkpoint with the final tree.
 - **The end** — the run's next accepted answer, the deadline's self-stop, or
   a step-wall/stall stop: running jobs are stopped, then the check runs on the
   final tree, bounded by the deadline less a quarter of the margin (at most

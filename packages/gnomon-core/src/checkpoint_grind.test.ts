@@ -35,6 +35,7 @@ import {
   passCount,
   resolveCheckpointGrind,
   restoreCheckpoint,
+  roundDecision,
   scoreWorse,
   takeCheckpoint,
 } from "./checkpoint_grind.js";
@@ -112,7 +113,7 @@ describe("conformance/checkpoint_grind.json", () => {
     for (const k of Object.keys(FIXTURE.keys)) expect(turn).toContain(k);
     const surface = (t: Record<string, unknown>) => ({ config: { turn: t }, roles: {}, tools: [], policy: {} }) as never;
     const of = (t: Record<string, unknown>) =>
-      auditSurface(surface(t)).filter((p) => /continue_after_answer|continue_min_remaining|checkpoint_check|continue_message/.test(p.where));
+      auditSurface(surface(t)).filter((p) => /continue_after_answer|continue_min_remaining|checkpoint_check|continue_message|continue_max_rounds|continue_until_s/.test(p.where));
     expect(of({ continue_after_answer: true, continue_min_remaining: 0.25, checkpoint_check: "pytest -q" })).toEqual([]);
     expect(of({ continue_after_answer: "yes" }).map((p) => p.fatal)).toEqual([true]);
     expect(of({ continue_after_answer: true, continue_min_remaining: 1.5 }).map((p) => p.fatal)).toEqual([true]);
@@ -122,6 +123,11 @@ describe("conformance/checkpoint_grind.json", () => {
     expect(of({ continue_after_answer: true, continue_message: "" }).map((p) => p.fatal)).toEqual([true]);
     expect(of({ continue_after_answer: true, continue_message: 3 }).map((p) => p.fatal)).toEqual([true]);
     expect(of({ continue_message: "x" }).map((p) => p.fatal)).toEqual([false]);
+    expect(of({ continue_after_answer: true, continue_max_rounds: 5, continue_until_s: 180 })).toEqual([]);
+    for (const bad of [0, 1.5, "3", 21, -1]) expect(of({ continue_after_answer: true, continue_max_rounds: bad }).map((p) => p.fatal)).toEqual([true]);
+    for (const bad of [0, -5, "180"]) expect(of({ continue_after_answer: true, continue_until_s: bad }).map((p) => p.fatal)).toEqual([true]);
+    expect(of({ continue_max_rounds: 3 }).map((p) => p.fatal)).toEqual([false]);
+    expect(of({ continue_until_s: 30 }).map((p) => p.fatal)).toEqual([false]);
   });
 });
 
@@ -405,4 +411,118 @@ describe("in a run under --deadline", () => {
     expect(r.events[1]).toMatchObject({ how: "deadline", verified: true });
     expect(readFileSync(join(r.root, "out.txt"), "utf-8")).toBe("good");
   }, 20_000);
+});
+
+
+describe("continue_max_rounds and continue_until_s: more than one continuation", () => {
+  const ROUNDS = (n: number, extra = "") => `continue_after_answer = true\ncontinue_max_rounds = ${n}\ncheckpoint_check = "sh check.sh"\n${extra}`;
+  const sendCount = (r: Awaited<ReturnType<typeof run>>) => r.continuations.at(-1);
+
+  it("the keys resolve; absent they are not in the resolved object (one continuation, unchanged)", () => {
+    expect(resolveCheckpointGrind({ config: { turn: { continue_after_answer: true } } } as never)).toEqual({ on: true, min_remaining: CONTINUE_MIN_REMAINING_DEFAULT });
+    expect(resolveCheckpointGrind({ config: { turn: { continue_after_answer: true, continue_max_rounds: 5, continue_until_s: 180 } } } as never))
+      .toEqual({ on: true, min_remaining: CONTINUE_MIN_REMAINING_DEFAULT, max_rounds: 5, until_s: 180 });
+    expect(CHECKPOINT_EVENTS).toContain("checkpoint_round");
+  });
+
+  it("roundDecision: new best when not worse, kept best when worse or unscorable, unverified without a check", () => {
+    expect(roundDecision({ exit: 0, passed: 3 }, { exit: 0, passed: 3 }, true)).toBe("new_best");
+    expect(roundDecision({ exit: 0, passed: 3 }, { exit: 0, passed: 4 }, true)).toBe("new_best");
+    expect(roundDecision({ exit: 0, passed: 3 }, { exit: 0, passed: 2 }, true)).toBe("kept_best");
+    expect(roundDecision({ exit: 0 }, { exit: 1 }, true)).toBe("kept_best");
+    expect(roundDecision({ exit: 0 }, { exit: 127 }, true)).toBe("kept_best");
+    expect(roundDecision({ exit: 0 }, undefined, true)).toBe("kept_best");
+    expect(roundDecision({ exit: 127 }, { exit: 0 }, true)).toBe("unverified_new");
+    expect(roundDecision(undefined, undefined, false)).toBe("unverified_new");
+  });
+
+  it("rounds stop at the maximum: N continuations, then the end decision", async () => {
+    const r = await run(ROUNDS(3), [
+      WRITE_GOOD, { answer: "a1" },
+      { bash: "printf 'good 2' > out.txt" }, { answer: "a2" },
+      { bash: "printf 'good 3' > out.txt" }, { answer: "a3" },
+      { bash: "printf 'good 4' > out.txt" }, { answer: "a4" },
+      { answer: "never asked" },
+    ]);
+    expect(sendCount(r)).toBe(3);
+    expect(r.events.map((e) => e.event)).toEqual(["checkpoint", "checkpoint_round", "checkpoint_round", "checkpoint_kept"]);
+    expect(r.events[1]).toMatchObject({ round: 2, decision: "new_best" });
+    expect(r.events[2]).toMatchObject({ round: 3, decision: "new_best" });
+    expect(r.events[3]).toMatchObject({ how: "answer", rounds: 3 });
+    expect(r.rec.counters.checkpoint).toMatchObject({ outcome: "kept", rounds: 3 });
+    expect(readFileSync(join(r.root, "out.txt"), "utf-8")).toBe("good 4");
+    // each round's message is the same one-line [gnomon] continuation
+    expect(r.raws.join("")).not.toContain("Time check");
+  });
+
+  it("stops when the time left is at or under continue_until_s", async () => {
+    // 10 s per request on a 100 s budget; until 50 s: answers at 80 s (first checkpoint), 60 s (round 2), 40 s (end).
+    const r = await run(ROUNDS(5, "continue_until_s = 50\n"), [
+      WRITE_GOOD, { answer: "a1" },
+      { bash: "printf 'good 2' > out.txt" }, { answer: "a2" },
+      { bash: "printf 'good 3' > out.txt" }, { answer: "a3" },
+      { answer: "never asked" },
+    ], { stepPct: 0.1 });
+    expect(sendCount(r)).toBe(2);
+    expect(r.events.map((e) => e.event)).toEqual(["checkpoint", "checkpoint_round", "checkpoint_kept"]);
+    expect(r.rec.counters.checkpoint).toMatchObject({ outcome: "kept", rounds: 2 });
+  });
+
+  it("the first checkpoint also needs more than continue_until_s left", async () => {
+    // the answer (request 5 at 10 s each) comes with 50 s left and until = 50: no checkpoint at all.
+    const r = await run(ROUNDS(5, "continue_until_s = 50\ncontinue_min_remaining = 0.01\n"), [
+      { bash: "printf x > a" }, { bash: "printf y > b" }, { bash: "printf z > c" }, WRITE_GOOD, { answer: "a1" },
+    ], { stepPct: 0.1 });
+    expect(r.events).toEqual([]);
+    expect(r.rec.counters.checkpoint).toEqual({ v: 1, outcome: "not_reached" });
+  });
+
+  it("best-so-far survives a worse round and is restored at the end", async () => {
+    const r = await run(ROUNDS(3), [
+      WRITE_GOOD, { answer: "a1" },                       // checkpoint 1: out.txt = good (best)
+      { bash: "printf bad > out.txt" }, { answer: "a2" },     // round 2: scores worse -> best kept
+      { bash: "printf worse > out.txt && echo x > junk" }, { answer: "a3" }, // round 3: worse again
+      { bash: "printf worst > out.txt" }, { answer: "a4" },   // rounds spent: final worse than the best
+    ]);
+    expect(r.events.map((e) => e.event)).toEqual(["checkpoint", "checkpoint_round", "checkpoint_round", "checkpoint_restored"]);
+    expect(r.events[1]).toMatchObject({ round: 2, decision: "kept_best", round_score: { exit: 1 }, best_score: { exit: 0 } });
+    expect(r.events[2]).toMatchObject({ round: 3, decision: "kept_best", content_hash: r.events[0]!.content_hash });
+    expect(r.events[3]).toMatchObject({ how: "answer", rounds: 3, checkpoint_hash: r.events[0]!.content_hash, verified: true });
+    expect(readFileSync(join(r.root, "out.txt"), "utf-8")).toBe("good");
+    expect(existsSync(join(r.root, "junk"))).toBe(false);
+    expect(r.rec.counters.checkpoint).toMatchObject({ outcome: "restored", rounds: 3 });
+  });
+
+  it("a later round that scores as well replaces the best; the end compares with that one", async () => {
+    const r = await run(ROUNDS(2), [
+      WRITE_GOOD, { answer: "a1" },
+      { bash: "printf 'good v2' > out.txt" }, { answer: "a2" },   // not worse -> new best (hash changes)
+      { bash: "printf bad > out.txt" }, { answer: "a3" },        // worse than the new best -> restored to v2
+    ]);
+    expect(r.events.map((e) => e.event)).toEqual(["checkpoint", "checkpoint_round", "checkpoint_restored"]);
+    expect(r.events[1]!.decision).toBe("new_best");
+    expect(r.events[1]!.content_hash).not.toBe(r.events[0]!.content_hash);
+    expect(r.events[2]).toMatchObject({ checkpoint_hash: r.events[1]!.content_hash });
+    expect(readFileSync(join(r.root, "out.txt"), "utf-8")).toBe("good v2");
+  });
+
+  it("unverified path: no check anywhere, every round takes a new checkpoint, the final tree is kept", async () => {
+    const r = await run("continue_after_answer = true\ncontinue_max_rounds = 3\n", [
+      WRITE_GOOD, { answer: "a1" },
+      { bash: "printf 'two' > out.txt" }, { answer: "a2" },
+      { bash: "printf 'three' > out.txt" }, { answer: "a3" },
+      { bash: "printf 'four' > out.txt" }, { answer: "a4" },
+    ]);
+    expect(r.events.map((e) => e.event)).toEqual(["checkpoint", "checkpoint_round", "checkpoint_round", "checkpoint_kept_unverified"]);
+    expect(r.events[1]).toMatchObject({ decision: "unverified_new", check_source: "none" });
+    expect(r.events[3]).toMatchObject({ why: "no check", rounds: 3 });
+    expect(readFileSync(join(r.root, "out.txt"), "utf-8")).toBe("four");
+    expect(r.rec.counters.checkpoint).toMatchObject({ outcome: "kept_unverified", rounds: 3 });
+  });
+
+  it("the default is unchanged: no continue_max_rounds, one continuation, no rounds field", async () => {
+    const r = await run('continue_after_answer = true\ncheckpoint_check = "sh check.sh"\n', [WRITE_GOOD, { answer: "a1" }, { answer: "a2" }, { answer: "never" }]);
+    expect(r.events.map((e) => e.event)).toEqual(["checkpoint", "checkpoint_kept"]);
+    expect(r.rec.counters.checkpoint).toEqual({ v: 1, outcome: "kept", check_source: "configured", left_s: expect.any(Number) });
+  });
 });
