@@ -4603,14 +4603,30 @@ export function routeRole(
   if (esc?.model && on.length > 0) {
     const escEndpointName = esc.endpoint ?? (esc.url ? undefined : DEFAULT_ENDPOINT);
     const escEndpoint = escEndpointName ? resolveEndpoint(config, escEndpointName) : undefined;
+    const escUrl = esc.url ?? escEndpoint?.url ?? "";
+    const escKind = endpointKind(escEndpoint ?? { url: esc.url }, "openai");
+    // Built as the fallback is: the escalated part of the turn runs on the
+    // endpoint's own streaming, timeouts, output limit, context window,
+    // reasoning replay, steering and sweep knobs, exactly as a role routed
+    // there would. (#102 carried only url/kind, so an escalated turn lost
+    // e.g. `replay_reasoning` and streaming that the same endpoint declares.)
     escalate = {
       model: esc.model,
       temperature,
       top_p,
-      url: esc.url ?? escEndpoint?.url ?? "",
+      url: escUrl,
       apiKeyEnv: esc.api_key_env ?? escEndpoint?.api_key_env,
       endpoint: escEndpointName,
-      kind: endpointKind(escEndpoint ?? { url: esc.url }, "openai"),
+      kind: escKind,
+      stream: resolveStream(escEndpoint ?? { url: esc.url }, "openai", config.config.defaults?.stream),
+      streamIdleMs: resilience.stream_idle_timeout_ms,
+      streamTotalMs: resilience.stream_total_timeout_ms,
+      ...firstTokenOf(resilience),
+      maxTokens: resolveMaxTokens(config, roleDef, escEndpoint),
+      ...contextWindowOf(config, escEndpoint?.max_context_tokens, { url: escUrl, kind: escKind, model: esc.model }),
+      ...replayFieldsOf({ ...(escEndpoint ?? {}), url: escUrl }, "openai"),
+      ...steerFieldsOf(escEndpoint),
+      ...knobsOf(roleDef, escEndpoint, escKind),
       on,
       ...(typeof esc.max_steps === "number" && esc.max_steps > 0 ? { max_steps: Math.floor(esc.max_steps) } : {}),
       carry: esc.carry === "handover" ? "handover" : ESCALATE_DEFAULTS.carry,

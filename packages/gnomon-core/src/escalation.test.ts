@@ -595,6 +595,18 @@ describe("local first, cloud rescue v2: stuck, deadline_share, carry, handoffs",
     expect(recs.some((r) => r.kind === "escalation")).toBe(false);
   });
 
+  it("the escalation route is built like a role routed to that endpoint (stream, replay, limits, knobs)", () => {
+    const c = fresh({}, ESC2(["stuck"]));
+    c.config.endpoints.cloudtest = { url: CLOUD, kind: "openai", replay_reasoning: true, stream: true, max_context_tokens: 64000 };
+    const esc: any = routeRole(c, "implement").escalate;
+    const direct = fresh({ model: "cloud-m", endpoint: "cloudtest" });
+    direct.config.endpoints.cloudtest = c.config.endpoints.cloudtest;
+    const t: any = routeRole(direct, "implement").target;
+    for (const k of Object.keys(t)) expect([k, esc[k]]).toEqual([k, t[k]]);
+    expect(esc.replayReasoning).toBe(true);
+    expect(esc.stream).toBe(true);
+  });
+
   it("declaring the block moves the surface hash", async () => {
     const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
     const { tmpdir } = await import("node:os");
