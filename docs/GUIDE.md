@@ -844,7 +844,7 @@ the cloud model, once:
 [roles.implementor.escalate]
 model = "<openrouter-model-id>"
 endpoint = "openrouter"
-on = ["stall", "step_wall", "budget_50"]
+on = ["stuck", "deadline_share", "stall", "step_wall"]
 ```
 
 The triggers are the ways a local turn usually fails:
@@ -854,10 +854,14 @@ The triggers are the ways a local turn usually fails:
 | `stall` | the local model repeats a call without progress |
 | `step_wall` | it reaches `max_steps_total` |
 | `budget_50` | half of `max_steps_total` is used and it has not finished (and half of the time, when the run declares a time budget) |
+| `stuck` | `stuck_failures` (4) tool calls in a row failed, or `stuck_steps` (12) in a row changed no file |
+| `deadline_share` | `deadline_share` (0.5) of the `--deadline` budget has passed |
 | `verify_failed` | the declared `[verify]` check still fails after its last round |
 | `apparatus` | the local endpoint is down, after retries and after any `fallback` |
 
-The cloud model does not get the local model's transcript. It gets a handover
+By default the cloud model gets the conversation so far plus a short takeover
+note (why, the files changed, the time and steps left, the checkpoint). With
+`carry = "handover"` it does not get the local model's transcript. It gets a handover
 of at most 8,000 characters: the task, the files changed so far, the last
 twelve actions and what they returned, the checklist, the last thing the local
 model said, and the failing check. It reads the files on disk for the rest. Only

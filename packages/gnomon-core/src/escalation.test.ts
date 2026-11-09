@@ -53,6 +53,9 @@ const ESC = (on: string[], extra: Record<string, unknown> = {}) => ({
   model: "cloud-m",
   endpoint: "cloudtest",
   on,
+  // #102's tests are about the bounded handover; the conversation carry (the
+  // default) has its own tests below.
+  carry: "handover",
   ...extra,
 });
 
@@ -118,11 +121,11 @@ async function run(
 /** Swap in the scripted endpoints for the length of `fn`. */
 async function scripted<T>(
   script: { local: (n: number) => Reply | "down"; cloud?: (n: number) => Reply },
-  fn: (calls: { local: number; cloud: number }) => Promise<T>
+  fn: (calls: { local: number; cloud: number; cloudBodies: any[] }) => Promise<T>
 ): Promise<T> {
-  const calls = { local: 0, cloud: 0 };
+  const calls = { local: 0, cloud: 0, cloudBodies: [] as any[] };
   const original = globalThis.fetch;
-  globalThis.fetch = (async (url: string | URL) => {
+  globalThis.fetch = (async (url: string | URL, init?: { body?: unknown }) => {
     const u = String(url);
     if (u.startsWith("http://local.invalid")) {
       const r = script.local(++calls.local);
@@ -130,6 +133,7 @@ async function scripted<T>(
       return { ok: true, status: 200, json: async () => ollamaReply(r) };
     }
     if (u.startsWith("http://cloud.invalid")) {
+      try { calls.cloudBodies.push(JSON.parse(String(init?.body ?? "null"))); } catch { calls.cloudBodies.push(null); }
       const r = (script.cloud ?? (() => ({ text: "done" })))(++calls.cloud);
       return { ok: true, status: 200, json: async () => openaiReply(r) };
     }
@@ -154,15 +158,15 @@ describe("local first, cloud rescue: routing and surface", () => {
   });
 
   it("a trigger outside the enumeration is fatal; a block with no trigger is a warning", () => {
-    const bad = fresh({}, ESC(["stuck"]));
+    const bad = fresh({}, ESC(["stuk"]));
     const p = auditSurface(bad).find((x) => x.where.includes("[roles.implement.escalate]"));
     expect(p?.fatal).toBe(true);
-    expect(p?.problem).toMatch(/"stuck"/);
+    expect(p?.problem).toMatch(/"stuk"/);
     const inert = fresh({}, ESC([]));
     const q = auditSurface(inert).find((x) => x.where.includes("[roles.implement.escalate]"));
     expect(q?.fatal).toBe(false);
     expect(routeRole(inert, "implement").escalate).toBeUndefined();
-    expect([...ESCALATE_TRIGGERS]).toEqual(["stall", "step_wall", "budget_50", "verify_failed", "apparatus"]);
+    expect([...ESCALATE_TRIGGERS]).toEqual(["stall", "step_wall", "budget_50", "verify_failed", "apparatus", "stuck", "deadline_share"]);
   });
 
   it("a profile can declare the block, over a role that has none", () => {
@@ -423,4 +427,188 @@ describe("local first, cloud rescue: the contract", () => {
     for (const k of taskKeys) expect(allowedTask).toContain(k);
     for (const k of Object.keys(record.volatile[fixture.volatile_field])) expect(fixture.volatile_keys).toContain(k);
   }, 20000);
+});
+
+/**
+ * v2 (HY2): the triggers wired to the executor being stuck and to --deadline,
+ * the conversation carry, the handoff cap, the audit fields and the surface hash.
+ */
+const ESC2 = (on: string[], extra: Record<string, unknown> = {}) => ({ model: "cloud-m", endpoint: "cloudtest", on, ...extra });
+const MISSING = (n: number): Reply => READ(`no-such-file-${n}.txt`);
+
+describe("local first, cloud rescue v2: stuck, deadline_share, carry, handoffs", () => {
+  it("stuck (failures): N failed tool calls in a row move the turn", async () => {
+    const { turn, calls, recs } = await run(fresh({}, ESC2(["stuck"], { stuck_failures: 3 })), {
+      local: (n) => MISSING(n),
+      cloud: () => ({ text: "done" }),
+    });
+    expect(turn.escalation).toMatchObject({ trigger: "stuck", detail: "failures", at_step: 3, carried: "context" });
+    expect(calls.local).toBe(3);
+    const rec = recs.find((r) => r.kind === "escalation");
+    expect(rec).toMatchObject({ trigger: "stuck", detail: "failures" });
+  });
+
+  it("stuck (no progress): N calls in a row that change no file move the turn", async () => {
+    let i = 0;
+    const { turn } = await run(fresh({}, ESC2(["stuck"], { stuck_steps: 4 })), {
+      local: () => READ(DISTINCT[i++ % DISTINCT.length]),
+      cloud: () => ({ text: "done" }),
+    });
+    expect(turn.escalation).toMatchObject({ trigger: "stuck", detail: "no_progress", at_step: 4 });
+  });
+
+  it("stuck does not fire while the executor makes progress below the thresholds", async () => {
+    let i = 0;
+    const { turn, calls } = await run(fresh({}, ESC2(["stuck"])), {
+      local: (n) => (n <= 3 ? READ(DISTINCT[i++ % DISTINCT.length]) : { text: "all done" }),
+    });
+    expect(turn.escalation).toBeUndefined();
+    expect(turn.stop_reason).toBe("answered");
+    expect(calls.cloud).toBe(0);
+  });
+
+  it("deadline_share: fires once the declared share of the --deadline budget has passed", async () => {
+    let i = 0;
+    const t0 = Date.now();
+    const { turn, recs } = await run(
+      fresh({ max_steps: 20, max_steps_total: 40 }, ESC2(["deadline_share"], { deadline_share: 0.3 })),
+      { local: () => READ(DISTINCT[i++ % DISTINCT.length]), cloud: () => ({ text: "done" }) },
+      undefined,
+      { deadline: { total_ms: 1_000_000, started_at: t0 - 400_000 } }
+    );
+    expect(turn.escalation).toMatchObject({ trigger: "deadline_share", at_step: 1 });
+    const rec = recs.find((r) => r.kind === "escalation");
+    expect(rec.elapsed_ms).toBeGreaterThanOrEqual(400_000);
+  });
+
+  it("deadline_share: does not fire before the share, nor without a deadline", async () => {
+    let i = 0;
+    const a = await run(
+      fresh({}, ESC2(["deadline_share"], { deadline_share: 0.9 })),
+      { local: (n) => (n <= 2 ? READ(DISTINCT[i++ % DISTINCT.length]) : { text: "ok" }) },
+      undefined,
+      { deadline: { total_ms: 1_000_000, started_at: Date.now() - 100_000 } }
+    );
+    expect(a.turn.escalation).toBeUndefined();
+    i = 0;
+    const b = await run(fresh({}, ESC2(["deadline_share"])), {
+      local: (n) => (n <= 2 ? READ(DISTINCT[i++ % DISTINCT.length]) : { text: "ok" }),
+    });
+    expect(b.turn.escalation).toBeUndefined();
+    expect(b.calls.cloud).toBe(0);
+  });
+
+  it("carry = conversation (default): the cloud model gets the conversation so far and a takeover note", async () => {
+    const { turn, calls } = await run(fresh({}, ESC2(["stuck"], { stuck_failures: 2 })), {
+      local: (n) => MISSING(n),
+      cloud: () => ({ text: "finished" }),
+    });
+    expect(turn.escalation).toMatchObject({ carried: "context", final_model: "cloud-m" });
+    expect(turn.escalation!.handover_chars).toBeGreaterThan(0);
+    const body = calls.cloudBodies[0];
+    const msgs: any[] = body.messages;
+    // The original request and the local model's tool calls are still there.
+    expect(msgs.some((m) => m.role === "user" && String(m.content).includes("fix the bug in a.txt"))).toBe(true);
+    expect(msgs.some((m) => m.role === "assistant" && Array.isArray(m.tool_calls) && m.tool_calls.length > 0)).toBe(true);
+    const last = msgs[msgs.length - 1];
+    expect(last.role).toBe("user");
+    expect(String(last.content)).toMatch(/^\[gnomon\] A different model takes over/);
+    expect(String(last.content)).toContain("## Files changed so far");
+    expect(body.model).toBe("cloud-m");
+  });
+
+  it("the takeover note names the checkpoint when one is declared", () => {
+    const n = promptLoop.buildTakeoverNote({
+      trigger: "deadline_share",
+      stepsUsed: 30,
+      stepsLeft: 50,
+      changed: ["src/a.ts"],
+      leftS: 812.4,
+      checkpoint: "A checkpoint of an earlier answer was taken.",
+    });
+    expect(n).toContain("## Checkpoint");
+    expect(n).toContain("about 812 s of wall time");
+    expect(n).toContain("- src/a.ts");
+    expect(n.length).toBeLessThanOrEqual(promptLoop.HANDOVER_MAX_CHARS);
+  });
+
+  it("a single handoff per run by default; max_handoffs raises it across turns", async () => {
+    const twoTurns = async (extra: Record<string, unknown>) => {
+      const config = fresh({}, ESC2(["stuck"], { stuck_failures: 2, ...extra }));
+      return scripted({ local: (n) => MISSING(n), cloud: () => ({ text: "done" }) }, async (calls) => {
+        const state: any = { config, exchanges: [], currentRole: "implement" };
+        const deps: any = {
+          approve: async () => true,
+          progress: { start() {}, update() {}, stop() {} },
+          ui: UI,
+          say: () => {},
+          audit: { write() {}, text: (t: string) => t, action: (t: string) => t },
+        };
+        const turns = [];
+        for (const q of ["first", "second"]) {
+          turns.push(
+            await promptLoop.runAgenticTurn(state, "implement", routeRole(config, "implement"), [{ role: "user", content: q }] as any, deps)
+          );
+        }
+        return { turns, calls, state };
+      });
+    };
+    const one = await twoTurns({});
+    expect(one.turns[0]!.escalation).toBeDefined();
+    expect(one.turns[1]!.escalation).toBeUndefined();
+    expect(one.state.escalations).toBe(1);
+    const two = await twoTurns({ max_handoffs: 2 });
+    expect(two.turns[0]!.escalation).toBeDefined();
+    expect(two.turns[1]!.escalation).toBeDefined();
+  }, 20000);
+
+  it("the audit record carries the reason, the time and the tokens before; the turn record the tokens after", async () => {
+    const { turn, recs } = await run(fresh({}, ESC2(["stuck"], { stuck_failures: 2 })), {
+      local: (n) => MISSING(n),
+      cloud: () => ({ text: "done" }),
+    });
+    const rec = recs.find((r) => r.kind === "escalation");
+    expect(rec).toMatchObject({ trigger: "stuck", detail: "failures", tokens_before: { input: 200, output: 20 } });
+    expect(typeof rec.elapsed_ms).toBe("number");
+    expect(turn.escalation!.usage_after).toMatchObject({ input: 1000, output: 50 });
+  });
+
+  it("knob values outside their range are fatal surface problems", () => {
+    for (const bad of [{ carry: "summary" }, { stuck_failures: 0 }, { deadline_share: 1.5 }, { max_handoffs: 0.5 }]) {
+      const c = fresh({}, ESC2(["stuck"], bad));
+      const p = auditSurface(c).filter((x) => x.where.includes("[roles.implement.escalate]"));
+      expect(p.some((x) => x.fatal)).toBe(true);
+    }
+    expect(routeRole(fresh({}, ESC2(["stuck"])), "implement").escalate).toMatchObject({
+      carry: "conversation",
+      stuck_failures: 4,
+      stuck_steps: 12,
+      deadline_share: 0.5,
+      max_handoffs: 1,
+    });
+  });
+
+  it("without a block, a stuck executor runs on and the cloud is never called", async () => {
+    const { turn, calls, recs } = await run(fresh({ max_steps: 6, max_steps_total: 6 }), { local: (n) => MISSING(n) });
+    expect(turn.escalation).toBeUndefined();
+    expect(calls.cloud).toBe(0);
+    expect(recs.some((r) => r.kind === "escalation")).toBe(false);
+  });
+
+  it("declaring the block moves the surface hash", async () => {
+    const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { recomputeManifest } = await import("./config.js");
+    const dir = mkdtempSync(join(tmpdir(), "esc-hash-"));
+    mkdirSync(join(dir, ".gnomon"));
+    const base = `[roles.implementor]\nmodel = "qwen3.6"\nendpoint = "local"\n`;
+    writeFileSync(join(dir, ".gnomon", "roles.toml"), base);
+    const h0 = recomputeManifest(join(dir, ".gnomon")).surface_hash;
+    writeFileSync(
+      join(dir, ".gnomon", "roles.toml"),
+      base + `\n[roles.implementor.escalate]\nmodel = "deepseek-v4.1-flash"\nendpoint = "bench"\non = ["stuck", "deadline_share"]\n`
+    );
+    const h1 = recomputeManifest(join(dir, ".gnomon")).surface_hash;
+    expect(h1).not.toBe(h0);
+  });
 });

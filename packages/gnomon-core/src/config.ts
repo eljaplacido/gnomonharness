@@ -475,14 +475,36 @@ export interface FallbackDef {
  *   apparatus      the model endpoint failed after retries (and after any
  *                  [roles.<name>.fallback])
  */
-export type EscalateTrigger = "stall" | "step_wall" | "budget_50" | "verify_failed" | "apparatus";
+export type EscalateTrigger =
+  | "stall"
+  | "step_wall"
+  | "budget_50"
+  | "verify_failed"
+  | "apparatus"
+  | "stuck"
+  | "deadline_share";
 export const ESCALATE_TRIGGERS: readonly EscalateTrigger[] = [
   "stall",
   "step_wall",
   "budget_50",
   "verify_failed",
   "apparatus",
+  "stuck",
+  "deadline_share",
 ];
+
+/** `[roles.<name>.escalate] carry`: what the escalated model is given. */
+export type EscalateCarry = "conversation" | "handover";
+export const ESCALATE_CARRY: readonly EscalateCarry[] = ["conversation", "handover"];
+
+/** Defaults for the `stuck` and `deadline_share` triggers' knobs. */
+export const ESCALATE_DEFAULTS = {
+  stuck_failures: 4,
+  stuck_steps: 12,
+  deadline_share: 0.5,
+  max_handoffs: 1,
+  carry: "conversation" as EscalateCarry,
+} as const;
 
 /**
  * `[roles.<name>.escalate]`: the model a stuck turn continues on.
@@ -501,6 +523,26 @@ export interface EscalateDef extends FallbackDef {
    * the role's max_steps (one leg). Time is never extended.
    */
   max_steps?: number;
+  /**
+   * What the escalated model is given. "conversation" (default): the
+   * conversation as it stands, plus a handover note (why, the files changed,
+   * the checkpoint, the steps left); the files on disk are shared. "handover":
+   * the bounded handover alone, in place of the transcript (PR #102's rule).
+   * `apparatus` always carries the conversation.
+   */
+  carry?: string;
+  /** `stuck`: this many tool calls in a row that failed (tool error or a non-zero shell exit). Default 4. */
+  stuck_failures?: number;
+  /** `stuck`: this many tool calls in a row that changed no file. Default 12. */
+  stuck_steps?: number;
+  /** `deadline_share`: fires once this share (0 < x < 1) of the `--deadline` budget has passed. Default 0.5. */
+  deadline_share?: number;
+  /**
+   * Handoffs per run (one `gnomon task`, or one interactive session). Default
+   * 1. A turn moves at most once whatever this says; a higher number lets a
+   * later turn of the same session move again.
+   */
+  max_handoffs?: number;
 }
 
 export interface RoleDef {
@@ -3868,6 +3910,24 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
           fatal: false,
         });
       }
+      const e = def.escalate as EscalateDef;
+      if (e.carry !== undefined && !(ESCALATE_CARRY as readonly string[]).includes(String(e.carry))) {
+        problems.push({
+          where,
+          problem: `carry = "${String(e.carry)}" is not one of ${ESCALATE_CARRY.join(", ")}.`,
+          fix: `carry = "conversation" (default) or "handover".`,
+          fatal: true,
+        });
+      }
+      for (const k of ["stuck_failures", "stuck_steps", "max_handoffs"] as const) {
+        const v = e[k];
+        if (v !== undefined && !(typeof v === "number" && Number.isInteger(v) && v >= 1)) {
+          problems.push({ where, problem: `${k} must be a whole number of at least 1.`, fix: `${k} = ${ESCALATE_DEFAULTS[k]}`, fatal: true });
+        }
+      }
+      if (e.deadline_share !== undefined && !(typeof e.deadline_share === "number" && e.deadline_share > 0 && e.deadline_share < 1)) {
+        problems.push({ where, problem: `deadline_share must be a number between 0 and 1.`, fix: `deadline_share = 0.5`, fatal: true });
+      }
       if (!def.escalate.model) {
         problems.push({
           where,
@@ -4553,6 +4613,14 @@ export function routeRole(
       kind: endpointKind(escEndpoint ?? { url: esc.url }, "openai"),
       on,
       ...(typeof esc.max_steps === "number" && esc.max_steps > 0 ? { max_steps: Math.floor(esc.max_steps) } : {}),
+      carry: esc.carry === "handover" ? "handover" : ESCALATE_DEFAULTS.carry,
+      stuck_failures: posInt(esc.stuck_failures) ?? ESCALATE_DEFAULTS.stuck_failures,
+      stuck_steps: posInt(esc.stuck_steps) ?? ESCALATE_DEFAULTS.stuck_steps,
+      deadline_share:
+        typeof esc.deadline_share === "number" && esc.deadline_share > 0 && esc.deadline_share < 1
+          ? esc.deadline_share
+          : ESCALATE_DEFAULTS.deadline_share,
+      max_handoffs: posInt(esc.max_handoffs) ?? ESCALATE_DEFAULTS.max_handoffs,
     };
   }
 
@@ -4563,6 +4631,15 @@ export function routeRole(
 export interface EscalateRoute extends RouteTarget {
   on: EscalateTrigger[];
   max_steps?: number;
+  carry: EscalateCarry;
+  stuck_failures: number;
+  stuck_steps: number;
+  deadline_share: number;
+  max_handoffs: number;
+}
+
+function posInt(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : undefined;
 }
 
 /**

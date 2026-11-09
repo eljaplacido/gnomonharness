@@ -856,7 +856,12 @@ one, once:
 [roles.implement.escalate]
 model = "<cloud-model-id>"
 endpoint = "openrouter"
-on = ["stall", "step_wall", "budget_50"]
+on = ["stuck", "deadline_share", "stall", "step_wall"]
+# carry = "conversation"           # default; "handover" = the bounded summary only
+# stuck_failures = 4               # `stuck`: failed tool calls in a row
+# stuck_steps = 12                 # `stuck`: calls in a row that changed no file
+# deadline_share = 0.5             # `deadline_share`: share of the --deadline budget
+# max_handoffs = 1                 # per run (one `gnomon task`) or session
 # max_steps = 12                   # calls the rescue is guaranteed; default: the role's max_steps
 ```
 
@@ -864,11 +869,17 @@ on = ["stall", "step_wall", "budget_50"]
 |---|---|
 | `stall` | the turn would stop because the model repeats a call without progress |
 | `step_wall` | the turn would stop at `max_steps_total` |
-| `budget_50` | half of `max_steps_total` is used and the turn has not ended. A run with a declared time budget (`gnomon task --deadline`, #93; until it merges, steps alone) also counts half of that time |
+| `budget_50` | half of `max_steps_total` is used and the turn has not ended, or half of the `gnomon task --deadline` budget has passed |
+| `stuck` | `stuck_failures` tool calls in a row failed, or `stuck_steps` in a row changed no file |
+| `deadline_share` | `deadline_share` of the `--deadline` budget has passed (never without a deadline) |
 | `verify_failed` | the declared `[verify]` check still fails after its last round |
 | `apparatus` | the role's endpoint is down after retries and after any `fallback` |
 
-The rest of the turn runs on the escalation model. It is not given the
+The rest of the turn runs on the escalation model. By default (`carry =
+"conversation"`) it is given the conversation as it stands, plus a takeover
+note: why the model changed, the files changed so far, the steps and seconds
+left, and the checkpoint's state under `[turn] continue_after_answer`. With
+`carry = "handover"` it is not given the
 transcript: it gets a **handover** of at most 8,000 characters, with the task,
 the files changed so far (from `git status`), the last twelve actions and their
 outcomes, the checklist, what the first model last said, and the failing check
@@ -884,7 +895,7 @@ turn record and in `gnomon task --json` (the trigger, the step, both models,
 the handover's size, the model the turn ended on, and each model's usage under
 `volatile`). Both can be declared; `fallback` is tried first.
 
-**Once per turn.** A rescue that stalls ends the turn the way any stall does;
+**Once per turn, once per run by default** (`max_handoffs`). Off unless declared. The block is part of the surface, so it moves the surface hash. A rescue that stalls ends the turn the way any stall does;
 it is never escalated again. **Budgets.** The rescue runs on what is left of
 `max_steps_total`, raised only to give it its `max_steps`; time is never
 extended. A role without the block behaves exactly as it did, and never

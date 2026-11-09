@@ -3653,21 +3653,44 @@ none of the fields below, and its records are byte-for-byte what they were.
 | `budget_50` | after a step, when half of `max_steps_total` is used, or half of a declared time budget (`TurnDeps.deadline`, which #93's `--deadline` sets) has passed | a handover |
 | `verify_failed` | the declared `[verify]` check still fails after its last round | a handover, with the check's output |
 | `apparatus` | the role's endpoint failed in a way retries and `fallback` did not fix (bucket `apparatus_failure`) | the conversation as it stands |
+| `stuck` | after a step, when `stuck_failures` (default 4) tool calls in a row failed (a tool error or a non-zero shell exit), or `stuck_steps` (default 12) in a row changed no file | per `carry` |
+| `deadline_share` | after a step, when `deadline_share` (default 0.5) of the `--deadline` budget has passed; never without a deadline | per `carry` |
 
-At most one escalation per turn. The escalated model is never itself escalated.
+**What is carried** — `carry = "conversation"` (the default since v2): the
+conversation as it stands, with a takeover note appended on the steering
+channel (a user message marked `[gnomon]`): why the model changed, the files
+changed so far (git), the steps and seconds left, the checkpoint's state when
+`[turn] continue_after_answer` is on, and a failing check's output. Recorded as
+`carried: "context"`, `handover_chars` = the note's length. `carry =
+"handover"`: the bounded handover (≤ 8,000 characters) in place of the
+transcript, `carried: "handover"` (PR #102's rule; the rows above that say "a
+handover"). `apparatus` always carries the conversation, with no note. The
+files on disk are shared either way; the checkpoint (§41) belongs to the turn
+and carries over unchanged.
+
+At most one escalation per turn, and at most `max_handoffs` (default 1) per run
+or session. The escalated model is never itself escalated. Off by default: a
+role without the block takes no new code path.
 
 **Audit record** — kind `escalation`, written once at the move. Keys: `role`,
 `depth`, `trigger`, `at_step`, `from` and `to` (`{ model, endpoint }`),
-`carried` (`handover` | `context`), `handover_chars`, `max_steps_total_after`
-(only when the move raised the wall), and `handover` (the text, under
-`[audit] record = "full"` only). The `turn` record carries the same
+`carried` (`handover` | `context`), `handover_chars`, `elapsed_ms` (from the
+start of the run's `--deadline` clock, or of the turn), `max_steps_total_after`
+(only when the move raised the wall), `detail` (`stuck` only: `failures` |
+`no_progress`), `tokens_before` (`{ input, output }`, the backend's count so
+far, when it reported one) and `handover` (the text, under `[audit] record =
+"full"` only). The record's `ts` is the time of the move. The tokens after
+the move are the turn record's `escalation.usage_after`. The `turn` record carries the same
 `escalation` object as the turn result.
 
 **Task record** — `gnomon task --json` carries `escalation`: `trigger`,
 `at_step`, `from`, `to`, `carried`, `handover_chars`, `max_steps_total_after`?,
-and `final_model` (the model the turn ended on). Each model's backend usage is
-under `volatile.escalation_usage` (`before`, `after`), beside the other token
-counts, because it is not reproducible. Both are absent when nothing moved.
+`detail`?, and `final_model` (the model the turn ended on). Each model's backend
+usage is under `volatile.escalation_usage` (`before`, `after`, and
+`elapsed_ms`), beside the other token counts, because it is not reproducible.
+
+**Surface hash** — the block lives in `roles.toml` or a profile, so declaring,
+changing or removing it moves the surface hash like any other key. Both are absent when nothing moved.
 
 **Fixture**: `conformance/escalation_record.json`.
 `packages/gnomon-core/src/escalation.test.ts` asserts the code's

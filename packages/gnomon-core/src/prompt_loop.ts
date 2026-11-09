@@ -398,6 +398,8 @@ export interface PromptState {
    * the rest of the session (adaptReplayReasoning).
    */
   replayReasoningLearned?: Set<string>;
+  /** Escalations ("local first, cloud rescue") made this session, against `[roles.<name>.escalate] max_handoffs`. */
+  escalations?: number;
   /**
    * Endpoint+model pairs that refused a request because it carried
    * reasoning_content gnomon replayed by default. Replay stays off for them
@@ -3660,14 +3662,19 @@ export interface EscalationRecord {
   to: { model: string; endpoint?: string };
   /**
    * What the escalation model was given: "handover" — a compact summary in
-   * place of the transcript; "context" — the conversation as it stood (only
-   * for `apparatus`, where the first model was not stuck, its endpoint was).
+   * place of the transcript (`carry = "handover"`); "context" — the
+   * conversation as it stood, plus a takeover note (`carry = "conversation"`,
+   * the default, and always for `apparatus`).
    */
   carried: "handover" | "context";
   /** Characters of handover text sent (0 when the context was carried) */
   handover_chars: number;
   /** The step ceiling after the move, when it had to be raised */
   max_steps_total_after?: number;
+  /** `stuck` only: which signal fired, "failures" or "no_progress" */
+  detail?: "failures" | "no_progress";
+  /** Milliseconds from the start of the run (the --deadline clock) or of the turn to the move */
+  elapsed_ms?: number;
   /** The model the turn ended on */
   final_model: string;
   /** Backend-reported usage before and after the move; volatile run to run */
@@ -3701,7 +3708,48 @@ const HANDOVER_WHY: Record<EscalateTrigger, string> = {
   budget_50: "half of the budget is spent and the task is not done",
   verify_failed: "the repository's declared check still fails",
   apparatus: "the previous model's endpoint stopped answering",
+  stuck: "the previous model was stuck (repeated failures, or no file changed for many steps)",
+  deadline_share: "the declared share of the time budget is spent and the task is not done",
 };
+
+export interface TakeoverInput {
+  trigger: EscalateTrigger;
+  stepsUsed: number;
+  stepsLeft: number;
+  changed: string[];
+  /** Seconds left before the deadline, under --deadline */
+  leftS?: number;
+  /** The checkpoint state (checkpoint_grind.ts), when one is declared */
+  checkpoint?: string;
+  verifyOutput?: string;
+}
+
+/**
+ * `carry = "conversation"`: the note appended to the conversation as the
+ * escalation model takes over. The conversation above it is kept; this says
+ * why the model changed, what is on disk and what is left. Bounded like the
+ * handover.
+ */
+export function buildTakeoverNote(t: TakeoverInput, maxChars: number = HANDOVER_MAX_CHARS): string {
+  const changed = t.changed.length > 0
+    ? t.changed.slice(0, 40).map((p) => `- ${p}`).join("\n") +
+      (t.changed.length > 40 ? `\n- … and ${t.changed.length - 40} more` : "")
+    : "(none detected)";
+  const tail = (text: string, n: number): string =>
+    text.length > n ? `[cut]…${text.slice(-n)}` : text;
+  const parts = [
+    `A different model takes over this task from here, because ` +
+      `${HANDOVER_WHY[t.trigger]}, after ${t.stepsUsed} tool call(s). The conversation above is ` +
+      `the previous model's work. The files on disk are the current state: check them rather than ` +
+      `trusting what was said, then finish the task. About ${t.stepsLeft} tool call(s) are left` +
+      (t.leftS !== undefined ? `, and about ${Math.round(t.leftS)} s of wall time.` : "."),
+    `## Files changed so far\n${changed}`,
+    t.checkpoint ? `## Checkpoint\n${t.checkpoint}` : "",
+    t.verifyOutput ? `## The failing check\n${tail(t.verifyOutput, 1500)}` : "",
+  ].filter((p) => p.length > 0);
+  const out = parts.join("\n\n");
+  return out.length > maxChars ? `${out.slice(0, maxChars - 20)}\n…[note cut]` : out;
+}
 
 /**
  * What the escalation model is told instead of the transcript.
@@ -5363,6 +5411,9 @@ async function agenticTurn(
   // The last actions and their outcomes, for a handover. Kept only when an
   // escalation is declared, so a turn without one does no extra work.
   const recentActions: string[] = [];
+  // `stuck`: tool calls in a row that failed. Counted only with a block.
+  let failStreak = 0;
+  const turnStartedAt = (deps.clock ?? Date.now)();
   // One re-prompt for an empty completion, per nudge cycle — not one per turn.
   //
   // The nudge re-fires every nudge_after_idle calls for as long as the turn
@@ -6214,10 +6265,15 @@ async function agenticTurn(
    */
   const escalateNow = (
     trigger: EscalateTrigger,
-    opts: { lastNote?: string; verifyOutput?: string } = {}
+    opts: { lastNote?: string; verifyOutput?: string; detail?: "failures" | "no_progress" } = {}
   ): boolean => {
     if (!escalateDecl || escalation || !escalateDecl.on.includes(trigger)) return false;
-    const keepContext = trigger === "apparatus";
+    // At most `max_handoffs` per run (default 1), whatever the number of turns.
+    if ((state.escalations ?? 0) >= escalateDecl.max_handoffs) return false;
+    state.escalations = (state.escalations ?? 0) + 1;
+    const keepContext = trigger === "apparatus" || escalateDecl.carry === "conversation";
+    const nowMs = (deps.clock ?? Date.now)();
+    const elapsedMs = Math.max(0, nowMs - (deps.deadline?.started_at ?? turnStartedAt));
     // The escalation runs on what is left of the step budget, raised only to
     // guarantee its declared floor (always needed for step_wall). Time is never
     // extended: a --deadline still means what it said.
@@ -6228,7 +6284,24 @@ async function agenticTurn(
       raisedTo = maxTotal;
     }
     let handover = "";
-    if (!keepContext) {
+    if (keepContext && trigger !== "apparatus") {
+      const cpText = grindOn
+        ? grindState.cp
+          ? `A checkpoint of an earlier answer was taken (phase ${grindState.phase}). At the end the ` +
+            `final tree is scored${grindState.check ? ` with \`${grindState.check.command}\`` : ""} and the ` +
+            `checkpoint is restored if the final tree scores worse.`
+          : `No checkpoint has been taken yet: the first answer that comes with enough time left is checkpointed.`
+        : undefined;
+      handover = buildTakeoverNote({
+        trigger,
+        stepsUsed: steps,
+        stepsLeft: Math.max(0, maxTotal - steps),
+        changed: gitChangedPaths(workRootOf(state.config)),
+        ...(stopClock ? { leftS: Math.max(0, stopClock.stopAt - nowMs) / 1000 } : {}),
+        ...(cpText ? { checkpoint: cpText } : {}),
+        verifyOutput: opts.verifyOutput,
+      });
+    } else if (!keepContext) {
       const root = workRootOf(state.config);
       const lastUser = [...messages].reverse().find((m) => m.role === "user");
       handover = buildHandover({
@@ -6251,6 +6324,8 @@ async function agenticTurn(
       carried: keepContext ? "context" : "handover",
       handover_chars: handover.length,
       ...(raisedTo !== undefined ? { max_steps_total_after: raisedTo } : {}),
+      ...(opts.detail ? { detail: opts.detail } : {}),
+      elapsed_ms: elapsedMs,
       final_model: escalateDecl.model,
       ...(turnUsage ? { usage_before: { ...turnUsage } } : {}),
     };
@@ -6264,9 +6339,14 @@ async function agenticTurn(
       carried: escalation.carried,
       handover_chars: escalation.handover_chars,
       ...(raisedTo !== undefined ? { max_steps_total_after: raisedTo } : {}),
+      ...(opts.detail ? { detail: opts.detail } : {}),
+      elapsed_ms: elapsedMs,
+      // The backend's count so far, all on the first model. The count after
+      // the move is on the turn record (escalation.usage_after).
+      ...(turnUsage ? { tokens_before: { input: turnUsage.input ?? 0, output: turnUsage.output ?? 0 } } : {}),
       // The handover text itself only under record = "full"; metadata keeps
       // its size and the decision, never content.
-      handover: keepContext ? undefined : deps.audit.text(handover),
+      handover: handover ? deps.audit.text(handover) : undefined,
     });
     deps.progress.stop();
     warn(
@@ -6276,7 +6356,7 @@ async function agenticTurn(
         `  [escalate] ${trigger} — continuing on ${escalateDecl.model} at ` +
           `${escalateDecl.endpoint || escalateDecl.url}` +
           (keepContext
-            ? " with the conversation so far"
+            ? " with the conversation so far" + (handover ? ` and a ${handover.length}-character note` : "")
             : ` with a ${handover.length}-character handover`) +
           (raisedTo !== undefined ? ` (step ceiling raised to ${raisedTo})` : "")
       )
@@ -6289,7 +6369,12 @@ async function agenticTurn(
       working.length = 0;
       if (system) working.push(system);
       working.push({ role: "user", content: handover });
+    } else if (handover) {
+      // On the steering channel: a user message marked [gnomon], which every
+      // chat template accepts after an assistant or tool message.
+      working.push({ role: "user", content: STEER_PREFIX + handover });
     }
+    failStreak = 0;
     // The new model starts with clean loop-detection state: the old model's
     // repetition is not the new model's.
     recentCalls.length = 0;
@@ -8041,6 +8126,9 @@ async function agenticTurn(
       if (escalateDecl && !escalation) {
         recentActions.push(`${call.name} ${describeCall(call)} → ${outcome.summary}`.trim());
         if (recentActions.length > 12) recentActions.shift();
+        const failed =
+          outcome.code !== 0 || (call.name === "bash" && outcome.shell_exit !== undefined && outcome.shell_exit !== 0);
+        failStreak = failed ? failStreak + 1 : 0;
       }
       tally(call.name, "calls");
       const outcomeBucket = mapBucket(outcome.code);
@@ -8370,8 +8458,29 @@ async function agenticTurn(
       const halfTime =
         deps.deadline !== undefined &&
         deps.deadline.total_ms > 0 &&
-        (Date.now() - deps.deadline.started_at) * 2 >= deps.deadline.total_ms;
+        ((deps.clock ?? Date.now)() - deps.deadline.started_at) * 2 >= deps.deadline.total_ms;
       if (halfSteps || halfTime) escalateNow("budget_50", { lastNote: lastRationale });
+    }
+    // deadline_share: the declared share of the --deadline budget has passed.
+    // Time only: without a deadline it never fires.
+    if (escalateDecl && !escalation && escalateDecl.on.includes("deadline_share")) {
+      const d = deps.deadline;
+      if (
+        d !== undefined &&
+        d.total_ms > 0 &&
+        (deps.clock ?? Date.now)() - d.started_at >= escalateDecl.deadline_share * d.total_ms
+      ) {
+        escalateNow("deadline_share", { lastNote: lastRationale });
+      }
+    }
+    // stuck: the executor is stuck, by either signal -- this many tool calls
+    // in a row that failed, or this many that changed no file.
+    if (escalateDecl && !escalation && escalateDecl.on.includes("stuck")) {
+      if (failStreak >= escalateDecl.stuck_failures) {
+        escalateNow("stuck", { lastNote: lastRationale, detail: "failures" });
+      } else if (callsSinceWrite >= escalateDecl.stuck_steps) {
+        escalateNow("stuck", { lastNote: lastRationale, detail: "no_progress" });
+      }
     }
   }
 }
@@ -8805,14 +8914,14 @@ export interface TaskRecord {
     /** `counters.completion_gate.ms`, moved here: the gate's clock. §30. */
     completion_gate_ms?: number;
     /** With an escalation: the usage before and after the move. */
-    escalation_usage?: { before?: TokenUsage; after?: TokenUsage };
+    escalation_usage?: { before?: TokenUsage; after?: TokenUsage; elapsed_ms?: number };
   };
   /**
    * Present only when the turn moved to its role's escalation model: the
    * trigger, the step, from and to, what was carried and its size, and the
    * model the turn ended on. Usage on each side is under `volatile`.
    */
-  escalation?: Omit<EscalationRecord, "usage_before" | "usage_after">;
+  escalation?: Omit<EscalationRecord, "usage_before" | "usage_after" | "elapsed_ms">;
 }
 
 /** One tool call's timing, as the record and the trail carry it (TB4). */
@@ -9604,7 +9713,13 @@ export async function runTask(
       // only when a gate is declared.
       ...(turn.counters.completion_gate ? { completion_gate_ms: turn.counters.completion_gate.ms ?? 0 } : {}),
       ...(turn.escalation
-        ? { escalation_usage: { before: turn.escalation.usage_before, after: turn.escalation.usage_after } }
+        ? {
+            escalation_usage: {
+              before: turn.escalation.usage_before,
+              after: turn.escalation.usage_after,
+              ...(turn.escalation.elapsed_ms !== undefined ? { elapsed_ms: turn.escalation.elapsed_ms } : {}),
+            },
+          }
         : {}),
     },
     ...(turn.escalation ? { escalation: escalationFields(turn.escalation) } : {}),
@@ -9631,8 +9746,8 @@ export async function runTask(
 }
 
 /** The reproducible part of an escalation, for a record outside `volatile`. */
-function escalationFields(e: EscalationRecord): Omit<EscalationRecord, "usage_before" | "usage_after"> {
-  const { usage_before: _b, usage_after: _a, ...fields } = e;
+function escalationFields(e: EscalationRecord): Omit<EscalationRecord, "usage_before" | "usage_after" | "elapsed_ms"> {
+  const { usage_before: _b, usage_after: _a, elapsed_ms: _e, ...fields } = e;
   return fields;
 }
 
