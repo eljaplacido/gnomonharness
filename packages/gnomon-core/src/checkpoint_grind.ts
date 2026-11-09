@@ -87,6 +87,8 @@ export interface ResolvedCheckpointGrind {
   min_remaining: number;
   /** `[turn] checkpoint_check`, when declared. */
   check?: string;
+  /** `[turn] continue_message`, when declared: the continuation text, `{minutes}` replaced by the minutes left. */
+  message?: string;
 }
 
 function turnOf(config: GnomonConfig): Record<string, unknown> | undefined {
@@ -98,10 +100,12 @@ export function resolveCheckpointGrind(config: GnomonConfig): ResolvedCheckpoint
   const t = turnOf(config);
   const m = t?.continue_min_remaining;
   const c = t?.checkpoint_check;
+  const msg = t?.continue_message;
   return {
     on: t?.continue_after_answer === true,
     min_remaining: typeof m === "number" && m > 0 && m < 1 ? m : CONTINUE_MIN_REMAINING_DEFAULT,
     ...(typeof c === "string" && c.trim() ? { check: c.trim() } : {}),
+    ...(typeof msg === "string" && msg.trim() ? { message: msg.trim() } : {}),
   };
 }
 
@@ -140,9 +144,18 @@ export function auditCheckpointGrind(
       fatal: true,
     });
   }
-  if (v !== true && (m !== undefined || c !== undefined)) {
+  const msg = t?.continue_message;
+  if (msg !== undefined && !(typeof msg === "string" && msg.trim())) {
     out.push({
-      where: ".gnomon/config.toml [turn] checkpoint_check / continue_min_remaining",
+      where: ".gnomon/config.toml [turn] continue_message",
+      problem: `continue_message = ${JSON.stringify(msg)} is not a non-empty string.`,
+      fix: 'continue_message = "Your result is saved as a checkpoint. About {minutes} minutes remain. ..."',
+      fatal: true,
+    });
+  }
+  if (v !== true && (m !== undefined || c !== undefined || msg !== undefined)) {
+    out.push({
+      where: ".gnomon/config.toml [turn] checkpoint_check / continue_min_remaining / continue_message",
       problem: "declared without continue_after_answer = true, so it does nothing.",
       fix: "continue_after_answer = true, or remove the key",
       fatal: false,
@@ -155,8 +168,14 @@ export function auditCheckpointGrind(
  * The continuation message. Under `deadline_note = "none"` no time cue of any
  * kind reaches the model, so the minutes are left out there.
  */
-export function continuationText(leftMs: number, withTime: boolean): string {
+export function continuationText(leftMs: number, withTime: boolean, custom?: string): string {
   const mins = Math.max(1, Math.round(leftMs / 60_000));
+  if (custom !== undefined) {
+    // `[turn] continue_message`: `{minutes}` is the minutes left (at least 1). Under `deadline_note = "none"` no time cue may reach the
+    // model, so every sentence that holds the placeholder is dropped instead.
+    if (withTime) return custom.split("{minutes}").join(String(mins));
+    return custom.replace(/\s*[^.!?]*\{minutes\}[^.!?]*[.!?]/g, "").replace(/\s+/g, " ").trim();
+  }
   return (
     `Your result is saved as a checkpoint.` +
     (withTime ? ` About ${mins} ${mins === 1 ? "minute remains" : "minutes remain"}.` : "") +

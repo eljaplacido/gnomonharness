@@ -89,6 +89,13 @@ describe("conformance/checkpoint_grind.json", () => {
     expect(continuationText(10 * 60_000, true)).toBe(FIXTURE.continuation.with_time.replace("{n}", "10"));
     expect(continuationText(10 * 60_000, false)).toBe(FIXTURE.continuation.without_time);
     expect(continuationText(20_000, true)).toContain("About 1 minute remains.");
+    // `[turn] continue_message`: a custom text, `{minutes}` replaced; no declared text = the default above, byte for byte
+    const custom = "Saved. About {minutes} minutes remain. Check every requirement. Restored if worse.";
+    expect(continuationText(10 * 60_000, true, custom)).toBe("Saved. About 10 minutes remain. Check every requirement. Restored if worse.");
+    expect(continuationText(10 * 60_000, false, custom)).toBe("Saved. Check every requirement. Restored if worse.");
+    expect(continuationText(10 * 60_000, true, undefined)).toBe(continuationText(10 * 60_000, true));
+    expect(resolveCheckpointGrind({ config: { turn: { continue_after_answer: true, continue_message: "  x {minutes} " } } } as never))
+      .toEqual({ on: true, min_remaining: CONTINUE_MIN_REMAINING_DEFAULT, message: "x {minutes}" });
   });
 
   it("CONTRACTS §41 names the keys, events, counters and the fixture", () => {
@@ -105,12 +112,16 @@ describe("conformance/checkpoint_grind.json", () => {
     for (const k of Object.keys(FIXTURE.keys)) expect(turn).toContain(k);
     const surface = (t: Record<string, unknown>) => ({ config: { turn: t }, roles: {}, tools: [], policy: {} }) as never;
     const of = (t: Record<string, unknown>) =>
-      auditSurface(surface(t)).filter((p) => /continue_after_answer|continue_min_remaining|checkpoint_check/.test(p.where));
+      auditSurface(surface(t)).filter((p) => /continue_after_answer|continue_min_remaining|checkpoint_check|continue_message/.test(p.where));
     expect(of({ continue_after_answer: true, continue_min_remaining: 0.25, checkpoint_check: "pytest -q" })).toEqual([]);
     expect(of({ continue_after_answer: "yes" }).map((p) => p.fatal)).toEqual([true]);
     expect(of({ continue_after_answer: true, continue_min_remaining: 1.5 }).map((p) => p.fatal)).toEqual([true]);
     expect(of({ continue_after_answer: true, checkpoint_check: "" }).map((p) => p.fatal)).toEqual([true]);
     expect(of({ checkpoint_check: "pytest" }).map((p) => p.fatal)).toEqual([false]);
+    expect(of({ continue_after_answer: true, continue_message: "Saved. {minutes} min." })).toEqual([]);
+    expect(of({ continue_after_answer: true, continue_message: "" }).map((p) => p.fatal)).toEqual([true]);
+    expect(of({ continue_after_answer: true, continue_message: 3 }).map((p) => p.fatal)).toEqual([true]);
+    expect(of({ continue_message: "x" }).map((p) => p.fatal)).toEqual([false]);
   });
 });
 
@@ -333,6 +344,20 @@ describe("in a run under --deadline", () => {
     expect(existsSync(join(r.root, "junk"))).toBe(false);
     expect(r.rec.counters.checkpoint).toMatchObject({ outcome: "restored", check_source: "configured" });
     expect(r.rec.stop_reason).toBe("answered");
+  });
+
+  it("continue_message: the declared text is the one continuation message, {minutes} replaced; absent = the default", async () => {
+    const msg = "Saved. About {minutes} minutes remain. Write a check per requirement and run it.";
+    const r = await run(`continue_after_answer = true\ncontinue_message = ${JSON.stringify(msg)}\ncheckpoint_check = "sh check.sh"\n`, [
+      WRITE_GOOD,
+      { answer: "first" },
+      { answer: "second" },
+    ]);
+    const m = (JSON.parse(r.raws[2]!).messages as Array<{ role: string; content: string }>).at(-1)!;
+    expect(m.content).toBe("[gnomon] " + continuationText(89_800, true, msg));
+    expect(m.content).toContain("About 1 minutes remain.");
+    expect(m.content).not.toContain("Run the task's checks or tests");
+    expect(r.events[0]!.event).toBe("checkpoint");
   });
 
   it("keeps the final when it scores better or equal; the session's last passing test is the check", async () => {

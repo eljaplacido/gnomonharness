@@ -2653,6 +2653,7 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "continue_after_answer",
       "continue_min_remaining",
       "checkpoint_check",
+      "continue_message",
     ],
   ],
   [

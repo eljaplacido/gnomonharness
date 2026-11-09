@@ -7160,7 +7160,7 @@ async function agenticTurn(
         return {
           stage: "checkpoint",
           role: "user",
-          content: STEER_PREFIX + continuationText(leftNow, d.style !== "none"),
+          content: STEER_PREFIX + continuationText(leftNow, d.style !== "none", grind?.message),
         };
       };
       let endHandBack: EndOfTurnHandBack | null = null;

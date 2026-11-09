@@ -3520,7 +3520,7 @@ body, tool schema and command environment is master's.
 **Fixture**: `conformance/sandbox_profile.json`;
 `packages/gnomon-core/src/sandbox_profile.test.ts` asserts the code equals it.
 
-## 41. Checkpoint, then grind — `[turn] continue_after_answer`, `continue_min_remaining`, `checkpoint_check`, audit kind `checkpoint`, `counters.checkpoint`, `v: 1`
+## 41. Checkpoint, then grind — `[turn] continue_after_answer`, `continue_min_remaining`, `checkpoint_check`, `continue_message`, audit kind `checkpoint`, `counters.checkpoint`, `v: 1`
 
 **Why.** Under a real budget the model often answers with a third or more of
 it unused (FG1, CF1: answers 9-13 minutes early; research note 12 §1). An
@@ -3533,12 +3533,14 @@ improved tree scores worse on a visible check, the best-so-far is restored.
 | `continue_after_answer` | `true`, `false` | `false`: nothing here runs |
 | `continue_min_remaining` | a fraction in (0, 1) | `1/3` |
 | `checkpoint_check` | a shell command | the most recent test command the model ran with exit 0 in this turn |
+| `continue_message` | a non-empty string; `{minutes}` is replaced by the minutes left (at least 1) | the continuation text below |
 
 **Validation.** A non-boolean `continue_after_answer`, a
-`continue_min_remaining` outside (0, 1) and an empty or non-string
-`checkpoint_check` are fatal surface findings; either of the last two declared
-without `continue_after_answer = true` is a warning (it does nothing). All
-three are in `BLOCK_KEYS` and in `.gnomon/config.toml`, so they move the
+`continue_min_remaining` outside (0, 1), an empty or non-string
+`checkpoint_check` and an empty or non-string `continue_message` are fatal
+surface findings; any of the last three declared without
+`continue_after_answer = true` is a warning (it does nothing). All four are
+in `BLOCK_KEYS` and in `.gnomon/config.toml`, so they move the
 surface hash.
 
 **What must not change.** With the key absent or `false`, and with it `true`
@@ -3572,7 +3574,9 @@ event or counter is written (`checkpoint_grind.test.ts`).
   saved as a checkpoint. About N minutes remain. Run the task's checks or
   tests, find what still fails or is untested against the task's
   requirements, and improve it. If you make it worse, it will be restored.`
-  Under `deadline_note = "none"` the minutes sentence is left out. After it
+  `continue_message` replaces this text (the `[gnomon] ` prefix stays; `{minutes}`
+  becomes the minutes left); under `deadline_note = "none"` every sentence of it
+  that holds `{minutes}` is dropped. Under `deadline_note = "none"` the minutes sentence is left out. After it
   no countdown note (§31, §39) is sent; a deliverable-first note (§35) can
   still name a missing output, alone.
 - **The end** — the run's next accepted answer, the deadline's self-stop, or
