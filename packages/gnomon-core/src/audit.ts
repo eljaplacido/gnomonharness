@@ -274,6 +274,11 @@ export type AuditKind =
   // no token arrived in time, its attempt and wait, and whether a later
   // attempt under the same retry budget answered.
   | "first_token_stall"
+  // `[turn] continue_after_answer` under --deadline (checkpoint_grind.ts):
+  // `checkpoint` (taken, with the tree's content hash and the check's score),
+  // `checkpoint_skipped`, and the end decision: `checkpoint_restored`,
+  // `checkpoint_kept`, `checkpoint_kept_unverified`.
+  | "checkpoint"
   // One per end of a turn the finish gate (`[verify] finish_gate = "v2"`,
   // finish_gate.ts) judged: fire, no_tool or accept, the budget left, the
   // caveat ids its audit found, claims without evidence, the open todos.

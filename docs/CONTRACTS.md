@@ -3519,3 +3519,99 @@ body, tool schema and command environment is master's.
 
 **Fixture**: `conformance/sandbox_profile.json`;
 `packages/gnomon-core/src/sandbox_profile.test.ts` asserts the code equals it.
+
+## 41. Checkpoint, then grind — `[turn] continue_after_answer`, `continue_min_remaining`, `checkpoint_check`, audit kind `checkpoint`, `counters.checkpoint`, `v: 1`
+
+**Why.** Under a real budget the model often answers with a third or more of
+it unused (FG1, CF1: answers 9-13 minutes early; research note 12 §1). An
+anytime harness keeps the first complete answer as a best-so-far and spends
+the rest improving it, guarded so the extra time can only help: if the
+improved tree scores worse on a visible check, the best-so-far is restored.
+
+| key (config.toml `[turn]`) | values | absent |
+|---|---|---|
+| `continue_after_answer` | `true`, `false` | `false`: nothing here runs |
+| `continue_min_remaining` | a fraction in (0, 1) | `1/3` |
+| `checkpoint_check` | a shell command | the most recent test command the model ran with exit 0 in this turn |
+
+**Validation.** A non-boolean `continue_after_answer`, a
+`continue_min_remaining` outside (0, 1) and an empty or non-string
+`checkpoint_check` are fatal surface findings; either of the last two declared
+without `continue_after_answer = true` is a warning (it does nothing). All
+three are in `BLOCK_KEYS` and in `.gnomon/config.toml`, so they move the
+surface hash.
+
+**What must not change.** With the key absent or `false`, and with it `true`
+but no `--deadline` (interactive sessions never have one), every request body
+is the one the same run sends with nothing declared, and no `checkpoint`
+event or counter is written (`checkpoint_grind.test.ts`).
+
+**`continue_after_answer = true`, under `gnomon task --deadline` only, at depth 0.**
+
+- When the model answers, after every end-of-turn stage (the declared
+  `[verify]` check, the todo gate, the completion gate, the finish gate) has
+  accepted the answer, and at least `continue_min_remaining` of the budget is
+  left before the self-stop, the turn does not end. Once per run.
+- **Snapshot.** The tree under the working root is copied, content-addressed,
+  into a new private directory under the OS temp directory (`gnomon-ckpt-*`),
+  never into the root: the graded tree gains no file. Excluded, and never
+  touched by a restore: `.git`, `.gnomon`, `.gnomon-audit`,
+  `.gnomon-sessions`, `.gnomon-loops`, `.gnomon-jobs`, `.gnomon-out`.
+  Symlinks are kept as links; unreadable paths are recorded and left alone.
+  A temp directory inside the root, or a tree of more than 100 000 files or
+  2 GiB, takes no checkpoint (`checkpoint_skipped`) and the answer is
+  accepted as before. The store is removed when the run is judged.
+- **The check** is fixed at that moment: `checkpoint_check` (`configured`),
+  else the most recent bash command of this turn that exited 0 and matches
+  the stall detectors' test pattern (`session`), else none (`none`). It is
+  run once on the checkpoint, through the bash tool (sandbox, governance;
+  ungated unless approval is `always`, as `[verify]` is), never as a job.
+  Its score is the exit status and the passing-test count the output reports
+  (pytest, jest/vitest, cargo, unittest, `go test -v`).
+- **The continuation**: ONE user message marked `[gnomon] `: `Your result is
+  saved as a checkpoint. About N minutes remain. Run the task's checks or
+  tests, find what still fails or is untested against the task's
+  requirements, and improve it. If you make it worse, it will be restored.`
+  Under `deadline_note = "none"` the minutes sentence is left out. After it
+  no countdown note (§31, §39) is sent; a deliverable-first note (§35) can
+  still name a missing output, alone.
+- **The end** — the run's next accepted answer, the deadline's self-stop, or
+  a step-wall/stall stop: running jobs are stopped, then the check runs on the
+  final tree, bounded by the deadline less a quarter of the margin (at most
+  5 s). Worse — the check fails where it passed on the checkpoint, or fewer
+  tests pass — restores the checkpoint (files created since removed, changed
+  ones rewritten, new empty directories removed) and the trail says whether
+  the restored tree's hash is the checkpoint's. Equal or better keeps the
+  final. No check, a check that could not run on the checkpoint (126, 127, a
+  timeout), or no time left to run it keeps the final, unverified. An Esc
+  cancel keeps the tree as it is.
+- Once per run: under a declared `[chain]` only the first stage that answers
+  in time takes it. Headless only in practice: interactive sessions have no
+  `--deadline`.
+
+**What the record says.**
+
+- `counters.checkpoint`: `{v: 1, outcome, check_source?, left_s?}`, `outcome`
+  one of `not_reached`, `skipped`, `continued`, `restored`, `kept`,
+  `kept_unverified`.
+- Audit kind `checkpoint`, `event`:
+  - `checkpoint`: `content_hash` (sha256 over the sorted entries), `files`,
+    `bytes`, `left_ms`, `share_left`, `check_source`, `command` (redacted),
+    `checkpoint_score`;
+  - `checkpoint_skipped`: `why`, `left_ms`;
+  - `checkpoint_restored`, `checkpoint_kept`, `checkpoint_kept_unverified`:
+    `how` (`answer`, `deadline`, `stop`), `checkpoint_hash`, `check_source`,
+    `command`, `checkpoint_score`, `final_score`, `why`; a restore adds
+    `rewritten`, `removed`, `verified`.
+
+**A benchmark arm** declares, on top of its base surface:
+
+```toml
+[turn]
+continue_after_answer = true
+```
+
+and runs `gnomon task --deadline <cap less the copy-out time>`.
+
+**Fixture**: `conformance/checkpoint_grind.json`;
+`packages/gnomon-core/src/checkpoint_grind.test.ts` asserts the code equals it.

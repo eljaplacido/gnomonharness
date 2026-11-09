@@ -34,6 +34,16 @@ merged, and no result is claimed for any of them yet. With none declared,
 request bodies are master's — except the network refusal's wording, which the
 long-task tier (a) changes on purpose (below).
 
+### Added — checkpoint, then grind (opt-in, unmeasured), CONTRACTS §41
+
+- `[turn] continue_after_answer = true`, under `gnomon task --deadline` only: an answer given with at least
+  `continue_min_remaining` (default 1/3) of the budget left becomes a checkpoint (the tree copied, content-addressed,
+  to a private temp directory outside the root; a `checkpoint` audit event with its hash), and the model gets ONE
+  continuation message; no countdown follows. At the end (next answer, deadline self-stop, step wall) the final tree is
+  scored with `[turn] checkpoint_check` or the last test command that passed in the turn, and the checkpoint is
+  restored if the final scores worse (`checkpoint_restored`); equal or better is kept (`checkpoint_kept`); no check
+  keeps the final (`checkpoint_kept_unverified`). Off, request bodies are unchanged.
+
 ### Added — `completion_gate = "review_only"` (opt-in, unmeasured), CONTRACTS §30
 
 - `[verify] completion_gate = "review_only"`: the reviewer without the checklist round. The first answer of a turn

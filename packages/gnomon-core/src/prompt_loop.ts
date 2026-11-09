@@ -146,6 +146,19 @@ import {
   resolveDeliverableFirst,
 } from "./deliverable_first.js";
 import {
+  continuationText,
+  decideCheckpoint,
+  dropCheckpoint,
+  isTestCommand,
+  passCount,
+  resolveCheckpointGrind,
+  restoreCheckpoint,
+  takeCheckpoint,
+  type CheckScore,
+  type CheckSource,
+  type TreeCheckpoint,
+} from "./checkpoint_grind.js";
+import {
   CallLedger,
   legBudget,
   overflowBudget,
@@ -2837,7 +2850,7 @@ export const STEER_CLOSE = "[/gnomon]";
  * message, sent after the rejected answer, in the role the stage chose.
  */
 interface EndOfTurnHandBack {
-  stage: "verify" | "todo_gate" | "completion_gate" | "finish_gate";
+  stage: "verify" | "todo_gate" | "completion_gate" | "finish_gate" | "checkpoint";
   role: "system" | "user";
   content: string;
 }
@@ -3393,6 +3406,28 @@ export interface TurnDeps {
    * `[resilience] task_transport_grace_ms` (config.ts taskResilience).
    */
   unattended?: boolean;
+}
+
+/**
+ * The sessions whose run already took its one checkpoint: a declared [chain]
+ * runs several depth-0 turns in one `gnomon task`, and the continuation is
+ * once per run, not once per stage.
+ */
+const CHECKPOINT_TAKEN = new WeakSet<object>();
+
+/** counters.checkpoint (checkpoint_grind.ts, CONTRACTS §41). */
+export interface CheckpointCounters {
+  v: 1;
+  /**
+   * `not_reached`: no answer came with enough of the budget left (or none came);
+   * `skipped`: the snapshot could not be taken, so no continuation was sent;
+   * `continued`: the continuation was sent and the run has not ended yet;
+   * `restored` / `kept` / `kept_unverified`: the end decision.
+   */
+  outcome: "not_reached" | "skipped" | "continued" | "restored" | "kept" | "kept_unverified";
+  check_source?: CheckSource;
+  /** Seconds of the budget left when the checkpoint was taken */
+  left_s?: number;
 }
 
 /** See TurnDeps.deadline. All times are epoch milliseconds. */
@@ -4238,6 +4273,11 @@ export interface TurnCounters {
    * yet (`[turn] deliverable_first`, deliverable_first.ts). Absent when none were.
    */
   deliverable_first_notes?: number;
+  /**
+   * `[turn] continue_after_answer` under `--deadline` (checkpoint_grind.ts,
+   * CONTRACTS §41): what became of the checkpoint. Absent when not declared.
+   */
+  checkpoint?: CheckpointCounters;
   /**
    * Streamed requests aborted because no token arrived within `[resilience]
    * first_token_timeout_ms`, and asked again under the retry budget. Absent
@@ -5253,6 +5293,106 @@ async function agenticTurn(
   if (todoGateOn) {
     counters.todo_gate = { v: 1, max_rounds: TODO_GATE_ROUNDS, rounds: 0, open: 0, outcome: "not_reached" };
   }
+  // Checkpoint, then grind (`[turn] continue_after_answer`, checkpoint_grind.ts,
+  // CONTRACTS §41). Only under `--deadline` (stopClock) and only for the turn
+  // a person asked for. Off, nothing below reads it.
+  const grind = depth === 0 && stopClock ? resolveCheckpointGrind(config) : undefined;
+  const grindOn = grind?.on === true;
+  const grindState: {
+    phase: "waiting" | "continued" | "done";
+    cp?: TreeCheckpoint;
+    check?: { command: string; source: CheckSource };
+    score?: CheckScore;
+    checkMs?: number;
+  } = { phase: "waiting" };
+  // The most recent test command the model ran with exit 0 in this turn.
+  let lastPassingTest: string | undefined;
+  if (grindOn) counters.checkpoint = { v: 1, outcome: "not_reached" };
+  // Run the checkpoint's check as the declared [verify] check runs: through
+  // the bash tool, sandbox and governance included, ungated unless approval
+  // is "always". Never as a job, never cut by the turn's own abort (the end
+  // check runs after the deadline's self-stop), and bounded by `untilMs`.
+  const runGrindCheck = async (command: string, untilMs: number): Promise<CheckScore> => {
+    const t0 = Date.now();
+    const out = await executeTool(
+      "bash",
+      { command },
+      {
+        ...ctx,
+        gate: gate === "always" ? "always" : "never",
+        allow: "strict" as SurfaceConsent,
+        signal: undefined,
+        jobs: undefined,
+        timedOutCommands: undefined,
+        deadlineAt: untilMs,
+      },
+      new Set(["bash"])
+    );
+    grindState.checkMs = Date.now() - t0;
+    const read = readVerifyExit(out);
+    return {
+      exit: read.exit,
+      ...((n) => (n !== undefined ? { passed: n } : {}))(passCount(out.content)),
+      ...(out.code !== 0 && /timeout/.test(out.summary) ? { timed_out: true } : {}),
+    };
+  };
+  // The end of a run that took a checkpoint: score the final tree with the
+  // checkpoint's check and restore the checkpoint if the final is worse.
+  // Called once, from the turn's next answer or from the deadline's stop.
+  const finishCheckpoint = async (how: "answer" | "deadline" | "stop"): Promise<void> => {
+    if (!grindOn || grindState.phase !== "continued" || !grindState.cp) return;
+    grindState.phase = "done";
+    const cp = grindState.cp;
+    const cc = counters.checkpoint!;
+    // Jobs still running are stopped first: they must not write past the decision.
+    await jobs?.closeAll("turn_end");
+    let final: CheckScore | undefined;
+    let why: string | undefined;
+    if (!grindState.check) why = "no check";
+    else if (grindState.score && (grindState.score.timed_out || grindState.score.exit === 126 || grindState.score.exit === 127))
+      why = "the check could not run on the checkpoint";
+    else {
+      // The time the check may take: up to the deadline itself, less a
+      // reserve for the restore and the record; it needs at least as long as
+      // it took on the checkpoint.
+      const at = stopClock!.at;
+      const reserve = Math.min(5_000, Math.floor(stopClock!.marginMs / 4));
+      const untilMs = at - reserve;
+      const room = untilMs - Date.now();
+      if (room < Math.max(200, (grindState.checkMs ?? 0) * 1.2)) why = "no time left to run the check";
+      else {
+        deps.progress.stop();
+        say(paint(deps.ui, "cyan", `  ⚙ checkpoint`) + paint(deps.ui, "gray", ` scoring the final tree: ${grindState.check.command}`));
+        final = await runGrindCheck(grindState.check.command, untilMs);
+        if (final.timed_out) why = "the check did not finish in the time left";
+      }
+    }
+    const verdict = decideCheckpoint(grindState.check ? grindState.score : undefined, why ? undefined : final);
+    const base = {
+      role,
+      how,
+      step: steps,
+      checkpoint_hash: cp.hash,
+      check_source: grindState.check?.source ?? "none",
+      ...(grindState.check ? { command: deps.audit?.action(grindState.check.command) ?? grindState.check.command } : {}),
+      ...(grindState.score ? { checkpoint_score: grindState.score } : {}),
+      ...(final ? { final_score: final } : {}),
+      ...(why ? { why } : {}),
+    };
+    if (verdict === "checkpoint_restored") {
+      const r = restoreCheckpoint(cp);
+      cc.outcome = "restored";
+      deps.audit?.write("checkpoint", { event: "checkpoint_restored", ...base, ...r });
+      warn(paint(deps.ui, "yellow", `  ⚙ checkpoint — the final tree scored worse; checkpoint restored (${r.rewritten} rewritten, ${r.removed} removed${r.verified ? "" : ", NOT verified"})`));
+      toolLog.push(`checkpoint — restored`);
+    } else {
+      cc.outcome = verdict === "checkpoint_kept" ? "kept" : "kept_unverified";
+      deps.audit?.write("checkpoint", { event: verdict, ...base });
+      say(paint(deps.ui, "gray", `  ⚙ checkpoint — final tree kept${verdict === "checkpoint_kept" ? "" : ` (unverified: ${why ?? "no usable check"})`}`));
+      toolLog.push(`checkpoint — ${cc.outcome}`);
+    }
+    dropCheckpoint(cp);
+  };
   // The compat edit's tiers and the package-index allowlist: counted on every
   // turn of a surface that declares them, zeros included (§32).
   if (editVariant === "compat") counters.edit_match = { exact: 0, whitespace: 0, indentation: 0 };
@@ -5369,7 +5509,12 @@ async function agenticTurn(
 
   // A cancelled turn still changed the tree if it got that far, and that is
   // exactly when someone wants to know what it left behind.
-  const cancelled = (): TurnResult => {
+  const cancelled = async (): Promise<TurnResult> => {
+    // `--deadline` stopped a run that took a checkpoint: judge it now, before
+    // the tree is measured. A cancel that is not the deadline (Esc) is a
+    // person stopping the run, and their tree is left as it is.
+    if (stopClock && deps.signal?.reason === DEADLINE_ABORT) await finishCheckpoint("deadline");
+    else if (grindState.cp && grindState.phase === "continued") dropCheckpoint(grindState.cp);
     flushFold();
     counters.tree_delta = measureTreeDelta(workRootOf(state.config), treeBaseline);
     // `--deadline` aborted the turn: the same ending, said as what it was.
@@ -5932,9 +6077,12 @@ async function agenticTurn(
       const now = (deps.clock ?? Date.now)();
       const used = (now - d.started_at) / Math.max(1, d.total_ms);
       let crossed = false;
+      // After a checkpoint's continuation (checkpoint_grind.ts) no countdown
+      // follows: the continuation said the time once.
+      const grinding = grindState.cp !== undefined;
       while (deadlineNoteNext < d.notes.length && used >= d.notes[deadlineNoteNext]!) {
         deadlineNoteNext++;
-        crossed = true;
+        if (!grinding) crossed = true;
       }
       let missing: string[] = [];
       if (deliverables) {
@@ -5973,7 +6121,7 @@ async function agenticTurn(
         working.push({
           role: "system",
           content:
-            style === "none" || style === "upfront"
+            style === "none" || style === "upfront" || grinding
               ? deliverableNote(missing, "continue")
               : deadlineNoteText(style, formatSpan(left), formatSpan(d.total_ms)) +
                 (missing.length > 0 ? ` ${deliverableNote(missing, style)}` : ""),
@@ -6943,8 +7091,80 @@ async function agenticTurn(
         }
         return null;
       };
+      const endCheckpoint = async (): Promise<EndOfTurnHandBack | null> => {
+        // Checkpoint, then grind (`[turn] continue_after_answer`,
+        // checkpoint_grind.ts, CONTRACTS §41). After every gate has accepted
+        // the answer: the answer's tree is the checkpoint. Once per run.
+        if (!grindOn) return null;
+        if (grindState.phase === "continued") {
+          await finishCheckpoint("answer");
+          return null;
+        }
+        if (
+          grindState.phase !== "waiting" ||
+          CHECKPOINT_TAKEN.has(state) ||
+          result.code !== 0 ||
+          emptyTerminus ||
+          lastFinishReason === "length"
+        ) {
+          return null;
+        }
+        const d = stopClock!;
+        const now = (deps.clock ?? Date.now)();
+        const leftMs = Math.max(0, d.stopAt - now);
+        const share = leftMs / Math.max(1, d.total_ms);
+        if (share < grind!.min_remaining) {
+          grindState.phase = "done";
+          return null;
+        }
+        grindState.phase = "done";
+        CHECKPOINT_TAKEN.add(state);
+        const cc = counters.checkpoint!;
+        const root = workRootOf(state.config);
+        const cp = takeCheckpoint(root);
+        if ("skipped" in cp) {
+          cc.outcome = "skipped";
+          deps.audit?.write("checkpoint", { event: "checkpoint_skipped", role, step: steps, why: cp.skipped, left_ms: leftMs });
+          say(paint(deps.ui, "gray", `  ⚙ checkpoint — not taken (${cp.skipped}); answer accepted`));
+          return null;
+        }
+        const command = grind!.check ?? lastPassingTest;
+        const check = command ? { command, source: (grind!.check ? "configured" : "session") as CheckSource } : undefined;
+        deps.progress.stop();
+        say(paint(deps.ui, "cyan", `  ⚙ checkpoint`) + paint(deps.ui, "gray", ` ${cp.files.size} file(s) saved; ${formatSpan(leftMs)} left — continuing`));
+        let score: CheckScore | undefined;
+        if (check) score = await runGrindCheck(check.command, d.stopAt - d.marginMs);
+        grindState.cp = cp;
+        grindState.check = check;
+        grindState.score = score;
+        grindState.phase = "continued";
+        cc.outcome = "continued";
+        cc.check_source = check?.source ?? "none";
+        cc.left_s = Math.round(leftMs / 1000);
+        deps.audit?.write("checkpoint", {
+          event: "checkpoint",
+          role,
+          step: steps,
+          content_hash: cp.hash,
+          files: cp.files.size,
+          bytes: cp.bytes,
+          left_ms: leftMs,
+          share_left: Math.round(share * 1000) / 1000,
+          check_source: check?.source ?? "none",
+          ...(check ? { command: deps.audit?.action(check.command) ?? check.command } : {}),
+          ...(score ? { checkpoint_score: score } : {}),
+        });
+        toolLog.push(`checkpoint — taken, continuing`);
+        // The time it took to score the checkpoint came out of the budget.
+        const leftNow = Math.max(0, d.stopAt - (deps.clock ?? Date.now)());
+        return {
+          stage: "checkpoint",
+          role: "user",
+          content: STEER_PREFIX + continuationText(leftNow, d.style !== "none"),
+        };
+      };
       let endHandBack: EndOfTurnHandBack | null = null;
-      for (const stage of [endVerify, endTodoGate, endCompletionGate, endFinishGate]) {
+      for (const stage of [endVerify, endTodoGate, endCompletionGate, endFinishGate, endCheckpoint]) {
         endHandBack = await stage();
         if (endHandBack) break;
       }
@@ -7139,6 +7359,8 @@ async function agenticTurn(
       // printed after the answer would describe work the reader has already
       // been given conclusions about.
       await jobs?.closeAll("turn_end");
+      // A run that took a checkpoint is judged on whatever ending it got.
+      await finishCheckpoint("stop");
       flushFold();
       counters.tree_delta = measureTreeDelta(workRootOf(state.config), treeBaseline);
       stampCitations(counters, content, workRootOf(state.config));
@@ -7498,6 +7720,12 @@ async function agenticTurn(
       if (gateOn && gateState.rounds > 0 && call.name === "bash" && outcome.code === 0) {
         gateState.checksSince++;
         counters.completion_gate!.checks++;
+      }
+      // For the checkpoint (checkpoint_grind.ts): the most recent test command
+      // that exited 0 is the check the checkpoint is scored with.
+      if (grindOn && call.name === "bash" && outcome.code === 0 && readVerifyExit(outcome).passed) {
+        const command = String(call.args?.command ?? "");
+        if (isTestCommand(command)) lastPassingTest = command;
       }
       // For the finish gate: the calls that ran (its claim/evidence check), and
       // any tool call that ran after it handed back.

@@ -24,6 +24,7 @@ import { COMPLETION_GATE_MODES, auditCompletionGate } from "./completion_gate.js
 import { auditSoftShell } from "./soft_shell.js";
 import { auditSandboxProfile } from "./sandbox_profile.js";
 import { auditDeliverableFirst } from "./deliverable_first.js";
+import { auditCheckpointGrind } from "./checkpoint_grind.js";
 import {
   CONTINUE_NOTE_AT,
   auditLongTaskProfile,
@@ -2649,6 +2650,9 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "todo_gate",
       "deadline_note",
       "prompt_profile",
+      "continue_after_answer",
+      "continue_min_remaining",
+      "checkpoint_check",
     ],
   ],
   [
@@ -3253,6 +3257,7 @@ problems.push(...auditFinishGate(config));
 problems.push(...auditSweepKnobs(config, (ep) => endpointKind(ep)));
 problems.push(...auditSoftShell(config));
 problems.push(...auditDeliverableFirst(config));
+problems.push(...auditCheckpointGrind(config));
 problems.push(...auditLongTaskProfile(config));
 problems.push(...auditSandboxProfile(config));
 
