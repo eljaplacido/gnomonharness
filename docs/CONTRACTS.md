@@ -3631,3 +3631,88 @@ and runs `gnomon task --deadline <cap less the copy-out time>`.
 
 **Fixture**: `conformance/checkpoint_grind.json`;
 `packages/gnomon-core/src/checkpoint_grind.test.ts` asserts the code equals it.
+
+## 42. OC-mode — `[context] compact_at_tokens`, `compact_keep_turns`, `[turn] max_reasoning_tokens_without_action`, `[turn] grader_check`, `[sandbox] hide_internal`, audit kinds `compaction` and `reasoning_cutoff`, `counters.oc_mode`, `v: 1`
+
+**Why.** On CB3 the same model solved about twice as many tasks under opencode
+as under gnomon (research note 19). Four of the mechanical differences are
+harness-side and cheap to copy: opencode compacts its context at ~170k tokens
+(37/80 cells), it never sat in a single 300 s+ derivation the way gnomon did
+(gnomon spent 21% of its model time in calls over 120 s, opencode 9%), gnomon's
+model read the harness's own folders in 51/80 cells (517k characters), and
+gnomon's near-misses checked their own design through private hooks where
+opencode's runs checked through the public API (§4.2-4.3). Each key is opt-in
+and unmeasured; arm "OCM" is how they get measured.
+
+| key | file, block | values | absent |
+|---|---|---|---|
+| `compact_at_tokens` | config.toml `[context]` | `"auto"`, or an integer of at least 4096 | no in-turn compaction |
+| `compact_keep_turns` | config.toml `[context]` | an integer of at least 1 | `4` |
+| `max_reasoning_tokens_without_action` | config.toml `[turn]` | an integer of at least 1000 | no cutoff |
+| `grader_check` | config.toml `[turn]` | `true`, `false` | `false` |
+| `hide_internal` | policy.toml `[sandbox]` | `true`, `false` | `false` |
+
+**Compaction.** Before each model call of a turn, when the larger of the
+estimated next request (about 4 characters a token) and the prompt tokens the
+provider reported for the previous call reaches the threshold, gnomon makes
+one extra call to the answering model, without tools. The call asks for a
+compact state under five headings: Task, Files changed, Decisions, Open
+issues, and Last test results. It shows the model the task statement and the
+history between the task and the last `compact_keep_turns` assistant replies,
+with each message clipped to 2000 characters. That history is then replaced by
+one system message, `[gnomon compaction] … <summary>`. The instructions, the
+task statement and the last `compact_keep_turns` replies with their tool
+results are kept verbatim. `"auto"` is opencode v2.2.5's ceiling on the
+answering endpoint's window: `window − max(0.15·window, 16000)`, which is
+170000 for a 200k window. A `compaction` event records `outcome`
+(`compacted` or `failed`), `threshold`, `window`, `before_tokens`,
+`before_prompt_tokens`, `after_tokens`, `compacted_messages`, `kept_messages`
+and `duration_ms`. A failed summary (an error, an empty reply, or a
+reasoning-only reply) leaves the context unchanged. gnomon tries again only
+after `compact_keep_turns` more steps.
+
+**Reasoning cutoff.** This applies only to streamed calls on an OpenAI-shaped
+endpoint. A streamed reply is stopped when its reasoning passes the cap
+(tokens counted as `ceil(chars/4)`) and it has no content and no tool call
+yet. gnomon closes the connection so the server stops generating. The
+reasoning is not echoed back. The next request ends with one user message:
+"Your last reply reasoned for over {cap} tokens without a tool call or any
+text, so it was stopped. Stop reasoning at length; write a script or run a
+command to get the answer." A `reasoning_cutoff` event records `cap`,
+`reasoning_tokens`, `reasoning_chars`, `consecutive`, `rearmed`,
+`duration_ms` and `model`. After `[turn] max_consecutive_malformed` cutoffs
+in a row, the next call runs uncapped. Any reply that is not cut re-arms the
+cutoff, so a model that can only think at length is never stopped forever.
+
+**hide_internal.** `read`, `grep` and `glob` leave `.gnomon` and every
+`.gnomon-*` folder out of directory listings and walks. A path inside one of
+these folders gets code 2 (refusal) and the message `Refused: "<path>" is
+inside gnomon's own folders (.gnomon, .gnomon-*) …`. A glob pattern that names
+such a folder outright gets the same refusal. This is a tool answer, not a
+governance rule: it carries no `rule`, it is not levelled, and `toolCallPolicy`
+(`gnomon guard`, `gnomon check`) does not apply it. **Bash is not confined.**
+The system prompt gains a "Harness folders" block that asks the model not to
+read the folders and shows how to exclude them with grep, find and ls, but
+`cat .gnomon/system.md` still works. Hiding the folders from bash would need
+the surface to live outside the task root.
+
+**grader_check.** The system prompt gains a "Check like the grader" block. It
+asks the model to test through the task's public entry points or provided
+tools and never through private names, hooks or monkeypatching. It treats a
+failing self-written test as a code bug and forbids editing a test's
+assertions to match the output. Before an answer given with time left, it asks
+for at least one varied-input check: shuffled or duplicated inputs, batched
+against one at a time, repeated ids, or concurrent calls.
+
+**Recorded.** When any key is on, `session_start.resolved.oc_mode` lists the
+keys that are on, with the defaults filled in, and is absent otherwise.
+`counters.oc_mode = {v, compactions, compaction_failures, reasoning_cutoffs}`
+is present when compaction or the cutoff is declared. All five keys are in
+`BLOCK_KEYS` (or `KEY_OWNER` for `[context]`) and in the surface, so declaring
+any of them moves the surface hash. A value outside its range is a fatal
+surface finding. `compact_keep_turns` without `compact_at_tokens` is a warning.
+With none declared, the request bodies are byte for byte the same as before
+(`oc_mode.test.ts`, "off").
+
+**Fixture**: `conformance/oc_mode.json`;
+`packages/gnomon-core/src/oc_mode.test.ts` asserts the code equals it.

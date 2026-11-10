@@ -93,8 +93,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3224 TypeScript tests (2691 core, 508 cli, 18
-> natives, 7 tui) and 63 Rust tests — **3287 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3242 TypeScript tests (2709 core, 508 cli, 18
+> natives, 7 tui) and 63 Rust tests — **3305 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -954,6 +954,8 @@ prompt_profile = "default"        # "unattended": no stop sentences, edge-case/m
 continue_after_answer = false     # gnomon task --deadline: an early answer becomes a checkpoint, one "improve it" continuation, restore if worse
 continue_min_remaining = 0.3333   # gnomon task --deadline: share of the budget that must be left for the continuation
 # checkpoint_check = "pytest -q"  # the check the checkpoint and the final are scored with (absent: the last passing test command)
+# max_reasoning_tokens_without_action = 12000  # OC-mode: stop a streamed reply that thinks this long with no tool call
+grader_check = false              # OC-mode: "check like the grader" prompt block (public entry points, varied-input check)
 ```
 
 Every value shown is the default, so a surface that omits the block — or writes
@@ -994,6 +996,8 @@ nothing in the record could say so.
 | `deliverable_first` | Read only under `gnomon task --deadline`; off by default. `true`: the output paths the task text names (an absolute path, or a quoted filename with an extension, after "write", "save", "create", "produce" and the like) are checked at 40% and 70% of the budget, and the ones that do not exist yet are named in that request's time note with "Write a first complete version now, then improve it." Nothing missing, nothing is added. Dependency manifests ("write any dependencies to `requirements.txt`") are not outputs, and a named file that exists when the run starts is not checked. [CONTRACTS §35](docs/CONTRACTS.md). |
 | `continue_after_answer` | Read only under `gnomon task --deadline`; off by default (opt-in, unmeasured). `true`: an answer given with at least `continue_min_remaining` (default 1/3) of the budget left, after every gate accepted it, becomes a checkpoint — the working tree is copied outside the root (nothing is written into it) — and the model gets one message: "Your result is saved as a checkpoint. About N minutes remain. Run the task's checks or tests, … If you make it worse, it will be restored." No countdown follows. At the run's end the final tree is scored with `checkpoint_check` (else the last test command that passed in the turn) and the checkpoint is restored if the final scores worse; with no check the final is kept, unverified. Audit kind `checkpoint`. [CONTRACTS §41](docs/CONTRACTS.md). |
 | `continue_min_remaining`, `checkpoint_check`, `continue_message`, `continue_max_rounds`, `continue_until_s` | See `continue_after_answer`; `continue_max_rounds` (1 to 20, default 1) lets each later answer take a new checkpoint (only if the check scores it no worse) and send the continuation again, until the rounds are used or `continue_until_s` seconds or fewer remain; `continue_message` (a non-empty string, `{minutes}` = minutes left) replaces the continuation text; declared without it they do nothing (a warning). |
+| `max_reasoning_tokens_without_action` | Off by default (OC-mode, opt-in, unmeasured). A streamed reply whose reasoning passes this many tokens with no content and no tool call is stopped, and the model is told "Stop reasoning at length; write a script or run a command to get the answer." After `max_consecutive_malformed` cutoffs in a row the next call runs uncapped. Audit kind `reasoning_cutoff`. With it come `[context] compact_at_tokens` (`"auto"` or tokens: summarise the turn into task, files changed, decisions, open issues and last test results once the prompt reaches it, keeping the task and the last `compact_keep_turns` steps; audit kind `compaction`) and `[sandbox] hide_internal` in policy.toml (read, grep and glob skip and refuse `.gnomon*` folders; bash is only asked to, not prevented). [CONTRACTS §42](docs/CONTRACTS.md). |
+| `grader_check` | Off by default (OC-mode). `true` adds a "Check like the grader" block: test through the task's public entry points or provided tools, never private hooks; never edit a test to match the output; before answering early, run one varied-input check (shuffled or duplicated inputs, batched against single, concurrency). [CONTRACTS §42](docs/CONTRACTS.md). |
 
 Values are floored where a zero would mean the opposite of what it reads:
 `max_run_notes = 0` would keep *every* note (`slice(-0)` returns the whole

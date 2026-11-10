@@ -97,6 +97,7 @@ import {
   resolveSandboxProfile,
 } from "./sandbox_profile.js";
 import type { ChildProcess } from "node:child_process";
+import { hiddenRefusal, isInternalName, isInternalRel } from "./oc_mode.js";
 
 /**
  * The roots host reads and writes of model-named files must stay under (sixth
@@ -1086,6 +1087,12 @@ export function commandEnv(
 export interface ToolContext {
   /** Needed by `skill`, which writes inside .gnomon/ */
   config?: GnomonConfig;
+  /**
+   * `[sandbox] hide_internal = true` (oc_mode.ts, CONTRACTS §42): read, grep
+   * and glob skip gnomon's own folders (`.gnomon`, `.gnomon-*`) in listings
+   * and walks, and refuse a path inside one. Bash is not confined by it.
+   */
+  hideInternal?: boolean;
   /** The session the tool runs in; exported to subprocesses as GNOMON_AGENT_SESSION. */
   agentSession?: string;
   /**
@@ -1457,6 +1464,18 @@ export function readPrecheck(
   return { abs };
 }
 
+/**
+ * `[sandbox] hide_internal`: the refusal for a path inside gnomon's own
+ * folders, or null. A tool answer, not a governance rule: no `rule`, so it is
+ * never levelled and toolCallPolicy (guard, check) is unchanged by it.
+ */
+function hiddenInternal(tool: string, path: string, abs: string, ctx: ToolContext): ToolOutcome | null {
+  if (!ctx.hideInternal) return null;
+  const rel = relative(ctx.root, abs).split(sep).join("/");
+  if (!isInternalRel(rel)) return null;
+  return { code: TOOL_DENIED, content: hiddenRefusal(tool, path), summary: `${tool} ${path} — refused (hide_internal)` };
+}
+
 async function readTool(
   args: Record<string, unknown>,
   ctx: ToolContext
@@ -1465,6 +1484,8 @@ async function readTool(
   if ("refusal" in pre) return outcomeOf(pre.refusal);
   const path = args.path as string;
   const abs = pre.abs;
+  const hidden = hiddenInternal("read", path, abs, ctx);
+  if (hidden) return hidden;
   // Ask BEFORE touching the filesystem.
   //
   // The existence probe used to run first, so under approval = "always" a
@@ -1490,6 +1511,7 @@ async function readTool(
     if (statSync(abs).isDirectory()) {
       const entries = readdirSync(abs, { withFileTypes: true })
         .filter((e) => e.name !== "node_modules" && e.name !== ".git")
+        .filter((e) => !(ctx.hideInternal && isInternalName(e.name)))
         .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
         .sort();
       return {
@@ -6105,7 +6127,13 @@ const SEARCH_MAX_HITS = 200;
  * `max` is WALK_MAX_FILES everywhere but the worktree stamp, which first asks
  * whether a tree is small enough to walk at all (STAMP_WALK_BELOW).
  */
-export function walkFiles(root: string, dir: string, max: number = WALK_MAX_FILES): string[] {
+export function walkFiles(
+  root: string,
+  dir: string,
+  max: number = WALK_MAX_FILES,
+  /** Directory names skipped besides NEVER_WALKED (`[sandbox] hide_internal`). */
+  skipDir?: (name: string) => boolean
+): string[] {
   // A file is a valid scope of exactly one file. Without this, readdirSync
   // throws ENOTDIR, the catch below swallows it, and `grep` answers
   // "No match for /x/ under path/to/file" for a file that contains x — a wrong
@@ -6142,6 +6170,7 @@ export function walkFiles(root: string, dir: string, max: number = WALK_MAX_FILE
       const abs = join(cur, e.name);
       if (e.isDirectory()) {
         if (NEVER_WALKED.has(e.name)) continue;
+        if (skipDir?.(e.name)) continue;
         subdirs.push(abs);
       } else if (e.isFile()) {
         out.push(relative(root, abs).split(sep).join("/"));
@@ -6215,6 +6244,8 @@ async function searchScope(
   // Past the precheck, outside the sandbox only when its level recorded the
   // refusal rather than applied it.
   const abs = resolveInRoot(ctx.root, raw, ctx.sandbox, ctx.extraRoots) ?? resolveInRoot(ctx.root, raw, "off")!;
+  const hidden = hiddenInternal(tool, raw, abs, ctx);
+  if (hidden) return hidden;
   // Same ordering rule as read: the gate decides before the filesystem is
   // consulted, so a declined search cannot confirm a directory exists.
   const denied = await gateReadOnly("glob", `search ${raw}`, ctx);
@@ -6261,6 +6292,14 @@ async function globTool(
   }
   const scope = await searchScope("glob", args, ctx);
   if ("code" in scope) return scope;
+  // A pattern that names a hidden folder outright (`.gnomon/**`) is refused like
+  // a path inside one, rather than answered "no files match".
+  if (ctx.hideInternal) {
+    const literal = pattern.split("/").filter((seg) => !/[*?[{]/.test(seg)).join("/");
+    if (isInternalRel(literal)) {
+      return { code: TOOL_DENIED, content: hiddenRefusal("glob", pattern), summary: `glob ${pattern} — refused (hide_internal)` };
+    }
+  }
 
   let re: RegExp;
   try {
@@ -6277,7 +6316,7 @@ async function globTool(
   if (gd) return gd;
 
   const base = scope.rel === "." ? "" : scope.rel.replace(/\/+$/, "") + "/";
-  const hits = walkFiles(ctx.root, scope.abs).filter((f) =>
+  const hits = walkFiles(ctx.root, scope.abs, WALK_MAX_FILES, ctx.hideInternal ? isInternalName : undefined).filter((f) =>
     re.test(base ? f.slice(base.length) : f)
   );
 
@@ -6363,7 +6402,7 @@ async function grepTool(
   }
   const base =
     scopeIsFile || scope.rel === "." ? "" : scope.rel.replace(/\/+$/, "") + "/";
-  const walked = walkFiles(ctx.root, scope.abs).filter(
+  const walked = walkFiles(ctx.root, scope.abs, WALK_MAX_FILES, ctx.hideInternal ? isInternalName : undefined).filter(
     (f) => !include || include.test(base ? f.slice(base.length) : f)
   );
   // A protected secret is not searched where its family is at prevent or

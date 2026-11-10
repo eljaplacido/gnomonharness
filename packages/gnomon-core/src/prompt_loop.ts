@@ -160,6 +160,18 @@ import {
   type TreeCheckpoint,
 } from "./checkpoint_grind.js";
 import {
+  applyCompaction,
+  compactThreshold,
+  compactionRequest,
+  ocModePromptBlocks,
+  ocModeRecord,
+  reasoningCutoffNote,
+  reasoningRunaway,
+  reasoningTokens,
+  resolveOcMode,
+  splitForCompaction,
+} from "./oc_mode.js";
+import {
   CallLedger,
   legBudget,
   overflowBudget,
@@ -948,6 +960,12 @@ interface InferenceResult {
    * an answer is reading the model think.
    */
   reasoningOnly?: boolean;
+  /**
+   * `[turn] max_reasoning_tokens_without_action` (oc_mode.ts): the streamed
+   * reply was aborted because its reasoning passed the cap with no content and
+   * no tool call. Code 0, nothing usable: the loop sends one note and asks again.
+   */
+  reasoningCutoff?: { tokens: number; chars: number };
   /**
    * The reply's reasoning channel (reasoning_content, or reasoning), when it
    * had one and it did not stand in for the content. Replayed on the
@@ -2063,11 +2081,23 @@ async function callEndpointOnce(
           trace.firstByteAt ??= Date.now();
           rearm();
         },
-        tokenClock ? firstToken : undefined
+        tokenClock ? firstToken : undefined,
+        target.reasoningCutoffTokens ? { reasoningCutoffTokens: target.reasoningCutoffTokens } : {}
       );
       drained = s.complete;
       trace.detail = s.usageDetail;
       trace.reasoningChars = s.reasoning.length;
+      // A runaway reply: not drained, so the finally below closes the
+      // connection and the server stops generating it.
+      if (s.reasoningCutoff) {
+        return {
+          content: "",
+          code: 0,
+          toolCalls: [],
+          reasoningCutoff: { tokens: reasoningTokens(s.reasoning.length), chars: s.reasoning.length },
+          usage: s.usage,
+        };
+      }
       if (s.error) {
         // An error sent in place of a chunk: the request was accepted and
         // failed on the way. Read exactly as the same text in a non-2xx body.
@@ -2378,6 +2408,11 @@ export interface StreamedReply {
   /** A finish_reason or [DONE] arrived, so the reply is whole */
   complete: boolean;
   /**
+   * Reading stopped because the reasoning passed `opts.reasoningCutoffTokens`
+   * with no content and no tool call (oc_mode.ts). `complete` stays false.
+   */
+  reasoningCutoff?: boolean;
+  /**
    * `data:` lines that were not JSON. Each was a chunk of the reply, and its
    * text is not in `content`. Skipped as before; counted so the loop can say
    * the reply may be missing text, which it used to drop without a word
@@ -2406,8 +2441,11 @@ export async function readChatStream(
    * reasoning or a tool call -- and never for a keep-alive comment or an
    * empty role chunk. The first-token watchdog reads it.
    */
-  onToken?: () => void
+  onToken?: () => void,
+  /** `reasoningCutoffTokens`: stop reading once a reply runs away (oc_mode.ts reasoningRunaway). */
+  opts: { reasoningCutoffTokens?: number } = {}
 ): Promise<StreamedReply> {
+  const cutoffAt = opts.reasoningCutoffTokens && opts.reasoningCutoffTokens > 0 ? opts.reasoningCutoffTokens : 0;
   const out: StreamedReply = { content: "", reasoning: "", toolCalls: [], complete: false, unparsed: 0 };
   const decoder = new TextDecoder();
   let buffer = "";
@@ -2501,6 +2539,15 @@ export async function readChatStream(
     if (typeof choice.finish_reason === "string" && choice.finish_reason) {
       out.finishReason = choice.finish_reason;
       out.complete = true;
+    }
+    if (
+      cutoffAt > 0 &&
+      !out.complete &&
+      typeof thought === "string" &&
+      reasoningRunaway(out.reasoning.length, out.content, out.toolCalls.length, cutoffAt)
+    ) {
+      out.reasoningCutoff = true;
+      done = true;
     }
   };
 
@@ -4282,6 +4329,11 @@ export interface TurnCounters {
    */
   checkpoint?: CheckpointCounters;
   /**
+   * OC-mode (oc_mode.ts, CONTRACTS §42): in-turn compactions and reasoning
+   * cutoffs this turn. Absent when no OC-mode key is declared.
+   */
+  oc_mode?: { v: 1; compactions: number; compaction_failures: number; reasoning_cutoffs: number };
+  /**
    * Streamed requests aborted because no token arrived within `[resilience]
    * first_token_timeout_ms`, and asked again under the retry budget. Absent
    * when none were.
@@ -4671,6 +4723,9 @@ export function buildSystemPrompt(
     ) + runNotesBlock(state)
   ) + platformBlock() + `\n\n${sessionModeBlock(state.interactive === true && !opts.delegated)}` +
     promptProfileBlock(profile) +
+    // OC-mode's prompt blocks (oc_mode.ts): "" unless `[sandbox] hide_internal`
+    // or `[turn] grader_check` is declared.
+    ocModePromptBlocks(resolveOcMode(state.config)) +
     // Last, and only once a bootstrap has run: "" otherwise, so a surface
     // without one builds the prompt it always did. Appended rather than
     // placed, so the turn that runs the bootstrap can extend the prompt it
@@ -4748,8 +4803,12 @@ export function resolvedSessionRecord(config: GnomonConfig, roles: string[]): Re
   }
   const profile = resolvePromptProfile(config);
   const sandboxProfile = sandboxProfileRecord(config);
+  const ocMode = ocModeRecord(config);
   return {
     routes,
+    // OC-mode (oc_mode.ts, CONTRACTS §42): the keys that are on, defaults
+    // filled in. Absent when none is declared.
+    ...(ocMode ? { oc_mode: ocMode } : {}),
     ...(profile !== "default"
       ? { prompt_profile: { name: profile, dropped: applyPromptProfile(config.system.content ?? "", profile).dropped } }
       : {}),
@@ -5023,6 +5082,9 @@ async function agenticTurn(
       ? [...pinned.extraRoots, ...scratchDirs().filter((d) => !pinned.extraRoots.includes(d))]
       : pinned.extraRoots,
     ...(pinned.container ? { containerNative: true } : {}),
+    // `[sandbox] hide_internal` (oc_mode.ts): read, grep and glob skip and
+    // refuse gnomon's own folders. Absent unless declared.
+    ...(resolveOcMode(config).hide_internal ? { hideInternal: true } : {}),
     taskAllow: config.roles[role]?.task_allow,
     // Where bash runs. "off" by default, so nothing moves unless a surface
     // asks for it -- and, once the session has started, only ever tighter.
@@ -5313,6 +5375,22 @@ async function agenticTurn(
   // The most recent test command the model ran with exit 0 in this turn.
   let lastPassingTest: string | undefined;
   if (grindOn) counters.checkpoint = { v: 1, outcome: "not_reached" };
+  // OC-mode (oc_mode.ts, CONTRACTS §42): in-turn compaction and the
+  // reasoning cutoff. Both off unless declared; the prompt blocks and
+  // hide_internal are applied where the prompt and the tool context are built.
+  const ocm = resolveOcMode(config);
+  if (ocm.compact_at !== undefined || ocm.max_reasoning_tokens !== undefined) {
+    counters.oc_mode = { v: 1, compactions: 0, compaction_failures: 0, reasoning_cutoffs: 0 };
+  }
+  // Replies in a row the cutoff stopped. At [turn] max_consecutive_malformed
+  // the next call runs uncapped, so a model that can only think long is not
+  // stopped forever; any reply that was not cut re-arms it.
+  let consecutiveCutoffs = 0;
+  // The step of the last compaction attempt, and the prompt tokens the
+  // provider reported for the last call (the threshold reads the larger of
+  // that and the estimate of the next request).
+  let lastCompactStep = Number.NEGATIVE_INFINITY;
+  let lastPromptTokens = 0;
   // Run the checkpoint's check as the declared [verify] check runs: through
   // the bash tool, sandbox and governance included, ungated unless approval
   // is "always". Never as a job, never cut by the turn's own abort (the end
@@ -5712,6 +5790,9 @@ async function agenticTurn(
   const announceRetry = deps.warn ?? deps.say;
   const call = async (declared: typeof route.target) => {
     let target = adaptTarget(state, declared);
+    if (ocm.max_reasoning_tokens !== undefined && consecutiveCutoffs < loop.max_consecutive_malformed) {
+      target = { ...target, reasoningCutoffTokens: ocm.max_reasoning_tokens };
+    }
     const offer = noTools.has(target.model) ? [] : toolSet.schemas;
     let r = await callEndpointWithRetry(
       target,
@@ -6169,7 +6250,67 @@ async function agenticTurn(
       }
     }
 
+    // OC-mode compaction (`[context] compact_at_tokens`, oc_mode.ts): once the
+    // next request reaches the threshold, everything after the task statement
+    // but the last compact_keep_turns steps is summarised by the model into a
+    // compact state, and the turn continues from it. One attempt per
+    // compact_keep_turns steps, so a failed or insufficient one cannot loop.
+    if (ocm.compact_at !== undefined && steps - lastCompactStep >= ocm.compact_keep_turns) {
+      const next = onFallback && route.fallback ? route.fallback : route.target;
+      const window = resolveContext(config, next).max_context_tokens;
+      const threshold = compactThreshold(ocm.compact_at, window);
+      const est = estOf(working);
+      const split = Math.max(est, lastPromptTokens) >= threshold ? splitForCompaction(working, ocm.compact_keep_turns) : null;
+      if (split) {
+        lastCompactStep = steps;
+        const t0 = Date.now();
+        deps.progress.update(`${next.model} — compacting the context`);
+        const r = await callEndpointWithRetry(
+          adaptTarget(state, next),
+          compactionRequest(split.head[split.head.length - 1]!.content, split.middle) as ChatMessage[],
+          [],
+          resilience.request_timeout_ms,
+          resilience,
+          announceRetry,
+          deps.ui,
+          deps.signal,
+          state.sessionId,
+          observe
+        );
+        turnUsage = addUsage(turnUsage, r.usage);
+        countUnmetered(r);
+        if (deps.signal?.aborted) return cancelled();
+        const summary = r.code === 0 && !r.reasoningOnly ? r.content.trim() : "";
+        const om = counters.oc_mode!;
+        const base = {
+          role,
+          step: steps,
+          threshold,
+          window,
+          before_tokens: est,
+          before_prompt_tokens: lastPromptTokens,
+          compacted_messages: split.middle.length,
+          duration_ms: Date.now() - t0,
+          ...(r.usage?.output !== undefined ? { summary_output_tokens: r.usage.output } : {}),
+        };
+        if (summary) {
+          const next2 = applyCompaction(split, summary, (content) => ({ role: "system", content }) as ChatMessage);
+          working.length = 0;
+          working.push(...next2);
+          om.compactions++;
+          const after = estOf(working);
+          deps.audit?.write("compaction", { ...base, outcome: "compacted", after_tokens: after, kept_messages: split.tail.length });
+          say(paint(deps.ui, "gray", `  [context] compacted ~${est} → ~${after} tok (${split.middle.length} messages summarised)`));
+        } else {
+          om.compaction_failures++;
+          deps.audit?.write("compaction", { ...base, outcome: "failed", code: r.code, after_tokens: est });
+          warn(paint(deps.ui, "yellow", `  [context] compaction failed (code ${r.code}) — continuing uncompacted`));
+        }
+      }
+    }
+
     let result: InferenceResult;
+    const callT0 = Date.now();
     if (onFallback && route.fallback) {
       usedModel = route.fallback.model;
       usedTarget = route.fallback;
@@ -6274,6 +6415,38 @@ async function agenticTurn(
     // stop_reason "answered". Ask once for the rest, bounded like the blank
     // retry, then let it stand rather than looping.
     lastFinishReason = result.finishReason;
+    if (result.usage?.input !== undefined) lastPromptTokens = result.usage.input;
+
+    // `[turn] max_reasoning_tokens_without_action` (oc_mode.ts): the reply was
+    // stopped mid-stream for thinking past the cap with nothing to show. Its
+    // reasoning is not echoed (it is the problem); one short note asks for a
+    // script or a command instead, and the model is asked again.
+    if (result.code === 0 && result.reasoningCutoff) {
+      consecutiveCutoffs++;
+      const cap = ocm.max_reasoning_tokens!;
+      counters.oc_mode!.reasoning_cutoffs++;
+      deps.audit?.write("reasoning_cutoff", {
+        role,
+        step: steps,
+        cap,
+        reasoning_tokens: result.reasoningCutoff.tokens,
+        reasoning_chars: result.reasoningCutoff.chars,
+        consecutive: consecutiveCutoffs,
+        rearmed: consecutiveCutoffs < loop.max_consecutive_malformed,
+        duration_ms: Date.now() - callT0,
+        model: usedModel,
+      });
+      warn(
+        paint(
+          deps.ui,
+          "yellow",
+          `  [loop] reasoning passed ${cap} tokens with no tool call — stopped it, asking for a script or a command`
+        )
+      );
+      working.push({ role: "user", content: reasoningCutoffNote(cap) });
+      continue;
+    }
+    consecutiveCutoffs = 0;
 
     // Set when a reply with no usable tool call arrives and the repair budget
     // is spent. The turn then ends through the same no-tools wrap-up as the

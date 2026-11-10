@@ -34,6 +34,18 @@ merged, and no result is claimed for any of them yet. With none declared,
 request bodies are master's — except the network refusal's wording, which the
 long-task tier (a) changes on purpose (below).
 
+### Added — OC-mode long-task mechanics (opt-in, unmeasured), CONTRACTS §42
+
+- `[context] compact_at_tokens` (`"auto"` = window - max(15%, 16k), opencode's ceiling; or tokens) and
+  `compact_keep_turns` (default 4): in-turn compaction into a compact state (task, files changed, decisions, open
+  issues, last test results), keeping the instructions, the task and the last N steps; audit kind `compaction` with
+  before and after tokens.
+- `[turn] max_reasoning_tokens_without_action`: a streamed reply that reasons past the cap with no content or tool
+  call is aborted and the model is told to write a script or run a command; audit kind `reasoning_cutoff`.
+- `[sandbox] hide_internal = true` (policy.toml): read, grep and glob skip and refuse `.gnomon*` folders; bash only
+  gets prompt guidance (not enforceable).
+- `[turn] grader_check = true`: a "check like the grader" prompt block. Off, request bodies are unchanged.
+
 ### Added — checkpoint, then grind (opt-in, unmeasured), CONTRACTS §41
 
 - `[turn] continue_after_answer = true`, under `gnomon task --deadline` only: an answer given with at least

@@ -279,6 +279,12 @@ export type AuditKind =
   // `checkpoint_skipped`, and the end decision: `checkpoint_restored`,
   // `checkpoint_kept`, `checkpoint_kept_unverified`.
   | "checkpoint"
+  // OC-mode (oc_mode.ts, CONTRACTS §42). `compaction`: an in-turn summary
+  // under `[context] compact_at_tokens`, with the tokens before and after
+  // (outcome compacted | failed). `reasoning_cutoff`: a streamed reply stopped
+  // under `[turn] max_reasoning_tokens_without_action`.
+  | "compaction"
+  | "reasoning_cutoff"
   // One per end of a turn the finish gate (`[verify] finish_gate = "v2"`,
   // finish_gate.ts) judged: fire, no_tool or accept, the budget left, the
   // caveat ids its audit found, claims without evidence, the open todos.

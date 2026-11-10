@@ -1,0 +1,21 @@
+{
+  "v": 1,
+  "_comment": [
+    "docs/CONTRACTS.md section 42: OC-mode -- four opt-in long-task mechanics taken from opencode (research notes 16, 19).",
+    "packages/gnomon-core/src/oc_mode.test.ts asserts the code equals this file."
+  ],
+  "keys": {
+    "config.toml [context] compact_at_tokens": { "values": "\"auto\" or an integer >= 4096", "default": null },
+    "config.toml [context] compact_keep_turns": { "values": "an integer >= 1", "default": 4 },
+    "config.toml [turn] max_reasoning_tokens_without_action": { "values": "an integer >= 1000", "default": null },
+    "policy.toml [sandbox] hide_internal": { "values": [true, false], "default": false },
+    "config.toml [turn] grader_check": { "values": [true, false], "default": false }
+  },
+  "auto_threshold": { "reserve_share": 0.15, "reserve_min": 16000, "window_200000": 170000 },
+  "events": ["compaction", "reasoning_cutoff"],
+  "compaction_outcomes": ["compacted", "failed"],
+  "record": "session_start.resolved.oc_mode",
+  "counters": "counters.oc_mode {v, compactions, compaction_failures, reasoning_cutoffs}",
+  "reasoning_cutoff_note": "Your last reply reasoned for over {cap} tokens without a tool call or any text, so it was stopped. Stop reasoning at length; write a script or run a command to get the answer.",
+  "hidden": { "exact": [".gnomon"], "prefix": [".gnomon-"], "tools": ["read", "grep", "glob"], "bash": "prompt guidance only, not enforced" }
+}

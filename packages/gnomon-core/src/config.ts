@@ -25,6 +25,7 @@ import { auditSoftShell } from "./soft_shell.js";
 import { auditSandboxProfile } from "./sandbox_profile.js";
 import { auditDeliverableFirst } from "./deliverable_first.js";
 import { auditCheckpointGrind } from "./checkpoint_grind.js";
+import { auditOcMode } from "./oc_mode.js";
 import {
   CONTINUE_NOTE_AT,
   auditLongTaskProfile,
@@ -299,6 +300,10 @@ export interface ContextConfig {
    * window on 85 of 156 requests. docs/CONTRACTS.md §29.
    */
   token_estimate?: TokenEstimate;
+  /** OC-mode in-turn compaction (oc_mode.ts, CONTRACTS §42). Absent = off. */
+  compact_at_tokens?: number | "auto";
+  /** Steps kept verbatim after an OC-mode compaction (default 4). */
+  compact_keep_turns?: number;
   /**
    * Observation masking, opt-in: `[context.mask_observations]`. Absent means
    * every tool result stays verbatim until the overflow trim, as before. See
@@ -1849,6 +1854,12 @@ export interface RouteTarget {
   streamTotalMs?: number;
   /** `[resilience] first_token_timeout_ms`, for a streamed call; absent when 0 (off) */
   firstTokenMs?: number;
+  /**
+   * `[turn] max_reasoning_tokens_without_action` (oc_mode.ts), for a streamed
+   * call: the reply is aborted once its reasoning passes this many tokens with
+   * no content and no tool call. Set per call by the loop; absent = off.
+   */
+  reasoningCutoffTokens?: number;
   /** The output limit sent with each call; 0 or absent sends none. */
   maxTokens?: number;
   /**
@@ -2531,6 +2542,11 @@ const KEY_OWNER: Record<string, string> = {
   bootstrap: "context",
   token_estimate: "context",
   env_snapshot: "context",
+  compact_at_tokens: "context",
+  compact_keep_turns: "context",
+  max_reasoning_tokens_without_action: "turn",
+  grader_check: "turn",
+  hide_internal: "sandbox",
   todo_gate: "turn",
   allow_package_index: "sandbox",
 };
@@ -2656,6 +2672,9 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "continue_message",
       "continue_max_rounds",
       "continue_until_s",
+      // OC-mode (oc_mode.ts, CONTRACTS §42)
+      "max_reasoning_tokens_without_action",
+      "grader_check",
     ],
   ],
   [
@@ -2688,7 +2707,7 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "finish_gate",
     ],
   ],
-  ["policy.toml", "sandbox", ["level", "network", "exec", "image", "extra_roots", "allow_package_index", "filesystem", "profile"]],
+  ["policy.toml", "sandbox", ["level", "network", "exec", "image", "extra_roots", "allow_package_index", "filesystem", "profile", "hide_internal"]],
   ["policy.toml", "approval", ["gate", "repo_code", "after_refusal", "after_refusal_calls", "modes", "default"]],
   // resolveLevels (governance.ts). A value outside the enumeration is fatal
   // (auditGovernance); an unknown key is warned here like any other.
@@ -3261,6 +3280,7 @@ problems.push(...auditSweepKnobs(config, (ep) => endpointKind(ep)));
 problems.push(...auditSoftShell(config));
 problems.push(...auditDeliverableFirst(config));
 problems.push(...auditCheckpointGrind(config));
+problems.push(...auditOcMode(config));
 problems.push(...auditLongTaskProfile(config));
 problems.push(...auditSandboxProfile(config));
 

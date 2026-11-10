@@ -41,6 +41,7 @@ export * from "./finish_gate.js";
 export * from "./deliverable_first.js";
 // Checkpoint, then grind (`[turn] continue_after_answer`, under --deadline):
 export * from "./checkpoint_grind.js";
+export * from "./oc_mode.js";
 // The sweep knobs: reasoning effort, sampling passthrough, the environment
 // snapshot, the todo gate, the edit variant and the package-index allowlist,
 // each opt-in (docs/CONTRACTS.md §32).
