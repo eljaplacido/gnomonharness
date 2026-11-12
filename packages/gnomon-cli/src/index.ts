@@ -90,6 +90,7 @@ import {
   settleTrustHeadless,
   evaluateTrust,
   clampToDefaults,
+  keyHostIsDefault,
   grantTrust,
   revokeTrust,
   forgetToolPins,
@@ -130,6 +131,10 @@ import {
 } from "./detect.js";
 import {
   checkReadiness,
+  preSessionSurface,
+  launchReadiness,
+  withheldWhy,
+  hostName,
   ENDPOINT_PRESETS,
   SETUP_CHOICES,
   parseSetupPick,
@@ -796,6 +801,15 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
   // GNOMON_MODEL_URL and friends. See the note in main().
   const supplied = applyCredentials(undefined, declaredKeyVars(config));
 
+  // `list` and `test` reach every endpoint with its key, and no session has
+  // settled trust first. They use what the trust step would run: a cloned
+  // repository's endpoint at its own host with api_key_env =
+  // "ANTHROPIC_API_KEY" is listed as declared but asked nothing with the key
+  // (docs/CONTRACTS.md §8). `add` writes the URL the user typed or chose.
+  const { config: reach, trusted } = preSessionSurface(config, trustOptions(args));
+  const keyHeld = (ep: { url: string; api_key_env?: string }): boolean =>
+    Boolean(ep.api_key_env) && !trusted && !keyHostIsDefault(ep.url);
+
   if (sub === "list") {
     // Cross-check every role's model id against what its endpoint advertises.
     // This is the diagnostic command, and the failure it exists to catch is
@@ -803,8 +817,12 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     // invisible here and shows up later as a provider 400 naming the model,
     // which reads as "unavailable" rather than "misspelled". `.catch(null)` so
     // an offline box still gets the listing, unchecked rather than wrong.
-    const modelChecks = await checkRoleModels(config).catch(() => null);
-    printEndpoints(describeEndpoints(config), resolveUi(config), null, modelChecks, config.profile);
+    const modelChecks = await checkRoleModels(reach).catch(() => null);
+    const rows = describeEndpoints(config);
+    printEndpoints(rows, resolveUi(config), null, modelChecks, config.profile);
+    for (const r of rows.filter((r) => keyHeld(r.endpoint))) {
+      console.log(`  ${r.name}: ${withheldWhy({ env: r.endpoint.api_key_env!, host: hostName(r.endpoint.url) })}.`);
+    }
     if (supplied.length > 0) {
       // Say where a key came from. "set" alone cannot distinguish a stored key
       // from an exported one, and only one of those follows you to another
@@ -825,17 +843,26 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     }
     const probes = new Map<string, { ok: boolean; status?: number; detail?: string }>();
     const untested: string[] = [];
+    const withheld: string[] = [];
     for (const row of rows) {
       const model = args.flags.model ?? row.probeModel;
       if (!model) {
         untested.push(row.name);
         continue;
       }
+      if (keyHeld(row.endpoint)) {
+        withheld.push(row.name);
+        continue;
+      }
       row.probeModel = model;
       probes.set(row.name, await probeEndpointAuth(row.endpoint, model));
     }
-    const modelChecks = await checkRoleModels(config).catch(() => null);
+    const modelChecks = await checkRoleModels(reach).catch(() => null);
     printEndpoints(rows, resolveUi(config), probes, modelChecks, config.profile);
+    for (const n of withheld) {
+      const ep = rows.find((r) => r.name === n)!.endpoint;
+      console.log(`  ${n}: NOT TESTED — ${withheldWhy({ env: ep.api_key_env!, host: hostName(ep.url) })}.`);
+    }
     // An endpoint with no role routed to it has no model to ask for, and was
     // skipped without a word — `gnomon endpoint test go` printed the listing
     // and exited 0, which reads as a pass. Say it, and do not exit 0 when the
@@ -846,6 +873,8 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     }
     const bad = [...probes.values()].filter((p) => !p.ok);
     if (bad.length > 0) process.exit(1);
+    // Held back by trust: refused_by_gate (docs/CONTRACTS.md §1), not a pass.
+    if (withheld.length > 0) process.exit(3);
     if (name && untested.length > 0) process.exit(10);
     return;
   }
@@ -2160,15 +2189,25 @@ async function offerModelSetup(args: CliArgs, target: string, opts: { showProbe?
   const role = args.subcommand || "implement";
   let probeShown = !opts.showProbe;
   for (;;) {
-    let config;
+    let declared;
     try {
-      config = loadConfig(target, args.flags["profile"]);
+      declared = loadConfig(target, args.flags["profile"]);
     } catch {
       return; // cmdPrompt reports a surface that does not load, in full.
     }
-    applyCredentials(undefined, declaredKeyVars(config));
-    const readiness = await checkReadiness(config, role);
+    // On what the trust step would run, never the surface as declared: this is
+    // before cmdPrompt's settleTrust, and a cloned repository's endpoint may
+    // name its own host and the user's key variable (setup.ts launchReadiness).
+    const readiness = await launchReadiness(declared, role, trustOptions(args), (c) => {
+      applyCredentials(undefined, declaredKeyVars(c));
+    });
     if (readiness.ready) return;
+    if (readiness.keyWithheld) {
+      // Said, not probed for: trust is asked when the session starts, next.
+      console.log("");
+      console.log(`  Not checked: ${readiness.why}.`);
+      return;
+    }
 
     // What the machine has, before asking what to set up: a model server
     // already running on another port is the answer to the question below.
@@ -2207,7 +2246,8 @@ async function offerModelSetup(args: CliArgs, target: string, opts: { showProbe?
       await cmdSetup({ ...args, dir: target, json: false, yes: false }, { fromLaunch: true });
       continue;
     }
-    await endpointAdd(args, config, { preset: pick, quick: true });
+    // The surface as declared: endpointAdd edits it, so it reads what is written.
+    await endpointAdd(args, declared, { preset: pick, quick: true });
     // Written or not, look again: a write is proved by the next check, and a
     // failure goes back to the choice instead of into a dead session.
   }
@@ -2300,6 +2340,15 @@ async function cmdSetup(args: CliArgs, opts: { fromLaunch?: boolean } = {}): Pro
       catalog,
       now: () => new Date(),
       ...systemSetupEffects(),
+      // Read when the wizard is about to check an endpoint the surface chose.
+      // A surface that does not load trusts nothing.
+      surfaceTrusted: () => {
+        try {
+          return preSessionSurface(loadConfig(projectRoot(args), args.flags["profile"]), trustOptions(args)).trusted;
+        } catch {
+          return false;
+        }
+      },
       commands: CLI_COMMANDS.map((c) => c.name),
     }
   );
@@ -2327,10 +2376,11 @@ async function cmdDoctor(args: CliArgs): Promise<number> {
         host: systemHost(),
         catalog,
         now: () => new Date(),
-        readiness: (config, role) => checkReadiness(config, role),
+        readiness: (config, role, opts) => checkReadiness(config, role, undefined, opts),
         applyKeys: (config) => {
           applyCredentials(undefined, declaredKeyVars(config));
         },
+        trust: trustOptions(args),
       }
     );
     if (args.json) console.log(JSON.stringify(report, null, 2));

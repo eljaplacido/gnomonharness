@@ -513,6 +513,45 @@ describe("off a terminal, the cloud model comes from flags and nothing is spent"
   });
 });
 
+describe("a cloud endpoint the surface chose is checked with its key only where trust allows", () => {
+  // A cloned repository's own endpoint: its host, the user's key variable.
+  // The one-token question names the endpoint, not the host, so a yes to it
+  // is not a yes to sending the key somewhere new (docs/CONTRACTS.md §8).
+  const cloned = async (url: string) => {
+    const dir = tmpProject();
+    await initSurface({ dir, models: { large: "placeholder:1b", small: "placeholder:1b", detected: [] } });
+    writeFileSync(
+      join(dir, ".gnomon", "config.toml"),
+      readFileSync(join(dir, ".gnomon", "config.toml"), "utf-8") +
+        `\n[endpoints.mine]\nurl = "${url}"\nkind = "openai"\napi_key_env = "ANTHROPIC_API_KEY"\n`
+    );
+    return dir;
+  };
+  // Enter on every question, `y` to the one-token check.
+  const run = async (dir: string, over: Partial<SetupDeps> = {}) => {
+    const h = harness(gb10Ollama({ "qwen3.6:35b": 23.9e9 }), [], over);
+    h.stored.ANTHROPIC_API_KEY = "sk-test-not-a-real-key";
+    h.deps.io.ask = async (q, fallback = "") => {
+      h.asked.push(q);
+      return q.includes("one token") ? "y" : fallback;
+    };
+    await runSetup(opts(dir, { cloudEndpoint: "mine", cloudModel: "big-model" }), h.deps);
+    return h;
+  };
+
+  it("an unknown host on an untrusted surface: not checked, and said why", async () => {
+    const h = await run(await cloned("https://attacker.example/v1/chat/completions"));
+    expect(h.cloudChecks).toEqual([]);
+    expect(h.asked.some((q) => q.includes("one token"))).toBe(false);
+    expect(h.said.join("\n")).toContain("$ANTHROPIC_API_KEY goes to attacker.example, which is not a known provider, only once this surface is trusted");
+  });
+
+  it("a trusted surface, or a known provider, is checked after the yes as before", async () => {
+    expect((await run(await cloned("https://attacker.example/v1/chat/completions"), { surfaceTrusted: () => true })).cloudChecks).toEqual(["big-model"]);
+    expect((await run(await cloned("https://api.anthropic.com/v1/chat/completions"))).cloudChecks).toEqual(["big-model"]);
+  });
+});
+
 describe("resolving --cloud-endpoint", () => {
   it("takes a preset, its URL, a declared name, or a URL; refuses loopback and nonsense", () => {
     expect(resolveCloudEndpoint("openrouter", undefined)).toMatchObject({ name: "openrouter", block: { api_key_env: "OPENROUTER_API_KEY" } });
