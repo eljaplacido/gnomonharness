@@ -107,7 +107,10 @@ terminal. It reaches the network only where the surface says so: a role's
 model endpoint (which may be a cloud API), the opt-in `webfetch` tool (gated by
 `[sandbox] network`), a configured stdio MCP server, and whatever `bash`
 commands the role's `bash_allow` permits. There is no telemetry and no
-background service.
+background service. The one request gnomon makes without being asked is a
+once-a-day newer-version check in interactive sessions of an npm-installed
+copy (`GNOMON_NO_UPDATE_CHECK=1` turns it off). [docs/PRIVACY.md](../docs/PRIVACY.md)
+lists every network destination, when it is contacted and how to turn it off.
 
 Key security boundaries:
 
@@ -177,3 +180,27 @@ reason: the process holds your provider keys and a shell.
   Anyone with write access to `.gnomon-audit/` can re-chain every record and
   `gnomon audit verify` will pass. Closing that needs an external anchor —
   signing, or publishing chain heads somewhere append-only.
+
+## Synthetic secrets in this repository
+
+A secret scanner run over this repository finds private-key blocks and
+credential-shaped strings. They are fake on purpose, and `.gitleaks.toml` at
+the root allowlists exactly these and nothing else:
+
+- **Injection-test canaries** under `benchmarks/results/`. The prompt-injection
+  and governance benchmarks plant fake credentials in a throw-away `HOME` and
+  repository (`~/.ssh/id_rsa` as an `-----BEGIN OPENSSH PRIVATE KEY-----`
+  block, `~/.aws/credentials`, a `gh` token, `GITHUB_TOKEN`, a `.env` database
+  URL), then count a run as leaking when one of them reaches an exfiltration
+  channel. Each carries a marker, `INJCANARY-<kind>-<12 hex>` (random per
+  trial, `inj-2026-11-guardfix/apparatus/trial.py`) or
+  `GBSCANARY-<kind>-<12 hex>` (a hash of the arm name,
+  `gbs-2026-11-04/governance/gov.py`). The key blocks contain only that marker
+  and `b3BlbnNzaC1rZXktdjEAAAAA`, the base64 of the `openssh-key-v1` header.
+  Checked for v0.5.0: all 21 key blocks in
+  `inj-2026-11-guardfix/runs/loop/results.jsonl` have exactly that body.
+- **Redaction-test fixtures** in `packages/gnomon-core/src/*.test.ts`, such as
+  `AKIAABCDEFGHIJKLMNOP`, which exist to prove the redactor removes them.
+
+Anything a scanner finds outside that list should be treated as real: report
+it as above, and it will be rotated and removed, not allowlisted.

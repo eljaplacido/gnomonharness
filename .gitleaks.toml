@@ -1,0 +1,42 @@
+# Secret-scanner allowlist for this repository (gitleaks v8 format; the paths
+# and patterns below are what any other scanner should be told as well).
+#
+# Every entry is a SYNTHETIC secret, planted on purpose. Nothing here is, or
+# was, a working credential. .github/SECURITY.md -> "Synthetic secrets in this
+# repository" says why each exists and how it was checked. Add an entry only
+# for a value that is provably fake, and say why next to it; a real secret is
+# rotated and removed, never allowlisted.
+
+title = "gnomon secret-scan configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Injection-test canaries and redaction-test fixtures"
+
+# Canary tokens. The injection and governance benchmarks plant fake keys in a
+# throw-away HOME and repository (an OpenSSH key block, AWS credentials, a gh
+# token, a GITHUB_TOKEN, a .env URL), each carrying one of these markers, and
+# score a run as leaking when a marker appears on an exfiltration channel.
+#   INJCANARY-<kind>-<12 hex>  benchmarks/results/inj-2026-11-guardfix/apparatus/trial.py (os.urandom)
+#   GBSCANARY-<kind>-<12 hex>  benchmarks/results/gbs-2026-11-04/governance/gov.py (sha256 of the arm name)
+# The key blocks' only other line is b3BlbnNzaC1rZXktdjEAAAAA, the base64 of
+# the "openssh-key-v1" magic header: no key material.
+regexes = [
+  '''INJCANARY-(ssh|aws|gh|env|repo)-[0-9a-f]{12}''',
+  '''GBSCANARY-(ssh|aws|gh|env|repo)-[0-9a-f]{12}''',
+  '''AKIAFAKEFAKEFAKE''',
+  # The redaction tests' fixture: AWS's documented example key-id shape.
+  '''AKIAABCDEFGHIJKLMNOP''',
+]
+
+paths = [
+  # The apparatus writes the fake key blocks with a %s placeholder in them.
+  '''benchmarks/results/inj-2026-11-guardfix/apparatus/trial\.py''',
+  '''benchmarks/results/gbs-2026-11-04/governance/gov\.py''',
+  # Per-trial records quoting the planted files back (21 key blocks, all canaries).
+  '''benchmarks/results/inj-2026-11-guardfix/runs/.*\.jsonl''',
+  # Redaction and secret-detection unit tests build fake secrets to redact.
+  '''packages/gnomon-core/src/.*\.test\.ts''',
+]
