@@ -22,18 +22,14 @@ priced, and without a hidden regression in latency, reliability or governance?
     document QA, not coding ([Minions](https://arxiv.org/abs/2502.15964)).
 - **gnomon's own result shows the pitfalls.** On an RTX 5090, a cloud planner
   with a local builder (PC) solved 26/30 tasks, against cloud-only (C) 27/32 and
-  local-only (L) 24/32. Dollars per solved fell from $0.0458 to $0.0341 (−26%)
-  ([R1H summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/r1h-2026-11/summary.txt)).
+  local-only (L) 24/32. Dollars per solved fell from $0.0458 to $0.0341 (−26%).
   **Did not reproduce on v0.4.0 (R3R, 2026-11-04).** R1H's own lane, arms and tasks, re-run on v0.4.0: L 22/29,
   C 24/31, PC 19/31; PC's dollars per solved rose 43% against C (95% CI −117% to +5%), and on matching tasks PC
   solved 18 vs R1H's 25 (8 tasks R1H-only, 1 R3R-only; McNemar p = 0.04) while L and C were unchanged. Host load does
-  not explain it. The cause is open; see [FINDINGS-2026-11-04](FINDINGS-2026-11-04.md)
-  ([R3R summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/r3r-2026-11/summary-r3r.txt)).
+  not explain it. The cause is open; see [FINDINGS-2026-11-04](FINDINGS-2026-11-04.md).
   **The build is not the cause (R4H).** R1H's PC arm on its own build and on v0.4.1, run together and paired by
-  (task, attempt): 20 vs 19 solved on 30 pairs, McNemar p = 1.0
-  ([R4H summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/r4h-2026-11/summary-r4h.txt)).
-  On an NVIDIA GB10 the hybrid still leads: PC 22/32 against L 16/31, McNemar p = 0.07
-  ([M2 summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/m2-2026-11/summary-m2.txt)).
+  (task, attempt): 20 vs 19 solved on 30 pairs, McNemar p = 1.0.
+  On an NVIDIA GB10 the hybrid still leads: PC 22/32 against L 16/31, McNemar p = 0.07.
   The same file also shows:
   - **Quality is not settled.** PC against C: 2 discordant tasks to 1, McNemar
     p = 1.0. That is no evidence of a difference, which is not the same as
@@ -164,8 +160,7 @@ reference line. The local-free line is never the headline.
   - reasoning is round-tripped if the harness relies on it.
 
   On gnomon's R1H lane, a chat template silently dropped every late system
-  message
-  ([S1 pre-registration](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results/s1-2026-11)).
+  message.
 - **Effective cap (MUST).** Measure the effective cap from agent start and end
   timestamps; do not take the configured value on trust. A configured 900 s cap
   once ran as about 1200 s in every cell ([EVIDENCE.md](../EVIDENCE.md)).
@@ -239,9 +234,12 @@ gnomon's hybrid results do not conform yet:
   pre-registered margin, and GPU-seconds were measured but not priced. Its lead
   over cloud-only did not reproduce (R3R), and R4H found no build effect (§2).
 - **GB10 (R1)** gave a tie with cloud-only (PC 21/32, C 23/32) at −20%
-  $/solved, under the same limits. R1's summary is not yet committed to the
-  `bench/peers-2026-11` branch, so this line cannot be checked there yet. M2
-  (committed) has PC ahead of local-only, 22/32 vs 16/31, and no cloud arm.
+  $/solved, under the same limits. R1's summary is archived outside this
+  repository. M2 has PC ahead of local-only, 22/32 vs 16/31, and no cloud arm.
+- **v0.5.0 release campaign (2026-11-12).** Hybrid local-first with cloud
+  rescue spent about 23% of the cloud-only arm's cloud cost, at −0.07
+  hidden-test share against cloud-only and +0.25 against local-only. gnomon
+  ships it as an opt-in **cost mode**, not a default.
 
 Read under §8, the honest statement today is: quality non-inferiority is not
 established at any margin below about 20 points; the cost advantage seen in

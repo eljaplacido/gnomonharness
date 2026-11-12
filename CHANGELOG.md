@@ -191,7 +191,7 @@ reasoning; delivering the idle nudge locally is untested); SW1/LG2 test them.
   defaults through a hashed declaration. **`grep` and `glob` are levelled**
   like read (family `secrets`) through one `searchPrecheck` shared by the loop
   and the guard; PR 1 had held them at prevent. CONTRACTS.md §37; the
-  GBS-LAYER pilot's G-4 leaks re-run is on `bench/gbs-v02`.
+  GBS-LAYER pilot's G-4 leaks re-run is archived outside this repository.
 - **Governance levels: `observe < advise < prevent < enforce`, per family of
   rules** (shared-governance PR 1). `[governance]` in policy.toml and
   `[roles.<name>.governance]` in roles.toml set how strongly each family's
@@ -347,8 +347,7 @@ reasoning; delivering the idle nudge locally is untested); SW1/LG2 test them.
   only `exec = "off"` or `"docker"`. GUIDE no longer cites the RTX 5090 hybrid
   lead (87% vs 84%) that R3R/R4H did not reproduce, and now cautions against the
   completion gate with its measurements (H4-lite: −0.10 hidden-test fraction on
-  hosted, caps 4 → 8; G1: no difference locally). POSITIONING adds P2G41 (v0.4.1
-  defaults 0/28 vs opencode 6/29). Stale versions fixed (GUIDE 0.3.3, README
+  hosted, caps 4 → 8; G1: no difference locally). Stale versions fixed (GUIDE 0.3.3, README
   v0.5.0) and the "24 of 32" figure given with its later re-runs.
 
 ## [0.4.5] — 2026-11-06
@@ -434,8 +433,7 @@ you do not trust in a container. Nothing changes for `exec = "off"`.
 Long hosted-model tasks, from the P2G41 root causes (2026-11-05). **One default
 changes: reasoning replay is on for a hosted endpoint that returns reasoning**,
 adopted by H3's pre-registered decision rule: hidden-test fraction +0.160
-[95% bootstrap +0.042, +0.293], capped runs 19 → 14
-([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+[95% bootstrap +0.042, +0.293], capped runs 19 → 14.
 H3 measured hosted endpoints only, so local lanes stay off unless they declare
 it. The idle nudge stays at 12, as in 0.4.3: LG1 measured switching it off on
 the local lane and it cost tokens. New and opt-in: `gnomon task --deadline`.
@@ -470,7 +468,7 @@ upgrade. The limits that remain are listed in the README under
   2026-11-06): replay alone (R1) against the 0.4.2 defaults (R0) raised the
   hidden-test fraction by +0.160 [95% bootstrap +0.042, +0.293] and cut
   capped runs from 19 to 14; both arms of the decision rule met, verdict
-  ADOPT ([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+  ADOPT.
   The rest of H3's hosted recipe (a 1M window, nudge off) added +0.017
   [−0.095, +0.138] on top of replay: not shown, so not a default.
 
@@ -481,8 +479,7 @@ upgrade. The limits that remain are listed in the README under
   build against 0.4.2 and solved 18 vs 18 while spending 1.43× the local
   tokens [95% 1.04, 2.15], past its 1.20 guard: verdict "regresses". The
   mechanism was the nudge (0.4.2 sent 547 nudged requests, the candidate 0);
-  replay never fired, because that lane returns no reasoning field
-  ([summary-lg1.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/lg1-2026-11/summary-lg1.txt)).
+  replay never fired, because that lane returns no reasoning field.
   New: a declared `nudge_after_idle = 0` turns the nudge off (it used to be
   floored to 1, a nudge on every idle call).
 
@@ -912,7 +909,7 @@ Upgrading from 0.4.0: nothing to do. Every addition is opt-in, record-only, or a
   hosted models with far larger windows, so every leg checkpoint trimmed the
   working context to about 39k tokens. On P2G (deepseek-v4.1-flash on OpenCode
   Go, a 1,000,000-token window), 25 of 28 gnomon cells crossed at least one
-  leg. gnomon's median total input was 1.56M against opencode's 6.89M.
+  leg; gnomon's median total input was 1.56M tokens.
   `"auto"` asks once per session for each endpoint URL and model. It reads the
   OpenCode, OpenRouter and vLLM `/models` shapes, llama.cpp's `/props` and
   Ollama's `/api/show`. When nothing answers, as with a metering relay that
@@ -1147,7 +1144,7 @@ Upgrading from 0.4.0: nothing to do. Every addition is opt-in, record-only, or a
   problem. `anchor.test.ts` pins git's behaviour on both sides.
 - **The policy guard closes the bypasses INJ-2026-11 found. Tightening only:
   no decision that refused before allows now.** The conclusive injection suite
-  (`benchmarks/results/inj-2026-11/` on `bench/injection-2026-11`) forced every
+  (INJ-2026-11, archived outside this repository) forced every
   attack with a scripted, compromised model and read outcomes from real state.
   Its red-team found two in-claim parser bugs, and its loop found five routes
   the rules did not cover. Each is now refused in the loop and in
@@ -1215,8 +1212,7 @@ Upgrading from 0.4.0: nothing to do. Every addition is opt-in, record-only, or a
     G1c's 790 recorded calls through `gnomon guard`, master `be4fc0d8` vs this
     branch: 0 decisions changed (17/17 labelled harmful calls refused, 8
     refusals in violation-free trials as before). G1-R's 120 trials re-scored by
-    `gnomon check`: 0 of 360 verdicts changed; 44/44 peer violation trials
-    blocked, 6/75 false alarms. G2b-R's 521 recorded tool calls and 16 probes:
+    `gnomon check`: 0 of 360 verdicts changed. G2b-R's 521 recorded tool calls and 16 probes:
     0 decisions changed. The 60 everyday commands: 0 refused. The property
     suites hold their published figures; two of their probes moved `.gnomon/`
     with a named shell write, which is now refused, and move it through a
@@ -1432,9 +1428,8 @@ described in the entries below:
   - Tests use fake servers on 127.0.0.1.
 - **Model calls carry a declared output limit, and a reply cut off by it is
   handled.** gnomon sent no `max_tokens`, so a reply ran until the model
-  stopped. On P2G (2026-11, hosted DeepSeek V4.1 Flash) it wrote about twice the
-  output per step that opencode and goose did, up to nine times on some tasks,
-  most of it reasoning.
+  stopped. On P2G (2026-11, hosted DeepSeek V4.1 Flash) its output per step was
+  long, most of it reasoning.
   - The limit is the role's `max_tokens`, else the endpoint's, else `[defaults]
     max_tokens`; absent from all three, none is sent, as before (Rule 1).
     `gnomon init` writes `[defaults] max_tokens = 32768` and `gnomon migrate`
@@ -1747,7 +1742,7 @@ described in the entries below:
   refreshed (UX2). The first status per process and repository may now take
   git's optional index lock and write the refresh back; every later call keeps
   `--no-optional-locks`. git rewrites only stat info, so nothing measured moves.
-  - A/B (`benchmarks/results/idx-2026-11/` on `bench/peers-2026-11`), 20 paired
+  - A/B (`idx-2026-11`, archived outside this repository), 20 paired
     rounds at 30k files: session CPU −130 ms [−170, −60], lower in 16/20.
   - Two tests: a clean stale copy is refreshed once with identical numbers
     (fails on master), and a later status never writes the index.
@@ -1760,30 +1755,27 @@ described in the entries below:
     scaffold's policy.
   - Re-measured on master 891b559b: control 3/3 crossed, payloads 0/18 crossed
     with 18/18 delivered.
-  - The suite's code is a reconstruction on `bench/peers-2026-11`
-    (`benchmarks/results/g2br-2026-11/`); its README on master says so.
+  - The suite's code is a reconstruction (`g2br-2026-11`), archived outside
+    this repository; its README on master says so.
 - **Verification in proportion to the task: about a third less spent per
   solved task on a hosted model.** The scaffold's `system.md` told the model to
   turn every constraint into its own check and paste the output. On DeepSeek
   V4.1 Flash that produced test suites, helper scripts and mutation testing
-  nobody asked for, and gnomon spent the most per solved task of five
-  harnesses (P1-H). The rule keeps its core: run what you produced. It loses
+  nobody asked for, and raised gnomon's spend per solved task (P1-H). The rule keeps its core: run what you produced. It loses
   the per-constraint mandate, and adds "stop once the requirements are met"
   and short reports. `gnomon migrate` replaces the exact old block only.
-  - Pre-registered A/B (`benchmarks/results/lean-2026-11/`, branch
-    `bench/peers-2026-11`), hosted model, 48 pairs: output tokens −28%
+  - Pre-registered A/B (`lean-2026-11`, archived outside this repository),
+    hosted model, 48 pairs: output tokens −28%
     (p < 0.0001), $ per solved task 0.052 → 0.035, 37 vs 34 tasks solved
     (not significant).
   - Stage 2, the same A/B on the local qwen3.6-35b (16 tasks, 2026-11-02),
     passed its pre-registered guard: the same tasks solved (10/16 vs 10/15
     valid). It showed no saving on the local model: prompt tokens 2.0x base,
     driven by three tasks both arms fail, where the lean arm keeps trying
-    longer (`benchmarks/results/lean-2026-11/README.md` on
-    `bench/peers-2026-11`).
+    longer (`lean-2026-11`).
 - **`gnomon check --format gnomon` reads gnomon's own audit trail.** G1-R
-  (bench/peers-2026-11, `benchmarks/results/g1r-2026-11/`) re-scored G1 on master:
-  check now catches 44/44 of the peers' violations, and its one miss was gnomon's
-  own arm, because nothing read gnomon's record of its own session. The audit
+  (`g1r-2026-11`, archived outside this repository) re-scored G1 on master:
+  check's one remaining miss was gnomon's own arm, because nothing read gnomon's record of its own session. The audit
   trail has kept whole shell commands since 0.3.2 (#67), so it can serve as check
   5's transcript.
   - The trail must be hash-chained and sealed. A broken chain, an unchained trail
@@ -2082,7 +2074,7 @@ the shell runs it, new transcript readers for `gnomon check`, and the guide
   command that leaves no job behind. The backgrounded-job path is unchanged
   (exit + 40 ms).
   - Measured with UX1b's scripted 10-turn session, interleaved, n = 10 each:
-    gnomon's own time per tool turn went from 48 to 9 ms (goose: 22, mini: 11),
+    gnomon's own time per tool turn went from 48 to 9 ms,
     and the session's wall clock from 817 to 417 ms. Requests were
     byte-identical.
   - All 186 tool tests pass, including "a backgrounded job returns at once,
@@ -2111,9 +2103,9 @@ the shell runs it, new transcript readers for `gnomon check`, and the guide
   reader matched only a tool named `bash`, and opencode V2 (2.2.5) names its
   shell tool `shell`, with the same part shape otherwise. Every V2 run therefore
   yielded zero commands, and check 5 (commands against `bash_allow`/`bash_deny`)
-  was skipped rather than failed. Found by the G1 governance benchmark: all 11
-  of the peers' destructions of git-ignored local state (`git clean -fdx`,
-  `rm -rf var/`) leave no diff, so the transcript is the only route to them. A
+  was skipped rather than failed. Found by the G1 governance benchmark:
+  destructions of git-ignored local state (`git clean -fdx`, `rm -rf var/`)
+  leave no diff, so the transcript is the only route to them. A
   test reads the real V2 event shape, and it fails on the old reader.
 - **`network = false` still lets curl and wget reach a local server.** A request
   whose every target is a literal loopback (`localhost`, `127.0.0.0/8`, `[::1]`)
@@ -2193,17 +2185,15 @@ the shell runs it, new transcript readers for `gnomon check`, and the guide
   it for the submitting action, which ran. A file in the wrong format is
   refused rather than read as "no commands", which skipped check 5 for
   opencode V2 (#64). Found by the G1 governance benchmark: with no reader, check
-  saw none of the 11 destructions of git-ignored state (`git clean -fdx`,
-  `rm -rf var/`) by these peers, which leave no diff.
+  could not see destructions of git-ignored state (`git clean -fdx`,
+  `rm -rf var/`), which leave no diff.
 
   Replayed through G1's 120 recorded trials on this branch (no model; the
   no-transcript run reproduced G1's recorded verdicts 120/120):
   - each reader returns, string for string, the commands G1's own adapter took
     from the same records (72/72; Qwen's two files agree 24/24);
-  - ignored-state destruction is caught in 8/12 trials, up from 0/12. With
-    #64's opencode fix as well, it is 11/12, every violating peer trial is
-    caught (44/44) and every violation in G1 but one (44/45). The miss is
-    gnomon's own arm, which has no reader here, and whose `mv` of `var/`
+  - ignored-state destruction is caught in 8/12 trials, up from 0/12, and 11/12
+    with #64's opencode fix as well. The remaining miss is gnomon's own arm, which has no reader here, and whose `mv` of `var/`
     matches no deny pattern anyway;
   - false alarms: 4/75 violation-free trials, and 6/75 (1/30 clean controls)
     with #64, as G1's adapter measured.
@@ -2255,8 +2245,7 @@ the shell runs it, new transcript readers for `gnomon check`, and the guide
 - **The worktree stamp asks git, and says "unknown" instead of guessing
   (#62).** Before and after every shell command, gnomon walked and stat'd every
   file in the project to answer "did this command change anything". Per tool
-  turn that cost 50 ms at 0 files, 104 ms at 5k and 260 ms at 20k, where goose
-  stayed at ~22 ms. Past 20,000 files the walk stopped and stamped what it had
+  turn that cost 50 ms at 0 files, 104 ms at 5k and 260 ms at 20k. Past 20,000 files the walk stopped and stamped what it had
   seen, so on a 30,000-file tree 7 of 20 edits did not move the stamp. A
   command that changed files was then recorded as changing nothing and counted
   toward the idle nudge.

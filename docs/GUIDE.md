@@ -66,8 +66,9 @@ file moved. Clone the repository on another machine and you get the same agent.
 | Local, cloud, or both | Each role picks its own endpoint and model: Ollama, llama.cpp or any OpenAI-compatible API. |
 
 **What it is not.** gnomon does not make a model complete more tasks. It was
-measured against opencode on 34 paired Terminal-Bench tasks with the same model:
-50.0% against 47.1%, p = 1.0 ([POSITIONING.md](POSITIONING.md)). That is no
+measured against opencode on 34 paired Terminal-Bench tasks with the same model
+on 2026-09-02 (v0.2 line): 50.0% against 47.1%, p = 1.0
+([POSITIONING.md](POSITIONING.md)). That is no
 measurable difference. What gnomon adds is determinism, capability separation
 and a record of what happened.
 
@@ -386,9 +387,9 @@ gnomon setup
    R4H found no build effect (20 vs 19). On an NVIDIA GB10 it solved 22/32 vs
    16/31 local-only (M2, McNemar p = 0.07). See
    [HYBRID.md](benchmarks/HYBRID.md) and the
-   [R3R](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/r3r-2026-11/summary-r3r.txt),
-   [R4H](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/r4h-2026-11/summary-r4h.txt) and
-   [M2](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/m2-2026-11/summary-m2.txt) summaries. A slow or small local model also leads to hybrid, a very slow one to
+   R3R,
+   R4H and
+   M2 summaries. A slow or small local model also leads to hybrid, a very slow one to
    cloud first; those speed thresholds are provisional and say so.
 3. **Accept the diff, then `gnomon launch`.** The change to `.gnomon/` is shown
    as a diff and written only on your yes. The surface hash moves, so a
@@ -719,8 +720,7 @@ request. The turn record's `wire` says `replay_reasoning: true` with
 `master` and in v0.4.4 (drafted, not yet published); v0.4.3 and earlier
 replay only when declared. The default is H3's (2026-11-06, pre-registered, hosted
 DeepSeek V4.1 Flash under 30-minute caps): replay alone raised the hidden-test
-fraction by +0.160 [95% +0.042, +0.293] and cut capped runs from 19 to 14
-([summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+fraction by +0.160 [95% +0.042, +0.293] and cut capped runs from 19 to 14.
 H3 measured hosted endpoints only, so **local lanes are untested and off unless
 declared**: an endpoint whose URL host is a loopback, private (10/8, 172.16/12, 192.168/16, fc00::/7), link-local, CGNAT/Tailscale (100.64/10), `*.local` or `host.docker.internal` host, a single-label name, or Ollama's `/api/chat` gets no replay by default,
 even when it returns reasoning (llama.cpp with a thinking model, vLLM with a
@@ -1548,12 +1548,10 @@ that changes files.
 deepseek-v4.1-flash, 1,800 s cap) `"review"` *lowered* the hidden-test
 fraction by 0.10 (95% CI −0.21 to −0.01), doubled capped cells (4 → 8) and
 cost +86% wire spend: the reviewer took ~12 minutes and the gate does not see
-the clock
-([H4-lite summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h4lite-2026-11/summary-h4lite.txt)).
+the clock.
 On a local model (G1, qwen3.6-35b) neither `"checklist"` (18 vs 16 solved,
 p = 0.63) nor `"review"` (17 vs 16, p = 1.0) showed a difference, and
-`"review"` added a median +153 s of wall time per task
-([G1 summary](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/g1gate-2026-11/summary-g1g.txt)).
+`"review"` added a median +153 s of wall time per task.
 Leave it off unless you are measuring it; if you try it, prefer `"checklist"`
 and a run deadline, so the gate is skipped near the end of the budget.
 
@@ -1920,7 +1918,7 @@ gnomon lacks: an IDE surface, cloud execution, HTTP/SSE MCP, a large ecosystem
 ([POSITIONING.md](POSITIONING.md)).
 
 **Will it complete more tasks than my current agent?**
-Not demonstrably (50.0% vs 47.1% against opencode, not significant). Choose it
+Not demonstrably (50.0% vs 47.1% against opencode on 2026-09-02, not significant). Choose it
 for reproducibility, separation and auditability.
 
 **Does it work offline?**

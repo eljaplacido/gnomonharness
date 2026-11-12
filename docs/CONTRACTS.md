@@ -2530,14 +2530,12 @@ Replay is H3's verdict (pre-registered; hosted DeepSeek V4.1 Flash, 30-minute
 caps): replay alone against the 0.4.2 defaults raised the hidden-test fraction
 by +0.160 [95% bootstrap +0.042, +0.293] and cut capped runs from 19 to 14, so
 both arms of its decision rule were met. H3 measured hosted endpoints only,
-so local lanes are untested and off unless declared
-([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+so local lanes are untested and off unless declared.
 The nudge stays because LG1 (pre-registered, local RTX lane) measured the
 build that switched it off against 0.4.2: 18 vs 18 solved at 1.43× the local
 tokens [1.04, 2.15], past its 1.20 guard, verdict "regresses"; the old build
 sent 547 nudged requests and the new 0, and replay never fired there because
-the lane returns no reasoning field
-([summary-lg1.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/lg1-2026-11/summary-lg1.txt)).
+the lane returns no reasoning field.
 H3's nudge-off recipe arm added +0.017 [−0.095, +0.138] on top of replay.
 
 An endpoint that never sends reasoning is never sent any, so its requests are
@@ -2871,12 +2869,10 @@ that every record carries only the fixture's keys.
 
 ## 34. Soft-timeout shell — bash `soft_timeout`, the `job` tool, audit kind `job`, `v: 1`
 
-**Why.** The long-task research notes (reverse-engineering 01 and 02,
-2026-11-05) found that the peers which do well on long tasks never cut a long
-command short: Codex returns a session handle after a 10 s yield and lets the
-model poll up to 300 s at a time, opencode backgrounds the command and wakes
-the session, and OpenHands returns after 30 s without output while the process
-keeps running. gnomon kills at the tool timeout (120 s by default) and refuses
+**Why.** The long-task research notes (01 and 02, 2026-11-05) found that a
+common design for long commands is not to cut them short: return a session
+handle after a short yield and let the model poll, or background the command
+and wake the session when it ends. gnomon kills at the tool timeout (120 s by default) and refuses
 an identical re-run. This key lets that difference be measured as a surface
 change.
 
@@ -3423,13 +3419,12 @@ never to the plan one. `session_start.deadline` carries `note` (`continue`, `non
 states "You have 28800 seconds" while the run's cap is 1,800 s (research note
 14): without a deadline the model plans for 8 h, and with the countdown it
 answers early at the first note; SW1's T arm measures it. `none` exists because DP1's decision-point
-replays (`benchmarks/results/dp1-2026-11/SUMMARY.txt` on `bench/peers-2026-11`)
+replays (`dp1-2026-11`, archived outside this repository)
 put the early-stop cue in the countdown itself ("about N of 29m remain"), not
 in the "plan the rest" ending: swapping the ending to `continue` barely
 changed it. Why: on FG1 the half-time `plan` note was followed by
 an answer 30–250 s later with 9–13 minutes unused in 12 cells of the three
-never-solved tasks, while the three opencode solves of those tasks landed at
-1597–1800 s (research note 12 §1); on CF1 the deliverable note carried the
+never-solved tasks (research note 12 §1); on CF1 the deliverable note carried the
 same sentence (research note 13, finding 2). Unmeasured as a change: SW1's P
 arm measures it.
 
@@ -3450,16 +3445,14 @@ inferred from a TTY, the environment or the command that started gnomon
 - makes `nudge_after_idle` 0 unless it is declared.
 
 `peer` drops the same two sentences and makes `nudge_after_idle` 0 the same
-way, and adds nothing: opencode's and mini-swe-agent's prompts carry no stop
-or verify-economy text and no unattended block (research note 16). Sampling
+way, and adds nothing: a prompt with no stop or verify-economy text and no
+unattended block (research note 16). Sampling
 for such a run is already declarable: `[endpoints.<name>] sampling =
 "provider"` sends no temperature and no top_p (§32).
 
 Why: the daily-dev sentences were validated on short tasks (lean-2026-11, 37
-vs 34/48) and stay there; on long tasks every winning harness has no stop cue
-and mini-swe-agent's only quality line is "Test edge cases" (0 of its 14
-contested losses were early answers vs OpenCode's 11 of 51, research note
-07); note 12 F3 traces vf2 and risk-scorer near-misses to measurements unlike
+vs 34/48) and stay there; on long tasks gnomon's early answers were a
+recurring way to lose (research note 07); note 12 F3 traces vf2 and risk-scorer near-misses to measurements unlike
 the verifier's. H2 (a stronger verify rule, 2 vs 2 of 12) is the
 counter-evidence: this is a hypothesis for SW1's U arm, hence opt-in.
 
@@ -3483,8 +3476,7 @@ CI job) they stand a second sandbox between the model and the one it has.
 Research note 15 (2026-11-08, 365 gnomon cells, post hoc): cells where gnomon
 refused or killed something solved 1 of 39 where 6.2 were expected
 (within-task permutation, p = 0.001); the file tools' refusal of `/tmp` alone
-0 of 21 vs 4.4. opencode and mini-swe-agent hand the model the container as
-it is. Unmeasured as a change: SW1's CN and PF arms measure it.
+0 of 21 vs 4.4. Unmeasured as a change: SW1's CN and PF arms measure it.
 
 **The key.** `.gnomon/policy.toml` `[sandbox] profile = "default" |
 "container"`. Declared only, never inferred from `/.dockerenv`, cgroups, an
