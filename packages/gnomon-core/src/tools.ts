@@ -1755,6 +1755,32 @@ export function pipelineStatusNote(command: string): string {
   );
 }
 
+/**
+ * A note for a shell its own command killed.
+ *
+ * `pkill -f <pattern>` (and `kill $(pgrep -f ...)`, or a /proc/<pid>/cmdline
+ * grep) matches every process whose command line holds the pattern -- which
+ * includes the `sh -c` running it. A model stopping its own background
+ * program that way ended its own call, read "killed by SIGTERM" with no
+ * reason given, and in three benchmark cells (2026-11) matched gnomon too
+ * (proc_title.ts). Only when the shell died by a signal (or the 128+signal a
+ * container reports) and the command has such a pattern: the bracket trick
+ * keeps a pattern from matching its own text.
+ */
+export function selfKillNote(command: string, exit: number | null, signal?: NodeJS.Signals | null): string {
+  const bySignal = (exit === null && (signal === "SIGTERM" || signal === "SIGKILL")) || exit === 143 || exit === 137;
+  if (!bySignal) return "";
+  const m = /\bp(?:kill|grep)\b[^\n;&|]*?\s-[A-Za-z]*f[A-Za-z]*\s+(['"]?)([^\s'";&|)]+)\1/.exec(command);
+  if (!m && !/\/proc\/\S*\/cmdline/.test(command)) return "";
+  const p = m?.[2] ?? "";
+  const example = /^[A-Za-z0-9_]/.test(p) ? `[${p[0]}]${p.slice(1)}` : "[a]pp.py";
+  return (
+    `\n\n(note: this shell was ended by ${signal ?? `exit ${exit}`}, most likely by its own command: a ` +
+    `\`pkill -f\` or \`pgrep -f\` pattern also matches the shell running it, whose command line ` +
+    `contains the pattern. Bracket one character so it cannot match itself: \`pkill -f '${example}'\`.)`
+  );
+}
+
 /** What to tell an operator on a Windows box with no POSIX shell. */
 export const NO_POSIX_SHELL =
   "Refused: no POSIX shell found, so `bash` cannot run.\n\n" +
@@ -4128,6 +4154,7 @@ function exitOutcome(o: {
         ? clampEnds(capped.text, capped.ctx, `bash-exit`)
         : clamp(capped.text, capped.ctx, `bash-exit`)) +
       pipelineStatusNote(command) +
+      selfKillNote(command, exit, signal) +
       (drift ? `\n\n${drift.notice}` : ""),
     // `exit` is null when the child died on a signal, and "exit null" then
     // failed the verify gate's /exit (-?\d+)/ and fell through to its
