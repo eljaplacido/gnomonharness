@@ -56,8 +56,8 @@ x86 slots shorten that.
   adapter's README names its author and invites the harness's maintainers to
   review or take it over. A disputed adapter blocks comparative claims about
   that harness until the dispute is resolved. gnomon's own record shows why:
-  a misread rule ordering in a peer's configuration once produced a false
-  finding that had to be withdrawn (2026-11-07).
+  a harness's last-rule-wins rule ordering once produced a false finding
+  that had to be withdrawn (2026-11-07).
 - **Outward too.** A gnomon adapter for obench (its single
   `run(instruction, workdir, model, timeout_s)` contract), and a Harbor agent
   for Terminal-Bench 4.0 runs that follow Harbor's ≥5-trial rules

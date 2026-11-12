@@ -199,6 +199,6 @@ The research behind these drafts is summarized in gnomon's November 2026
 state-of-the-art review: the benchmark landscape, statistics, security and
 harness techniques. Each spec cites its own sources inline. gnomon's own
 measurements are cited by result directory on `master`, or by study name where
-the summary is archived outside this repository.
+the summary is archived outside this repository. Peer results are not published.
 
 Latest findings: [FINDINGS-2026-11-04](FINDINGS-2026-11-04.md) — long-task diagnosis (C2D, H1, H2), hybrid on v0.4.0 (M2, R3R), causal analysis. Later gnomon-only campaigns (H3, H4-lite, G1gate, LG1, R4H) and the v0.5.0 conclusions are summarised in [EVIDENCE.md](../EVIDENCE.md#2026-11-campaigns).

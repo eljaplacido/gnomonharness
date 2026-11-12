@@ -8,7 +8,7 @@ import os
 import sys
 from pathlib import Path
 
-# G1_DIR: benchmarks/results/g1-2026-11 of a bench/peers-2026-11 checkout
+# G1_DIR: benchmarks/results/g1-2026-11 of a checkout of the private benchmark repository
 G1 = Path(os.environ["G1_DIR"]) / "runs"
 
 

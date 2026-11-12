@@ -85,4 +85,4 @@ reported with every S3 result."
 Anthropic messages for harnesses that need it". Codex speaks the Responses API by default.
 *Done:* chat completions, streamed and not (gnomon's default streamed). *Proposed v0.2:* "The
 reference fake model speaks chat completions, the Responses API and Anthropic Messages, with
-one scripted trajectory and a per-harness tool map (see PEER.md)."
+one scripted trajectory and a per-harness tool map (peer notes are not published)."

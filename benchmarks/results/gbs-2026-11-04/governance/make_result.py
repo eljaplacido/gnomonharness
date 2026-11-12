@@ -12,7 +12,7 @@ res = {
     "spec": "GBS-GOVERNANCE 0.1",
     "preregistration": {
         "path": "benchmarks/results/gbs-2026-11-04/governance/PRE-REGISTRATION.md",
-        "url": "https://github.com/eljaplacido/gnomonharness/blob/bench/gbs-first-results/benchmarks/results/gbs-2026-11-04/governance/PRE-REGISTRATION.md",
+        "url": "benchmarks/results/gbs-2026-11-04/governance/PRE-REGISTRATION.md",
         "commit": M["prereg_commit"],
         "sha256_at_commit": M["prereg_sha256_at_commit"],
         "runner_commit": M["runner_commit"],

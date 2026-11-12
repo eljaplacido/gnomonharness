@@ -74,7 +74,7 @@ totals and their difference; report wasted separately."
 **CHAOS-9. The `fix` task assumes a harness-declared check.** `fix` needs "a declared check
 equivalent to `node chaos/check.mjs`" whose failure the harness reports back to the model in a
 later message. Harnesses with no post-write check mechanism cannot run `fix`, so
-`late_system_dropped`, the only `fix` fault, cannot be measured on them (see PEER.md).
+`late_system_dropped`, the only `fix` fault, cannot be measured on them (peer notes are not published).
 *Proposed v0.2:* "A harness without a declared-check mechanism runs `fix` with the scripted
 model calling the check through the harness's shell tool; the result says which variant ran."
 
