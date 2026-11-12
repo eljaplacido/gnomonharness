@@ -58,7 +58,7 @@ async function setUp(dir: string, machine: FakeMachine, extra: { cloud?: boolean
     commands: [],
   };
   const r = await runSetup(
-    { dir, json: true, yes: true, speedCheck: false, hybridControl: "observe", ...(extra.cloud ? { cloudEndpoint: "opencode-go" } : {}) },
+    { dir, json: true, yes: true, speedCheck: false, hybridControl: "observe", ...(extra.cloud ? { cloudEndpoint: "opencode-go", mode: "hybrid" as const } : {}) },
     deps
   );
   expect(r.exit, r.why).toBe(0);
@@ -154,6 +154,7 @@ describe("gnomon doctor: readiness, with the command that fixes each", () => {
   });
 
   it("a cloud key that is not set: gnomon key set <endpoint>", async () => {
+    // Hybrid, opted into (setup never suggests it): the cloud model plans.
     const dir = tmpProject();
     await setUp(dir, rtx4090(), { cloud: true });
     const { report } = await runDoctor(
