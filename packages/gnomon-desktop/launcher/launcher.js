@@ -105,7 +105,7 @@ function cliCard(s) {
     h("h2", { text: "Install gnomon" }),
     h("div", { class: "status" }, h("span", { class: "dot bad" }), h("p", null,
       "This app runs the gnomon installed on this machine, and could not use one: ", c.problem, ".")),
-    h("p", { class: "muted" }, `gnomon needs Node 20 or newer. Run its installer in ${s.install.script_shell}:`),
+    h("p", { class: "muted" }, `gnomon needs Node 22 or newer. Run its installer in ${s.install.script_shell}:`),
     copyable(s.install.script),
     h("p", { class: "muted" }, "or, with Node already installed:"),
     copyable(s.install.npm),

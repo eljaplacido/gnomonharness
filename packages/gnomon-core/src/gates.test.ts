@@ -23,6 +23,8 @@ import {
   appendFileSync,
   readFileSync,
   chmodSync,
+  existsSync,
+  readdirSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
@@ -333,8 +335,34 @@ describe("gate: the repository's own CI gates can fail", () => {
       const nodes = [...yml.matchAll(/uses:\s*actions\/setup-node@(\S+)/g)].map((m) => m[1]);
       expect(new Set(nodes).size, `jobs use different actions/setup-node versions: ${[...new Set(nodes)].join(", ")}`).toBe(1);
 
-      const versions = [...yml.matchAll(/node-version:\s*(\S+)/g)].map((m) => m[1]);
+      // A job either pins the one version every other job pins, or takes it
+      // from a `node: [...]` matrix (ts-tests runs the floor and the current
+      // LTS). The matrix must include the pinned version, so the floor the
+      // packages declare is tested by every kind of job.
+      const all = [...yml.matchAll(/node-version:[ \t]*(.+)$/gm)].map((m) => m[1]!.trim());
+      const versions = all.filter((v) => !v.startsWith("${{"));
       expect(new Set(versions).size, `jobs pin different node versions: ${[...new Set(versions)].join(", ")}`).toBe(1);
+      const pinned = versions[0]!;
+      const matrices = [...yml.matchAll(/^\s+node: \[([^\]]+)\]$/gm)].map((m) => m[1]!.split(",").map((s) => s.trim()));
+      if (all.some((v) => v.includes("matrix.node"))) {
+        expect(matrices.length, "a job reads matrix.node but no `node: [...]` matrix was found").toBeGreaterThan(0);
+      }
+      for (const m of matrices) {
+        expect(m, `a node matrix (${m.join(", ")}) leaves out ${pinned}, the version every other job pins`).toContain(pinned);
+      }
+
+      // And that pinned version is the floor the packages declare: engines in
+      // every package.json and .nvmrc say the same major. They said >=20 while
+      // CI tested only 22, so the floor users were promised was never run.
+      const manifests = ["package.json", ...readdirSync(join(REPO, "packages"))
+        .map((p) => join("packages", p, "package.json"))
+        .filter((f) => existsSync(join(REPO, f)))];
+      for (const f of manifests) {
+        const m = JSON.parse(readFileSync(join(REPO, f), "utf-8")) as { engines?: { node?: string }; private?: boolean };
+        if (!m.engines?.node) continue;
+        expect(m.engines.node.replace(/\.0\.0$/, ""), `${f} engines.node`).toBe(`>=${pinned}`);
+      }
+      expect(readFileSync(join(REPO, ".nvmrc"), "utf-8").trim(), ".nvmrc").toBe(pinned);
 
       // The specific refusal: package.json owns the pnpm version, so no job may
       // also declare one.

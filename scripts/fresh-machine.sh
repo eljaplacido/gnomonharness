@@ -37,12 +37,12 @@
 #
 # Usage:
 #   scripts/fresh-machine.sh              # pack this working tree, test it
-#   scripts/fresh-machine.sh --image node:22-slim
+#   scripts/fresh-machine.sh --image node:24-slim
 #
 # Exit codes: 0 fine · 1 a real failure · 2 cannot run here (no docker)
 set -euo pipefail
 
-IMAGE="node:20-slim"
+IMAGE="node:22-slim"
 while [ $# -gt 0 ]; do
     case "$1" in
         --image) IMAGE="$2"; shift 2 ;;
