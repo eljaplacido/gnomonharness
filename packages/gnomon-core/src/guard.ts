@@ -51,6 +51,8 @@ import {
   rmSync,
   statSync,
   unlinkSync,
+  utimesSync,
+  readdirSync,
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
@@ -65,12 +67,21 @@ import {
   type GnomonConfig,
 } from "./config.js";
 import { AuditTrail, redact, resolveAudit } from "./audit.js";
-import { resolveLevels, resolveProtectedPaths, type GovernanceFamily, type GovernanceLevel } from "./governance.js";
+import {
+  levelAtLeast,
+  maxLevel,
+  resolveLevels,
+  resolveProtectedPaths,
+  type GovernanceFamily,
+  type GovernanceLevel,
+  type GovernanceLevels,
+} from "./governance.js";
 import { joinWords } from "./shell.js";
 import { harnessBuild } from "./build.js";
 import {
   POLICY_TOOLS,
   buildToolSet,
+  needsApproval,
   scratchDirs,
   toolCallPolicy,
   type PolicyDecision,
@@ -129,6 +140,52 @@ export type GuardRule = (typeof GUARD_RULES)[number];
  * decided as the `node -e` one-liner it is equivalent to (see decide).
  */
 export const GUARD_TOOLS = [...POLICY_TOOLS, "grep", "glob", "execute"] as const;
+
+/**
+ * Host tools that are not gnomon tool kinds, and how each is classified
+ * (CONTRACTS.md §10, "Other host tools"; docs/GOVERNING-OTHER-HARNESSES.md):
+ *
+ *   websearch  a search the host runs on a server: no URL to judge, but it
+ *              reaches the network. Decided as webfetch is, without the URL
+ *              rules: `[sandbox] network = false` refuses it (rule `network`)
+ *              whatever the role holds; otherwise a role without webfetch
+ *              is asked (rule `tools`, as `execute` without bash) and the
+ *              gate asks as for webfetch. Family
+ *              `network`.
+ *   agent      a subagent (Claude Code Agent/Task, opencode task). It does
+ *              nothing itself; every tool call the subagent makes reaches the
+ *              same hook and is decided one by one. Allowed, recorded, with
+ *              rule `ungoverned`, never levelled.
+ *   inert      host bookkeeping with no effect outside the conversation (todo
+ *              lists, a question to the person). Allowed, rule `ungoverned`.
+ *
+ * Anything else — an MCP tool, a tool this gnomon does not know — is
+ * `ungoverned`: no rule of gnomon's can see what it does. With no
+ * `[governance]` declared it is allowed, as it always was. Under a declared
+ * governance it is put to a person: verdict `ask`, family null, at the
+ * strictest level the surface declares for any family but `rules`, so it is
+ * recorded and allowed under observe/advise and asked under prevent/enforce.
+ */
+export const GUARD_FOREIGN_TOOLS: Readonly<Record<string, "websearch" | "agent" | "inert">> = {
+  websearch: "websearch",
+  agent: "agent",
+  // Claude Code (the matcher does not select these; a generic caller may send them)
+  TodoWrite: "inert",
+  ExitPlanMode: "inert",
+  // opencode
+  todowrite: "inert",
+  todoread: "inert",
+  question: "inert",
+  invalid: "inert",
+};
+
+/** The families an ungoverned tool could reach: every family but `rules`, whose floor would pin it at prevent. */
+const UNGOVERNED_REACH: readonly GovernanceFamily[] = ["write", "bash", "network", "secrets", "ci"];
+
+/** The strictest level the surface puts on any family an ungoverned tool could reach. */
+export function ungovernedLevel(governance: GovernanceLevels): GovernanceLevel {
+  return UNGOVERNED_REACH.map((f) => governance.levels[f]).reduce((a, b) => maxLevel(a, b));
+}
 
 export interface GuardVerdict {
   schema: typeof GUARD_SCHEMA;
@@ -195,6 +252,8 @@ export interface GuardRequest {
   session?: string;
   /** Which adapter asked: claude-code, opencode, cursor, generic. Recorded only. */
   harness?: string;
+  /** The host's own name for the tool (`Bash`, `mcp__github__create_issue`). Recorded only. */
+  hostTool?: string;
   /** The host's id for this tool call (Claude Code `tool_use_id`, opencode `id`). Recorded only, under [governance]. */
   callId?: string;
   /**
@@ -563,15 +622,10 @@ export async function guardToolCall(req: GuardRequest): Promise<GuardVerdict> {
       });
       return done();
     }
-    if (!(GUARD_TOOLS as readonly string[]).includes(req.call.tool)) {
-      Object.assign(v, {
-        decision: "allow",
-        rule: "ungoverned",
-        reason: `gnomon has no pre-execution rule for "${req.call.tool}" (it decides ${GUARD_TOOLS.join(", ")}); the harness's own permissions apply`,
-      });
-      return done();
-    }
     const session = req.session ? safeSessionId(req.session) : null;
+    // Liveness first: whatever the decision turns out to be, this host
+    // session reached the guard (CONTRACTS.md §44).
+    recordLiveness(where, req, session);
     const hinted = typeof req.sessionBase === "string" && /^[0-9a-f]{40,64}$/.test(req.sessionBase) ? req.sessionBase : null;
     const rev = req.base ?? (session ? sessionBase(where, session) : null) ?? hinted ?? "HEAD";
     const rules = rulesAt(where, rev);
@@ -583,7 +637,9 @@ export async function guardToolCall(req: GuardRequest): Promise<GuardVerdict> {
     if ("error" in resolved) throw new GuardCannotDecide(resolved.error);
     v.role = resolved.role;
 
-    const policy = await decide(rules.config, resolved.role, where, req.call);
+    const policy = (GUARD_TOOLS as readonly string[]).includes(req.call.tool)
+      ? await decide(rules.config, resolved.role, where, req.call)
+      : decideForeign(rules.config, resolved.role, where, req.call);
     v.decision = policy.decision;
     v.rule = policy.rule;
     v.reason = policy.reason;
@@ -613,17 +669,12 @@ function unanswerable(v: GuardVerdict, req: GuardRequest): void {
   v.reason = `${req.askUnanswerable} What a person would have been asked: ${v.reason}`;
 }
 
-/**
- * The ToolContext the loop would build for this role, pointed at the live
- * tree, and the decision `toolCallPolicy` makes in it. Exported so a test can
- * put the same call to this and to the loop and compare.
- */
-export async function decide(
+/** The ToolContext the loop would build for this role, pointed at the live tree. */
+function contextFor(
   config: GnomonConfig,
   role: string,
-  where: { project: string },
-  call: GuardCall
-): Promise<PolicyDecision> {
+  where: { project: string }
+): { ctx: ToolContext; offered: Set<string>; governance: GovernanceLevels | undefined } {
   // The rules are the committed ones; every PATH resolves in the live tree,
   // which is where the other agent's call would land.
   const live: GnomonConfig = { ...config, gnomonDir: join(where.project, ".gnomon") };
@@ -665,6 +716,20 @@ export async function decide(
     allow: "strict",
   };
   const offered = new Set(buildToolSet(config, role).schemas.map((s) => s.function.name));
+  return { ctx, offered, governance };
+}
+
+/**
+ * The decision `toolCallPolicy` makes in the loop's context for this role.
+ * Exported so a test can put the same call to this and to the loop and compare.
+ */
+export async function decide(
+  config: GnomonConfig,
+  role: string,
+  where: { project: string },
+  call: GuardCall
+): Promise<PolicyDecision> {
+  const { ctx, offered } = contextFor(config, role, where);
   if (call.tool === "execute") return decideExecute(call, ctx, offered);
   // `grep` and `glob` read what they search: a role that holds read may
   // search, with or without the tool itself (tools.ts searchPrecheck).
@@ -672,6 +737,107 @@ export async function decide(
     return toolCallPolicy(call.tool, call.input, ctx, new Set([...offered, call.tool]));
   }
   return toolCallPolicy(call.tool, call.input, ctx, offered);
+}
+
+/** A decision on a host tool gnomon has no tool kind for (GUARD_FOREIGN_TOOLS). */
+export interface ForeignDecision {
+  decision: GuardDecisionValue;
+  rule: GuardRule | null;
+  reason: string;
+  pattern?: string;
+  verdict?: GuardDecisionValue;
+  family?: GovernanceFamily | null;
+  level?: GovernanceLevel | null;
+}
+
+/**
+ * Decide a call to a host tool that is not one of GUARD_TOOLS: a web search,
+ * a subagent, host bookkeeping, or an ungoverned tool (MCP, unknown). Exported
+ * for tests; see GUARD_FOREIGN_TOOLS for the classes.
+ */
+export function decideForeign(
+  config: GnomonConfig,
+  role: string,
+  where: { project: string },
+  call: GuardCall
+): ForeignDecision {
+  const { ctx, offered, governance } = contextFor(config, role, where);
+  const cls = Object.prototype.hasOwnProperty.call(GUARD_FOREIGN_TOOLS, call.tool) ? GUARD_FOREIGN_TOOLS[call.tool] : undefined;
+  const level = (said: ForeignDecision, family: GovernanceFamily | null, at: GovernanceLevel | null): ForeignDecision => {
+    if (!governance) return said;
+    const levelled = said.decision !== "allow" && family !== null && at !== null && !levelAtLeast(at, "prevent");
+    return {
+      ...said,
+      decision: levelled ? "allow" : said.decision,
+      reason: levelled ? `[governance] ${family} = "${at}": recorded, not applied. ${said.reason}` : said.reason,
+      verdict: said.decision,
+      family,
+      level: at,
+    };
+  };
+  if (cls === "agent") {
+    return level(
+      {
+        decision: "allow",
+        rule: "ungoverned",
+        reason: "a subagent does nothing itself: each tool call it makes reaches this hook and is decided on its own",
+      },
+      null,
+      null
+    );
+  }
+  if (cls === "inert") {
+    return level({ decision: "allow", rule: "ungoverned", reason: `"${call.tool}" has no effect outside the conversation` }, null, null);
+  }
+  if (cls === "websearch") {
+    const net = governance ? governance.levels.network : null;
+    // network = false first: a declared no-network surface refuses the search
+    // whatever the role holds — the less-privileged role must not get the
+    // weaker (approvable) answer.
+    if (ctx.network === false) {
+      return level(
+        {
+          decision: "deny",
+          rule: "network",
+          reason: "Refused: .gnomon/policy.toml sets [sandbox] network = false, so tools may not reach the network, and a web search does.",
+        },
+        "network",
+        net
+      );
+    }
+    if (!offered.has("webfetch")) {
+      // As `execute` for a role without bash: put to a person, not refused —
+      // a search reads. Reached only where the network is allowed.
+      return level(
+        {
+          decision: "ask",
+          rule: "tools",
+          reason: "A web search reaches the network as webfetch does, and this role was not given webfetch. A person decides whether it may run.",
+        },
+        null,
+        null
+      );
+    }
+    if (needsApproval("webfetch", ctx.gate)) {
+      return level({ decision: "ask", rule: "approval", reason: "A web search reaches the network; the [approval] gate asks before webfetch." }, "network", net);
+    }
+    return level({ decision: "allow", rule: null, reason: "a web search, decided as webfetch is: no rule refuses it" }, "network", net);
+  }
+  // MCP and anything unknown: nothing gnomon can judge.
+  const said = `gnomon has no pre-execution rule for "${call.tool}" (it decides ${GUARD_TOOLS.join(", ")}, web searches and subagents)`;
+  if (!governance) return { decision: "allow", rule: "ungoverned", reason: `${said}; the harness's own permissions apply` };
+  const at = ungovernedLevel(governance);
+  const asked: ForeignDecision = {
+    decision: levelAtLeast(at, "prevent") ? "ask" : "allow",
+    rule: "ungoverned",
+    reason: levelAtLeast(at, "prevent")
+      ? `${said}, so under [governance] a person decides whether it may run`
+      : `[governance] level "${at}": recorded, not applied. ${said}.`,
+    verdict: "ask",
+    family: null,
+    level: at,
+  };
+  return asked;
 }
 
 /**
@@ -711,6 +877,134 @@ async function decideExecute(call: GuardCall, ctx: ToolContext, offered: Set<str
 }
 
 // ---------------------------------------------------------------------------
+// Liveness
+// ---------------------------------------------------------------------------
+
+/** The liveness record's schema (CONTRACTS.md §44). */
+export const GUARD_LIVE_SCHEMA = "gnomon.guard.live/1";
+
+/** What the guard writes the first time it decides for a host session. */
+export interface GuardLiveRecord {
+  schema: typeof GUARD_LIVE_SCHEMA;
+  kind: "session_start";
+  /** The host's session id; null for calls that named none (then one record per day). */
+  session: string | null;
+  /** The adapter that asked: claude-code, opencode, cursor, generic. */
+  via: string | null;
+  agent: string | null;
+  started: string;
+}
+
+/** A liveness record read back, with the time of the session's latest decision. */
+export interface GuardLiveSession extends GuardLiveRecord {
+  /** The record's file name without `.json`: the session id, or `day-YYYY-MM-DD`. */
+  id: string;
+  last_decision: string;
+}
+
+const liveDir = (gitDir: string) => join(repoStateDir(gitDir), "guard", "live");
+
+/**
+ * Say that this host session reached the guard. The first call writes a
+ * `session_start` record; every later call touches it, so its mtime is the
+ * session's latest decision. In gnomon's per-repository state, outside the
+ * work tree, and refused to every tool call (`host_hooks`). Never fails the
+ * decision: an unwritable state dir only costs the liveness signal, which
+ * `gnomon guard status` then shows as missing.
+ */
+function recordLiveness(where: Located, req: GuardRequest, session: string | null): void {
+  const id = session ?? `day-${new Date().toISOString().slice(0, 10)}`;
+  const f = join(liveDir(where.gitDir), `${id}.json`);
+  try {
+    const now = new Date();
+    if (existsSync(f)) {
+      utimesSync(f, now, now);
+      return;
+    }
+    mkdirSync(dirname(f), { recursive: true });
+    const record: GuardLiveRecord = {
+      schema: GUARD_LIVE_SCHEMA,
+      kind: "session_start",
+      session,
+      via: req.harness ?? null,
+      agent: req.agent ?? null,
+      started: now.toISOString(),
+    };
+    writeFileSync(f, JSON.stringify(record), { flag: "wx" });
+    // mtime is the latest decision: the first one is the start, to the ms.
+    utimesSync(f, now, now);
+  } catch {
+    // A racing first call won, or the state dir is read-only.
+  }
+}
+
+/** Every host session the guard has decided for in this repository, latest decision first. */
+export function guardLiveSessions(cwd: string): GuardLiveSession[] {
+  const where = locate(cwd);
+  if (!where) return [];
+  const dir = liveDir(where.gitDir);
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((n) => n.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  const out: GuardLiveSession[] = [];
+  for (const n of names) {
+    try {
+      const f = join(dir, n);
+      const rec = JSON.parse(readFileSync(f, "utf-8")) as GuardLiveRecord;
+      if (rec.schema !== GUARD_LIVE_SCHEMA) continue;
+      out.push({ ...rec, id: n.slice(0, -5), last_decision: statSync(f).mtime.toISOString() });
+    } catch {
+      // unreadable: not evidence either way
+    }
+  }
+  return out.sort((a, b) => (a.last_decision < b.last_decision ? 1 : -1));
+}
+
+/**
+ * Host sessions a SessionStart hook recorded (`gnomon check --hook
+ * session-start`, Claude Code) at or after `since`, for which the guard has
+ * decided nothing: either the session made no call the hook selects, or the
+ * PreToolUse hook did not run. Oldest first.
+ */
+export function sessionsWithoutGuard(cwd: string, since?: string): Array<{ session: string; started: string }> {
+  const where = locate(cwd);
+  if (!where) return [];
+  const dir = dirname(checkSessionFile(where.gitDir, "x"));
+  const live = liveDir(where.gitDir);
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((n) => n.endsWith(".json"));
+  } catch {
+    return [];
+  }
+  const out: Array<{ session: string; started: string }> = [];
+  for (const n of names) {
+    const session = n.slice(0, -5);
+    if (existsSync(join(live, n))) continue;
+    let started = "";
+    try {
+      const v = (JSON.parse(readFileSync(join(dir, n), "utf-8")) as { started?: unknown }).started;
+      started = typeof v === "string" ? v : statSync(join(dir, n)).mtime.toISOString();
+    } catch {
+      continue;
+    }
+    if (since && started < since) continue;
+    out.push({ session, started });
+  }
+  return out.sort((a, b) => (a.started < b.started ? -1 : 1));
+}
+
+/** Whether the guard has decided anything for this host session. */
+export function guardSawSession(cwd: string, session: string): boolean {
+  const where = locate(cwd);
+  const id = safeSessionId(session);
+  return Boolean(where && id && existsSync(join(liveDir(where.gitDir), `${id}.json`)));
+}
+
+// ---------------------------------------------------------------------------
 // The trail
 // ---------------------------------------------------------------------------
 
@@ -718,7 +1012,17 @@ async function decideExecute(call: GuardCall, ctx: ToolContext, offered: Set<str
 export function guardTarget(call: GuardCall): string {
   const a = call.input;
   const raw =
-    typeof a.path === "string" ? a.path : typeof a.url === "string" ? a.url : typeof a.command === "string" ? a.command : "";
+    typeof a.path === "string"
+      ? a.path
+      : typeof a.url === "string"
+        ? a.url
+        : typeof a.command === "string"
+          ? a.command
+          : typeof a.query === "string"
+            ? a.query
+            : typeof a.description === "string"
+              ? a.description
+              : "";
   const flat = raw.replace(/\s+/g, " ");
   return flat.length > 200 ? `${flat.slice(0, 200)}…` : flat;
 }
@@ -786,6 +1090,7 @@ function appendDecision(
       role: v.role,
       agent: req.agent,
       via: req.harness,
+      ...(req.hostTool && req.hostTool !== v.tool ? { host_tool: req.hostTool } : {}),
       ...(req.hostMode ? { host_mode: req.hostMode } : {}),
       base: v.base,
       surface_hash: v.surface_hash,
@@ -912,7 +1217,13 @@ export function fromClaudeCode(raw: Record<string, unknown>): HarnessRequest {
       return { ...base, calls: [{ tool: "grep", input: { pattern: input.pattern, path: input.path } }] };
     case "Glob":
       return { ...base, calls: [{ tool: "glob", input: { pattern: input.pattern, path: input.path } }] };
+    case "WebSearch":
+      return { ...base, calls: [{ tool: "websearch", input: { query: input.query } }] };
+    case "Agent":
+    case "Task":
+      return { ...base, calls: [{ tool: "agent", input: { description: input.description, subagent_type: input.subagent_type } }] };
     default:
+      // mcp__<server>__<tool> and anything else: decided by its own name, as ungoverned.
       return { ...base, calls: [] };
   }
 }
@@ -968,6 +1279,16 @@ export function fromOpencode(raw: Record<string, unknown>): HarnessRequest {
     case "execute":
       // Code Mode: `{ code }`, JavaScript with fetch (opencode 2.2.5).
       return { ...base, calls: [{ tool: "execute", input: { code: input.code } }] };
+    case "websearch":
+    case "codesearch":
+      return { ...base, calls: [{ tool: "websearch", input: { query: input.query } }] };
+    case "task":
+      return { ...base, calls: [{ tool: "agent", input: { description: input.description, subagent_type: input.subagent_type } }] };
+    case "list":
+      // A directory listing reads where it lists: decided as a glob there.
+      return { ...base, calls: [{ tool: "glob", input: { pattern: "*", path: input.path } }] };
+    case "multiedit":
+      return { ...base, calls: [{ tool: "edit", input: { path: input.path ?? input.filePath } }] };
     default:
       return { ...base, calls: [] };
   }
@@ -1037,6 +1358,7 @@ export async function guardHarnessRequest(
 ): Promise<GuardVerdict> {
   const cwd = opts.cwd ?? hr.cwd ?? process.cwd();
   const session = opts.session ?? hr.session;
+  if (hr.harnessTool && !opts.hostTool) opts = { ...opts, hostTool: hr.harnessTool };
   if (opts.callId ?? hr.callId) opts = { ...opts, callId: opts.callId ?? hr.callId };
   if (hr.permissionMode) {
     opts = { ...opts, hostMode: hr.permissionMode };

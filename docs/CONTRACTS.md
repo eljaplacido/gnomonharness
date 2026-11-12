@@ -215,12 +215,32 @@ so both format drift and non-determinism fail the build.
   "approval": ["never", "on_write", "always"],
   "role_profile": ["local_first", "frontier_plan", "all_remote"],
   "governance_level": ["observe", "advise", "prevent", "enforce"],
-  "governance_family": ["write", "bash", "network", "secrets", "rules", "ci"]
+  "governance_family": ["write", "bash", "network", "secrets", "rules", "ci"],
+  "audit_kind": ["session_start", "session_resume", "turn", "chain_stage", "tool_call", "approval",
+                 "verify", "bootstrap", "context_mask", "degradation", "check", "trust", "guard",
+                 "skill_accept", "skill_reject", "skill_trial", "record_tamper",
+                 "record_tamper_resolved", "record_notice", "mcp_tools", "stall_signal",
+                 "completion_gate", "todo_gate", "job", "deliverable_first", "first_token_stall",
+                 "finish_gate", "model_call", "session_end"],
+  "guard_decision": ["allow", "deny", "ask"],
+  "guard_rule": ["tools", "malformed", "bash_deny", "bash_allow", "sudo", "sandbox", "surface",
+                 "record", "git_hooks", "host_hooks", "write_allow", "outside_root", "secret_path",
+                 "ci_path", "network", "url", "repo_code", "approval", "ungoverned", "error"],
+  "guard_tool": ["bash", "write", "edit", "read", "webfetch", "grep", "glob", "execute"]
 }
 ```
 
 `governance_level` and `governance_family` are §36's: the levels, weakest
 first, and the families every policy rule is assigned to.
+
+`audit_kind` is every `kind` an audit trail record may carry (`AUDIT_KINDS`,
+audit.ts; the trail format is §44), and `guard_decision`, `guard_rule` and
+`guard_tool` are §10's tables (issue #113, Rule 6: what a record or a document
+can say is published, not only exported). `gnomon-core`'s guard test holds
+`AUDIT_KINDS`, `GUARD_DECISIONS`, `GUARD_RULES` and `GUARD_TOOLS` to the golden;
+the build fails when a kind is added to the `AuditKind` type and not to
+`AUDIT_KINDS`. The skill enumerations #113 also names (candidate signals, trial
+verdicts and statuses) stay in their own fixtures (§12, §13) for now.
 
 **`role_profile` is implemented.** This paragraph said it was "declared and not
 implemented" and stayed there after `495fa40` made it route: `applyProfile`
@@ -695,7 +715,9 @@ client against a fake model.
 ## 10. `gnomon guard` — schema `gnomon.guard/1`
 
 The decision on one tool call another harness is about to make (README,
-[Governing other harnesses](../README.md#governing-other-harnesses)). A hook
+[Governing other harnesses](../README.md#governing-other-harnesses);
+[GOVERNING-OTHER-HARNESSES.md](GOVERNING-OTHER-HARNESSES.md) for the support
+matrix, levels, liveness and known bypasses). A hook
 gates the call on it: deny is refused with `reason`, ask goes to a person,
 allow changes nothing. One JSON object per call on stdout.
 
@@ -730,7 +752,7 @@ decision gnomon could not make is never an allow.
 | `url` | a scheme other than http(s), or a private, loopback or link-local address |
 | `repo_code` | `[approval] repo_code = true`, and the call runs repository-defined code: package.json scripts or lifecycle scripts (`npm`/`pnpm`/`yarn`/`bun` run, test, start, install, ci, …; `npx`), a Makefile, justfile, Rakefile, Gradle or Maven build, tox/nox, pre-commit hooks, `cargo` build/test/run (build.rs), `go generate`, `poetry`/`pdm`/`hatch`/`pipenv` install or run, `pip install -e`/a local path/`-r`, `python setup.py` (decision `ask`, never `deny`) |
 | `approval` | the gate would ask (decision `ask`) |
-| `ungoverned` | no `.gnomon/` above the working directory, or a tool gnomon has no pre-execution rule for (decision `allow`) |
+| `ungoverned` | no `.gnomon/` above the working directory, or a host tool gnomon has no pre-execution rule for: an MCP tool or an unknown one (`allow` with no `[governance]`; under one, verdict `ask`, levelled — see "Other host tools" below), a subagent, or host bookkeeping (`allow`) |
 | `error` | no decision could be made (exit 10) |
 
 `rule` is `null` on an allow that nothing stopped. Tools decided (`tool`):
@@ -742,7 +764,25 @@ the sandbox), and, for a glob whose pattern names its own directory, that
 directory too — and `execute` (`{ "code" }`), JavaScript a harness runs itself
 (opencode V2's Code Mode). `execute` is decided as the equivalent bash call
 `node -e '<code>'`; for a role without `bash` it is `ask` with rule `tools`.
-Anything else is `allow` with rule `ungoverned`, never guessed at.
+Anything else is a host tool gnomon has no tool kind for, below.
+
+**Other host tools** (`GUARD_FOREIGN_TOOLS`, guard.ts; the Claude Code matcher
+selects them since v0.5.0, the opencode plugin sends every tool). The document's
+`tool` names what the call was decided as:
+
+| Host tool | Decided as (`tool`) | Decision |
+|---|---|---|
+| Claude Code `WebSearch`, opencode `websearch`/`codesearch` | `websearch` | as `webfetch` without the URL rules: `deny` with `network` under `[sandbox] network = false`, checked first and whatever the role holds; otherwise `ask` with rule `tools` when the role holds no `webfetch` (as `execute` without `bash`) and `approval` when the gate asks for webfetch; family `network` |
+| Claude Code `Agent`/`Task`, opencode `task` | `agent` | `allow`, rule `ungoverned`, never levelled: a subagent does nothing itself, and each call it makes reaches the same hook |
+| opencode `list` | `glob` | a glob of `*` in the listed directory: a read of where it lists |
+| opencode `multiedit` | `edit` | an edit of its file |
+| `TodoWrite`, `ExitPlanMode`, opencode `todowrite`/`todoread`/`question`/`invalid` | itself | `allow`, rule `ungoverned`, never levelled: no effect outside the conversation |
+| an MCP tool (`mcp__<server>__<tool>`), anything else | itself | rule `ungoverned`. No `[governance]`: `allow`, as before. Under one: verdict `ask`, `family` null, `level` the strictest the surface puts on `write`, `bash`, `network`, `secrets` or `ci` — so `allow` (recorded) under observe/advise and `ask` under prevent/enforce; under Claude Code's `bypassPermissions` that ask is a deny, like every other |
+
+Nothing about an MCP call's arguments is judged or recorded: the trail's
+`target` is empty for it. Fixture: `conformance/guard_cases.json`
+`host_tools`, put to the real binary and to `guardHarnessRequest` (gnomon's
+own loop has no such tools).
 
 **Governance levels (§36).** Under a declared `[governance]` (or a role's
 `[roles.<name>.governance]`), the document also carries `verdict` (what the
@@ -826,15 +866,46 @@ otherwise, exit 0; opencode's plugin reads the generic document, and passes
 `--session-base <sha>`, the HEAD it read when opencode loaded it, which the
 guard uses and records only for a session with no recorded base yet.
 
+**`gnomon guard install`** writes the **absolute** path of a gnomon that
+answers `gnomon guard --help` into every hook it writes (Claude Code's three
+commands, Cursor's two, the opencode plugin's `GNOMON_ARGV`): `--bin <path>`,
+else `$GNOMON_GUARD_BIN`, else the gnomon running the install (when it is not
+in an npx cache), else each `gnomon` on PATH. None answers: exit 10, nothing
+written. A bare `gnomon` resolves to whatever is on the host's PATH when the
+host starts; in the 2026-11-12 governance test that was an older gnomon with no
+`guard`, the hook could not run, and Claude Code ran every call (a hook that
+fails to start is a non-blocking error to it). Re-running install over an older
+install updates its entries in place (program and matcher), never adding a
+second copy; a command counts as gnomon's when its program part names gnomon.
+The path is the installing machine's. `--local` keeps the hook out of git:
+Claude Code's goes into `.claude/settings.local.json`; the opencode plugin and
+Cursor's `hooks.json` are written where they always are and listed in
+`.git/info/exclude` (a tracked file is warned of, not untracked). Without
+`--local`, `install` warns on stderr when a program path is under the home
+directory or a versioned directory (`/v22.22.2/`), which another clone will not
+have. The exit is the same either way.
+
 **`gnomon guard status`** (`--dir`, `--expect <hosts>`, `--json`, schema
 `gnomon.guard.status/1`) says, per host (`claude-code`, `opencode`,
 `cursor`), whether the hook `gnomon guard install` wrote is still there:
-`ok`, `missing`, `modified` (the guard hook is gone from the file, its matcher
-no longer covers the decided tools, or the file differs from HEAD or from
-what `install --write` recorded), `disabled` (`disableAllHooks` in the
-project, local or user Claude Code settings) or `not_installed`. A host is
-expected when its hook is committed at HEAD, `install --write` recorded it, or
-`--expect` names it. Exit 0 with no finding, 2 with one, 10 when not governed.
+`ok`, `outdated` (the hook an earlier release wrote, unchanged: a Claude Code
+PreToolUse matcher from `OLDER_CLAUDE_CODE_MATCHERS`, or an opencode plugin
+whose sha256 is a known earlier one; or a hook `install --write` updated whose
+update is not committed while HEAD holds gnomon's older one), `missing`,
+`modified` (the guard hook is gone from the file, its matcher no longer covers
+the selected tools and is not an earlier gnomon's, the absolute program it runs
+does not exist, or the file differs from HEAD or from what `install --write`
+recorded), `disabled` (`disableAllHooks` in the project, local or user Claude
+Code settings) or `not_installed`. Claude Code's file is
+`.claude/settings.local.json` when `install --local` recorded it, or when only
+it holds gnomon's hook, else `.claude/settings.json`. `outdated` is listed in
+`warnings`, not `findings`, and does not change the exit. A host is expected when a hook file with
+gnomon's guard in it is committed at HEAD, `install --write` recorded it, or
+`--expect` names it. It also says which host sessions reached the guard
+(§44): `sessions_seen`, `last_decision`, `sessions` and
+`unguarded_sessions`. Exit 0 with no finding, 2 with one, 10 when not
+governed; a session that never reached the guard is listed, not a finding
+(it may have made no selected call; `gnomon check` tells, §44).
 
 **Fixtures**: `conformance/guard_decision.json` (this contract) and
 `conformance/guard_cases.json` (calls and the decision each must reach).
@@ -2368,7 +2439,7 @@ never their sum, since a gateway may carry two spellings of one number.
 `prompt_tokens_details.cache_creation_tokens`) and is never counted as cached.
 Reasoning tokens from `completion_tokens_details.reasoning_tokens`. Where a
 reply carries Anthropic's `input_tokens` and no `prompt_tokens`, the prompt is
-`input_tokens + cache_read_input_tokens + cache_creation_input_tokens` (§41).
+`input_tokens + cache_read_input_tokens + cache_creation_input_tokens` (§43).
 
 **The trail: `model_call`.** When `[audit]` is on, one record per request,
 written as the request ends, joining both halves: `i`, `role`, `model`,
@@ -3174,7 +3245,8 @@ tools.ts; tools and governance tests pin the table against the rule list):
 | `secrets` | `secret_path` (§37); `sandbox` on read, grep and glob (a read or search outside the root) |
 | `rules` | `surface`, `record`, `git_hooks`, `host_hooks` |
 | `ci` | `ci_path` (§37) |
-| *(structural, never levelled)* | `tools`, `malformed`; and in the guard `ungoverned`, `error` |
+| *(structural, never levelled)* | `tools`, `malformed`; and in the guard `error`, and `ungoverned` on a subagent or host bookkeeping |
+| *(no family; levelled at the strictest of `write`, `bash`, `network`, `secrets`, `ci`)* | `ungoverned` on an MCP or unknown host tool (§10, "Other host tools") |
 
 An `approval` ask takes the family of the calling tool: `bash` (and `execute`)
 → `bash`, `write`/`edit` → `write`, `webfetch` → `network`; a `read` ask is
@@ -3787,3 +3859,103 @@ while the target gets markers; absent otherwise. `model_calls` (§29) carries
 request body is master's, byte for byte.
 
 **Tests**: `packages/gnomon-core/src/prompt_cache.test.ts`.
+
+## 44. The audit feed — guard records, liveness `gnomon.guard.live/1`, the scorecard `gnomon.scorecard/1`, `v: 1`
+
+What gnomon leaves behind when it governs another harness, published so a
+reviewer, a CI job or a log pipeline can consume it without reading gnomon's
+code (docs/GOVERNING-OTHER-HARNESSES.md says how to wire it). Three parts: the
+guard's audit trail, one liveness record per host session, and the scorecard
+that reads both back. JSON Schema: `conformance/audit_feed_schema.json`
+(draft-07, one self-contained definition per record).
+
+**The guard trail.** Written when the base surface's `[audit] enabled = true`,
+and always under a declared `[governance]` (§36: at observe the record is the
+decision's whole effect). One file per host session in the `[audit] dir`
+(default `.gnomon-audit/`): `guard-<session>.jsonl`, or
+`guard-<YYYY-MM-DD>.jsonl` for calls that name no session. Every guard process
+appends, under a lock, `session_start` (first call) or `session_resume`, the
+`guard` record and `session_end`, so the file is a sealed chain after every
+call.
+
+Every record carries the envelope `seq` (0-based, per file), `ts` (ISO 8601),
+`kind` (an `audit_kind`, §3), `prev` (the previous record's `hash`, null on
+the first) and `hash`: sha256, hex, over the record without `hash`,
+serialised as canonical JSON (keys sorted, no whitespace; `canonicalJson`,
+audit.ts). `gnomon audit verify <trail>` and the scorecard check it.
+
+| Record | Keys |
+|---|---|
+| `session_start` | `surface_hash`, `harness` (gnomon's build, §3b), `cwd`, `mode: "guard"`, `role`, `agent`?, `via`? |
+| `session_resume` | `resumed` (the trail id), `surface_hash` |
+| `guard` | `tool` (what the call was decided as, a `guard_tool` or the host tool's own name, §10), `target` (path, URL, command, query or description; through `[audit] redact`; empty for an MCP call), `decision`, `rule` (a `guard_rule` or null), `pattern`?, `role`, `agent`?, `via`? (`claude-code`, `opencode`, `cursor`, `generic`), `host_tool`? (the host's name for the tool, when it is not `tool`), `host_mode`? (Claude Code `permission_mode`), `base`, `surface_hash`, `exit` (0/2/3/10); under `[governance]` also `verdict`, `family`, `level`, `call_id`?, `delivered: false`? (§36) |
+| `session_end` | none of its own (an attested or anchored trail adds what §11/§21 say) |
+
+**Liveness** (`gnomon.guard.live/1`). A hook that does not run decides
+nothing and records nothing, so a trail cannot show its own absence. The
+guard therefore writes, the first time it decides anything for a host session
+(any decision, an ungoverned tool and a call it could not decide included), a
+record in gnomon's per-repository state, outside the work tree and refused to
+every tool call (`host_hooks`, §10):
+`<data dir>/repos/<id>/guard/live/<session>.json` (`day-<YYYY-MM-DD>.json`
+without a session id). Keys: `schema`, `kind: "session_start"`, `session`,
+`via`, `agent`, `started`. Every later decision sets its mtime: the session's
+latest decision. Written whether or not `[audit]` is on. A write that fails
+(a read-only state dir) costs the signal, never the decision.
+
+Read back by:
+
+- `gnomon guard status` (§10): `sessions_seen`, `last_decision`, `sessions`
+  (each record with `id` and `last_decision`, latest first, at most 50) and
+  `unguarded_sessions`: Claude Code sessions whose SessionStart hook
+  (`gnomon check --hook session-start`) ran since the hook was installed and
+  that never reached the guard.
+- `gnomon check` (§6), when a guard hook is installed or committed, or
+  `--require-guard` is given: for the session `--session` names, or a Claude
+  Code `--transcript`'s, or else every unguarded session (each one's
+  transcript looked up under `$CLAUDE_CONFIG_DIR`/`~/.claude` `projects/`), a
+  transcript with calls the hook's matcher selects and no liveness record is
+  a gap. A gap is a `warnings` entry starting `liveness:`; with
+  `--require-guard` it makes the exit 2, and so does a session whose
+  transcript cannot be found. The verdict's schema is unchanged.
+- The Stop hook (`gnomon check --hook stop`): a gap in the stopping session is
+  printed to the operator (exit 1, which Claude Code shows and does not block
+  on).
+
+**`gnomon check --scorecard [--session <id>] [--transcript <file>]
+[--require-guard] [--json] [--dir <path>]`** — schema `gnomon.scorecard/1`.
+One document summarising a foreign run, read-only. Markdown without `--json`,
+for a person or a PR comment. It reads the records where the agent ran
+(liveness in this machine's gnomon state, trails in the audit directory); a
+fresh clone or CI checkout has neither, and with no `--transcript` or
+`--require-guard` its card passes with a warning. `--require-guard` makes the
+absence of evidence a finding: no hook installed or committed, a hook that has
+decided nothing (or nothing for `--session`) with no transcript given, and
+sessions with no decision whose transcript cannot be found.
+
+| Key | Meaning |
+|---|---|
+| `decisions` | from the guard trails: `total`, `by_decision`, `by_verdict` (the rules' verdict under `[governance]`, else the decision), `by_family` (family → verdict → count; the record's family, else its rule's, `ungoverned`, `structural` or `none`), `by_rule`, `by_via`, `recorded_not_applied` (verdicts an observe/advise level did not apply), `advise_undelivered` |
+| `coverage` | `tools` (per host tool: `kind` decided as, `calls`, `governed` = a rule other than `ungoverned` decided it), `calls`, `governed_calls`, `ratio`; `transcript` with `--transcript`: the host's own tool calls by name, how many the matcher selects, whether the guard saw the session, `gap` |
+| `liveness` | `hosts` (`guard status`'s), `sessions_seen`, `last_decision`, `sessions`, `unguarded_sessions` |
+| `audit` | `dir`, `trails` (each guard trail and the ten latest check trails: `records`, `ok` = the hash chain holds, `sealed`, `problem`?), `chain_ok` |
+| `checks` | `recent`: the ten latest recorded `gnomon check` verdicts (`ts`, `base`, `head`, `role`, `exit`, `failed` check ids) |
+| `findings` | what fails the card: a hook missing, modified or switched off; a hash chain that does not hold; a session whose transcript shows selected calls the guard never decided; the latest recorded check failed |
+| `warnings` | what a reader should know and does not fail it: an `outdated` hook, calls to tools no rule governs, unsealed trails, sessions with no decision and no transcript to tell, a hook that has decided nothing (these two are findings under `--require-guard`), a guard with no trail (`[audit]` off) |
+| `exit` | 0 no finding, 2 a finding, 10 not governed |
+
+Also `schema`, `governed`, `project`, `session`, `generated`.
+
+**What the feed is not.** A call the host ran without asking the hook (the
+hook removed, Claude Code's `disableAllHooks`, a tool the matcher does not
+select) leaves no guard record; liveness and `guard status` find a missing or
+silent hook, and only a host transcript shows which calls went unseen. The
+hash chain proves a trail consistent with itself, not that nobody re-chained
+it: `[audit.attest]` (§11) signs heads, `[audit.anchor]` (§21) copies them to a
+witness.
+
+**Fixture**: `conformance/audit_feed_schema.json`;
+`packages/gnomon-cli/src/scorecard.test.ts` validates every record a real
+`gnomon guard` wrote, a liveness record and a real scorecard against it (with
+a checker that refuses any schema keyword it does not implement), and
+`packages/gnomon-core/src/guard.test.ts` the liveness behaviour.
