@@ -221,7 +221,7 @@ so both format drift and non-determinism fail the build.
                  "skill_accept", "skill_reject", "skill_trial", "record_tamper",
                  "record_tamper_resolved", "record_notice", "mcp_tools", "stall_signal",
                  "completion_gate", "todo_gate", "job", "deliverable_first", "first_token_stall",
-                 "finish_gate", "model_call", "session_end"],
+                 "checkpoint", "finish_gate", "model_call", "escalation", "session_end"],
   "guard_decision": ["allow", "deny", "ask"],
   "guard_rule": ["tools", "malformed", "bash_deny", "bash_allow", "sudo", "sandbox", "surface",
                  "record", "git_hooks", "host_hooks", "write_allow", "outside_root", "secret_path",

@@ -400,7 +400,10 @@ describe("local first, cloud rescue: the contract", () => {
 
   it("the triggers, the fixture and CONTRACTS.md section 42 are one set", () => {
     expect([...ESCALATE_TRIGGERS]).toEqual(fixture.triggers);
-    const section = contracts.slice(contracts.indexOf("## 42. Escalation"));
+    // §42 only: later sections (§43, §44) have tables of their own.
+    const from = contracts.indexOf("## 42. Escalation");
+    const next = contracts.indexOf("\n## ", from + 1);
+    const section = contracts.slice(from, next === -1 ? undefined : next);
     const documented = [...section.matchAll(/^\| `([a-z_0-9]+)` \|/gm)].map((m) => m[1]);
     expect(documented).toEqual(fixture.triggers);
     expect(promptLoop.HANDOVER_MAX_CHARS).toBe(fixture.handover_max_chars);

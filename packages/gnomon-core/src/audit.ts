@@ -329,8 +329,10 @@ export const AUDIT_KINDS = [
   "job",
   "deliverable_first",
   "first_token_stall",
+  "checkpoint",
   "finish_gate",
   "model_call",
+  "escalation",
   "session_end",
 ] as const satisfies readonly AuditKind[];
 type MissingAuditKind = Exclude<AuditKind, (typeof AUDIT_KINDS)[number]>;
