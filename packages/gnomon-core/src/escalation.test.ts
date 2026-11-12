@@ -668,6 +668,32 @@ describe("local first, cloud rescue: what the takeover note says changed", () =>
     }
   }, 20000);
 
+  it("reads of test files are not checks: `cat tests/...` stays out of the checks section", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "gnomon-takeover-reads-")));
+    try {
+      const config = fresh({ tools: ["read", "write", "bash", "glob", "todo"] }, ESC2(["stuck"], { stuck_failures: 3 }));
+      config.workRoot = root;
+      const r = await run(config, {
+        local: (n) =>
+          n === 1 ? WRITE("tests/test_x.py", "def test_x():\n    assert True\n")
+          : n === 2 ? BASH("cat tests/test_x.py")
+          : n === 3 ? BASH("sed -n 1,40p tests/test_x.py")
+          : n === 4 ? BASH("python3 -c 'import sys; sys.exit(2)' tests/test_x.py")
+          : MISSING(n),
+        cloud: () => ({ text: "done" }),
+      });
+      const msgs: any[] = r.calls.cloudBodies[0].messages;
+      const note = String(msgs[msgs.length - 1].content);
+      const checks = note.slice(note.indexOf("## Its last commands and how they exited"));
+      expect(note).toContain("## Its last commands and how they exited");
+      expect(checks).toContain("tests/test_x.py` → exit 2");
+      expect(checks).not.toContain("`cat tests/test_x.py`");
+      expect(checks).not.toContain("`sed -n 1,40p tests/test_x.py`");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20000);
+
   it("git: the list is git's, under the plain heading, as before", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "gnomon-takeover-git-")));
     try {

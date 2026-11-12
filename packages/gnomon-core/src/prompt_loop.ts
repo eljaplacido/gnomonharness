@@ -3853,12 +3853,14 @@ export function buildHandover(h: HandoverInput, maxChars: number = HANDOVER_MAX_
 }
 
 /**
- * A bash command worth naming in a hand-off as a check: a test run, or any
- * command that is not only reading (a build, a script run against the data).
+ * A bash command worth naming in a hand-off as a check: any command that is
+ * not only reading (a test run, a build, a script run against the data). The
+ * read test comes first and alone: `test_command` also matches test-file
+ * paths, so `cat tests/test_x.py` would otherwise count as a check, take one
+ * of the few slots and read as a passing test run.
  */
 function isHandoffCheck(command: string): boolean {
-  const c = normalizeCommand(command);
-  return STALL_SIGNAL_PATTERNS.test_command.test(c) || !STALL_SIGNAL_PATTERNS.read_command.test(c);
+  return !STALL_SIGNAL_PATTERNS.read_command.test(normalizeCommand(command));
 }
 
 /** Paths git reports as changed or new in the worktree. Null when git cannot say. */
