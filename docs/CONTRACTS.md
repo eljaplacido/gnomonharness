@@ -2325,7 +2325,7 @@ interactive exchange, which has no reader for it.
 | `prompt_max` | the largest provider `prompt_tokens` |
 | `over_window` | requests whose provider `prompt_tokens` exceeded their window |
 | `ratio` | provider `prompt_tokens` over `est`, summed over the metered requests, to 3 places |
-| `first`, `calls` | as above. Per request: `i`, `code` (0, or the exit-contract code it failed with), `ms`, `first_byte_ms` (streamed), the four token counts, `reasoning_chars`, `finish` |
+| `first`, `calls` | as above. Per request: `i`, `code` (0, or the exit-contract code it failed with), `ms`, `first_byte_ms` (streamed), the five token counts, `reasoning_chars`, `finish` |
 
 Cached tokens are read from `prompt_tokens_details.cached_tokens` (OpenAI,
 LiteLLM), `prompt_cache_hit_tokens` (DeepSeek) or `cache_read_input_tokens`
