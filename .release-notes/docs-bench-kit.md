@@ -20,8 +20,12 @@
     and its expected output.
   - `relay-meter.mjs`: a dependency-free metering relay (tokens and dollars from the usage the
     server reported, Chat Completions / Responses / Anthropic Messages, per-cell attribution,
-    placeholder-key injection, dated price table). 7 tests (`node --test
-    benchmarks/kit/tests/relay-meter.test.mjs`).
+    placeholder-key injection, dated price table). Responses are metered incrementally, line by
+    line as they stream, so a long Anthropic stream keeps the input and cache tokens of its first
+    event (`message_start`) and a Responses `response.completed` line or a non-streamed body of
+    any realistic size is parsed whole (bound 64 Mi characters; past it the call is counted as
+    unmetered, never partly metered). 12 tests, including streams over 256 KB in each wire format
+    (`node --test benchmarks/kit/tests/relay-meter.test.mjs`).
   - `ADAPTER-RECIPE.md`: wrapping any harness for Harbor / Terminal-Bench (install pinned by
     SHA256SUMS, unattended flags, deadline handling, audit/trace on, traffic through the meter).
   - `standards/`: the gnomon Bench Standards v0.2 spec text (GBS-OVERHEAD, -CHAOS, -AUDIT,

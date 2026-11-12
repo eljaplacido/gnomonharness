@@ -39,7 +39,8 @@
 // `prompt_tokens_details.cached_tokens`), Responses (`usage.input_tokens`, `output_tokens`,
 // `input_tokens_details.cached_tokens`), Anthropic Messages (`input_tokens`, `output_tokens`,
 // `cache_read_input_tokens`, `cache_creation_input_tokens`, from message_start and
-// message_delta). Whole JSON bodies and SSE streams both work.
+// message_delta). Whole JSON bodies and SSE streams both work. Streams are metered line by line as
+// they pass, so a stream of any length keeps the usage of its first and last events.
 import http from "node:http";
 import https from "node:https";
 import fs from "node:fs";
@@ -63,12 +64,10 @@ function objects(text) {
   const out = [];
   let sse = false;
   for (const line of text.split("\n")) {
-    const l = line.trim();
-    if (!l.startsWith("data:")) continue;
+    const o = sseLine(line);
+    if (o === NOT_SSE) continue;
     sse = true;
-    const payload = l.slice(5).trim();
-    if (!payload || payload === "[DONE]") continue;
-    try { out.push(JSON.parse(payload)); } catch { /* a partial line; skip */ }
+    if (o) out.push(o);
   }
   if (!sse) {
     try { out.push(JSON.parse(text)); } catch { /* not JSON */ }
@@ -76,42 +75,108 @@ function objects(text) {
   return out;
 }
 
+const NOT_SSE = Symbol("not-sse");
+/** One line of a body: NOT_SSE if it is no `data:` line, null if it carries no JSON, else the object. */
+function sseLine(line) {
+  const l = line.trim();
+  if (!l.startsWith("data:")) return NOT_SSE;
+  const payload = l.slice(5).trim();
+  if (!payload || payload === "[DONE]") return null;
+  try { return JSON.parse(payload); } catch { return null; /* not JSON; skip */ }
+}
+
+/** Fold one response object (a whole body or one SSE event) into the running state. */
+function fold(st, o) {
+  if (!o || typeof o !== "object") return;
+  if (o.model) st.model = o.model;
+  if (o.response?.model) st.model = o.response.model;
+  if (o.message?.model) st.model = o.message.model;
+  for (const ch of o.choices || []) if (ch.finish_reason) st.finish = ch.finish_reason;
+  if (o.delta?.stop_reason) st.finish = o.delta.stop_reason;
+  if (o.stop_reason) st.finish = o.stop_reason;
+  const usage = o.usage || o.response?.usage || o.message?.usage;
+  if (!usage) return;
+  if (usage.prompt_tokens !== undefined || usage.completion_tokens !== undefined) {
+    // Chat Completions: prompt_tokens INCLUDES cached tokens. Cumulative: the last one wins.
+    const cached = usage.prompt_tokens_details?.cached_tokens ?? 0;
+    st.usage = { input_uncached: (usage.prompt_tokens ?? 0) - cached, input_cached: cached, input_cache_write: 0,
+                 output: usage.completion_tokens ?? 0 };
+  } else if (usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined
+             || o.type === "message_start" || o.type === "message_delta" || o.type === "message") {
+    // Anthropic Messages: input_tokens EXCLUDES cache reads and writes. message_start (the FIRST
+    // event of a stream) carries the input side, message_delta the running output count.
+    const u = (st.usage ??= { input_uncached: 0, input_cached: 0, input_cache_write: 0, output: 0 });
+    if (usage.input_tokens !== undefined) u.input_uncached = usage.input_tokens;
+    if (usage.cache_read_input_tokens !== undefined) u.input_cached = usage.cache_read_input_tokens;
+    if (usage.cache_creation_input_tokens !== undefined) u.input_cache_write = usage.cache_creation_input_tokens;
+    if (usage.output_tokens !== undefined) u.output = usage.output_tokens;
+  } else if (usage.input_tokens !== undefined || usage.output_tokens !== undefined) {
+    // Responses: input_tokens INCLUDES cached tokens.
+    const cached = usage.input_tokens_details?.cached_tokens ?? 0;
+    st.usage = { input_uncached: (usage.input_tokens ?? 0) - cached, input_cached: cached, input_cache_write: 0,
+                 output: usage.output_tokens ?? 0 };
+  }
+}
+
 /** Normalised usage: input split into uncached / cached / cache-write, and output. */
 export function parseUsage(text) {
-  let u = null;
-  let model = null;
-  let finish = null;
-  for (const o of objects(text)) {
-    if (o.model) model = o.model;
-    if (o.response?.model) model = o.response.model;
-    if (o.message?.model) model = o.message.model;
-    for (const ch of o.choices || []) if (ch.finish_reason) finish = ch.finish_reason;
-    if (o.delta?.stop_reason) finish = o.delta.stop_reason;
-    if (o.stop_reason) finish = o.stop_reason;
-    const usage = o.usage || o.response?.usage || o.message?.usage;
-    if (!usage) continue;
-    if (usage.prompt_tokens !== undefined || usage.completion_tokens !== undefined) {
-      // Chat Completions: prompt_tokens INCLUDES cached tokens. Cumulative: the last one wins.
-      const cached = usage.prompt_tokens_details?.cached_tokens ?? 0;
-      u = { input_uncached: (usage.prompt_tokens ?? 0) - cached, input_cached: cached, input_cache_write: 0,
-            output: usage.completion_tokens ?? 0 };
-    } else if (usage.cache_read_input_tokens !== undefined || usage.cache_creation_input_tokens !== undefined
-               || o.type === "message_start" || o.type === "message_delta" || o.type === "message") {
-      // Anthropic Messages: input_tokens EXCLUDES cache reads and writes. message_start carries
-      // the input side, message_delta the running output count.
-      u ??= { input_uncached: 0, input_cached: 0, input_cache_write: 0, output: 0 };
-      if (usage.input_tokens !== undefined) u.input_uncached = usage.input_tokens;
-      if (usage.cache_read_input_tokens !== undefined) u.input_cached = usage.cache_read_input_tokens;
-      if (usage.cache_creation_input_tokens !== undefined) u.input_cache_write = usage.cache_creation_input_tokens;
-      if (usage.output_tokens !== undefined) u.output = usage.output_tokens;
-    } else if (usage.input_tokens !== undefined || usage.output_tokens !== undefined) {
-      // Responses: input_tokens INCLUDES cached tokens.
-      const cached = usage.input_tokens_details?.cached_tokens ?? 0;
-      u = { input_uncached: (usage.input_tokens ?? 0) - cached, input_cached: cached, input_cache_write: 0,
-            output: usage.output_tokens ?? 0 };
+  const st = { usage: null, model: null, finish: null };
+  for (const o of objects(text)) fold(st, o);
+  return st;
+}
+
+// Bound, in characters, on what the meter holds at once: one SSE line, or a whole non-streamed
+// body. Far above any real response; a response past it is counted as unmetered (and logged with
+// `meter_overflow: true`), never as partly metered.
+export const METER_MAX_CHARS = 64 * 1024 * 1024;
+
+/**
+ * Incremental meter for one response. Usage is folded in as each complete SSE line arrives, so
+ * a long stream keeps the input side (Anthropic `message_start`, the first event) however long it
+ * runs, and memory stays bounded by the longest single line. A non-SSE body is kept whole and
+ * parsed at the end.
+ */
+export function createMeter(maxChars = METER_MAX_CHARS) {
+  const st = { usage: null, model: null, finish: null };
+  const decoder = new TextDecoder("utf-8");
+  let sse = false;
+  let line = "";   // the current, incomplete line
+  let body = "";   // the whole body, kept until it turns out to be SSE
+  let overflow = false;
+  const take = (l) => {
+    const o = sseLine(l);
+    if (o === NOT_SSE) return;
+    if (!sse) { sse = true; body = ""; }
+    if (o) fold(st, o);
+  };
+  const push = (text) => {
+    if (overflow || !text) return;
+    if (!sse) {
+      body += text;
+      if (body.length > maxChars) { overflow = true; body = ""; line = ""; return; }
     }
-  }
-  return { usage: u, model, finish };
+    let start = 0;
+    let nl;
+    while ((nl = text.indexOf("\n", start)) !== -1) { // scan only the new text, never the held line
+      take(line + text.slice(start, nl));
+      line = "";
+      start = nl + 1;
+    }
+    line += text.slice(start);
+    if (line.length > maxChars) { overflow = true; line = ""; body = ""; }
+  };
+  return {
+    write(chunk) { push(typeof chunk === "string" ? chunk : decoder.decode(chunk, { stream: true })); },
+    end() {
+      push(decoder.decode());
+      if (overflow) return { usage: null, model: st.model, finish: st.finish, overflow: true };
+      if (line) take(line);
+      if (!sse) {
+        try { fold(st, JSON.parse(body)); } catch { /* not JSON */ }
+      }
+      return { usage: st.usage, model: st.model, finish: st.finish, overflow: false };
+    },
+  };
 }
 
 export function price(model, u, table) {
@@ -212,7 +277,7 @@ function main() {
       const base = UPSTREAM.pathname.replace(/\/$/, "");
       const target = new URL(base + req.url, UPSTREAM);
       const mod = target.protocol === "https:" ? https : http;
-      let tail = "";
+      const meter = isModel ? createMeter() : null;
       const up = mod.request(target, { method: req.method, headers }, (ur) => {
         const status = ur.statusCode ?? 502;
         if (status >= 500) add(cell, "status_5xx", 1);
@@ -221,12 +286,12 @@ function main() {
         ur.on("data", (c) => {
           if (ttft === null) ttft = Date.now() - t0;
           res.write(c);
-          if (isModel) tail = (tail + c.toString("utf8")).slice(-262144); // usage arrives at the end
+          if (meter) meter.write(c);
         });
         ur.on("end", () => {
           res.end();
           if (!isModel) return;
-          const { usage, model, finish } = parseUsage(tail);
+          const { usage, model, finish, overflow } = meter.end();
           const m = model || prep.reqModel;
           let usd = null;
           if (usage) {
@@ -240,7 +305,7 @@ function main() {
           }
           log({ n: i, t: new Date(t0).toISOString(), cell, path: req.url.split("?")[0], status, model: m,
                 stream: prep.stream, include_usage_injected: prep.injected, ttft_ms: ttft, wall_ms: Date.now() - t0,
-                usage, usd, finish });
+                usage, usd, finish, ...(overflow ? { meter_overflow: true } : {}) });
         });
       });
       up.on("error", (e) => {

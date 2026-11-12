@@ -8,7 +8,7 @@ import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseUsage, price, prepareBody } from "../relay-meter.mjs";
+import { parseUsage, price, prepareBody, createMeter } from "../relay-meter.mjs";
 
 const RELAY = join(dirname(fileURLToPath(import.meta.url)), "..", "relay-meter.mjs");
 const FAKE_KEY = "test-upstream-key-0000";
@@ -68,6 +68,82 @@ test("prepareBody: include_usage only for streamed chat completions", () => {
   assert.equal(prepareBody(ns, "/chat/completions").injected, false);
 });
 
+// Long responses: the input side of an Anthropic stream arrives FIRST (message_start), and a
+// Responses stream's response.completed line can itself be large. Each is fed in 16 KB chunks,
+// split mid-character, the way a socket delivers it.
+const PAD = "é".repeat(400); // two bytes per character, so chunk edges split characters
+
+function longAnthropicStream(deltas = 400) {
+  const ev = (type, o) => `event: ${type}\ndata: ${JSON.stringify({ type, ...o })}\n\n`;
+  let s = ev("message_start", { message: { model: "claude-x", usage: { input_tokens: 50000, cache_read_input_tokens: 100000, cache_creation_input_tokens: 2000, output_tokens: 1 } } });
+  for (let i = 0; i < deltas; i++) s += ev("content_block_delta", { index: 0, delta: { type: "text_delta", text: PAD } });
+  s += ev("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 20000 } });
+  return s + ev("message_stop", {});
+}
+
+function longResponsesStream() {
+  const ev = (type, o) => `event: ${type}\ndata: ${JSON.stringify({ type, ...o })}\n\n`;
+  let s = ev("response.created", { response: { model: "gpt-x" } });
+  for (let i = 0; i < 50; i++) s += ev("response.output_text.delta", { delta: PAD });
+  const text = PAD.repeat(400); // the completed response repeats all output: one line over 256 KB
+  return s + ev("response.completed", { response: { model: "gpt-x", output: [{ type: "message", content: [{ type: "output_text", text }] }],
+    usage: { input_tokens: 70000, output_tokens: 9000, input_tokens_details: { cached_tokens: 30000 } } } });
+}
+
+function feed(text, maxBytes) {
+  const m = createMeter(maxBytes);
+  const buf = Buffer.from(text, "utf8");
+  for (let i = 0; i < buf.length; i += 16385) m.write(buf.subarray(i, i + 16385));
+  return m.end();
+}
+
+test("meter: an Anthropic stream over 256 KB keeps message_start's input and cache tokens", () => {
+  const s = longAnthropicStream();
+  assert.ok(Buffer.byteLength(s) > 262144);
+  const r = feed(s);
+  assert.deepEqual(r.usage, { input_uncached: 50000, input_cached: 100000, input_cache_write: 2000, output: 20000 });
+  assert.equal(r.model, "claude-x");
+  assert.equal(r.finish, "end_turn");
+  assert.deepEqual(r.usage, parseUsage(s).usage); // same answer as parsing the whole body at once
+});
+
+test("meter: a Responses stream whose response.completed line is over 256 KB", () => {
+  const s = longResponsesStream();
+  assert.ok(Buffer.byteLength(s.slice(s.lastIndexOf("data:"))) > 262144);
+  const r = feed(s);
+  assert.deepEqual(r.usage, { input_uncached: 40000, input_cached: 30000, input_cache_write: 0, output: 9000 });
+  assert.equal(r.model, "gpt-x");
+});
+
+test("meter: a Chat Completions stream over 256 KB, and a non-streamed body over 256 KB", () => {
+  let s = `data: ${JSON.stringify({ model: "m1", choices: [{ delta: { content: "x" } }] })}\n\n`;
+  for (let i = 0; i < 400; i++) s += `data: ${JSON.stringify({ choices: [{ delta: { content: PAD } }] })}\n\n`;
+  s += `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }] })}\n\n`;
+  s += `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 80000, completion_tokens: 12000, prompt_tokens_details: { cached_tokens: 60000 } } })}\n\ndata: [DONE]\n\n`;
+  assert.ok(Buffer.byteLength(s) > 262144);
+  assert.deepEqual(feed(s).usage, { input_uncached: 20000, input_cached: 60000, input_cache_write: 0, output: 12000 });
+
+  const big = JSON.stringify({ type: "message", model: "claude-x", stop_reason: "end_turn",
+    content: [{ type: "text", text: PAD.repeat(400) }],
+    usage: { input_tokens: 5000, cache_read_input_tokens: 40000, cache_creation_input_tokens: 300, output_tokens: 8000 } }, null, 2);
+  assert.ok(Buffer.byteLength(big) > 262144);
+  const r = feed(big);
+  assert.deepEqual(r.usage, { input_uncached: 5000, input_cached: 40000, input_cache_write: 300, output: 8000 });
+  assert.equal(r.finish, "end_turn");
+});
+
+test("meter: a stream without a trailing newline, and a response past the bound is unmetered, not partly metered", () => {
+  const s = `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 3, completion_tokens: 1 } })}`;
+  assert.deepEqual(feed(s).usage, { input_uncached: 3, input_cached: 0, input_cache_write: 0, output: 1 });
+  const over = feed(longResponsesStream(), 100000); // one line longer than the bound
+  assert.equal(over.usage, null);
+  assert.equal(over.overflow, true);
+  const body = feed(JSON.stringify({ model: "m", pad: PAD.repeat(300), usage: { prompt_tokens: 1, completion_tokens: 1 } }), 100000);
+  assert.equal(body.usage, null);
+  assert.equal(body.overflow, true);
+  assert.equal(feed(longAnthropicStream(), 100000).overflow, false); // short lines: no bound applies
+});
+
 function fakeUpstream() {
   const seen = [];
   const server = http.createServer((req, res) => {
@@ -78,7 +154,13 @@ function fakeUpstream() {
       const j = body ? JSON.parse(body) : {};
       seen.push({ path: req.url, auth: req.headers.authorization, xkey: req.headers["x-api-key"],
                   cell: req.headers["x-bench-cell"], body: j });
-      if (req.url.endsWith("/messages")) {
+      if (req.url.endsWith("/messages") && j.long) {
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        const s = Buffer.from(longAnthropicStream());
+        let i = 0;
+        const next = () => (i < s.length ? res.write(s.subarray(i, (i += 16385)), next) : res.end());
+        next();
+      } else if (req.url.endsWith("/messages")) {
         res.writeHead(200, { "content-type": "text/event-stream" });
         res.end([
           `data: ${JSON.stringify({ type: "message_start", message: { model: "m2", usage: { input_tokens: 50, cache_read_input_tokens: 20, cache_creation_input_tokens: 5, output_tokens: 1 } } })}`,
@@ -173,6 +255,25 @@ test("relay: meters, prices and attributes every call; the key never reaches the
     const log = readFileSync(join(dir, "calls.jsonl"), "utf8");
     assert.equal(log.trim().split("\n").length, 5);
     assert.ok(!log.includes(FAKE_KEY) && !log.includes("placeholder"));
+  } finally {
+    child.kill();
+    up.server.close();
+  }
+});
+
+test("relay: a long Anthropic stream, delivered in chunks, is metered with its input and cache tokens", async () => {
+  const up = await fakeUpstream();
+  const { child, relayPort, countersPort } = await startRelay({
+    RELAY_UPSTREAM: `http://127.0.0.1:${up.port}/v1`, RELAY_LISTEN: "127.0.0.1:0", RELAY_COUNTERS: "127.0.0.1:0" });
+  try {
+    const r = await call(relayPort, "POST", "/messages", { model: "claude-x", stream: true, long: true, messages: [] });
+    assert.equal(r.text, longAnthropicStream()); // passed through byte for byte
+    const t = JSON.parse((await call(countersPort, "GET", "/counters")).text).totals;
+    assert.equal(t.responses_with_usage, 1);
+    assert.equal(t.input_uncached, 50000);
+    assert.equal(t.input_cached, 100000);
+    assert.equal(t.input_cache_write, 2000);
+    assert.equal(t.output, 20000);
   } finally {
     child.kill();
     up.server.close();
