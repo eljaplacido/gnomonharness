@@ -1016,7 +1016,7 @@ function modePanel(d, nav) {
     sp && sp.genTps !== undefined ? h("p", { class: "muted small", text: `Measured in step 3: generation ${sp.genTps.toFixed(1)} tok/s${sp.prefillTps !== undefined ? `, prompt ${Math.round(sp.prefillTps)} tok/s` : ""}. Setup's suggestion here is made without that run; the speed check's own suggestion was shown there.` }) : null,
     h("fieldset", { class: "choices" }, h("legend", { class: "muted small", text: "Mode" }),
       radio("local", "Local only", "every role on this machine (role_profile local_first)"),
-      radio("hybrid", "Hybrid", "a cloud model plans, this machine builds (frontier_plan)"),
+      radio("hybrid", "Hybrid", "a cloud model plans, this machine builds: an opt-in cost mode, not a quality gain (frontier_plan)"),
       radio("cloud", "Cloud first", "a cloud model does the work (all_remote)")),
     pick === "hybrid" ? h("label", { class: "picker" }, "Hybrid control (recorded as a preference; it takes effect when escalation, PR #102, is merged)",
       h("select", { onChange: (e) => { u.control = e.target.value; u.review = null; } },

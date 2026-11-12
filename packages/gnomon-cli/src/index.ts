@@ -2630,8 +2630,9 @@ Commands:
         [--expect-proposal DIGEST]
     Scan this machine, plug in a local model it can run, then connect a
     cloud model. Recommends from a dated catalog and says why, pulls only on
-    a yes, offers a short speed check, suggests local only, hybrid or cloud
-    first, and writes .gnomon/ only after you accept the diff. Off a
+    a yes, offers a short speed check, suggests local only or cloud first
+    (hybrid, an opt-in cost mode, is --mode hybrid), and writes .gnomon/
+    only after you accept the diff. Off a
     terminal: --yes approves the write and nothing else; a download needs
     --pull TAG; nothing is spent. --expect-proposal writes only the change
     whose proposal.digest an earlier --json run printed. Exit 0 written,

@@ -10,7 +10,7 @@
  *   4. a short speed check, only on a yes (`--speed-check` off a terminal);
  *   5. optionally a cloud model, its key read hidden and stored outside the
  *      repository, exactly as `gnomon key set` does;
- *   6. suggest a mode: local only, hybrid or cloud first;
+ *   6. suggest a mode: local only or cloud first (hybrid is opted into);
  *   7. show the change to `.gnomon/` as a diff, and write it only when a
  *      person accepts it (or `--yes` does, for a script).
  *
@@ -348,7 +348,8 @@ function isLoopback(url: string): boolean {
 
 /**
  * A cloud model the surface already routes a role to, with its key held:
- * "a cloud endpoint is configured", which is when hybrid is suggested.
+ * "a cloud endpoint is configured", which is when setup names hybrid as the
+ * opt-in cost mode beside its suggestion.
  */
 function configuredCloud(texts: SurfaceTexts, deps: SetupDeps): { choice: CloudChoice; model: string } | undefined {
   const blocks = configTextEndpoints(texts["config.toml"]);

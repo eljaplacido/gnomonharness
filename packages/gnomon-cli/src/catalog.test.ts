@@ -69,9 +69,11 @@ describe("the shipped catalog", () => {
     // not a quality gain. R1H's RTX 5090 lead (87% vs 84%, 26% cheaper) did
     // not reproduce (R3R, R4H): the catalog must not quote it as current.
     expect(catalog.hybrid.evidence).toContain("cost mode, not a quality gain");
-    expect(catalog.hybrid.evidence).toContain("about 23% of cloud-only's cloud cost");
-    expect(catalog.hybrid.evidence).toContain("0.07 below cloud-only and 0.25 above local-only");
     expect(catalog.hybrid.evidence).toContain("no advantage over cloud-only");
+    // It cites the hybrid setup writes (frontier_plan: a cloud model plans),
+    // not local-first with cloud rescue, which setup cannot write yet.
+    expect(catalog.hybrid.evidence).toContain("a cloud model plans, the local model builds");
+    expect(catalog.hybrid.evidence).not.toMatch(/rescue|23%/);
     expect(catalog.hybrid.evidence).not.toMatch(/87%|84%|26% lower cost/);
     expect(catalog.hybrid.evidenceUnified).toContain("22/32 vs 16/31 local-only");
     // The file says so in words, where a reviewer reads it.
@@ -152,13 +154,14 @@ describe("the recommendation, per machine", () => {
     expect(mode.mode).toBe("cloud_first");
   });
 
-  it("a 16 GB Mac gets an 8B model, and hybrid is suggested", async () => {
+  it("a 16 GB Mac gets an 8B model, and cloud first is suggested (hybrid is never the default)", async () => {
     const rec = await recFor(MACHINES.mac16());
     expect(rec.top?.tag).toBe("qwen3:8b");
     expect(rec.top?.fit).toBe("fits");
     expect(rec.options.some((o) => o.tag === "qwen3.6:35b")).toBe(false);
     const mode = suggestMode({ local: rec.top, memory: rec.memory, hasCloud: false }, catalog);
-    expect(mode).toMatchObject({ mode: "hybrid", needsCloud: true });
+    expect(mode).toMatchObject({ mode: "cloud_first", needsCloud: true });
+    expect(mode.why).not.toMatch(/stronger|[Hh]ybrid/);
   });
 
   it("a 24 GB GPU gets qwen3.6:35b, and is told a few layers may spill", async () => {
@@ -272,20 +275,34 @@ describe("the mode it suggests", () => {
     const s = suggestMode({ local: await local(), memory: await mem(), speed: speed(375, 4000), hasCloud: false }, catalog);
     expect(s).toMatchObject({ mode: "local_only", needsCloud: false, provisional: true });
   });
-  it("a cloud model configured: hybrid, citing the measured result", async () => {
+  it("a cloud model configured: never hybrid by default; hybrid is named as the opt-in, citing the measured result", async () => {
     const s = suggestMode({ local: await local(), memory: await mem(), speed: speed(375, 4000), hasCloud: true }, catalog);
-    expect(s.mode).toBe("hybrid");
-    expect(s.why).toContain("a cost mode, not a quality gain");
-    expect(s.why).not.toContain("87%");
+    expect(s).toMatchObject({ mode: "local_only", needsCloud: false });
+    expect(s.why).toContain("cloud first would let it do the work");
+    expect(s.why).toContain("opt-in cost mode, not a quality gain");
+    expect(s.why).not.toMatch(/stronger|87%|rescue/);
   });
   it("on unified memory, the GB10 result is cited beside it", async () => {
     const rec = await recFor(withUrls(MACHINES.gb10(), ollamaServing({ "qwen3.6:35b": 23.9e9 })));
     const s = suggestMode({ local: rec.top, memory: rec.memory, hasCloud: true }, catalog);
+    expect(s.mode).not.toBe("hybrid");
     expect(s.why).toContain("NVIDIA GB10");
   });
-  it("usable but slow: hybrid, on the provisional threshold", async () => {
+  it("usable but slow: cloud first, on the provisional threshold", async () => {
     const s = suggestMode({ local: await local(), memory: await mem(), speed: speed(20, 3000), hasCloud: false }, catalog);
-    expect(s).toMatchObject({ mode: "hybrid", provisional: true, needsCloud: true });
+    expect(s).toMatchObject({ mode: "cloud_first", provisional: true, needsCloud: true });
+    // No cloud model to opt in with: hybrid is not mentioned.
+    expect(s.why).not.toMatch(/[Hh]ybrid/);
+    const withCloud = suggestMode({ local: await local(), memory: await mem(), speed: speed(20, 3000), hasCloud: true }, catalog);
+    expect(withCloud.mode).toBe("cloud_first");
+    expect(withCloud.why).toContain("opt-in cost mode");
+  });
+  it("hybrid is never the suggestion, on any machine or speed", async () => {
+    for (const sp of [undefined, speed(375, 4000), speed(20, 3000), speed(5, 200)]) {
+      for (const hasCloud of [false, true]) {
+        expect(suggestMode({ local: await local(), memory: await mem(), speed: sp, hasCloud }, catalog).mode).not.toBe("hybrid");
+      }
+    }
   });
   it("too slow for a task: cloud first", async () => {
     const s = suggestMode({ local: await local(), memory: await mem(), speed: speed(5, 200), hasCloud: false }, catalog);
