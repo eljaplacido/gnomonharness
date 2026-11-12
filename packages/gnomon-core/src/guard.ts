@@ -147,9 +147,10 @@ export const GUARD_TOOLS = [...POLICY_TOOLS, "grep", "glob", "execute"] as const
  *
  *   websearch  a search the host runs on a server: no URL to judge, but it
  *              reaches the network. Decided as webfetch is, without the URL
- *              rules: a role without webfetch is asked (rule `tools`, as
- *              `execute` without bash), `[sandbox] network = false` refuses
- *              it (rule `network`), the gate asks as for webfetch. Family
+ *              rules: `[sandbox] network = false` refuses it (rule `network`)
+ *              whatever the role holds; otherwise a role without webfetch
+ *              is asked (rule `tools`, as `execute` without bash) and the
+ *              gate asks as for webfetch. Family
  *              `network`.
  *   agent      a subagent (Claude Code Agent/Task, opencode task). It does
  *              nothing itself; every tool call the subagent makes reaches the
@@ -790,19 +791,9 @@ export function decideForeign(
   }
   if (cls === "websearch") {
     const net = governance ? governance.levels.network : null;
-    if (!offered.has("webfetch")) {
-      // As `execute` for a role without bash: put to a person, not refused —
-      // a search reads, and the scaffold's roles hold no webfetch.
-      return level(
-        {
-          decision: "ask",
-          rule: "tools",
-          reason: "A web search reaches the network as webfetch does, and this role was not given webfetch. A person decides whether it may run.",
-        },
-        null,
-        null
-      );
-    }
+    // network = false first: a declared no-network surface refuses the search
+    // whatever the role holds — the less-privileged role must not get the
+    // weaker (approvable) answer.
     if (ctx.network === false) {
       return level(
         {
@@ -812,6 +803,19 @@ export function decideForeign(
         },
         "network",
         net
+      );
+    }
+    if (!offered.has("webfetch")) {
+      // As `execute` for a role without bash: put to a person, not refused —
+      // a search reads. Reached only where the network is allowed.
+      return level(
+        {
+          decision: "ask",
+          rule: "tools",
+          reason: "A web search reaches the network as webfetch does, and this role was not given webfetch. A person decides whether it may run.",
+        },
+        null,
+        null
       );
     }
     if (needsApproval("webfetch", ctx.gate)) {
