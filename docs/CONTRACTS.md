@@ -2519,11 +2519,11 @@ deadline, capped runs leaving only a partial record (TB1, 29 of 29), no tool
 timing (TB4), a read-only `/app` failing as "No .gnomon/ surface found" (TB7),
 and a 60 s provider grace outlasted by 503s.
 
-**The default that changes (v0.4.4), and the one that does not.**
+**The default that changes (v0.4.4, first released in v0.5.0), and the one that does not.**
 
 | key | before | now | to restore |
 |---|---|---|---|
-| `[endpoints.<name>] replay_reasoning` | off unless declared (or `api.deepseek.com`) | undeclared on a **hosted** endpoint: on from the request after it first answers a tool call with reasoning content (`reasoning_content` or `reasoning`), for the session. Undeclared on a **local lane** (`isLocalLaneUrl`): off, as before. (since v0.4.6 judged by `replayLocal`, §39, the same host set) | `replay_reasoning = false` |
+| `[endpoints.<name>] replay_reasoning` | off unless declared (or `api.deepseek.com`) | undeclared on a **hosted** endpoint: on from the request after it first answers a tool call with reasoning content (`reasoning_content` or `reasoning`), for the session. Undeclared on a **local lane** (`isLocalLaneUrl`): off, as before. (since v0.5.0 judged by `replayLocal`, §39, the same host set) | `replay_reasoning = false` |
 | `[turn] nudge_after_idle` | `12` | `12`, unchanged; a declared `0` is now off (it was floored to 1) | — |
 
 Replay is H3's verdict (pre-registered; hosted DeepSeek V4.1 Flash, 30-minute
@@ -3019,7 +3019,7 @@ hashes §32 pinned, held again in `deliverable_first.test.ts`). The same with
   item's leading path. `named \`x.csv\`` beside a directory the same sentence
   asks for is joined to it. Fenced code and HTML comments are not read;
   directories are never named. Each path once, in order.
-- Since v0.4.6 (research note 13, finding 3): a verb whose object names
+- Since v0.5.0 (research note 13, finding 3): a verb whose object names
   `dependencies`, `dependency` or `packages` before its first path is a
   dependency manifest ("Write any Python dependencies … to
   `/app/requirements.txt`"), not an output, and names nothing; a modal whose
@@ -3028,10 +3028,10 @@ hashes §32 pinned, held again in `deliverable_first.test.ts`). The same with
   span right after `running`/`run` names the file its `--output`, `--out` or
   `-o` flag gives. A named path that exists when the run starts is not
   checked; the `named` event lists it under `present`.
-- On the 29 P2G41 task instructions, against the labels as revised for v0.4.6
+- On the 29 P2G41 task instructions, against the labels as revised for v0.5.0
   (dependency manifests out; `flight_plan.json` and the risk scorer's three
   outputs in), the extractor names 34 paths, all 34 labelled (precision 1.0,
-  recall 1.0). Before v0.4.6 it named 33, 30 of them right, and 11 of the 29
+  recall 1.0). Before v0.5.0 it named 33, 30 of them right, and 11 of the 29
   tasks were wrong or empty; the 8 still empty name no output file. Left out on
   purpose: `/app/src` (a directory), and outputs a program is said to write
   without a command the task names (`release-manifest.json`, `audit.log`, the
@@ -3053,7 +3053,7 @@ hashes §32 pinned, held again in `deliverable_first.test.ts`). The same with
 - Audit kind `deliverable_first`, `event`:
   - `named`, once, after `session_start`: `named` (the paths checked,
     possibly `[]`), `present` (named paths that already existed, not
-    checked; since v0.4.6), `at` (the fractions);
+    checked; since v0.5.0), `at` (the fractions);
   - `check`, at each fraction when something was named: `at`, `step`, `used`
     (the budget fraction used), `named`, `missing`, `noted` (whether the note
     named them).
@@ -3351,7 +3351,7 @@ tiers of it: `isLoopbackEndpoint` (`loopback`) for trust and key grants,
 billed check and the `delivered` flag; `replayLocal` (`loopback`, `private`,
 or a URL that does not parse) for the replay default, the same host set
 `isLocalLaneUrl` held.
-Until v0.4.6 three predicates with three host sets decided these
+Until v0.5.0 three predicates with three host sets decided these
 (`isLocalEndpoint`, `isLocalLaneUrl`, `isLoopbackEndpoint`; audit 2026-11-06
 #11); merging widened `isLocalEndpoint` by 127/8 beyond 127.0.0.1,
 `*.localhost`, 0/8, link-local, IPv6 private ranges, `host.docker.internal`
