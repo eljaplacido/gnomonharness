@@ -59,7 +59,7 @@ import { FALLBACK_LARGE, FALLBACK_SMALL } from "./detect.js";
 // Published values (docs/CONTRACTS.md §16)
 // ---------------------------------------------------------------------------
 
-/** Hybrid control, per escalation block, once PR #102's `escalate` exists. */
+/** Hybrid control: a recorded preference. Setup writes no `[roles.<name>.escalate]` block (CONTRACTS §42). */
 export const HYBRID_CONTROLS = ["off", "observe", "ask", "auto"] as const;
 export type HybridControl = (typeof HYBRID_CONTROLS)[number];
 
@@ -79,8 +79,8 @@ export const MODE_ALIASES: Record<string, Suggestion> = {
 };
 
 const ESCALATE_NOTE =
-  "recorded as your preference; it takes effect only when escalation ([roles.X.escalate], PR #102) is merged, " +
-  "and `gnomon setup` will then propose it in the surface";
+  "recorded as your preference only; setup writes no escalation block. Local-first cloud rescue is declared " +
+  "by hand with [roles.<name>.escalate] (CONTRACTS §42)";
 
 // ---------------------------------------------------------------------------
 // Seams

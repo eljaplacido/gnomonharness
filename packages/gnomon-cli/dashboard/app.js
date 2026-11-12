@@ -1018,7 +1018,7 @@ function modePanel(d, nav) {
       radio("local", "Local only", "every role on this machine (role_profile local_first)"),
       radio("hybrid", "Hybrid", "a cloud model plans, this machine builds: an opt-in cost mode, not a quality gain (frontier_plan)"),
       radio("cloud", "Cloud first", "a cloud model does the work (all_remote)")),
-    pick === "hybrid" ? h("label", { class: "picker" }, "Hybrid control (recorded as a preference; it takes effect when escalation, PR #102, is merged)",
+    pick === "hybrid" ? h("label", { class: "picker" }, "Hybrid control (recorded as a preference only; setup writes no [roles.<name>.escalate] block)",
       h("select", { onChange: (e) => { u.control = e.target.value; u.review = null; } },
         ["off", "observe", "ask", "auto"].map((c) => h("option", { value: c, selected: u.control === c ? true : null, text: c + (c === "observe" ? " (default)" : "") })))) : null,
     nav(4, pick ? 6 : null, "Review the change"));
@@ -1101,7 +1101,7 @@ function reviewPanel(d, nav) {
       ["Local model", rep.local ? `${rep.local.tag}${rep.local.small && rep.local.small !== rep.local.tag ? ` (smol: ${rep.local.small})` : ""}${rep.local.endpoint ? ` @${rep.local.endpoint}` : ""}` : "none"],
       ["Cloud model", rep.cloud ? `${rep.cloud.model} @${rep.cloud.endpoint}${rep.cloud.key_env ? ` · $${rep.cloud.key_env} ${rep.cloud.key_held ? "held" : "NOT SET"}` : ""}` : "none"],
       ["Mode", rep.mode ? `${MODE_TEXT[rep.mode.chosen]} · role_profile ${rep.mode.role_profile}` : "–"],
-      ["Hybrid control", rep.hybrid_control ? `${rep.hybrid_control.value} · recorded only, not active yet` : "–"],
+      ["Hybrid control", rep.hybrid_control ? `${rep.hybrid_control.value} · recorded only, not active` : "–"],
       ["Surface now", p.fresh ? "no .gnomon/ yet: created from `gnomon init`'s scaffold" : short(rep.surface_hash && rep.surface_hash.before)],
       ["Proposal", short(p.digest)],
     ]),

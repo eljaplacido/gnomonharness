@@ -441,7 +441,7 @@ describe("the guided path, start to finish", () => {
     expect(r.mode!.why).toContain("opt-in cost mode, not a quality gain");
     expect(r.mode!.why).not.toContain("87%");
     expect(r.hybrid_control).toMatchObject({ value: "observe", active: false });
-    expect(r.hybrid_control!.note).toContain("PR #102");
+    expect(r.hybrid_control!.note).toContain("[roles.<name>.escalate]");
     const config = loadConfig(dir);
     expect(routeRole(config, "coordinator").target).toMatchObject({ model: "deepseek-v4.1-flash", endpoint: "go" });
     expect(routeRole(config, "implementor").target).toMatchObject({ model: "qwen3.6:35b", endpoint: "local" });
