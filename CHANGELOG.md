@@ -106,7 +106,10 @@ Also in this release:
   trust`. As defence in depth, the readiness check itself sends no
   `Authorization` header to such a host unless the surface is trusted, and
   `gnomon setup` no longer offers its one-token check for an endpoint taken
-  from an untrusted surface at such a host. Known providers, loopback
+  from an untrusted surface at such a host. Its model listing sends such an
+  endpoint no key either, including one named like a preset
+  (`[endpoints.openrouter]` at another host): the host decides, not the
+  name. Known providers, loopback
   endpoints and trusted surfaces (`gnomon trust grant`, `--trust`,
   `GNOMON_TRUST`) behave as before. Present in every release before 0.5.0.
   CONTRACTS.md §8, "Keys before (or without) a session".

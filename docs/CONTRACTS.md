@@ -644,13 +644,16 @@ usual), never the surface as declared:
 | `gnomon endpoint list` | listed as declared; the model cross-check runs without the key, and the line above is printed |
 | `gnomon endpoint test` | that endpoint is `NOT TESTED`, and the command exits **3** (`refused_by_gate`) |
 | `gnomon setup`'s one-token check of an endpoint taken from the surface | not offered; the line above is said instead |
+| `gnomon setup`'s model listing of an endpoint taken from the surface (one named like a preset, e.g. `[endpoints.openrouter]`, included) | the listing runs without the key, and the line above is said |
 
 A trusted surface (or one that grants nothing beyond the scaffold) runs as
 declared in all of them, and a known provider or a loopback endpoint always gets
 its key. As defence in depth, the readiness check itself (`checkReadiness`)
 sends no `Authorization` header to a host that fails `keyHostIsDefault` unless
 its caller says the surface is trusted. `endpoint add` and `setup` send a key to
-the URL the person typed or the preset they chose, which is their own choice.
+the URL the person typed or the preset they chose, which is their own choice;
+a surface endpoint whose name is a preset's is not that preset — its host
+decides.
 Before v0.5.0, `launch`'s readiness check, `gnomon doctor` and `gnomon endpoint
 list|test` ran on the surface as declared, so a cloned repository naming its own
 host and, say, `ANTHROPIC_API_KEY` was sent that key on an interactive

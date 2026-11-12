@@ -715,9 +715,7 @@ export async function runSetup(opts: SetupOptions, deps: SetupDeps): Promise<Set
     // gets its key only once the surface is trusted -- the rule the session's
     // trust step applies (clampToDefaults). The y/N below names an endpoint,
     // not a host, so a yes there is not a yes to sending a key somewhere new.
-    const keyHeldBack =
-      Boolean(keyEnv) && cloud.choice.fromSurface === true && !keyHostIsDefault(cloud.choice.block.url) && !deps.surfaceTrusted?.();
-    if (held && io.interactive && keyHeldBack) {
+    if (held && io.interactive && keyHeldBack(cloud.choice, deps)) {
       say(`  Not checked: ${withheldWhy({ env: keyEnv!, host: hostName(cloud.choice.block.url) })}.`);
     } else if (held && io.interactive) {
       const go = await io.ask(`  Check it now with one token through ${cloud.choice.name} (a fraction of a cent)? [y/N] `, "n");
@@ -958,13 +956,33 @@ function safeHash(gnomonDir: string): string | undefined {
   }
 }
 
+/**
+ * An endpoint the surface chose, at a host that is not a known provider, on a
+ * surface not yet trusted: its key stays here. The host decides, never the
+ * endpoint's name -- a surface's `[endpoints.openrouter]` is not OpenRouter
+ * unless its URL is. The rule the session's trust step applies
+ * (clampToDefaults), for every request setup makes before that step.
+ */
+function keyHeldBack(choice: CloudChoice, deps: SetupDeps): boolean {
+  return Boolean(choice.block.api_key_env) && choice.fromSurface === true && !keyHostIsDefault(choice.block.url) && !deps.surfaceTrusted?.();
+}
+
 /** Pick a model on a cloud endpoint: the catalog's default for the preset, or one from its listing. */
 async function pickCloudModel(choice: CloudChoice, deps: SetupDeps): Promise<{ choice: CloudChoice; model: string } | undefined> {
   const { io } = deps;
-  const known = deps.catalog.cloud.find((c) => c.preset === choice.preset);
+  // Only a preset's own choice carries the catalog's default; a surface
+  // endpoint that reuses a preset's name has no preset (resolveCloudEndpoint).
+  const known = choice.preset ? deps.catalog.cloud.find((c) => c.preset === choice.preset) : undefined;
   let suggested = known?.model;
   if (!suggested) {
-    const listed = await deps.listCloudModels(choice.block).catch(() => [] as string[]);
+    // Listing is a GET, but it carries the key: held back, it is asked without one.
+    let block = choice.block;
+    if (keyHeldBack(choice, deps)) {
+      const { api_key_env: env, ...keyless } = choice.block;
+      block = keyless;
+      io.say(`  ${choice.name} in this surface is at ${hostName(choice.block.url)}; listing its models without a key: ${withheldWhy({ env: env!, host: hostName(choice.block.url) })}.`);
+    }
+    const listed = await deps.listCloudModels(block).catch(() => [] as string[]);
     suggested = listed[0];
     if (listed.length > 0) io.say(`  It lists ${listed.length} models${listed.length > 12 ? `, e.g. ${listed.slice(0, 12).join(", ")}` : `: ${listed.join(", ")}`}.`);
   }
