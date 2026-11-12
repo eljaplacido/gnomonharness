@@ -56,6 +56,8 @@ import {
   resolveBootstrap,
   resolveExec,
   listRoles,
+  resolveEndpoint,
+  DEFAULT_ENDPOINT,
 } from "./config.js";
 import { bashPolicy } from "./tools.js";
 import { gnomonDataDir, restrictToOwner } from "./credentials.js";
@@ -331,6 +333,29 @@ export function keyHostIsDefault(url: string): boolean {
 }
 
 /**
+ * The URL a role's `fallback` or `escalate` block is actually sent to, judged
+ * the way routeRole builds it: its own `url`, else the named endpoint's (the
+ * default endpoint when neither is given). An inline `api_key_env` beside
+ * `endpoint = "..."` goes to that endpoint's host, so the trust step judges
+ * that host, not only a `url` written in the block. Null when the endpoint is
+ * unknown (routeRole refuses such a surface anyway).
+ */
+function effectiveSideUrl(config: GnomonConfig, side: { url?: unknown; endpoint?: unknown } | undefined): string | null {
+  if (!side) return null;
+  const own = str(side.url);
+  if (own) return own;
+  const name = str(side.endpoint) || DEFAULT_ENDPOINT;
+  try {
+    return str(resolveEndpoint(config, name).url) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** The role blocks besides the target that name their own key: fallback and escalate. */
+const KEYED_SIDES = ["fallback", "escalate"] as const;
+
+/**
  * Everything this surface grants beyond the scaffold `gnomon init` writes.
  *
  * What counts, and why each is a grant rather than a preference:
@@ -437,11 +462,13 @@ export function surfaceGrants(config: GnomonConfig): Grant[] {
     }
   }
   for (const [role, def] of Object.entries(config.roles ?? {})) {
-    const fb = def?.fallback;
-    const v = str(fb?.api_key_env);
-    const url = str(fb?.url);
-    if (v && url && !keyHostIsDefault(url)) {
-      add({ key: `key:${role}.fallback:${v}@${hostOf(url)}`, subject: `role ${role}`, grants: `fallback sends $${v} to ${hostOf(url) || url}`, default: "keys go only to known providers" });
+    for (const side of KEYED_SIDES) {
+      const block = def?.[side] as { api_key_env?: unknown; url?: unknown; endpoint?: unknown } | undefined;
+      const v = str(block?.api_key_env);
+      const url = v ? effectiveSideUrl(config, block) : null;
+      if (v && url && !keyHostIsDefault(url)) {
+        add({ key: `key:${role}.${side}:${v}@${hostOf(url)}`, subject: `role ${role}`, grants: `${side} sends $${v} to ${hostOf(url) || url}`, default: "keys go only to known providers" });
+      }
     }
   }
 
@@ -544,8 +571,12 @@ export function clampToDefaults(config: GnomonConfig, floor?: ExecFloor): Gnomon
 
   for (const [role, def] of Object.entries(c.roles ?? {}) as Array<[string, RoleDef]>) {
     if (!def) continue;
-    const fb = def.fallback as Record<string, any> | undefined;
-    if (fb && str(fb.api_key_env) && str(fb.url) && !keyHostIsDefault(str(fb.url))) delete fb.api_key_env;
+    for (const side of KEYED_SIDES) {
+      const block = def[side] as Record<string, any> | undefined;
+      if (!block || !str(block.api_key_env)) continue;
+      const url = effectiveSideUrl(c, block);
+      if (url && !keyHostIsDefault(url)) delete block.api_key_env;
+    }
 
     const base = SCAFFOLD_ROLES[role] ?? ENVELOPE;
     const tools = effectiveTools(c, def);

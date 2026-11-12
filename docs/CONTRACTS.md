@@ -628,10 +628,10 @@ parse trusts nothing.
 **Exit codes.** A clamped run exits by its bucket like any other. Quitting at the
 interactive prompt exits **3** (`refused_by_gate`) with nothing run.
 
-**Keys before (or without) a session.** The rule that clamps a key — an endpoint
-or fallback's `api_key_env` goes to a host that is not loopback and not in
-`KEY_HOSTS` only on a surface the operator trusts (`keyHostIsDefault`, exported
-from gnomon-core) — holds for every request that carries a key, not only for a
+**Keys before (or without) a session.** The rule that clamps a key — an endpoint's,
+a role's `fallback`'s or a role's `escalate`'s `api_key_env` goes to a host that
+is not loopback and not in `KEY_HOSTS` only on a surface the operator trusts
+(`keyHostIsDefault`, exported from gnomon-core) — holds for every request that carries a key, not only for a
 session's. These run before `launch`'s trust prompt, or in commands that never
 open a session, and each one uses the surface **as the trust step would run it**
 (settled headless and silently, with `--trust` / `GNOMON_TRUST` / the store as
@@ -3799,6 +3799,15 @@ usage is under `volatile.escalation_usage` (`before`, `after`, and
 
 **Surface hash** — the block lives in `roles.toml` or a profile, so declaring,
 changing or removing it moves the surface hash like any other key. Both are absent when nothing moved.
+
+**Trust** — the block is a route like `fallback` (§8). An `api_key_env` in it
+that would go to a host that is not loopback and not in `KEY_HOSTS` is the
+grant `key:<role>.escalate:<VAR>@<host>`, and a clamped surface drops that key,
+so the escalated request is sent without an `Authorization` header. The host
+judged is the one the request goes to: the block's `url`, else its `endpoint`'s
+(an inline `api_key_env` beside `endpoint = "..."` included); `fallback` is
+judged the same way (`key:<role>.fallback:<VAR>@<host>`). The escalated route
+also takes its endpoint's `prompt_cache` (§43), as a role routed there would.
 
 **Fixture**: `conformance/escalation_record.json`.
 `packages/gnomon-core/src/escalation.test.ts` asserts the code's

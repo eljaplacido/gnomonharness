@@ -13,6 +13,8 @@ import { join } from "node:path";
 import { loadConfig, routeRole, auditSurface, applyProfile, ESCALATE_TRIGGERS } from "./config.js";
 import * as promptLoop from "./prompt_loop.js";
 import { mapBucket } from "./session.js";
+import { clampToDefaults, surfaceGrants } from "./trust.js";
+import { promptCacheOn } from "./prompt_cache.js";
 
 const UI = { meta: [], meta_style: "line", think: "hide", spinner: false, color: false, cot: "work" } as any;
 const LOCAL = "http://local.invalid/api/chat";
@@ -123,11 +125,11 @@ async function run(
 /** Swap in the scripted endpoints for the length of `fn`. */
 async function scripted<T>(
   script: { local: (n: number) => Reply | "down"; cloud?: (n: number) => Reply },
-  fn: (calls: { local: number; cloud: number; cloudBodies: any[] }) => Promise<T>
+  fn: (calls: { local: number; cloud: number; cloudBodies: any[]; cloudHeaders: Array<Record<string, string>> }) => Promise<T>
 ): Promise<T> {
-  const calls = { local: 0, cloud: 0, cloudBodies: [] as any[] };
+  const calls = { local: 0, cloud: 0, cloudBodies: [] as any[], cloudHeaders: [] as Array<Record<string, string>> };
   const original = globalThis.fetch;
-  globalThis.fetch = (async (url: string | URL, init?: { body?: unknown }) => {
+  globalThis.fetch = (async (url: string | URL, init?: { body?: unknown; headers?: unknown }) => {
     const u = String(url);
     if (u.startsWith("http://local.invalid")) {
       const r = script.local(++calls.local);
@@ -136,6 +138,7 @@ async function scripted<T>(
     }
     if (u.startsWith("http://cloud.invalid")) {
       try { calls.cloudBodies.push(JSON.parse(String(init?.body ?? "null"))); } catch { calls.cloudBodies.push(null); }
+      calls.cloudHeaders.push(Object.fromEntries(new Headers((init?.headers ?? {}) as HeadersInit).entries()));
       const r = (script.cloud ?? (() => ({ text: "done" })))(++calls.cloud);
       return { ok: true, status: 200, json: async () => openaiReply(r) };
     }
@@ -610,6 +613,48 @@ describe("local first, cloud rescue v2: stuck, deadline_share, carry, handoffs",
     for (const k of Object.keys(t)) expect([k, esc[k]]).toEqual([k, t[k]]);
     expect(esc.replayReasoning).toBe(true);
     expect(esc.stream).toBe(true);
+  });
+
+  // Release review (v0.5.0): the escalation route lacked the endpoint's
+  // prompt_cache, so an opted-out Claude endpoint still got cache_control.
+  it("an escalation to a Claude endpoint follows that endpoint's prompt_cache", async () => {
+    const claude = (extra: Record<string, unknown>) => {
+      const c = fresh({}, ESC(["stall"], { model: "claude-sonnet-4-5" }));
+      c.config.endpoints.cloudtest = { url: CLOUD, kind: "openai", ...extra };
+      return c;
+    };
+    const off = claude({ prompt_cache: false });
+    expect(routeRole(off, "implement").escalate?.promptCache).toBe(false);
+    expect(promptCacheOn(routeRole(off, "implement").escalate!)).toBe(false);
+    const optedOut = await run(off, { local: () => READ("README.md"), cloud: () => ({ text: "fixed it" }) });
+    expect(optedOut.calls.cloud).toBeGreaterThan(0);
+    for (const body of optedOut.calls.cloudBodies) expect(JSON.stringify(body)).not.toContain("cache_control");
+    // The control: undeclared, a Claude model id gets the markers.
+    const on = await run(claude({}), { local: () => READ("README.md"), cloud: () => ({ text: "fixed it" }) });
+    expect(on.calls.cloudBodies.some((body) => JSON.stringify(body).includes("cache_control"))).toBe(true);
+  });
+
+  // Release review (v0.5.0): an untrusted surface's escalate key to a host the
+  // trust step does not know is clamped, so no Authorization header reaches it.
+  it("on a clamped surface, an escalation to an unknown host sends no key", async () => {
+    const VAR = "GNOMON_TEST_ESCALATE_KEY";
+    const prior = process.env[VAR];
+    process.env[VAR] = "sk-test-not-a-real-key";
+    try {
+      const declared = fresh({}, { model: "cloud-m", url: CLOUD, api_key_env: VAR, on: ["stall"], carry: "handover" });
+      expect(surfaceGrants(declared).map((g) => g.key)).toContain(`key:implement.escalate:${VAR}@cloud.invalid`);
+      const script = { local: () => READ("README.md"), cloud: () => ({ text: "fixed it" }) as Reply };
+      // The control: trusted as written, the key is sent.
+      const trusted = await run(declared, script);
+      expect(trusted.calls.cloudHeaders[0]?.authorization).toBe("Bearer sk-test-not-a-real-key");
+      const clamped = await run(clampToDefaults(declared), script);
+      expect(clamped.turn.escalation).toBeDefined();
+      expect(clamped.calls.cloud).toBeGreaterThan(0);
+      for (const h of clamped.calls.cloudHeaders) expect(h.authorization).toBeUndefined();
+    } finally {
+      if (prior === undefined) delete process.env[VAR];
+      else process.env[VAR] = prior;
+    }
   });
 
   it("declaring the block moves the surface hash", async () => {

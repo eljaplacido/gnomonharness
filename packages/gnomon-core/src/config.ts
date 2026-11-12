@@ -4670,6 +4670,7 @@ export function routeRole(
       ...contextWindowOf(config, escEndpoint?.max_context_tokens, { url: escUrl, kind: escKind, model: esc.model }),
       ...replayFieldsOf({ ...(escEndpoint ?? {}), url: escUrl }, "openai"),
       ...steerFieldsOf(escEndpoint),
+      ...promptCacheFieldsOf(escEndpoint),
       ...knobsOf(roleDef, escEndpoint, escKind),
       on,
       ...(typeof esc.max_steps === "number" && esc.max_steps > 0 ? { max_steps: Math.floor(esc.max_steps) } : {}),

