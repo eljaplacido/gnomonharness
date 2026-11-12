@@ -36,7 +36,8 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { hostname } from "node:os";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
+import { escapesBase } from "./rel_path.js";
 import { redact, resolveAudit } from "./audit.js";
 import { harnessBuild } from "./build.js";
 import { recordDegradation, type DegradationSink } from "./degradation.js";
@@ -847,7 +848,7 @@ export function shadowDir(root: string, env: NodeJS.ProcessEnv, warn: (line: str
   if (!declared) return local;
   const abs = resolve(declared);
   const rel = relative(resolve(root), abs);
-  const inside = rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  const inside = !escapesBase(rel);
   const ownDir = rel === ".gnomon-shadow" || /^\.gnomon-shadow[\\/]/.test(rel);
   if (inside && !ownDir) {
     warn(

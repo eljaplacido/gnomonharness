@@ -31,6 +31,7 @@ import {
   readlinkSync
 } from "node:fs";
 import { resolve, relative, isAbsolute, dirname, basename, join, sep, win32 as win32Path } from "node:path";
+import { escapesBase } from "./rel_path.js";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
 import { homedir, tmpdir } from "node:os";
@@ -579,7 +580,7 @@ export function resolveInRoot(
   for (const candidate of [root, ...extraRoots]) {
     const realRoot = realpathOrSelf(resolve(candidate));
     const rel = relative(realRoot, realAbs);
-    if (!rel.startsWith("..") && !isAbsolute(rel)) return abs;
+    if (!escapesBase(rel)) return abs;
   }
   return null;
 }
@@ -2802,7 +2803,7 @@ function bashWriteRefusal(command: string, ctx: ToolContext, deferred: Precheck[
     }
     if (!j.writeAllow) continue;
     const rel = relative(root, j.abs);
-    if (rel.startsWith("..") || isAbsolute(rel)) continue;
+    if (escapesBase(rel)) continue;
     if (allowed.length === 0) continue;
     const scope = writeAllowed(ctx, j.abs);
     if (scope.ok) continue;
@@ -2884,7 +2885,7 @@ function outsideRootRefusal(ctx: ToolContext, path: string, abs: string, how: st
       : realpathOfNearest(abs);
   const under = (dir: string) => {
     const rel = relative(dir, real);
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    return !escapesBase(rel);
   };
   const realRoot = realpathOrSelf(resolve(ctx.root));
   for (const r of [ctx.root, ...(ctx.extraRoots ?? [])]) if (under(realpathOrSelf(resolve(r)))) return null;
@@ -2892,7 +2893,7 @@ function outsideRootRefusal(ctx: ToolContext, path: string, abs: string, how: st
   const holder = dirname(realRoot);
   const inside = (dir: string, p: string) => {
     const rel = relative(dir, p);
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    return !escapesBase(rel);
   };
   // A recursive removal reaches everything below where it starts; through a
   // glob (`rm -rf /tmp/*`), everything below the glob's directory.
@@ -2935,7 +2936,7 @@ function outsideWriteAllowed(ctx: ToolContext, realRoot: string, real: string): 
       glob = p;
     } else if (p === "~" || p.startsWith("~/")) {
       const rel = relative(realpathOrSelf(homedir()), real);
-      if (rel.startsWith("..") || isAbsolute(rel)) continue;
+      if (escapesBase(rel)) continue;
       subject = slash(rel);
       glob = p.slice(2) || "**";
     } else if (p.startsWith("/") || isAbsolute(p)) {
@@ -2984,7 +2985,7 @@ function surfaceCommitRefusal(command: string, ctx: ToolContext): Precheck | nul
   const root = resolve(ctx.root);
   const surface = surfaceDir(ctx);
   const spec = relative(root, surface).split(sep).join("/");
-  if (spec.startsWith("..") || isAbsolute(spec)) return null;
+  if (escapesBase(spec)) return null;
   const r = safeGit(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", spec || "."], {
     cwd: root,
     timeout: 5000,
@@ -3038,7 +3039,7 @@ function surfaceCommitRefusal(command: string, ctx: ToolContext): Precheck | nul
 /** Whether `dir` is `p` or above it. */
 function isAncestor(dir: string, p: string): boolean {
   const rel = relative(recordPathKey(resolve(dir)), recordPathKey(resolve(p)));
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  return !escapesBase(rel);
 }
 
 /** The surface directory a context guards. */
@@ -3210,7 +3211,7 @@ const GIT_CONTROL = new Map<string, string[]>();
 export function inGitControl(ctx: ToolContext, abs: string): boolean {
   const under = (base: string, p: string): boolean => {
     const rel = relative(recordPathKey(base), recordPathKey(p));
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    return !escapesBase(rel);
   };
   return gitControlPaths(ctx.root).some((g) => under(realpathOrSelf(g), realpathOfNearest(abs)) || under(g, resolve(abs)));
 }
@@ -3344,7 +3345,7 @@ const HOST_HOOK_REL =
 export function inHostHooks(ctx: ToolContext, abs: string): boolean {
   const under = (base: string, p: string): boolean => {
     const rel = relative(recordPathKey(base), recordPathKey(p));
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    return !escapesBase(rel);
   };
   const real = realpathOfNearest(abs);
   const lexical = resolve(abs);
@@ -3468,7 +3469,7 @@ function patternMatches(pattern: string, at: string, root: string, home: string)
   const slash = (p: string) => p.split(sep).join("/");
   const inside = (base: string): string | null => {
     const rel = relative(base, at);
-    return rel.startsWith("..") || isAbsolute(rel) ? null : slash(rel);
+    return escapesBase(rel) ? null : slash(rel);
   };
   let subject: string | null;
   let glob: string;
@@ -3671,7 +3672,7 @@ function archiveMembers(abs: string, kind: "tar" | "unzip", roots: string[] = []
         rr = resolve(r);
       }
       const rel = relative(rr, real);
-      return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+      return rel !== "" && !escapesBase(rel);
     });
     if (!inside) return [];
   }
@@ -5306,7 +5307,7 @@ export function recordPathKey(p: string, platform: NodeJS.Platform = process.pla
 export function inRecordDir(ctx: ToolContext, abs: string): boolean {
   const under = (base: string, p: string): boolean => {
     const rel = relative(recordPathKey(base), recordPathKey(p));
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    return !escapesBase(rel);
   };
   // Lexical OR realpath, for the reason inSurface gives: a symlink can alias
   // the directory from either side.
@@ -5456,7 +5457,7 @@ export function inSurface(ctx: ToolContext, abs: string): boolean {
   // on a case-sensitive APFS volume, the direction this guard errs in.
   const under = (base: string, p: string): boolean => {
     const rel = relative(recordPathKey(base), recordPathKey(p));
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    return !escapesBase(rel);
   };
   // `abs` arrives already `resolve()`d by resolveInRoot, so `..` is collapsed
   // and the lexical arm cannot be walked out of and back in.

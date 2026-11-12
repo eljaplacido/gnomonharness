@@ -316,6 +316,8 @@ reasoning; delivering the idle nudge locally is untested); SW1/LG2 test them.
 
 ### Fixed
 
+- **Dotfile writes no longer fail on Linux**: every containment check read `rel.startsWith("..")`, so `.gitignore`'s temp file `..gitignore.<pid>.<hex>.tmp` (and a `..data` directory) counted as outside the root and every edit or write of a dotfile failed with 11; the ~30 sites share `escapesBase` (rel_path.ts), true only for a `..` component or an absolute path (dc1, 2026-11-12).
+
 - **A read-only directory below another project ran the project's surface.**
   `gnomon init` in a read-only directory keeps its surface in the state
   directory (TB7), and `gnomon trust grant --dir` found that one, but

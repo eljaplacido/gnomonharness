@@ -44,6 +44,7 @@ import {
   type GnomonConfig,
   type AuditRecord,
   safeGit,
+  escapesBase,
 } from "gnomon-core";
 
 // ---------------------------------------------------------------------------
@@ -549,7 +550,7 @@ export function sessionsView(p: DashboardProject): Record<string, unknown> {
 
 function relativeTo(root: string, path: string): string {
   const r = relative(root, path);
-  return r && !r.startsWith("..") ? r.split(sep).join("/") : path;
+  return r && !escapesBase(r) ? r.split(sep).join("/") : path;
 }
 
 /** A trail name from the browser is only ever one of the names on disk. */

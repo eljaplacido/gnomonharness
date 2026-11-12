@@ -43,7 +43,8 @@ import {
   writeFileSync,
   type Stats,
 } from "node:fs";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { escapesBase } from "./rel_path.js";
 import { createHash, randomBytes } from "node:crypto";
 import { gnomonDataDir } from "./credentials.js";
 
@@ -77,7 +78,7 @@ function lstatOrNull(p: string): Stats | null {
 function within(parent: string, child: string): boolean {
   if (child === parent) return true;
   const rel = relative(parent, child);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  return rel !== "" && !escapesBase(rel);
 }
 
 /** The real root and `path`'s components below it, or null when `path` is not under `root`. */
@@ -189,7 +190,7 @@ export function openAppendIn(root: string, file: string, mode = 0o644): number {
  */
 export function writeRootFor(projectRoot: string, dir: string): string {
   const rel = relative(resolve(projectRoot), resolve(dir));
-  if (rel === "" || (!rel.startsWith("..") && !isAbsolute(rel))) return projectRoot;
+  if (!escapesBase(rel)) return projectRoot;
   mkdirSync(dir, { recursive: true });
   return dir;
 }
@@ -466,7 +467,7 @@ function submoduleGitFile(root: string, sub: string): string | null {
 /** The directories between `root` (exclusive) and `path` (inclusive). */
 function chainBelow(root: string, path: string): string[] {
   const rel = relative(root, path);
-  if (!rel || rel.startsWith("..") || isAbsolute(rel)) return [];
+  if (!rel || escapesBase(rel)) return [];
   const out: string[] = [];
   let cur = root;
   for (const part of rel.split(sep)) {

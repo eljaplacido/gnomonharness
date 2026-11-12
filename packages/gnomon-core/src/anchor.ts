@@ -81,6 +81,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { escapesBase } from "./rel_path.js";
 import { fileURLToPath } from "node:url";
 import { createHash, randomBytes } from "node:crypto";
 import { hostname } from "node:os";
@@ -342,7 +343,7 @@ export function statementDigest(s: AnchorStatement): string {
 /** A trail's name in a statement. */
 export function trailName(root: string, trailPath: string): string {
   const rel = relative(root, resolve(trailPath));
-  return rel.startsWith("..") || isAbsolute(rel) ? resolve(trailPath) : rel.split(sep).join("/");
+  return escapesBase(rel) ? resolve(trailPath) : rel.split(sep).join("/");
 }
 
 export function statementFor(
