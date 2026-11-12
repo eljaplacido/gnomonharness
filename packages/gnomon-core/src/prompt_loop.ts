@@ -174,6 +174,12 @@ import {
 } from "./mediators.js";
 import { writeTamperRecord, compareWithCheckpoint, writeCheckpoint } from "./record_tamper.js";
 import {
+  promptCacheOn,
+  readCacheControlRefusal,
+  refusePromptCache,
+  withCacheBreakpoints,
+} from "./prompt_cache.js";
+import {
   FAILED_CODE,
   LiveRecord,
   failedNote,
@@ -950,6 +956,19 @@ interface InferenceResult {
    */
   replayRejected?: boolean;
   /**
+   * The request carried `cache_control` breakpoints and the endpoint refused
+   * it with a 400 naming the field. Internal to callEndpoint, which resends
+   * the call once without them and returns the resend; never seen above it.
+   */
+  promptCacheRejected?: boolean;
+  /**
+   * This call (or an earlier attempt of it) was refused for carrying
+   * `cache_control` and was resent without; the endpoint gets no markers for
+   * the rest of the process (prompt_cache.ts). Counted by the loop as
+   * `counters.prompt_cache_refused`.
+   */
+  promptCacheRefused?: boolean;
+  /**
    * The content is the reasoning channel standing in for an empty reply: no
    * text and no tool call came back, only thinking. A loop that reads this as
    * an answer is reading the model think.
@@ -1006,8 +1025,16 @@ export function readUsage(json: unknown): TokenUsage | undefined {
   if (!j || typeof j !== "object") return undefined;
   const num = (v: unknown) => (typeof v === "number" && isFinite(v) ? v : undefined);
 
-  const input = num(j.usage?.prompt_tokens) ?? num(j.prompt_eval_count);
-  const output = num(j.usage?.completion_tokens) ?? num(j.eval_count);
+  // Anthropic's own usage shape, as a gateway may pass it through: input_tokens
+  // excludes the prompt read from and written to the cache, so the prompt is
+  // the three together. Read only where prompt_tokens is absent.
+  const anthropicInput = (() => {
+    const base = num(j.usage?.input_tokens);
+    if (base === undefined) return undefined;
+    return base + (num(j.usage?.cache_read_input_tokens) ?? 0) + (num(j.usage?.cache_creation_input_tokens) ?? 0);
+  })();
+  const input = num(j.usage?.prompt_tokens) ?? num(j.prompt_eval_count) ?? anthropicInput;
+  const output = num(j.usage?.completion_tokens) ?? num(j.eval_count) ?? num(j.usage?.output_tokens);
   // Ollama reports nanoseconds; OpenAI reports no duration at all.
   const ns = num(j.total_duration);
   const ms = ns === undefined ? undefined : Math.round(ns / 1e6);
@@ -1353,9 +1380,13 @@ export async function callEndpointWithRetry(
   let unmetered = 0;
   // The first-token watchdog's aborts, carried on whatever this returns.
   const stalls: Array<{ attempt: number; waited_ms: number }> = [];
+  // A refused set of cache breakpoints on any attempt, carried likewise, so
+  // the loop counts it whichever attempt the answer came from.
+  let cacheRefused = false;
   const metered = (x: InferenceResult): InferenceResult => {
     let out = unmetered > 0 ? { ...x, unmeteredCalls: unmetered } : x;
     if (stalls.length > 0) out = { ...out, firstTokenStalls: [...stalls] };
+    if (cacheRefused && !out.promptCacheRefused) out = { ...out, promptCacheRefused: true };
     return out;
   };
   for (let attempt = 1; attempt <= resilience.attempts; attempt++) {
@@ -1378,6 +1409,7 @@ export async function callEndpointWithRetry(
       spentMs += r.firstByteMs ?? Date.now() - startedAt;
     }
     unmetered += r.unmeteredCalls ?? 0;
+    if (r.promptCacheRefused) cacheRefused = true;
     if (r.code === 0 || !RETRYABLE.has(r.code)) return metered(r);
     last = r;
     if (signal?.aborted) return metered(r);
@@ -1672,6 +1704,35 @@ export async function callEndpoint(
    */
   observe?: CallObserver
 ): Promise<InferenceResult> {
+  const r = await callEndpointObserved(target, messages, tools, timeoutMs, signal, session, observe);
+  if (!r.promptCacheRejected) return r;
+  // The endpoint refused the cache_control breakpoints by name. Sent once more
+  // without them, and none for the rest of the process: a gateway or a model
+  // that cannot take them should cost one refused request, not the turn. The
+  // refused request went out, so the observer was told about it too.
+  refusePromptCache(target);
+  const again = await callEndpointObserved(
+    { ...target, promptCache: false },
+    messages,
+    tools,
+    timeoutMs,
+    signal,
+    session,
+    observe
+  );
+  return { ...again, promptCacheRefused: true };
+}
+
+/** One request, timed, traced and told to the observer. */
+async function callEndpointObserved(
+  target: RouteTarget,
+  messages: ChatMessage[],
+  tools: unknown[],
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+  session: string | undefined,
+  observe: CallObserver | undefined
+): Promise<InferenceResult> {
   const started = Date.now();
   const trace: CallTrace = {};
   const r = await callEndpointOnce(target, messages, tools, timeoutMs, signal, session, trace);
@@ -1857,9 +1918,16 @@ async function callEndpointOnce(
   // is asked for, so it is asked for: the token counts are what the benchmarks
   // read, and a streamed call must report exactly what an unstreamed one did.
   const streamed = target.stream === true;
+  // Anthropic prompt-cache breakpoints, for an Anthropic-family target only
+  // (prompt_cache.ts): the system prompt, the last tool and a rolling one on
+  // the last message, at most four in all. Any other endpoint is sent the
+  // bytes it was always sent.
+  const cacheMarked = promptCacheOn(target) ? withCacheBreakpoints(wireMessages, tools) : undefined;
+  const sentMessages = cacheMarked ? cacheMarked.messages : wireMessages;
+  const sentTools = cacheMarked ? cacheMarked.tools : tools;
   const payload: Record<string, unknown> = {
     model: target.model,
-    messages: wireMessages,
+    messages: sentMessages,
     stream: streamed,
   };
   if (streamed) payload.stream_options = { include_usage: true };
@@ -1889,7 +1957,7 @@ async function callEndpointOnce(
     if (payload.options && Object.keys(payload.options as object).length === 0) delete payload.options;
   }
   if (target.reasoningEffort) payload[REASONING_EFFORT_FIELD] = target.reasoningEffort;
-  if (tools.length > 0) payload.tools = tools;
+  if (sentTools.length > 0) payload.tools = sentTools;
 
   // One controller for every way a call ends early: the deadline, a streamed
   // reply going silent or running past its cap, and Esc. Aborting it closes
@@ -1970,6 +2038,19 @@ async function callEndpointOnce(
           return body;
         }
       })().trim();
+
+      // The cache_control breakpoints this request carried, refused by name:
+      // a strict gateway ("Extra inputs are not permitted"), or a model behind
+      // it that does not cache. Code 10, so the retry wrapper does not resend
+      // the identical request; callEndpoint resends it without them.
+      if (cacheMarked && cacheMarked.added > 0 && readCacheControlRefusal(res.status, detail)) {
+        return {
+          content: `Model API error: ${res.status} ${res.statusText}` + (detail ? `\n${detail.slice(0, 500)}` : ""),
+          code: 10,
+          toolCalls: [],
+          promptCacheRejected: true,
+        };
+      }
 
       // A rejected credential, told as a credential problem.
       //
@@ -2598,6 +2679,12 @@ export interface WireRecord {
    */
   sampling_omitted?: SamplingParam[];
   /**
+   * Present, and true, only when requests carried Anthropic prompt-cache
+   * breakpoints (`cache_control`): an Anthropic-family target, or
+   * `prompt_cache = true`, not refused this process (prompt_cache.ts).
+   */
+  prompt_cache?: true;
+  /**
    * sha256 over the canonical JSON of the tool definitions the turn offered,
    * sorted by name (tools_hash.ts). Not derived from the target, so wireOf
    * leaves it out and the turn adds it. Built-in schemas live in the build
@@ -2642,6 +2729,7 @@ export function wireOf(target: RouteTarget): WireRecord {
     ...(target.samplingOmitted && target.samplingOmitted.length > 0
       ? { sampling_omitted: [...target.samplingOmitted] }
       : {}),
+    ...(promptCacheOn(target) ? { prompt_cache: true as const } : {}),
   };
 }
 
@@ -4576,6 +4664,12 @@ export interface TurnCounters {
    */
   replay_reasoning_refused?: number;
   /**
+   * Calls resent because the endpoint refused the Anthropic prompt-cache
+   * breakpoints (`cache_control`) by name; it gets none for the rest of the
+   * process (prompt_cache.ts). Absent when none were.
+   */
+  prompt_cache_refused?: number;
+  /**
    * Calls `[approval] after_refusal` sent to a person: each named something a
    * call refused earlier in the turn had named, and would otherwise have run
    * unasked. Absent when none were, which is every turn of a surface that
@@ -5794,6 +5888,24 @@ async function agenticTurn(
         waited_ms: st.waited_ms,
         recovered: r.code === 0,
       });
+    }
+    // The endpoint refused the prompt-cache breakpoints and the call was sent
+    // again without them (callEndpoint). Counted on the turn record, which the
+    // trail keeps, and said on the unsilenceable channel. It happens once per
+    // endpoint and model: none are sent there again this process.
+    if (r.promptCacheRefused) {
+      counters.prompt_cache_refused = (counters.prompt_cache_refused ?? 0) + 1;
+      deps.progress.stop();
+      warn(
+        paint(
+          deps.ui,
+          "yellow",
+          `  [endpoint] the endpoint refused the prompt-cache breakpoints (cache_control) — ` +
+            `resent without them, and none for the rest of this session. ` +
+            `Declare prompt_cache = false on the endpoint to skip the refused call.`
+        )
+      );
+      deps.progress.start(`${route.target.model}`);
     }
   };
   const tally = (name: string, field: "calls" | "refusals" | "apparatus") => {
