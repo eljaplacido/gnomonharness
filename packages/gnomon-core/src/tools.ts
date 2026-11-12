@@ -5017,7 +5017,7 @@ function stampSkips(rel: string, isDir: boolean): boolean {
 /**
  * Below this many files the walk is the cheaper stamp, and the stamp walks.
  *
- * A git stamp costs a process (two, the first time): on gx10 ~3.5ms a status
+ * A git stamp costs a process (two, the first time): on an NVIDIA GB10 ~3.5ms a status
  * at 0 files, against the walk's 0.2ms, and the walk catches up at about 700
  * files. On the Windows runner a git process costs ~35ms -- this repository's
  * own 482-file tree took ~45ms more a stamp through git than walked, and a
@@ -5129,7 +5129,7 @@ function nearestDotGit(dir: string): string | null {
  * prefix and joining the rest to `base` never compares two spellings of a path.
  *
  * Asked once per root rather than twice per command: it costs as much as the
- * status call it serves, ~2ms each on gx10, and at 0 files that doubled the
+ * status call it serves, ~2ms each on an NVIDIA GB10, and at 0 files that doubled the
  * stamp. The cached answer is reused only while the nearest `.git` above the
  * root is the one it was given under, so a `git init` or an `rm -rf .git` asks
  * again. GIT_DIR or GIT_WORK_TREE in the environment puts the repository where
@@ -5212,7 +5212,7 @@ function gitRootOf(base: string): GitRoot | null {
  * would run it, once a session, is the cost of not paying that twice a
  * command for the rest of it.
  *
- * Cost, measured on gx10 under load (refreshed index; walk in brackets): one
+ * Cost, measured on an NVIDIA GB10 under load (refreshed index; walk in brackets): one
  * status 3.5ms at 0 files [0.2], 8.7ms at 5k [39], 25ms at 20k [162] and 53ms
  * at 50k [131, and 12 of 20 edits missed] -- git's parallel lstat of the index
  * and a readdir of every directory, in C. Small trees never get here

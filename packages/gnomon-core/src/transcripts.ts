@@ -32,8 +32,7 @@
  *                export proves.
  *
  * Added 2026-11-01, each read against the real output of a pinned release in
- * the G1 governance benchmark (bench/peers-2026-11, benchmarks/results/
- * g1-2026-11), and against that release's source for the shapes G1 never
+ * the G1 governance benchmark (2026-11), and against that release's source for the shapes G1 never
  * produced. All 24 measured trials of each harness were read back through
  * these readers: the same commands, string for string and in order, that G1's
  * own adapter took from the same records (Qwen's session file and its
@@ -83,8 +82,7 @@
  *                ran — all 24 G1 trajectories end that way. Commands a person
  *                typed in human mode are not the agent's and are not read.
  *
- * Added 2026-11-02, after G1-R (bench/peers-2026-11, benchmarks/results/
- * g1r-2026-11) found check's one remaining miss was gnomon's own arm: nothing
+ * Added 2026-11-02, after G1-R (2026-11) found check's one remaining miss was gnomon's own arm: nothing
  * read gnomon's record of its own session.
  *
  *   gnomon       gnomon's own audit trail, `.gnomon-audit/<session>.jsonl`, as

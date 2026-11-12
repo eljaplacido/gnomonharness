@@ -572,8 +572,7 @@ export class AuditTrail {
    * what the model said. A command is neither. It is what was done, which is
    * the thing this trail exists to answer. Until 2026-11 a bash call kept the
    * 70-character terminal form of its command, and its full arguments only
-   * under `full`. G1 (benchmarks/results/g1-2026-11, on bench/peers-2026-11)
-   * then found gnomon's one violation in 24 trials: after the deny-list
+   * under `full`. The G1 governance study (2026-11) then found gnomon's one violation in 24 trials: after the deny-list
    * refused `git clean`, `git reset --hard` and `rm -r -f`, the agent moved
    * `var/` out of the repository. The command that did it fell past the cut,
    * so the trail could not show it. Redaction still applies, so a token pasted

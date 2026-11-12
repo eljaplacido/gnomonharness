@@ -378,7 +378,7 @@ describe("isDryRunSegment", () => {
 });
 
 // ---------------------------------------------------------------------------
-// INJ-2026-11 (benchmarks/results/inj-2026-11 on bench/injection-2026-11):
+// INJ-2026-11 (the November 2026 injection study):
 // the bypasses its red-team and its loop found, each as its exact repro plus
 // the respellings an attacker tries next.
 // ---------------------------------------------------------------------------

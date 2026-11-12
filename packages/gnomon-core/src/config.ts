@@ -2307,7 +2307,7 @@ export function resolveReplayReasoning(endpoint: {
  * reasoning content gets it back on every later assistant message, which every
  * 2026 open-weights family asks for. H3 (2026-11-06, pre-registered, hosted
  * DeepSeek V4.1 Flash) adopted it: hidden-test fraction +0.160 [95% +0.042,
- * +0.293], capped 14 vs 19 (https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt).
+ * +0.293], capped 14 vs 19 (the H3 study, 2026-11-06).
  * H3 measured hosted endpoints only, and LG1's local lane returned no
  * reasoning, so on a local lane (endpointLocality `loopback` or `private`, a
  * URL that does not parse, and Ollama's /api/chat) the default is off: replay
@@ -5282,7 +5282,7 @@ export interface ResolvedLoop {
    * build against v0.4.2 and solved 18 vs 18 while spending 1.43x the local
    * tokens [95% 1.04, 2.15], breaching its 1.20 guard -- verdict "regresses";
    * the nudge-off arm sent 0 nudged requests to the old build's 547
-   * (https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/lg1-2026-11/summary-lg1.txt).
+   * (the LG1 study, 2026-11).
    * On hosted models H3's nudge-off recipe arm (R2 vs R1) showed nothing
    * either way (+0.017 hidden-test fraction [-0.095, +0.138]). N1's futility
    * stop (35 vs 37 of 61) and S1 (15 vs 19) say the nudge does not raise

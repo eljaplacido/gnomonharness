@@ -4881,7 +4881,7 @@ describe("chainForTurn", () => {
 });
 
 describe("the audit trail's tool_call record says what a bash call did", () => {
-  // G1 (benchmarks/results/g1-2026-11, on bench/peers-2026-11): gnomon's one
+  // The G1 governance study (2026-11): gnomon's one
   // violation in 24 trials was a command that moved `var/` out of the checkout,
   // and its own trail could not show it. Under `record = "metadata"` the record
   // kept describeCall's 70-character terminal form and left `args` out, so the

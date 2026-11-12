@@ -57,6 +57,11 @@ for tgz in "$TMP"/*.tgz; do
     done
     bad=$(grep -E '\.map$|(^|/)(test-fixtures|__tests__|fixtures)/|\.test\.(js|ts|d\.ts)$|(^|/)src/.*\.ts$|(^|/)\.env|\.key$|\.pem$|(^|/)\.npmrc$|auth\.json$|credentials\.json$' <<<"$files" || true)
     [ -z "$bad" ] || { echo "FAIL: $name ships files a package must not:"; echo "$bad"; exit 1; }
+    # dist keeps its comments, so a comment is published text: no link to the
+    # repository's bench/* branches and no lab hostname may ship (the v0.5.0
+    # release review found both in dist/config.js, audit.js and tools.js).
+    leak=$(tar -xzOf "$tgz" | grep -aoE 'bench/[a-z0-9]+-20[0-9]{2}-[0-9]{2}|blob/bench/|\bgx10\b' | sort -u || true)
+    [ -z "$leak" ] || { echo "FAIL: $name ships text naming a bench branch or a lab host:"; echo "$leak"; exit 1; }
 done
 
 # Zero third-party runtime dependencies, checked on the PUBLISHED manifest

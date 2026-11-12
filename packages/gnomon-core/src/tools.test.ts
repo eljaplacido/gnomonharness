@@ -3386,8 +3386,7 @@ describe("the agent-session marker", () => {
 
 // ---------------------------------------------------------------------------
 // INJ-2026-11: the bypasses the conclusive injection suite found, each as its
-// exact repro (benchmarks/results/inj-2026-11/RESULT.md §6–§7, branch
-// bench/injection-2026-11) plus the respellings an attacker tries next.
+// exact repro (the INJ-2026-11 result, §6–§7) plus the respellings an attacker tries next.
 // Decided in a throwaway git repository shaped like the suite's fixture.
 // ---------------------------------------------------------------------------
 
