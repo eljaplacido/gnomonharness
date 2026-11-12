@@ -5024,6 +5024,44 @@ function walkStampOf(base: string, max: number): string | null {
   return h.digest("hex");
 }
 
+/**
+ * Every file under `base` as `path -> "size:mtime"`, by the stamp's own walk
+ * and exclusions. Null when the walk reached `max`, for the same reason the
+ * stamp is: a partial listing would read as "these are all the files".
+ *
+ * For where git cannot say what changed (no repository, as in a benchmark
+ * container's /app): diffing two of these names the files a turn created,
+ * changed or removed, including those written through the shell. Stat only,
+ * never contents.
+ */
+export function statSnapshot(base: string, max: number = WALK_MAX_FILES): Map<string, string> | null {
+  try {
+    const files = walkFiles(base, base, max);
+    if (files.length >= max) return null;
+    const out = new Map<string, string>();
+    for (const rel of files) {
+      if (stampSkips(rel, false)) continue;
+      try {
+        const st = statSync(join(base, rel));
+        out.set(rel, `${st.size}:${st.mtimeMs}`);
+      } catch {
+        // vanished mid-walk: absent from this snapshot, which is what it is
+      }
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/** Paths created, changed or removed between two statSnapshots, sorted. */
+export function statChangedPaths(before: Map<string, string>, after: Map<string, string>): string[] {
+  const out: string[] = [];
+  for (const [p, v] of after) if (before.get(p) !== v) out.push(p);
+  for (const p of before.keys()) if (!after.has(p)) out.push(p);
+  return out.sort();
+}
+
 /** A status this slow is worth falling back from, not waiting on twice a command. */
 const GIT_STAMP_TIMEOUT_MS = 5_000;
 /** Far past what a WALK_MAX_FILES budget of listed paths can print. */

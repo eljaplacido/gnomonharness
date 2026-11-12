@@ -3659,8 +3659,16 @@ none of the fields below, and its records are byte-for-byte what they were.
 **What is carried** — `carry = "conversation"` (the default since v2): the
 conversation as it stands, with a takeover note appended on the steering
 channel (a user message marked `[gnomon]`): why the model changed, the files
-changed so far (git), the steps and seconds left, the checkpoint's state when
-`[turn] continue_after_answer` is on, and a failing check's output. Recorded as
+changed so far, the last commands it ran that were not read-only (at most 5,
+with their exit status), the steps and seconds left, the checkpoint's state when
+`[turn] continue_after_answer` is on, and a failing check's output. The files
+come from git; where git cannot say (no repository, as in a benchmark
+container), from the paths the turn's `write`/`edit` calls wrote merged with a
+stat scan of the tree against one taken at turn start (only with an `escalate`
+block and no git answer; null past 20,000 files), the heading saying so, and
+"unknown" when neither is available. Both notes list at most 40 paths and clip
+each listed path or command to 200 characters; the note is cut at 8,000
+characters in all. Recorded as
 `carried: "context"`, `handover_chars` = the note's length. `carry =
 "handover"`: the bounded handover (≤ 8,000 characters) in place of the
 transcript, `carried: "handover"` (PR #102's rule; the rows above that say "a

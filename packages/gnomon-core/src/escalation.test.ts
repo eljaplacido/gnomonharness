@@ -6,7 +6,9 @@
  * model did which step. Nothing reaches a network.
  */
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, writeFileSync, rmSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { loadConfig, routeRole, auditSurface, applyProfile, ESCALATE_TRIGGERS } from "./config.js";
 import * as promptLoop from "./prompt_loop.js";
@@ -622,5 +624,114 @@ describe("local first, cloud rescue v2: stuck, deadline_share, carry, handoffs",
     );
     const h1 = recomputeManifest(join(dir, ".gnomon")).surface_hash;
     expect(h1).not.toBe(h0);
+  });
+});
+
+/**
+ * The takeover note's file list where git cannot say (HY3: /app had no .git,
+ * and 22 of 28 escalated cells were told "(none detected)").
+ */
+describe("local first, cloud rescue: what the takeover note says changed", () => {
+  const WRITE = (path: string, content: string): Reply => ({ tool: { name: "write", args: { path, content } } });
+  const BASH = (command: string): Reply => ({ tool: { name: "bash", args: { command } } });
+
+  async function handOff(root: string) {
+    const config = fresh({ tools: ["read", "write", "bash", "glob", "todo"] }, ESC2(["stuck"], { stuck_failures: 3 }));
+    config.workRoot = root;
+    const r = await run(config, {
+      local: (n) =>
+        n === 1 ? WRITE("src/a.txt", "rewritten\n")
+        : n === 2 ? BASH("echo shell > b.txt")
+        : n === 3 ? BASH("sh -c 'exit 3'")
+        : MISSING(n),
+      cloud: () => ({ text: "done" }),
+    });
+    const msgs: any[] = r.calls.cloudBodies[0].messages;
+    return { ...r, note: String(msgs[msgs.length - 1].content) };
+  }
+
+  it("no git: lists the files the local model wrote, by write and through the shell, and its checks", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "gnomon-takeover-nogit-")));
+    try {
+      writeFileSync(join(root, "untouched.txt"), "same\n");
+      const { turn, note } = await handOff(root);
+      expect(turn.escalation).toMatchObject({ trigger: "stuck", carried: "context" });
+      expect(note).toContain("## Files changed so far (no git answer");
+      expect(note).toContain("- src/a.txt");
+      expect(note).toContain("- b.txt");
+      expect(note).not.toContain("untouched.txt");
+      expect(note).not.toContain("(none detected)");
+      expect(note).toContain("## Its last commands and how they exited");
+      expect(note).toContain("`sh -c 'exit 3'` → exit 3");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  it("git: the list is git's, under the plain heading, as before", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "gnomon-takeover-git-")));
+    try {
+      const git = (...a: string[]) =>
+        spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...a], { cwd: root });
+      writeFileSync(join(root, "untouched.txt"), "same\n");
+      git("init", "-q");
+      git("add", ".");
+      git("commit", "-qm", "init");
+      const { note } = await handOff(root);
+      expect(note).toContain("## Files changed so far\n");
+      expect(note).not.toContain("no git answer");
+      expect(note).toContain("- src/a.txt");
+      expect(note).toContain("- b.txt");
+      expect(note).not.toContain("untouched.txt");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 20000);
+
+  it("takeoverChanged: git first; else write/edit paths and the scan, merged; else unknown", () => {
+    expect(promptLoop.takeoverChanged(["g.ts"], ["w.ts"], ["s.ts"])).toEqual({ changed: ["g.ts"] });
+    expect(promptLoop.takeoverChanged([], ["w.ts"], ["s.ts"])).toEqual({ changed: [] });
+    expect(promptLoop.takeoverChanged(null, ["w.ts", "s.ts"], ["s.ts", "a.ts"])).toEqual({
+      changed: ["a.ts", "s.ts", "w.ts"],
+      changedVia: "fallback",
+    });
+    expect(promptLoop.takeoverChanged(null, ["w.ts"], null)).toEqual({ changed: ["w.ts"], changedVia: "fallback" });
+    expect(promptLoop.takeoverChanged(null, [], null)).toEqual({ changed: [], changedVia: "unknown" });
+    const unknown = promptLoop.buildTakeoverNote({ trigger: "stall", stepsUsed: 1, stepsLeft: 1, changed: [], changedVia: "unknown" });
+    expect(unknown).toContain("(unknown: git could not say");
+    expect(unknown).not.toContain("(none detected)");
+  });
+
+  it("stays inside its bound: 40 paths, 5 checks, 200 characters a line, HANDOVER_MAX_CHARS in all", () => {
+    const long = "x".repeat(5000);
+    const n = promptLoop.buildTakeoverNote({
+      trigger: "deadline_share",
+      stepsUsed: 99,
+      stepsLeft: 1,
+      changed: Array.from({ length: 500 }, (_, i) => `dir/${i}-${long}`),
+      changedVia: "fallback",
+      checks: Array.from({ length: 50 }, (_, i) => ({ command: `pytest ${i} ${long}`, exit: i % 2 })),
+      checkpoint: long,
+      verifyOutput: long,
+    });
+    expect(n.length).toBeLessThanOrEqual(promptLoop.HANDOVER_MAX_CHARS);
+    const unbounded = promptLoop.buildTakeoverNote(
+      {
+        trigger: "deadline_share",
+        stepsUsed: 99,
+        stepsLeft: 1,
+        changed: Array.from({ length: 500 }, (_, i) => `dir/${i}-${long}`),
+        changedVia: "fallback",
+        checks: Array.from({ length: 50 }, (_, i) => ({ command: `pytest ${i} ${long}`, exit: i % 2 })),
+      },
+      Number.MAX_SAFE_INTEGER
+    );
+    const pathLines = unbounded.split("\n").filter((l) => l.startsWith("- dir/"));
+    expect(pathLines).toHaveLength(promptLoop.HANDOFF_MAX_PATHS);
+    expect(unbounded).toContain("- … and 460 more");
+    const checkLines = unbounded.split("\n").filter((l) => l.startsWith("- `pytest"));
+    expect(checkLines).toHaveLength(promptLoop.HANDOFF_MAX_CHECKS);
+    expect(checkLines[checkLines.length - 1]).toContain("pytest 49");
+    for (const l of [...pathLines, ...checkLines]) expect(l.length).toBeLessThanOrEqual(220);
   });
 });

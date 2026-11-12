@@ -14,7 +14,7 @@ import { pinCredentials, holdCredentials, heldNotice, type CredentialPin } from 
 import { pinSandbox, applySandboxPin, describeLoosening, type SandboxPin } from "./sandbox_pin.js";
 import { checkCitations } from "./citations.js";
 import { mustFailFirst, readVerifyExit } from "./must_fail_first.js";
-import { resolve, dirname, join, basename, sep } from "node:path";
+import { resolve, dirname, join, basename, sep, relative } from "node:path";
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, realpathSync, renameSync } from "node:fs";
 import { readRegular } from "./root_fs.js";
 import { createHash } from "node:crypto";
@@ -105,8 +105,8 @@ import {
   DEADLINE_ABORT,
 } from "./tools.js";
 import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
-import { StallSignals, type StallSignalCounters } from "./stall_signals.js";
-import { JobTable, scratchDirs } from "./tools.js";
+import { StallSignals, STALL_SIGNAL_PATTERNS, normalizeCommand, type StallSignalCounters } from "./stall_signals.js";
+import { JobTable, scratchDirs, statSnapshot, statChangedPaths } from "./tools.js";
 import { resolveSandboxProfile, sandboxProfileRecord } from "./sandbox_profile.js";
 import { JOB_TOOL, resolveSoftTimeout } from "./soft_shell.js";
 import {
@@ -3693,6 +3693,8 @@ export interface HandoverInput {
   stepsLeft: number;
   /** Paths changed in the worktree so far */
   changed: string[];
+  /** Where `changed` came from when git could not say (takeoverChanged) */
+  changedVia?: ChangedVia;
   /** The last actions and their outcomes, oldest first */
   recent: string[];
   todos: Array<{ content: string; status: string }>;
@@ -3717,11 +3719,81 @@ export interface TakeoverInput {
   stepsUsed: number;
   stepsLeft: number;
   changed: string[];
+  /** Where `changed` came from when git could not say (takeoverChanged) */
+  changedVia?: ChangedVia;
+  /** The last test/check commands and their exit status, oldest first */
+  checks?: HandoffCheck[];
   /** Seconds left before the deadline, under --deadline */
   leftS?: number;
   /** The checkpoint state (checkpoint_grind.ts), when one is declared */
   checkpoint?: string;
   verifyOutput?: string;
+}
+
+/** How a hand-off learned what changed, when git could not say. */
+export type ChangedVia = "fallback" | "unknown";
+
+/** A test or check command the first model ran, and how it exited (null: unknown). */
+export interface HandoffCheck {
+  command: string;
+  exit: number | null;
+}
+
+/** The most paths a hand-off lists, the most checks, and the longest of either line. */
+export const HANDOFF_MAX_PATHS = 40;
+export const HANDOFF_MAX_CHECKS = 5;
+const HANDOFF_LINE_CHARS = 200;
+
+/**
+ * What changed, for a hand-off: git first, and only where git cannot say
+ * (`git` null: no repository, git missing or failing) the union of the paths
+ * gnomon's own write/edit calls wrote this turn and a stat scan of the tree
+ * against its turn-start scan (`scanned`, null when either scan was not
+ * taken). Neither fallback available: "unknown", which the note says rather
+ * than "(none detected)".
+ *
+ * HY3 (2026-11-12): 22 of 28 escalated cells told the cloud model "(none
+ * detected)" because /app in the task containers has no .git, while the local
+ * model had rewritten up to 27 files. The cloud model's first moves went on
+ * rediscovering the disk.
+ */
+export function takeoverChanged(
+  git: string[] | null,
+  written: readonly string[],
+  scanned: string[] | null
+): { changed: string[]; changedVia?: ChangedVia } {
+  if (git !== null) return { changed: git };
+  if (scanned === null && written.length === 0) return { changed: [], changedVia: "unknown" };
+  const all = new Set<string>([...written, ...(scanned ?? [])]);
+  return { changed: [...all].sort(), changedVia: "fallback" };
+}
+
+function renderChanged(changed: string[], via: ChangedVia | undefined): string {
+  const clip = (p: string) => (p.length > HANDOFF_LINE_CHARS ? `${p.slice(0, HANDOFF_LINE_CHARS)}…` : p);
+  const heading =
+    via === "fallback"
+      ? "## Files changed so far (no git answer: from gnomon's write/edit calls and a scan of the tree)"
+      : "## Files changed so far";
+  const body =
+    changed.length > 0
+      ? changed.slice(0, HANDOFF_MAX_PATHS).map((p) => `- ${clip(p)}`).join("\n") +
+        (changed.length > HANDOFF_MAX_PATHS ? `\n- … and ${changed.length - HANDOFF_MAX_PATHS} more` : "")
+      : via === "unknown"
+      ? "(unknown: git could not say and the tree could not be scanned; list the files on disk)"
+      : "(none detected)";
+  return `${heading}\n${body}`;
+}
+
+function renderChecks(checks: HandoffCheck[] | undefined): string {
+  if (!checks || checks.length === 0) return "";
+  const clip = (c: string) => {
+    const one = c.replace(/\s+/g, " ").trim();
+    return one.length > HANDOFF_LINE_CHARS ? `${one.slice(0, HANDOFF_LINE_CHARS)}…` : one;
+  };
+  const lines = checks
+    .slice(-HANDOFF_MAX_CHECKS)
+    .map((c) => `- \`${clip(c.command)}\` → ${c.exit === null ? "exit unknown" : `exit ${c.exit}`}`);
+  return `## Its last commands and how they exited\n${lines.join("\n")}`;
 }
 
 /**
@@ -3731,10 +3803,6 @@ export interface TakeoverInput {
  * handover.
  */
 export function buildTakeoverNote(t: TakeoverInput, maxChars: number = HANDOVER_MAX_CHARS): string {
-  const changed = t.changed.length > 0
-    ? t.changed.slice(0, 40).map((p) => `- ${p}`).join("\n") +
-      (t.changed.length > 40 ? `\n- … and ${t.changed.length - 40} more` : "")
-    : "(none detected)";
   const tail = (text: string, n: number): string =>
     text.length > n ? `[cut]…${text.slice(-n)}` : text;
   const parts = [
@@ -3743,7 +3811,8 @@ export function buildTakeoverNote(t: TakeoverInput, maxChars: number = HANDOVER_
       `the previous model's work. The files on disk are the current state: check them rather than ` +
       `trusting what was said, then finish the task. About ${t.stepsLeft} tool call(s) are left` +
       (t.leftS !== undefined ? `, and about ${Math.round(t.leftS)} s of wall time.` : "."),
-    `## Files changed so far\n${changed}`,
+    renderChanged(t.changed, t.changedVia),
+    renderChecks(t.checks),
     t.checkpoint ? `## Checkpoint\n${t.checkpoint}` : "",
     t.verifyOutput ? `## The failing check\n${tail(t.verifyOutput, 1500)}` : "",
   ].filter((p) => p.length > 0);
@@ -3763,17 +3832,13 @@ export function buildHandover(h: HandoverInput, maxChars: number = HANDOVER_MAX_
     text.length > n ? `${text.slice(0, n)}…[cut]` : text;
   const tail = (text: string, n: number): string =>
     text.length > n ? `[cut]…${text.slice(-n)}` : text;
-  const changed = h.changed.length > 0
-    ? h.changed.slice(0, 40).map((p) => `- ${p}`).join("\n") +
-      (h.changed.length > 40 ? `\n- … and ${h.changed.length - 40} more` : "")
-    : "(none detected)";
   const parts = [
     `You are taking over a task another model started. It stopped because ` +
       `${HANDOVER_WHY[h.trigger]}, after ${h.stepsUsed} tool call(s). You have ` +
       `about ${h.stepsLeft} tool call(s) left. The files on disk are the current ` +
       `state: inspect them rather than trusting this summary, then finish the task.`,
     `## The task\n${clip(h.request.trim(), 3000)}`,
-    `## Files changed so far\n${changed}`,
+    renderChanged(h.changed, h.changedVia),
     h.recent.length > 0
       ? `## Its last actions and their outcomes\n${h.recent.slice(-12).map((r) => `- ${clip(r, 300)}`).join("\n")}`
       : "",
@@ -3787,15 +3852,29 @@ export function buildHandover(h: HandoverInput, maxChars: number = HANDOVER_MAX_
   return out.length > maxChars ? `${out.slice(0, maxChars - 20)}\n…[handover cut]` : out;
 }
 
-/** Paths git reports as changed or new in the worktree. Empty when git cannot say. */
-function gitChangedPaths(root: string): string[] {
-  const r = safeGit(["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"], {
-    cwd: root,
-    timeout: 10_000,
-    stdio: ["ignore", "pipe", "ignore"],
-    hot: true,
-  });
-  if (r.status !== 0 || typeof r.stdout !== "string") return [];
+/**
+ * A bash command worth naming in a hand-off as a check: a test run, or any
+ * command that is not only reading (a build, a script run against the data).
+ */
+function isHandoffCheck(command: string): boolean {
+  const c = normalizeCommand(command);
+  return STALL_SIGNAL_PATTERNS.test_command.test(c) || !STALL_SIGNAL_PATTERNS.read_command.test(c);
+}
+
+/** Paths git reports as changed or new in the worktree. Null when git cannot say. */
+function gitChangedPaths(root: string): string[] | null {
+  let r: ReturnType<typeof safeGit>;
+  try {
+    r = safeGit(["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+      cwd: root,
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "ignore"],
+      hot: true,
+    });
+  } catch {
+    return null;
+  }
+  if (r.status !== 0 || typeof r.stdout !== "string") return null;
   const out: string[] = [];
   const entries = r.stdout.split("\0");
   for (let i = 0; i < entries.length; i++) {
@@ -5411,6 +5490,11 @@ async function agenticTurn(
   // The last actions and their outcomes, for a handover. Kept only when an
   // escalation is declared, so a turn without one does no extra work.
   const recentActions: string[] = [];
+  // For the same hand-off, where git cannot say what changed: the paths this
+  // turn's write/edit calls wrote (root-relative, first-write order), and the
+  // last few test/check commands with their exit status.
+  const handoffWritten: string[] = [];
+  const handoffChecks: HandoffCheck[] = [];
   // `stuck`: tool calls in a row that failed. Counted only with a block.
   let failStreak = 0;
   const turnStartedAt = (deps.clock ?? Date.now)();
@@ -5671,6 +5755,12 @@ async function agenticTurn(
   // reports the whole dirty tree as the turn's doing -- including for a
   // read-only role that only called `read`. One git call, taken once.
   const treeBaseline = treeSnapshot(workRootOf(state.config));
+  // Where git cannot say (no repository: a benchmark container's /app), a stat
+  // scan of the tree, so a hand-off can still name what the first model
+  // changed, shell writes included. Only with an escalation declared, and only
+  // without git: everywhere else this is no work at all.
+  const scanBaseline =
+    escalateDecl && treeBaseline === null ? statSnapshot(workRootOf(state.config)) : null;
   // The reasoning behind the reply a turn ends on, kept for the exchange when
   // either endpoint this role can reach replays reasoning -- not only the one
   // that answered. A turn answered by the fallback, or by the tool-less
@@ -6256,6 +6346,14 @@ async function agenticTurn(
     deps.progress.start(`${route.model}`);
   }
 
+  /** What changed so far, for a hand-off: git first, then the fallbacks (takeoverChanged). */
+  const handoffChangedNow = (): { changed: string[]; changedVia?: ChangedVia } => {
+    const root = workRootOf(state.config);
+    const git = gitChangedPaths(root);
+    if (git !== null) return takeoverChanged(git, [], null);
+    const now = scanBaseline ? statSnapshot(root) : null;
+    return takeoverChanged(null, handoffWritten, scanBaseline && now ? statChangedPaths(scanBaseline, now) : null);
+  };
   /**
    * Move the rest of this turn to the role's escalation model, if `trigger` is
    * one it declared and nothing has moved yet. Returns whether it moved.
@@ -6296,20 +6394,20 @@ async function agenticTurn(
         trigger,
         stepsUsed: steps,
         stepsLeft: Math.max(0, maxTotal - steps),
-        changed: gitChangedPaths(workRootOf(state.config)),
+        ...handoffChangedNow(),
+        checks: handoffChecks,
         ...(stopClock ? { leftS: Math.max(0, stopClock.stopAt - nowMs) / 1000 } : {}),
         ...(cpText ? { checkpoint: cpText } : {}),
         verifyOutput: opts.verifyOutput,
       });
     } else if (!keepContext) {
-      const root = workRootOf(state.config);
       const lastUser = [...messages].reverse().find((m) => m.role === "user");
       handover = buildHandover({
         request: typeof lastUser?.content === "string" ? lastUser.content : "",
         trigger,
         stepsUsed: steps,
         stepsLeft: Math.max(0, maxTotal - steps),
-        changed: gitChangedPaths(root),
+        ...handoffChangedNow(),
         recent: recentActions,
         todos: state.todos ?? [],
         lastNote: opts.lastNote,
@@ -8126,6 +8224,17 @@ async function agenticTurn(
       if (escalateDecl && !escalation) {
         recentActions.push(`${call.name} ${describeCall(call)} → ${outcome.summary}`.trim());
         if (recentActions.length > 12) recentActions.shift();
+        if ((call.name === "write" || call.name === "edit") && outcome.code === 0 && typeof call.args?.path === "string") {
+          const root = workRootOf(state.config);
+          const rel = relative(root, resolve(root, String(call.args.path))).split(sep).join("/");
+          if (!handoffWritten.includes(rel) && handoffWritten.length < 1000) handoffWritten.push(rel);
+        } else if (call.name === "bash" && typeof call.args?.command === "string") {
+          const command = String(call.args.command);
+          if (isHandoffCheck(command)) {
+            handoffChecks.push({ command, exit: typeof outcome.shell_exit === "number" ? outcome.shell_exit : null });
+            if (handoffChecks.length > HANDOFF_MAX_CHECKS) handoffChecks.shift();
+          }
+        }
         const failed =
           outcome.code !== 0 || (call.name === "bash" && outcome.shell_exit !== undefined && outcome.shell_exit !== 0);
         failStreak = failed ? failStreak + 1 : 0;

@@ -42,7 +42,9 @@ long-task tier (a) changes on purpose (below).
   changed no file, default 12) and `deadline_share` (that share of the `--deadline` budget has passed, default 0.5).
   `budget_50` now reads the `--deadline` clock.
 - `carry = "conversation"` (default) passes the conversation as it stands plus a takeover note (why, files changed,
-  steps and seconds left, the checkpoint's state); `carry = "handover"` is #102's bounded handover. `max_handoffs`
+  the last few non-read-only commands with their exit status, steps and seconds left, the checkpoint's state);
+  where git cannot say what changed (no `.git`, as in HY3's /app, where 22 of 28 escalated cells were told
+  "(none detected)"), the files come from the turn's own write/edit paths plus a turn-start stat scan of the tree; `carry = "handover"` is #102's bounded handover. `max_handoffs`
   (default 1) caps handoffs per run or session; a turn moves at most once.
 - Recorded: an `escalation` audit record (trigger, `detail`, step, `elapsed_ms`, `tokens_before`, from/to, carry),
   `escalation` on the turn and task records, usage before/after and `elapsed_ms` under `volatile.escalation_usage`.
