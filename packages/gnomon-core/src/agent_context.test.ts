@@ -35,6 +35,11 @@ describe("isGnomonAncestor", () => {
     [["node", "/r/packages/gnomon-cli/dist/index.js", "skill", "trial", "x"]],
     [["/usr/local/bin/gnomon", "--yes"]],
     [["/bin/sh", "/usr/local/bin/gnomon", "task", "x"]],
+    // Under its process title (gnomon-cli's proc_title.ts) a harness's cmdline
+    // is one string.
+    [["gnomon task"]],
+    [["gnomon tui"]],
+    [["gnomon"]],
   ])("%j is gnomon", (argv) => {
     expect(isGnomonAncestor(argv)).toBe(true);
   });
@@ -50,6 +55,11 @@ describe("isGnomonAncestor", () => {
     [["node", "-e", "require('/x/gnomon.js')"]],
     [["vim", "gnomon.js"]],
     [["/usr/bin/gnomon-exec", "run"]],
+    // A title-shaped line that is not one: gnomon titles no decision, and
+    // only a whole single entry is read as a title.
+    [["gnomon skill accept x"]],
+    [["gnomonish task"]],
+    [["bash", "gnomon task"]],
     [[]],
   ])("%j is not", (argv) => {
     expect(isGnomonAncestor(argv)).toBe(false);

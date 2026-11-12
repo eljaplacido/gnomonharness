@@ -13,13 +13,16 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { processTitleFor, TITLED_COMMANDS } from "./proc_title.js";
+import { isGnomonAncestor } from "../../gnomon-core/src/agent_context.js";
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), "index.ts");
+/** The repo-root convenience shim the published bin tells checkout users to run. */
+const ROOT_SHIM = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "gnomon");
 
 const made: string[] = [];
 let server: Server;
@@ -63,8 +66,12 @@ function surface(mode: "hang" | "answer"): string {
   return root;
 }
 
-function gnomon(args: string[], stdin?: string): { child: ChildProcess; done: Promise<{ code: number | null; stdout: string; stderr: string }> } {
-  const child = spawn(process.execPath, ["--import", "tsx", CLI, ...args], {
+function gnomon(
+  args: string[],
+  stdin?: string,
+  entry: string[] = ["--import", "tsx", CLI]
+): { child: ChildProcess; done: Promise<{ code: number | null; stdout: string; stderr: string }> } {
+  const child = spawn(process.execPath, [...entry, ...args], {
     env: { ...process.env, GNOMON_NO_UPDATE_CHECK: "1" },
     stdio: [stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
   });
@@ -109,12 +116,52 @@ describe("a running gnomon task's command line", () => {
         expect(cmdline).not.toContain(marker);
         expect(cmdline.replace(/\0+$/, "")).toBe("gnomon task");
         expect(readFileSync(`/proc/${run.child.pid}/comm`, "utf-8").trim()).toBe("gnomon task");
+        // And the decision commands still see the harness above them under
+        // its title (agent_context.ts check 3): a skill accept from its bash
+        // must not read as a person's.
+        expect(isGnomonAncestor(cmdline.split("\0").filter(Boolean))).toBe(true);
       } finally {
         run.child.kill("SIGKILL");
         await run.done;
       }
     },
     60_000
+  );
+
+  // The repo-root ./gnomon once ran the launcher as a child and waited with
+  // the task text in its own argv: `pkill -f` on a word of it then killed the
+  // process its caller waits on. What pgrep -f would list is checked here:
+  // every process on the box whose cmdline holds the marker.
+  it.skipIf(process.platform !== "linux")(
+    "through the repo-root ./gnomon, no process carries the task text",
+    async () => {
+      const root = surface("hang");
+      const marker = `anon_shim_${process.pid}_${Date.now().toString(36)}.py`;
+      const before = seen.get("hang")?.length ?? 0;
+      const run = gnomon(["task", `stop the job: pkill -f ${marker} when done`, "--role", "smol", "--dir", root], undefined, [ROOT_SHIM]);
+      try {
+        for (let i = 0; i < 2400 && (seen.get("hang")?.length ?? 0) === before && run.child.exitCode === null; i++) {
+          await new Promise((r) => setTimeout(r, 25));
+        }
+        expect(run.child.exitCode, "the run ended before its model call").toBeNull();
+        expect(seen.get("hang")!.at(-1)).toContain(marker);
+        const holders = readdirSync("/proc")
+          .filter((p) => /^\d+$/.test(p))
+          .filter((p) => {
+            try {
+              return readFileSync(`/proc/${p}/cmdline`, "utf-8").includes(marker);
+            } catch {
+              return false; // gone, or not ours to read
+            }
+          });
+        expect(holders, `processes whose cmdline holds the task text: ${holders.join(", ")}`).toEqual([]);
+        expect(readFileSync(`/proc/${run.child.pid}/cmdline`, "utf-8").replace(/\0+$/, "")).toBe("gnomon task");
+      } finally {
+        run.child.kill("SIGKILL");
+        await run.done;
+      }
+    },
+    120_000
   );
 });
 

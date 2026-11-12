@@ -20,14 +20,22 @@
  * A wrapper's own shell (`sh -c 'gnomon task "..."'`) still carries the text,
  * and gnomon cannot rename that: `gnomon task --task-file <path|->` takes the
  * text from a file or stdin, so it need not be on any command line.
+ *
+ * The title's shape is load-bearing elsewhere: `gnomon skill accept`/`reject`
+ * and `audit resolve` refuse when a gnomon process is among their ancestors
+ * (gnomon-core agent_context.ts, check 3), and they recognise this title by
+ * its leading word "gnomon". Keep it "gnomon <command>", and keep the decision
+ * commands themselves untitled: an ancestor that is a launcher of the same
+ * decision is allowed only because its arguments say so.
  */
 
 /**
  * The commands that get a fixed title: the run, the interactive session and
  * its aliases, and the other long-lived servers.
  *
- * Both launchers run the CLI in their own process (bin/gnomon.mjs imports
- * dist/, ./gnomon imports its bundle), so the title set here is the one other
+ * Every launcher runs the CLI in its own process (bin/gnomon.mjs imports
+ * dist/, packages/gnomon-cli/gnomon.js imports its bundle, and the repo-root
+ * ./gnomon imports gnomon.js), so the title set here is the one other
  * processes see. The checkout launcher's tsx fallback (GNOMON_LAUNCH=tsx, or
  * a bundle that cannot be built) is not covered: tsx's own process sits
  * between it and this one with the arguments intact.
