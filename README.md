@@ -27,9 +27,11 @@ gnomon dashboard   # optional: the same steps and the project's records, in a br
 gnomon launch      # start working
 ```
 
-The installer installs v0.5.0, the latest release. From v0.5.0 the package is
-also on npm: `npm i -g gnomon-harness` (the native binaries come with the
-installer; see [Install](#install)). Update with `gnomon update`;
+The installer installs v0.5.0, the latest release. v0.5.0 is also published
+to npm as `gnomon-harness` once the release's npm workflow completes; until
+`npm view gnomon-harness version` prints 0.5.0, `npm i -g gnomon-harness`
+installs the old 0.3.2, so use the installer (it also brings the native
+binaries; see [Install](#install)). Update with `gnomon update`;
 `gnomon uninstall` prints how to remove it.
 
 ## Get started in 3 steps
@@ -450,7 +452,9 @@ curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/sc
 # or: $env:GNOMON_SETUP = '1' before the irm | iex line
 ```
 
-From v0.5.0 the package is also on npm:
+From v0.5.0 the package is also published to npm, once the release's npm
+workflow completes (`npm view gnomon-harness version` prints 0.5.0; until then
+the registry has only 0.3.2, which has no `guard` or `acp`):
 
 ```bash
 npm i -g gnomon-harness
@@ -515,8 +519,8 @@ name. Releases reach npm when they are published on GitHub, by
 [`publish-npm.yml`](.github/workflows/publish-npm.yml), with npm provenance,
 authenticated by npm trusted publishing
 ([docs/RELEASING.md](docs/RELEASING.md) → "Publishing to npm"). Versions 0.3.3
-to 0.4.5 never reached the registry; v0.5.0 is the first release published
-there since 0.3.2. An older pin installs from the release tarballs above (the
+to 0.4.5 never reached the registry; v0.5.0 is the first release to be
+published there since 0.3.2, once that workflow completes. An older pin installs from the release tarballs above (the
 installer does this by itself).
 
 Requires **Node ≥ 22** and a model endpoint — [Ollama](https://ollama.com) for

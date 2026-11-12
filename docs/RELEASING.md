@@ -39,6 +39,11 @@ verification](#provenance-sbom-and-verification).
 Pressing Publish is also what puts the release on npm:
 `.github/workflows/publish-npm.yml` runs on `release: published` and publishes
 that release's own four tarballs. See [Publishing to npm](#publishing-to-npm).
+Treat npm trusted publishing (or `NPM_TOKEN`) as a gate before pressing
+Publish, and after the publish-npm run confirm that
+`npm view gnomon-harness version` prints the new version. Until it does, the
+release text says the package reaches npm "once the npm workflow completes",
+not that it is there.
 
 ## Why a script rather than an instruction
 

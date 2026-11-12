@@ -30,9 +30,10 @@
 
 The first published release since 0.4.3: 0.4.4 and 0.4.5 were drafted and
 never published, so upgrading from 0.4.3 brings their sections below as well
-as this one. From 0.5.0 the release is also published to npm as
-`gnomon-harness` (the registry had stopped at 0.3.2). Node 22 is now the
-minimum.
+as this one. 0.5.0 is also to be published to npm as `gnomon-harness` (the
+registry had stopped at 0.3.2) once the npm publishing workflow completes;
+until `npm view gnomon-harness version` says 0.5.0, install from the GitHub
+release. Node 22 is now the minimum.
 
 **What the release benchmarks recommend (gnomon-only results).** Start from
 the defaults: on Claude Haiku they did at least as well as a tuned long-task
@@ -47,7 +48,8 @@ which showed no advantage over cloud-only (R3R, R4H).
 
 The new keys below (`soft_timeout = "handle"`, `finish_gate = "v2"`,
 `deliverable_first`, `first_token_timeout_ms`, `[governance]` levels,
-`continue_after_answer`, `[roles.<name>.escalate]`) are **opt-in** and none is
+`continue_after_answer` with `continue_message`, `continue_max_rounds` and
+`continue_until_s`, `[roles.<name>.escalate]`) are **opt-in** and none is
 shown to improve outcomes. With none declared, request bodies are 0.4.5's —
 except the network refusal's wording, which the long-task tier (a) changes on
 purpose, and the prompt-cache markers on requests to Claude targets
@@ -417,11 +419,16 @@ Also in this release:
 
 - `[turn] continue_after_answer = true`, under `gnomon task --deadline` only: an answer given with at least
   `continue_min_remaining` (default 1/3) of the budget left becomes a checkpoint (the tree copied, content-addressed,
-  to a private temp directory outside the root; a `checkpoint` audit event with its hash), and the model gets ONE
-  continuation message; no countdown follows. At the end (next answer, deadline self-stop, step wall) the final tree is
+  to a private temp directory outside the root; a `checkpoint` audit event with its hash), and the model gets, by
+  default, ONE continuation message; no countdown follows. At the end (next answer, deadline self-stop, step wall) the final tree is
   scored with `[turn] checkpoint_check` or the last test command that passed in the turn, and the checkpoint is
   restored if the final scores worse (`checkpoint_restored`); equal or better is kept (`checkpoint_kept`); no check
   keeps the final (`checkpoint_kept_unverified`). Off, request bodies are unchanged.
+- `continue_message` (a non-empty string replacing the continuation text; `{minutes}` is the minutes left),
+  `continue_max_rounds` (1 to 20, default 1 = one continuation) and `continue_until_s` (keep continuing while more than
+  this many seconds remain): with more than one round, each later answer is scored and becomes the new best checkpoint
+  if it is no worse, a `checkpoint_round` audit event records each round, `counters.checkpoint.rounds` counts them, and
+  the end decision compares the best checkpoint with the final tree.
 
 #### `completion_gate = "review_only"` (opt-in, unmeasured), CONTRACTS §30
 

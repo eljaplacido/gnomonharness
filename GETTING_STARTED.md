@@ -120,7 +120,9 @@ route does not fetch the native binaries; see
 npm i -g gnomon-harness
 ```
 
-Available from v0.5.0. The package is `gnomon-harness` and the command is
+Available from v0.5.0, once the release's npm workflow completes
+(`npm view gnomon-harness version` prints 0.5.0; until then the registry has
+only 0.3.2, so use the installer above). The package is `gnomon-harness` and the command is
 `gnomon` (the name `gnomon` on npm belongs to an unrelated logging utility).
 From the registry the four packages are one name because npm resolves the
 three libraries by name. Versions 0.3.3 to 0.4.5 were never published there;
