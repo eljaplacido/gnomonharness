@@ -26,13 +26,60 @@
 
 ## [Unreleased]
 
-Everything in this section is on master and in no release. The new keys below
-(`soft_timeout = "handle"`, `finish_gate = "v2"`, `deliverable_first`,
-`first_token_timeout_ms`, `[governance]` levels) are **opt-in and unmeasured**:
-the long-task arms that test them (FG1, AS1) were still running when they
-merged, and no result is claimed for any of them yet. With none declared,
-request bodies are master's — except the network refusal's wording, which the
-long-task tier (a) changes on purpose (below).
+## [0.5.0] — 2026-11-12
+
+The first published release since 0.4.3: 0.4.4 and 0.4.5 were drafted and
+never published, so upgrading from 0.4.3 brings their sections below as well
+as this one. From 0.5.0 the release is also published to npm as
+`gnomon-harness` (the registry had stopped at 0.3.2).
+
+**What the release benchmarks recommend (gnomon-only results).** Start from
+the defaults: on Claude Haiku they did at least as well as a tuned long-task
+recipe at about half the cost. A done check before the final answer is opt-in;
+it makes the final answer more honest, not the outcome better. Hybrid
+local-first with cloud rescue is an opt-in cost mode, not a default: about 23%
+of cloud-only's cloud cost, −0.07 hidden-test share against cloud-only and
++0.25 against local-only.
+
+The new keys below (`soft_timeout = "handle"`, `finish_gate = "v2"`,
+`deliverable_first`, `first_token_timeout_ms`, `[governance]` levels) are
+**opt-in** and none is shown to improve outcomes. With none declared, request
+bodies are 0.4.5's — except the network refusal's wording, which the long-task
+tier (a) changes on purpose (below).
+
+### Pull requests in this release
+
+Merged after the 0.4.5 draft (`git log v0.4.5..origin/master --merges`):
+
+- #161 soft-timeout shell: job handles instead of kills (opt-in)
+- #162 finish gate v2: caveat audit and targeted checks (opt-in)
+- #163 audit cleanup: docs truth, exec threat model, unknown keys, startup, flakes
+- #164 deliverable-first time note and first-token stall watchdog (opt-in)
+- #165 guard: protect host hooks, deny an ask under bypass, opencode session base and grep coverage
+- #166 soft shell: docker job removal race
+- #167 governance levels observe/advise/prevent/enforce per family (shared-governance PR 1)
+- #168 protected paths with the secret and CI families (shared-governance PR 3)
+- #169 docs truth pass 2026-11-07
+- #171 refuse writes outside the project root (shared-governance)
+- #172 read-only working directory regression (state-dir surface)
+- #173 long-task tier (a): replay rule, steering delivery, `deadline_note`, unattended profile
+- #174 opt-in upfront deadline note, peer prompt profile, container sandbox profile
+- #175 completion gate `review_only`; the reviewer sees the request, not a chain stage's report
+
+### Merged for the release
+
+<!-- RELEASE-PLACEHOLDER: the integrator replaces each line with its entry
+     (Added/Changed/Fixed, PR number) once the PR is merged for v0.5.0, and
+     deletes any line whose PR does not make the release. -->
+
+- TODO: dotfile and self-kill fixes
+- TODO: hybrid local-first rescue v2 (#180, includes checkpoint-then-grind #179)
+- TODO: Anthropic prompt caching
+- TODO: hand-off note fix
+- TODO: first-run journey
+- TODO: guard liveness and the audit scorecard
+- TODO: benchmark kit
+- TODO: package hygiene
 
 ### Added — `completion_gate = "review_only"` (opt-in, unmeasured), CONTRACTS §30
 
@@ -352,10 +399,8 @@ reasoning; delivering the idle nudge locally is untested); SW1/LG2 test them.
 
 ## [0.4.5] — 2026-11-06
 
-> **Not yet published.** This release is a GitHub draft; the latest published
-> release is [0.4.3], which is what the installer and `gnomon update` install
-> (npm's `gnomon-harness` is still 0.3.2). Until it is published, this section
-> describes master.
+> **Never published.** This release stayed a GitHub draft; its changes ship
+> in [0.5.0].
 
 Security release for `exec = "docker"` (PR #158). Upgrade if you run a model
 you do not trust in a container. Nothing changes for `exec = "off"`.
@@ -425,10 +470,8 @@ you do not trust in a container. Nothing changes for `exec = "off"`.
 
 ## [0.4.4] — 2026-11-06
 
-> **Not yet published.** This release is a GitHub draft; the latest published
-> release is [0.4.3], which is what the installer and `gnomon update` install
-> (npm's `gnomon-harness` is still 0.3.2). Until it is published, this section
-> describes master.
+> **Never published.** This release stayed a GitHub draft; its changes ship
+> in [0.5.0].
 
 Long hosted-model tasks, from the P2G41 root causes (2026-11-05). **One default
 changes: reasoning replay is on for a hosted endpoint that returns reasoning**,
@@ -4517,9 +4560,12 @@ was written.
   `git tag`, not a documentation edit as well.
 -->
 
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.4.5...HEAD
-[0.4.5]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.5
-[0.4.4]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.4
+<!-- 0.4.4 and 0.4.5 were never published, so 0.5.0 compares against 0.4.3 and
+     their links point at the tags, not at (draft) release pages. -->
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/eljaplacido/gnomonharness/compare/v0.4.3...v0.5.0
+[0.4.5]: https://github.com/eljaplacido/gnomonharness/tree/v0.4.5
+[0.4.4]: https://github.com/eljaplacido/gnomonharness/tree/v0.4.4
 [0.4.3]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.3
 [0.4.2]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.2
 [0.4.1]: https://github.com/eljaplacido/gnomonharness/releases/tag/v0.4.1
