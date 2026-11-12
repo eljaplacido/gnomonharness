@@ -318,8 +318,13 @@ function hostOf(url: string): string {
  * Whether sending a key to this URL is something the scaffold could have set
  * up. Only loopback is "local" here (seventh review, L3): a LAN, `.local` or
  * tailnet host is someone else's machine as far as a key is concerned.
+ *
+ * Exported because the trust step is not the only thing that sends a key: a
+ * readiness listing, `gnomon doctor` and `gnomon endpoint list|test` reach an
+ * endpoint before (or without) a session, and each applies this same rule --
+ * a key goes to a host that fails it only when the surface is trusted.
  */
-function keyHostIsDefault(url: string): boolean {
+export function keyHostIsDefault(url: string): boolean {
   if (isLoopbackEndpoint(url)) return true;
   return KEY_HOSTS.includes(hostOf(url));
 }

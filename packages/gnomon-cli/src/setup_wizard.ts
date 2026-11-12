@@ -25,7 +25,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { recomputeManifest } from "gnomon-core";
+import { recomputeManifest, keyHostIsDefault } from "gnomon-core";
 import { probeMachine, formatProbe, RUNTIME_PORTS, type MachineProbe, type ProbeHost, type RuntimeId } from "./probe.js";
 import {
   recommend,
@@ -51,7 +51,7 @@ import {
   type EndpointBlock,
   type SurfaceTexts,
 } from "./setup_surface.js";
-import { ENDPOINT_PRESETS } from "./setup.js";
+import { ENDPOINT_PRESETS, hostName, withheldWhy } from "./setup.js";
 import { initSurface, scaffoldTexts } from "./init.js";
 import { FALLBACK_LARGE, FALLBACK_SMALL } from "./detect.js";
 
@@ -127,6 +127,13 @@ export interface SetupDeps {
   checkCloud(endpoint: EndpointBlock, model: string): Promise<{ ok: boolean; status?: number; detail?: string }>;
   /** A cloud endpoint's model listing: a GET, spends nothing. */
   listCloudModels(endpoint: EndpointBlock): Promise<string[]>;
+  /**
+   * The trust step would run this project's surface as declared (trusted, or
+   * granting nothing beyond the scaffold). Absent means no: an endpoint taken
+   * from the surface whose host is not a known provider is then not checked
+   * with its key (docs/CONTRACTS.md §8).
+   */
+  surfaceTrusted?(): boolean;
   /** Commands this build dispatches, for the closing "Next" lines. */
   commands: readonly string[];
 }
@@ -286,6 +293,11 @@ interface CloudChoice {
   /** Declared already in config.toml: nothing to add there. */
   declared: boolean;
   preset?: string;
+  /**
+   * The URL and key variable are the surface's, not a preset's or what the
+   * person typed: a cloned repository may have chosen them.
+   */
+  fromSurface?: boolean;
 }
 
 /**
@@ -297,7 +309,7 @@ export function resolveCloudEndpoint(value: string, configText: string | undefin
   const parsed = configTextEndpoints(configText)[value];
   if (parsed) {
     if (isLoopback(parsed.url)) return { error: `"${value}" is a local endpoint (${parsed.url}), not a cloud one` };
-    return { name: value, block: parsed, declared: true };
+    return { name: value, block: parsed, declared: true, fromSurface: true };
   }
   const preset = ENDPOINT_PRESETS[value] ?? Object.entries(ENDPOINT_PRESETS).find(([, p]) => p.url === value)?.[1];
   const presetKey = Object.entries(ENDPOINT_PRESETS).find(([, p]) => p === preset)?.[0];
@@ -362,7 +374,7 @@ function configuredCloud(texts: SurfaceTexts, deps: SetupDeps): { choice: CloudC
       const block = endpoint ? blocks[endpoint] : undefined;
       if (!model || !endpoint || !block || isLoopback(block.url)) continue;
       if (block.api_key_env && !deps.keys.held(block.api_key_env)) continue;
-      return { choice: { name: endpoint, block, declared: true }, model };
+      return { choice: { name: endpoint, block, declared: true, fromSurface: true }, model };
     }
   }
   return undefined;
@@ -697,7 +709,15 @@ export async function runSetup(opts: SetupOptions, deps: SetupDeps): Promise<Set
     }
     let checked: "ok" | "failed" | "skipped" = "skipped";
     let detail: string | undefined;
-    if (held && io.interactive) {
+    // An endpoint the surface chose, at a host that is not a known provider,
+    // gets its key only once the surface is trusted -- the rule the session's
+    // trust step applies (clampToDefaults). The y/N below names an endpoint,
+    // not a host, so a yes there is not a yes to sending a key somewhere new.
+    const keyHeldBack =
+      Boolean(keyEnv) && cloud.choice.fromSurface === true && !keyHostIsDefault(cloud.choice.block.url) && !deps.surfaceTrusted?.();
+    if (held && io.interactive && keyHeldBack) {
+      say(`  Not checked: ${withheldWhy({ env: keyEnv!, host: hostName(cloud.choice.block.url) })}.`);
+    } else if (held && io.interactive) {
       const go = await io.ask(`  Check it now with one token through ${cloud.choice.name} (a fraction of a cent)? [y/N] `, "n");
       if (yes(go)) {
         const r = await deps.checkCloud(cloud.choice.block, cloud.model);

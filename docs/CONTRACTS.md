@@ -604,6 +604,34 @@ parse trusts nothing.
 **Exit codes.** A clamped run exits by its bucket like any other. Quitting at the
 interactive prompt exits **3** (`refused_by_gate`) with nothing run.
 
+**Keys before (or without) a session.** The rule that clamps a key — an endpoint
+or fallback's `api_key_env` goes to a host that is not loopback and not in
+`KEY_HOSTS` only on a surface the operator trusts (`keyHostIsDefault`, exported
+from gnomon-core) — holds for every request that carries a key, not only for a
+session's. These run before `launch`'s trust prompt, or in commands that never
+open a session, and each one uses the surface **as the trust step would run it**
+(settled headless and silently, with `--trust` / `GNOMON_TRUST` / the store as
+usual), never the surface as declared:
+
+| Where | On an untrusted surface, for an endpoint at an unknown host |
+|---|---|
+| `launch`'s readiness check (before the session) | no request; prints `Not checked: $VAR goes to <host> … only once this surface is trusted`, and the session's trust prompt follows |
+| `gnomon doctor` (and the dashboard's `doctor.scan`) | no request; a `readiness` finding with that text and fix `gnomon trust …` |
+| `gnomon endpoint list` | listed as declared; the model cross-check runs without the key, and the line above is printed |
+| `gnomon endpoint test` | that endpoint is `NOT TESTED`, and the command exits **3** (`refused_by_gate`) |
+| `gnomon setup`'s one-token check of an endpoint taken from the surface | not offered; the line above is said instead |
+
+A trusted surface (or one that grants nothing beyond the scaffold) runs as
+declared in all of them, and a known provider or a loopback endpoint always gets
+its key. As defence in depth, the readiness check itself (`checkReadiness`)
+sends no `Authorization` header to a host that fails `keyHostIsDefault` unless
+its caller says the surface is trusted. `endpoint add` and `setup` send a key to
+the URL the person typed or the preset they chose, which is their own choice.
+Before v0.5.0, `launch`'s readiness check, `gnomon doctor` and `gnomon endpoint
+list|test` ran on the surface as declared, so a cloned repository naming its own
+host and, say, `ANTHROPIC_API_KEY` was sent that key on an interactive
+`gnomon launch`, a `gnomon doctor` or an `endpoint list`.
+
 **Fixture**: `conformance/trust_record.json`. `packages/gnomon-core/src/trust.test.ts`
 asserts the code's `TRUST_DECISIONS` and `TRUST_BY` equal the fixture; the end-to-end
 tests there and in `packages/gnomon-cli/src/trust.test.ts` read the `trust` field
