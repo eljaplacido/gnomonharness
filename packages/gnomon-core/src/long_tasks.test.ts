@@ -74,7 +74,7 @@ describe("v0.4.4 release defaults (H3 adopt, LG1 keep)", () => {
       replayReasoningAuto: true,
     });
     // A local lane (llama.cpp on this machine, the LAN, Tailscale): off unless declared.
-    for (const url of ["http://127.0.0.1:8080/v1/chat/completions", "http://192.168.1.20:8000/v1", "http://100.86.231.23:4310/v1"]) {
+    for (const url of ["http://127.0.0.1:8080/v1/chat/completions", "http://192.168.1.20:8000/v1", "http://100.64.0.1:4310/v1"]) {
       expect(replayFieldsOf({ url }), url).toEqual({ replayReasoning: false });
       expect(replayFieldsOf({ url, replay_reasoning: true }), url).toEqual({
         replayReasoning: true,
@@ -126,7 +126,7 @@ describe("v0.4.4 release defaults (H3 adopt, LG1 keep)", () => {
       "http://[fd12:3456::1]/v1",
       "http://100.64.0.1/v1",
       "http://100.127.255.254/v1",
-      "http://gx10.local:11434/v1",
+      "http://gpu-box.local:11434/v1",
       "http://host.docker.internal:8080/v1",
       "http://vllm:8000/v1",
       "not a url",

@@ -443,7 +443,8 @@ describe("gnomon guard — Cursor", () => {
 // opencode V2
 // ---------------------------------------------------------------------------
 
-const OPENCODE = process.env.GNOMON_OPENCODE_BIN ?? "/home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/bin/opencode";
+// The live opencode tests run only when GNOMON_OPENCODE_BIN names an opencode binary.
+const OPENCODE = process.env.GNOMON_OPENCODE_BIN ?? "";
 
 describe("gnomon guard — opencode V2 plugin", () => {
   let dir: string;

@@ -2331,7 +2331,7 @@ notice, not as tampering. The last write before a normal session end comes
 before the checkpoint.
 
 **Cost.** Each write is one `JSON.stringify`, one write and one rename, with no
-fsync: the file outlives the process, not a power cut. Measured on gx10
+fsync: the file outlives the process, not a power cut. Measured on an NVIDIA GB10
 (aarch64, ext4, benchmarks running): median 0.04–0.15 ms a write and p95 under
 0.35 ms for turns of 10 to 400 tool calls (the file then 1–21 KB), two writes a
 tool call.
