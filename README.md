@@ -144,7 +144,6 @@ does not. Behaviour is readable because something is holding still.
 - [Interactive Commands](#interactive-commands)
 - [Adopting gnomon in an Existing Project](#adopting-gnomon-in-an-existing-project)
 - [Determinism and Contracts](#determinism-and-contracts)
-- [Composing with TriadSepta](#composing-with-triadsepta)
 - [Known Limits](#known-limits)
 - [Where gnomon sits](docs/POSITIONING.md)
 - [gnomon Bench Standards](docs/benchmarks/README.md): proposed open benchmarks for what the harness decides (draft v0.1)
@@ -344,7 +343,7 @@ a model's opinion — any shell command satisfies the `verifier` role's
 `bash_allow`, and the optional `[verify]` block runs one (`pytest`, `cargo
 test`, `make`, `.gnomon/ci.sh`) after a turn and hands it back on failure. That
 works with nothing external installed.
-[SeptaCore](https://github.com/eljaplacido/SeptaCore) (external, optional) is
+SeptaCore (the author's own verification plane; private and unreleased) is
 *one* such gate — a repository-native verification plane any shell can drive,
 which this repository's own surface happens to use; gnomon does not require it.
 gnomon deliberately does not build a *second* gate of its own, because that
@@ -2945,39 +2944,6 @@ determinism check that computes the manifest twice and compares.
 
 What is *not* deterministic, stated plainly: `compaction = "summary"` calls a
 model. Everything else in the surface path is reproducible.
-
----
-
-## Composing with TriadSepta
-
-[TriadSepta](https://github.com/eljaplacido/TriadSepta) composes subsystems and
-publishes evidence about whether composing them was worth it. Its governing
-constraint:
-
-> Removing this repository must leave every subsystem able to do everything it
-> could do before.
-
-gnomon is built to satisfy that rather than depend on it:
-
-| Requirement | How gnomon meets it |
-|---|---|
-| Works with the integration layer absent | Standalone CLI. Nothing here references TriadSepta. |
-| Configuration by its own paths | Everything is `.gnomon/`, resolved from the working directory. |
-| A documented, non-interactive invocation | `gnomon task "<what to do>" --json` |
-| Reproducible evidence | The record carries `surface_hash`; run-to-run differences are confined to `volatile`. |
-
-```json
-{
-  "name": "gnomon",
-  "role": "harness",
-  "remote": "https://github.com/eljaplacido/gnomonharness.git",
-  "invocation": "gnomon task \"<what to do>\" --dir <repository> --json"
-}
-```
-
-A non-interactive run refuses every gated tool call unless `--yes`. There is
-nobody to ask, and granting writes because no one is watching would invert the
-meaning of `approval = "on_write"`.
 
 ---
 

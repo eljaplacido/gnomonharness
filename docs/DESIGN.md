@@ -106,8 +106,8 @@ which is how that control came to exist.
 names — any shell command satisfies the `verifier` role's `bash_allow`, and the
 optional `[verify]` block runs one (`pytest`, `cargo test`, `make`,
 `.gnomon/ci.sh`) after a turn and hands it back on failure. That works with
-nothing external installed. [SeptaCore](https://github.com/eljaplacido/SeptaCore)
-(external, optional) is *one* such gate — a verification plane any shell can
+nothing external installed. SeptaCore (the author's own verification plane;
+private and unreleased) is *one* such gate — a verification plane any shell can
 drive — which the author's own surface uses; gnomon does not require it. A
 second gate built into gnomon would be duplicated mechanism.
 
