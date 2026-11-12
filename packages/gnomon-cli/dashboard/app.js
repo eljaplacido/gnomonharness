@@ -1141,13 +1141,31 @@ function resultPanel(d, nav) {
 
 /** A path as the shell it is pasted into reads it. */
 function shellPath(path, platform) {
-  if (/^[A-Za-z0-9_./:\\~+@-]+$/.test(path)) return path;
-  // cmd.exe and PowerShell: a Windows path cannot contain a double quote.
-  if (platform === "win32") return `"${path}"`;
+  if (platform === "win32") {
+    if (/^[A-Za-z0-9_./:\\~+-]+$/.test(path)) return path;
+    // Double quotes read the same in cmd.exe, Windows PowerShell 5.1 and
+    // PowerShell 7 (a Windows path cannot contain one) -- unless the path has
+    // `$` or a backtick, which PowerShell expands inside them, or `%`, which
+    // cmd.exe does. Then single quotes: PowerShell's literal string, and
+    // PowerShell is the default shell on Windows 10/11.
+    if (!/[$`%]/.test(path)) return `"${path}"`;
+    return `'${path.replace(/'/g, "''")}'`;
+  }
+  if (/^[A-Za-z0-9_./:~+@-]+$/.test(path)) return path;
   return `'${path.replace(/'/g, "'\\''")}'`;
 }
 function startCommand(root, platform) {
+  // Windows gets `--dir`, not `cd <path> && …`: Windows PowerShell 5.1
+  // rejects `&&`, and cmd.exe's `cd` does not change drive without /d, so
+  // launch would run -- and scaffold .gnomon/ -- in the old folder.
+  if (platform === "win32") return `gnomon launch --dir ${shellPath(root, platform)}`;
   return `cd ${shellPath(root, platform)} && gnomon launch`;
+}
+/** On Windows, when the command above is PowerShell-only: what to run in cmd.exe instead. */
+function startCommandNote(root, platform) {
+  if (platform !== "win32" || !/[$`%]/.test(root)) return null;
+  if (/%/.test(root)) return "This is for PowerShell. cmd.exe would expand the % in this path: run it in PowerShell.";
+  return `This is for PowerShell. In cmd.exe: gnomon launch --dir "${root}"`;
 }
 function startPanel(d, nav) {
   const u = setupState();
@@ -1188,7 +1206,7 @@ function startPanel(d, nav) {
       h("label", { class: "picker" }, "Command to start gnomon in this project", field),
       h("button", { type: "button", class: "btn primary", text: "Copy", "aria-describedby": "start-cmd", onClick: copy })),
     said,
-    platform === "win32" ? h("p", { class: "muted small", text: "In Windows PowerShell 5.1, use ; instead of && between the two commands." }) : null,
+    startCommandNote(p.root, platform) ? h("p", { class: "muted small", text: startCommandNote(p.root, platform) }) : null,
     h("p", { class: "muted small", text: "Later: `gnomon doctor` checks every role still answers; `gnomon setup` again changes the model." }),
     nav(6, null));
 }

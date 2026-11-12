@@ -459,7 +459,7 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
       projects.forEach(refresh);
       return json(res, 200, {
         harness: harnessBuild(),
-        // Which shell the Start step quotes its `cd <path> && gnomon launch` for.
+        // Which shell the Start step writes its launch command for (`cd <path> && gnomon launch`, or `gnomon launch --dir <path>` on Windows).
         platform: process.platform,
         read_only: false,
         projects: projects.map((p) => ({ id: p.id, name: p.name, root: p.root, source: p.source, hasSurface: p.hasSurface })),

@@ -380,16 +380,36 @@ describe("every dashboard button maps to a command that exists", () => {
 
 describe("the Start step: the exact command for the project, quoted for its shell", () => {
   const start = new Function(`${fn("shellPath")}\n${fn("startCommand")}\nreturn startCommand;`)() as (root: string, platform: string) => string;
+  const note = new Function(`${fn("startCommandNote")}\nreturn startCommandNote;`)() as (root: string, platform: string) => string | null;
 
-  it("cd <path> && gnomon launch", () => {
+  it("cd <path> && gnomon launch on macOS and Linux; launch --dir on Windows", () => {
     expect(start("/home/me/app", "linux")).toBe("cd /home/me/app && gnomon launch");
-    expect(start("C:\\work\\app", "win32")).toBe("cd C:\\work\\app && gnomon launch");
+    // No `cd … &&` on Windows: PowerShell 5.1 rejects &&, and cmd.exe's cd
+    // does not change drive -- launch would scaffold the wrong folder.
+    expect(start("C:\\work\\app", "win32")).toBe("gnomon launch --dir C:\\work\\app");
+    expect(start("D:\\proj", "win32")).toBe("gnomon launch --dir D:\\proj");
+    expect(start("C:\\work\\app", "win32")).not.toContain("&&");
+    expect(note("D:\\proj", "win32")).toBeNull();
   });
 
   it("quotes a path a shell would split or expand", () => {
     expect(start("/home/me/my app", "darwin")).toBe("cd '/home/me/my app' && gnomon launch");
     expect(start("/tmp/it's $HOME", "linux")).toBe("cd '/tmp/it'\\''s $HOME' && gnomon launch");
-    expect(start("C:\\Users\\Jane Doe\\app", "win32")).toBe('cd "C:\\Users\\Jane Doe\\app" && gnomon launch');
+    // Double quotes read the same in cmd.exe and both PowerShells.
+    expect(start("C:\\Users\\Jane Doe\\app", "win32")).toBe('gnomon launch --dir "C:\\Users\\Jane Doe\\app"');
+    expect(start("D:\\R&D (old)\\it's", "win32")).toBe('gnomon launch --dir "D:\\R&D (old)\\it\'s"');
+    expect(note("C:\\Users\\Jane Doe\\app", "win32")).toBeNull();
+  });
+
+  it("on Windows, a $ or % in the path gets PowerShell's literal quotes and a note for cmd.exe", () => {
+    // PowerShell 7 expands $name inside double quotes.
+    expect(start("D:\\cash$flow\\app", "win32")).toBe("gnomon launch --dir 'D:\\cash$flow\\app'");
+    expect(start("D:\\it's $x", "win32")).toBe("gnomon launch --dir 'D:\\it''s $x'");
+    expect(note("D:\\cash$flow\\app", "win32")).toBe('This is for PowerShell. In cmd.exe: gnomon launch --dir "D:\\cash$flow\\app"');
+    // cmd.exe expands %name% even inside quotes: PowerShell only.
+    expect(start("C:\\100%done", "win32")).toBe("gnomon launch --dir 'C:\\100%done'");
+    expect(note("C:\\100%done", "win32")).toMatch(/run it in PowerShell/);
+    expect(note("/srv/$app", "linux")).toBeNull();
   });
 
   it("is a wizard step after Review, and is shown, never run", () => {
