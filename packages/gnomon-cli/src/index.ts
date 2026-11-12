@@ -2615,7 +2615,8 @@ Commands:
     Show surface hash, manifest, or paths for .gnomon/ tree
 
   enumerations
-    Show the enumerations contract (edit_format, sandbox, approval, role_profile, governance_level, governance_family)
+    Show the enumerations contract (edit_format, sandbox, approval, role_profile, governance_level,
+    governance_family, audit_kind, guard_decision, guard_rule, guard_tool)
 
   session [--dir <path>] <command> [command ...]
     Run commands as a session, recording outcomes. Each command runs with
@@ -2728,6 +2729,14 @@ Commands:
     or mini-swe-agent.
     --install-hook claude-code prints the SessionStart + Stop hooks that
     run this on every Claude Code session (it edits nothing).
+    --require-guard fails (exit 2) a session that made calls the guard hook
+    selects and that gnomon guard never decided (--session, or the
+    transcript's own session; else every Claude Code session since install).
+  check --scorecard [--session <id>] [--transcript <file>] [--json]
+    Summarise a foreign harness's run: guard decisions by family and verdict,
+    tools seen vs governed, hook and session liveness, the audit trails'
+    hash chains, and the recorded check results. Markdown, or
+    gnomon.scorecard/1 JSON. Exit 0 clean, 2 a finding, 10 not governed.
 
   guard --tool <bash|write|edit|read|webfetch|grep|glob|execute> --input <json> [--role <r> | --agent <a>]
   guard --from claude-code|opencode|cursor|generic  (the call on stdin)
@@ -2738,12 +2747,14 @@ Commands:
     Exit: 0 allow, 2 deny, 3 ask, 10 no decision (answered as ask). With
     --from claude-code|cursor it answers in that harness's hook format.
     Recorded in the audit trail when [audit] is on.
-  guard install claude-code|opencode|cursor [--write]
+  guard install claude-code|opencode|cursor [--write] [--bin <path>]
     Print the hook (Claude Code PreToolUse, an opencode 2.2 plugin, Cursor
-    hooks.json), or with --write add it to this project's own config.
+    hooks.json), or with --write add it to this project's own config. The
+    hook names an absolute gnomon that answers guard; none: exit 10.
   guard status [--expect claude-code,opencode,cursor] [--json] [--dir <path>]
     Per host: the hook ok, missing, modified (differs from HEAD or from what
-    install --write recorded), disabled (disableAllHooks) or not installed.
+    install --write recorded), disabled (disableAllHooks) or not installed;
+    and the host sessions the guard has decided for (liveness).
     Exit 0 no finding, 2 a finding, 10 no .gnomon/ governs the directory.
 
   dashboard [--port <n>] [--no-open] [--dir <path>]

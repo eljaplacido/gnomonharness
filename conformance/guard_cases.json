@@ -145,5 +145,26 @@
       {"name": "malformed: a non-string command (structural, never levelled)", "role": "implement", "tool": "bash", "input": {"command": ["rm", "-rf", "x"]}, "verdict": "deny", "rule": "malformed", "family": null, "expect": {"observe": "deny", "advise": "deny", "prevent": "deny", "enforce": "deny"}},
       {"name": "a read inside the repository: nothing to level", "role": "implement", "tool": "read", "input": {"path": "src/a.ts"}, "verdict": "allow", "rule": null, "family": null, "expect": {"observe": "allow", "advise": "allow", "prevent": "allow", "enforce": "allow"}}
     ]
+  },
+  "host_tools": {
+    "_comment": [
+      "Host tools that are not gnomon tool kinds (CONTRACTS.md §10 \"Other host tools\"), as Claude Code's",
+      "PreToolUse hook sends them (`tool_name`, `tool_input`). Decided by `gnomon guard` only: gnomon's own",
+      "loop has no such tools, so these are not put to it. packages/gnomon-cli/src/guard.test.ts puts each to",
+      "the real binary with --from claude-code; packages/gnomon-core/src/guard.test.ts to guardHarnessRequest.",
+      "",
+      "`expect` is [decision, rule] per [approval] gate on `surface` (no [governance]); `levels` is the",
+      "same call on `surface` with `levels.policy` at each level: `verdict`, `rule` and `family` are what the",
+      "guard document carries, `expect` the decision. `decided_as` is the document's `tool`. An ungoverned",
+      "tool's `level` is the strictest level the surface puts on write, bash, network, secrets or ci."
+    ],
+    "cases": [
+      {"name": "an MCP tool is ungoverned: allowed with no [governance], put to a person under it at prevent and above", "role": "implement", "tool_name": "mcp__github__create_issue", "tool_input": {"title": "t", "body": "b"}, "decided_as": "mcp__github__create_issue", "expect": {"never": ["allow", "ungoverned"], "on_write": ["allow", "ungoverned"]}, "levels": {"verdict": "ask", "rule": "ungoverned", "family": null, "expect": {"observe": "allow", "advise": "allow", "prevent": "ask", "enforce": "ask"}}},
+      {"name": "WebSearch is decided as webfetch is, without the URL rules: the gate asks, network = false refuses", "role": "implement", "tool_name": "WebSearch", "tool_input": {"query": "gnomon harness"}, "decided_as": "websearch", "expect": {"never": ["allow", null], "on_write": ["ask", "approval"]}, "levels": {"verdict": "deny", "rule": "network", "family": "network", "expect": {"observe": "allow", "advise": "allow", "prevent": "deny", "enforce": "deny"}}},
+      {"name": "WebSearch for a role without webfetch is put to a person at every level (tools is structural; as execute without bash)", "role": "readonly", "tool_name": "WebSearch", "tool_input": {"query": "gnomon harness"}, "decided_as": "websearch", "expect": {"never": ["ask", "tools"], "on_write": ["ask", "tools"]}, "levels": {"verdict": "ask", "rule": "tools", "family": null, "expect": {"observe": "ask", "advise": "ask", "prevent": "ask", "enforce": "ask"}}},
+      {"name": "Agent starts a subagent: recorded and allowed, its own calls are decided one by one", "role": "implement", "tool_name": "Agent", "tool_input": {"description": "explore", "prompt": "look around", "subagent_type": "Explore"}, "decided_as": "agent", "expect": {"never": ["allow", "ungoverned"], "on_write": ["allow", "ungoverned"]}, "levels": {"verdict": "allow", "rule": "ungoverned", "family": null, "expect": {"observe": "allow", "advise": "allow", "prevent": "allow", "enforce": "allow"}}},
+      {"name": "Task (the older name of Agent) is the same", "role": "implement", "tool_name": "Task", "tool_input": {"description": "explore", "prompt": "look around", "subagent_type": "general-purpose"}, "decided_as": "agent", "expect": {"never": ["allow", "ungoverned"], "on_write": ["allow", "ungoverned"]}, "levels": {"verdict": "allow", "rule": "ungoverned", "family": null, "expect": {"observe": "allow", "advise": "allow", "prevent": "allow", "enforce": "allow"}}},
+      {"name": "TodoWrite has no effect outside the conversation (the matcher does not select it; a caller may still send it)", "role": "implement", "tool_name": "TodoWrite", "tool_input": {"todos": []}, "decided_as": "TodoWrite", "expect": {"never": ["allow", "ungoverned"], "on_write": ["allow", "ungoverned"]}, "levels": {"verdict": "allow", "rule": "ungoverned", "family": null, "expect": {"observe": "allow", "advise": "allow", "prevent": "allow", "enforce": "allow"}}}
+    ]
   }
 }

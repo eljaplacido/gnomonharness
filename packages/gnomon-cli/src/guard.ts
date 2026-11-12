@@ -13,28 +13,32 @@
  * (bin/gnomon.mjs) imports this file directly for `gnomon guard`.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { accessSync, constants as fsConstants, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
   GUARD_HARNESSES,
   GUARD_TOOLS,
   committedAtHead,
   guardExit,
+  guardLiveSessions,
   guardRepo,
+  sessionsWithoutGuard,
   guardHarnessRequest,
   readHarness,
   toClaudeCode,
   toCursor,
   type GuardHarness,
+  type GuardLiveSession,
   type GuardVerdict,
   writeFileIn,
 } from "gnomon-core/guard";
 
 export const GUARD_USAGE = `Usage: gnomon guard --tool <${GUARD_TOOLS.join("|")}> --input <json> [options]
        gnomon guard [--from generic|claude-code|opencode|cursor] [options] < call.json
-       gnomon guard install claude-code|opencode|cursor [--write] [--dir <path>]
+       gnomon guard install claude-code|opencode|cursor [--write] [--dir <path>] [--bin <path>]
        gnomon guard status [--dir <path>] [--expect claude-code,opencode,cursor] [--json]
 
 Options:
@@ -48,8 +52,11 @@ Options:
 
 Exit (generic and opencode): 0 allow, 2 deny, 3 ask, 10 no decision (answered as ask).
 claude-code and cursor answer in their own hook format and exit 0.
+install writes the absolute path of a gnomon that answers \`gnomon guard\` (--bin, else
+$GNOMON_GUARD_BIN, else the gnomon running the install, else the one on PATH), and refuses
+(exit 10) when none does.
 status: 0 every installed hook is in place, 2 a hook is missing, changed or switched off,
-10 not governed.`;
+10 not governed. It also lists the host sessions the guard has decided for.`;
 
 export interface GuardArgs {
   sub?: string;
@@ -165,39 +172,197 @@ function answer(from: GuardHarness, v: GuardVerdict, out: (s: string) => void, e
 // Adapters: what each harness is given to install
 // ---------------------------------------------------------------------------
 
-/** The Claude Code tools gnomon decides; the others are left to Claude Code. */
-export const CLAUDE_CODE_MATCHER = "Bash|Write|Edit|MultiEdit|NotebookEdit|Read|WebFetch|Grep|Glob";
-export const CLAUDE_CODE_GUARD_COMMAND = "gnomon guard --from claude-code --agent claude-code";
+/**
+ * The Claude Code tools the PreToolUse hook is run for. The ones gnomon has a
+ * tool kind for are decided by its rules; WebSearch as a network call; Agent
+ * and Task (a subagent, whose own calls reach the hook one by one) are
+ * recorded; every MCP tool (`mcp__<server>__<tool>`) is recorded as
+ * `ungoverned` and, under a declared `[governance]`, put to a person
+ * (CONTRACTS.md §10, "Other host tools"). Left to Claude Code: TodoWrite,
+ * ExitPlanMode and the other tools with no effect outside the conversation.
+ */
+export const CLAUDE_CODE_MATCHER = "Bash|Write|Edit|MultiEdit|NotebookEdit|Read|WebFetch|WebSearch|Grep|Glob|Agent|Task|mcp__.*";
+/** Tool names the matcher must select, for `guard status` (one stands in for every MCP tool). */
+export const CLAUDE_CODE_MATCHED_TOOLS = [
+  "Bash",
+  "Write",
+  "Edit",
+  "MultiEdit",
+  "NotebookEdit",
+  "Read",
+  "WebFetch",
+  "WebSearch",
+  "Grep",
+  "Glob",
+  "Agent",
+  "Task",
+  "mcp__server__tool",
+];
+const CC_GUARD_TAIL = "guard --from claude-code --agent claude-code";
+const CC_START_TAIL = "check --hook session-start";
+const CC_STOP_TAIL = "check --hook stop --agent claude-code";
+const CURSOR_TAIL = "guard --from cursor --agent cursor";
+export const CLAUDE_CODE_GUARD_COMMAND = `gnomon ${CC_GUARD_TAIL}`;
+
+/**
+ * A program (an argv prefix) as a shell word list. Claude Code and Cursor run
+ * a hook's command through a shell, so a path with a space or a quote must be
+ * quoted; a plain one is left as it is, to stay readable.
+ */
+export function shellCommand(argv: string[], tail: string): string {
+  const q = (w: string) =>
+    /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(w)
+      ? w
+      : process.platform === "win32"
+        ? `"${w.replace(/"/g, '\\"')}"`
+        : `'${w.replace(/'/g, "'\\''")}'`;
+  return `${argv.map(q).join(" ")} ${tail}`;
+}
+
+/**
+ * The part of a hook command after the program: `guard --from claude-code
+ * --agent claude-code`, or null when the command is not a gnomon one. The
+ * program may be `gnomon`, an absolute path to it, or node and a launcher
+ * script — anything that names gnomon.
+ */
+export function gnomonTail(command: string): string | null {
+  const m = /^(.*?)\s+((?:guard|check)(?:\s.*)?)$/.exec(command.trim());
+  if (!m || !/gnomon/i.test(m[1]!)) return null;
+  return m[2]!.replace(/\s+/g, " ");
+}
+
+/** The program a hook command runs, when it is one absolute path (unquoted or quoted). */
+function hookProgram(command: string): string | null {
+  const t = command.trim();
+  const quoted = /^(['"])(.*?)\1\s/.exec(t);
+  const first = quoted ? quoted[2]! : t.split(/\s+/)[0]!;
+  return isAbsolute(first) ? first : null;
+}
 
 /**
  * The PreToolUse hook, added to the SessionStart + Stop hooks `gnomon check
  * --install-hook claude-code` already prints — one fragment, not two that
  * could drift. SessionStart records the base the guard then reads its rules
- * from, so the three hooks judge a session by one policy.
+ * from, so the three hooks judge a session by one policy. `bin` is the
+ * program `install` resolved (resolveGnomonBin); bare `gnomon` by default.
  */
-export function claudeCodeHooks(): { hooks: Record<string, unknown[]> } {
+export function claudeCodeHooks(bin: string[] = ["gnomon"]): { hooks: Record<string, unknown[]> } {
   return {
     hooks: {
-      SessionStart: [{ hooks: [{ type: "command", command: "gnomon check --hook session-start" }] }],
+      SessionStart: [{ hooks: [{ type: "command", command: shellCommand(bin, CC_START_TAIL) }] }],
       PreToolUse: [
         {
           matcher: CLAUDE_CODE_MATCHER,
-          hooks: [{ type: "command", command: CLAUDE_CODE_GUARD_COMMAND, timeout: 30 }],
+          hooks: [{ type: "command", command: shellCommand(bin, CC_GUARD_TAIL), timeout: 30 }],
         },
       ],
-      Stop: [{ hooks: [{ type: "command", command: "gnomon check --hook stop --agent claude-code", timeout: 900 }] }],
+      Stop: [{ hooks: [{ type: "command", command: shellCommand(bin, CC_STOP_TAIL), timeout: 900 }] }],
     },
   };
 }
 
 /** Cursor's hooks.json (version 1): the two documented pre-execution events gnomon can decide. */
-export function cursorHooks(): { version: number; hooks: Record<string, unknown[]> } {
+export function cursorHooks(bin: string[] = ["gnomon"]): { version: number; hooks: Record<string, unknown[]> } {
+  const command = shellCommand(bin, CURSOR_TAIL);
   return {
     version: 1,
     hooks: {
-      beforeShellExecution: [{ command: "gnomon guard --from cursor --agent cursor", timeout: 30 }],
-      beforeReadFile: [{ command: "gnomon guard --from cursor --agent cursor", timeout: 30 }],
+      beforeShellExecution: [{ command, timeout: 30 }],
+      beforeReadFile: [{ command, timeout: 30 }],
     },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Which gnomon the hooks run
+// ---------------------------------------------------------------------------
+
+const answers = new Map<string, string | null>();
+
+/** Does this program answer `guard --help` as gnomon guard? null when it does, else why not. */
+function answersGuard(argv: string[]): string | null {
+  const key = JSON.stringify(argv);
+  if (answers.has(key)) return answers.get(key)!;
+  const win = process.platform === "win32";
+  const r = spawnSync(argv[0]!, [...argv.slice(1), "guard", "--help"], {
+    encoding: "utf-8",
+    timeout: 30_000,
+    stdio: ["ignore", "pipe", "pipe"],
+    shell: win && /\.(cmd|bat)$/i.test(argv[0]!),
+  });
+  const why = r.error
+    ? r.error.message
+    : r.status !== 0
+      ? `\`${argv.join(" ")} guard --help\` exited ${r.status ?? "on a signal"} (a gnomon without \`guard\`?)`
+      : !/gnomon guard/.test(r.stdout)
+        ? `\`${argv.join(" ")} guard --help\` did not print gnomon guard's usage`
+        : null;
+  answers.set(key, why);
+  return why;
+}
+
+function onPath(name: string, env: NodeJS.ProcessEnv): string[] {
+  const exts = process.platform === "win32" ? [".cmd", ".exe", ""] : [""];
+  const out: string[] = [];
+  for (const dir of (env.PATH ?? "").split(delimiter).filter(Boolean)) {
+    for (const ext of exts) {
+      const f = join(dir, name + ext);
+      try {
+        if (statSync(f).isFile()) {
+          if (process.platform !== "win32") accessSync(f, fsConstants.X_OK);
+          if (isAbsolute(f) && !out.includes(f)) out.push(f);
+        }
+      } catch {
+        // not here, or not executable
+      }
+    }
+  }
+  return out;
+}
+
+/** The launcher running this process, as a program, when it is gnomon's. */
+function runningLauncher(): string[] | null {
+  const script = process.argv[1];
+  if (!script || !isAbsolute(script)) return null;
+  const name = basename(script);
+  // An npx cache is gone by the next session: never write it into a hook.
+  if (/[\\/]_npx[\\/]/.test(script)) return null;
+  if (/^gnomon\.(m?js|cjs)$/.test(name)) return [process.execPath, script];
+  if (/^gnomon(\.cmd|\.exe)?$/.test(name)) return [script];
+  return null;
+}
+
+/**
+ * The gnomon a hook should run, as an absolute program (an argv prefix), or
+ * why there is none. A hook that says bare `gnomon` runs whatever PATH holds
+ * when the HOST starts — in the 2026-11-12 governance test that was an older
+ * gnomon without `guard`, and Claude Code ran every call unguarded (a hook
+ * that cannot start is a non-blocking error to it). So the path is resolved
+ * now, and each candidate must answer `gnomon guard --help`:
+ * `--bin`, then `$GNOMON_GUARD_BIN`, then the gnomon running this install,
+ * then each `gnomon` on PATH.
+ */
+export function resolveGnomonBin(given?: string, env: NodeJS.ProcessEnv = process.env): { argv: string[] } | { error: string } {
+  const candidates: string[][] = [];
+  if (given) candidates.push([resolve(given)]);
+  else {
+    if (env.GNOMON_GUARD_BIN) candidates.push([resolve(env.GNOMON_GUARD_BIN)]);
+    const self = runningLauncher();
+    if (self) candidates.push(self);
+    for (const f of onPath("gnomon", env)) candidates.push([f]);
+  }
+  const tried: string[] = [];
+  for (const argv of candidates) {
+    const why = answersGuard(argv);
+    if (why === null) return { argv };
+    tried.push(`  ${argv.join(" ")}: ${why}`);
+  }
+  return {
+    error:
+      "no gnomon that answers `gnomon guard` was found, so no hook was written: a hook that cannot run " +
+      "lets every call through unguarded." +
+      (tried.length ? `\nTried:\n${tried.join("\n")}` : " Nothing was found to try (no --bin, no $GNOMON_GUARD_BIN, no gnomon on PATH).") +
+      "\nInstall gnomon (npm i -g gnomon-harness) or pass --bin <path to gnomon>.",
   };
 }
 
@@ -225,16 +390,20 @@ export const OPENCODE_PLUGIN_MARKER = "gnomon-guard: generated by `gnomon guard 
  *    HEAD at its first call. GBS-LAYER pilot: the plugin had no session start,
  *    so a commit before a session's first call moved its rules.
  */
-export function opencodePlugin(): string {
+export function opencodePlugin(bin: string[] = ["gnomon"]): string {
   return `// ${OPENCODE_PLUGIN_MARKER}
-// Every shell, write, edit, patch, read, grep, glob, webfetch and execute call is put to
-// this repository's .gnomon/ rules (as committed at the session's start) before it runs.
+// Every tool call (shell, write, edit, patch, read, grep, glob, list, webfetch, websearch,
+// execute, task, MCP tools, ...) is put to this repository's .gnomon/ rules (as committed
+// at the session's start) before it runs; a tool no rule governs is recorded as ungoverned.
 // deny fails the call with gnomon's reason; ask raises opencode's own permission prompt;
 // allow changes nothing. gnomon guard refuses edits to this file; \`gnomon guard status\`
 // reports it missing or changed.
 import { execFile, execFileSync } from "node:child_process";
 
-const GNOMON = process.env.GNOMON_GUARD_BIN || "gnomon";
+// The gnomon \`gnomon guard install\` resolved, as an absolute program; $GNOMON_GUARD_BIN overrides it.
+const GNOMON_ARGV = ${JSON.stringify(bin)};
+const GNOMON = process.env.GNOMON_GUARD_BIN || GNOMON_ARGV[0];
+const PREFIX = process.env.GNOMON_GUARD_BIN ? [] : GNOMON_ARGV.slice(1);
 const AGENT = process.env.GNOMON_GUARD_AGENT || "opencode";
 const ACTION = "gnomon_guard";
 
@@ -253,12 +422,14 @@ function head(directory) {
 
 function guard(event, directory, base) {
   return new Promise((resolve) => {
-    const args = ["guard", "--from", "opencode", "--agent", AGENT];
+    const args = [...PREFIX, "guard", "--from", "opencode", "--agent", AGENT];
     if (/^[0-9a-f]{40,64}$/.test(base || "")) args.push("--session-base", base);
     // Windows: npm installs gnomon as a .cmd shim, which only a shell starts
     // (execFile alone fails with ENOENT/EFTYPE). The arguments are fixed
     // flags and a checked commit id, so nothing here needs quoting.
-    const child = execFile(GNOMON, args, { cwd: directory, timeout: 30000, maxBuffer: 1 << 20, shell: process.platform === "win32" }, (err, stdout) => {
+    const win = process.platform === "win32";
+    const program = win && /\\s/.test(GNOMON) ? '"' + GNOMON + '"' : GNOMON;
+    const child = execFile(program, args, { cwd: directory, timeout: 30000, maxBuffer: 1 << 20, shell: win }, (err, stdout) => {
       try {
         resolve(JSON.parse(String(stdout).trim().split("\\n").pop()));
       } catch {
@@ -324,22 +495,50 @@ export default {
 `;
 }
 
-/** Merge hook entries into a JSON settings file, skipping any whose command is already there. */
+/**
+ * Merge hook entries into a JSON settings file. An entry whose gnomon command
+ * is already there (the same subcommand, whatever program runs it) is brought
+ * up to date in place — its program, and a PreToolUse matcher — rather than
+ * added twice: an older install wrote bare `gnomon` and a shorter matcher.
+ */
 function mergeHooks(project: string, file: string, fragment: { hooks: Record<string, unknown[]>; version?: number }): string[] {
   const current = existsSync(file) ? (JSON.parse(readFileSync(file, "utf-8")) as Record<string, unknown>) : {};
   const hooks = (current.hooks && typeof current.hooks === "object" ? current.hooks : {}) as Record<string, unknown[]>;
   const added: string[] = [];
-  const commandsIn = (entry: unknown): string[] => {
-    const e = entry as { command?: unknown; hooks?: Array<{ command?: unknown }> };
-    return [e.command, ...(e.hooks ?? []).map((h) => h.command)].filter((c): c is string => typeof c === "string");
+  type Entry = { command?: unknown; matcher?: unknown; hooks?: Array<{ command?: unknown }> };
+  const slots = (entry: unknown): Array<{ command?: unknown }> => {
+    const e = entry as Entry;
+    return [...(typeof e.command === "string" ? [e] : []), ...(Array.isArray(e.hooks) ? e.hooks : [])];
   };
+  const tailOf = (c: unknown) => (typeof c === "string" ? (gnomonTail(c) ?? c) : null);
   for (const [event, entries] of Object.entries(fragment.hooks)) {
     const list = Array.isArray(hooks[event]) ? hooks[event]! : [];
-    const present = new Set(list.flatMap(commandsIn));
     for (const entry of entries) {
-      if (commandsIn(entry).every((c) => present.has(c))) continue;
-      list.push(entry);
-      added.push(event);
+      const want = slots(entry).map((h) => h.command as string);
+      let changed = false;
+      let found = 0;
+      for (const cmd of want) {
+        const tail = tailOf(cmd);
+        for (const existing of list) {
+          for (const h of slots(existing)) {
+            if (tailOf(h.command) !== tail) continue;
+            found++;
+            if (h.command !== cmd) {
+              h.command = cmd;
+              changed = true;
+            }
+            const m = (entry as Entry).matcher;
+            if (m !== undefined && (existing as Entry).matcher !== m) {
+              (existing as Entry).matcher = m;
+              changed = true;
+            }
+          }
+        }
+      }
+      if (found === 0) {
+        list.push(entry);
+        added.push(event);
+      } else if (changed) added.push(`${event} (updated)`);
     }
     hooks[event] = list;
   }
@@ -359,13 +558,23 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
   const target = args.positional[0];
   const write = args.flags.write === "true";
   const project = resolve(args.flags.dir ?? process.cwd());
+  if (target !== "claude-code" && target !== "opencode" && target !== "cursor") {
+    console.error(`gnomon guard install: claude-code, opencode or cursor (got "${target ?? ""}")\n\n${GUARD_USAGE}`);
+    return 10;
+  }
+  const resolved = resolveGnomonBin(args.flags.bin && args.flags.bin !== "true" ? args.flags.bin : undefined);
+  if ("error" in resolved) {
+    console.error(`gnomon guard install: ${resolved.error}`);
+    return 10;
+  }
+  const bin = resolved.argv;
   switch (target) {
     case "claude-code": {
-      const fragment = claudeCodeHooks();
+      const fragment = claudeCodeHooks(bin);
       if (write) {
         const file = join(project, ".claude", "settings.json");
         const added = mergeHooks(project, file, fragment);
-        recordInstall(project, "claude-code", file);
+        recordInstall(project, "claude-code", file, bin);
         console.error(added.length ? `gnomon guard: added ${added.join(", ")} to ${file}` : `gnomon guard: ${file} already has these hooks`);
         return 0;
       }
@@ -378,9 +587,12 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
           "`gnomon guard install claude-code --write` to merge it into this project's file.",
           "",
           "  SessionStart  records HEAD: the rules every call this session is decided by",
-          "  PreToolUse    `gnomon guard` on each Bash/Write/Edit/Read/WebFetch call: deny or ask",
-          "                is handed to Claude Code; allow says nothing, so Claude Code's own",
-          "                permission prompt still applies",
+          "  PreToolUse    `gnomon guard` on each Bash/Write/Edit/Read/Grep/Glob/WebFetch/WebSearch,",
+          "                Agent/Task and MCP call: deny or ask is handed to Claude Code; allow says",
+          "                nothing, so Claude Code's own permission prompt still applies. MCP tools",
+          "                are recorded as ungoverned, and asked under a declared [governance]",
+          `Every hook runs ${bin.join(" ")}: an absolute path, so a host that starts with`,
+          "another gnomon (or none) on its PATH still runs this one.",
           "  Stop          `gnomon check` on everything the session changed",
           "",
           "The role comes from [check.roles] in .gnomon/policy.toml: claude-code = \"implement\".",
@@ -395,12 +607,12 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
           console.error(`gnomon guard: ${file} exists and was not written by gnomon; --force replaces it`);
           return 10;
         }
-        writeFileIn(project, file, opencodePlugin());
-        recordInstall(project, "opencode", file);
+        writeFileIn(project, file, opencodePlugin(bin));
+        recordInstall(project, "opencode", file, bin);
         console.error(`gnomon guard: wrote ${file}`);
         return 0;
       }
-      out(opencodePlugin());
+      out(opencodePlugin(bin));
       console.error(
         [
           "",
@@ -412,11 +624,11 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
       return 0;
     }
     case "cursor": {
-      const fragment = cursorHooks();
+      const fragment = cursorHooks(bin);
       if (write) {
         const file = join(project, ".cursor", "hooks.json");
         const added = mergeHooks(project, file, fragment);
-        recordInstall(project, "cursor", file);
+        recordInstall(project, "cursor", file, bin);
         console.error(added.length ? `gnomon guard: added ${added.join(", ")} to ${file}` : `gnomon guard: ${file} already has these hooks`);
         return 0;
       }
@@ -432,9 +644,6 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
       );
       return 0;
     }
-    default:
-      console.error(`gnomon guard install: claude-code, opencode or cursor (got "${target ?? ""}")\n\n${GUARD_USAGE}`);
-      return 10;
   }
 }
 
@@ -457,13 +666,13 @@ const lf = (b: string | Buffer) => (typeof b === "string" ? b : b.toString("utf-
  * the file and its hash, so `status` can tell a removed or changed hook even
  * when the hook file was never committed.
  */
-function recordInstall(project: string, host: string, file: string): void {
+function recordInstall(project: string, host: string, file: string, bin: string[]): void {
   const repo = guardRepo(project);
   if (!repo) return;
   try {
     const at = join(repo.stateDir, "installed.json");
     const current = existsSync(at) ? (JSON.parse(readFileSync(at, "utf-8")) as Record<string, unknown>) : {};
-    current[host] = { file, sha256: sha256(lf(readFileSync(file))), at: new Date().toISOString() };
+    current[host] = { file, sha256: sha256(lf(readFileSync(file))), at: new Date().toISOString(), bin };
     mkdirSync(dirname(at), { recursive: true });
     writeFileSync(at, `${JSON.stringify(current, null, 2)}\n`);
   } catch {
@@ -486,6 +695,19 @@ export interface GuardStatus {
   hosts: HookStatus[];
   /** One line per host whose hook is missing, changed or switched off. */
   findings: string[];
+  /** How many host sessions the guard has decided for in this repository (CONTRACTS.md §41). */
+  sessions_seen: number;
+  /** The latest decision for any of them, ISO 8601; null when there was none. */
+  last_decision: string | null;
+  /** Those sessions, latest decision first (at most 50). */
+  sessions: GuardLiveSession[];
+  /**
+   * Claude Code sessions whose SessionStart hook ran, since the hook was
+   * installed, and for which the guard decided nothing: no selected tool
+   * call, or a PreToolUse hook that did not run. `gnomon check --transcript`
+   * tells the two apart.
+   */
+  unguarded_sessions: Array<{ session: string; started: string }>;
 }
 
 const readJson = (f: string): Record<string, unknown> | null => {
@@ -497,24 +719,39 @@ const readJson = (f: string): Record<string, unknown> | null => {
   }
 };
 
-/** Whether a hooks map runs `command` on `event` (and, given, for every tool in `tools`). */
-function runs(hooks: unknown, event: string, command: string, tools?: string[]): boolean {
+/**
+ * The command of a hook on `event` that runs gnomon's `tail` (whatever
+ * program runs it), and, given `tools`, whose matcher selects every one of
+ * them; null when there is none.
+ */
+function runs(hooks: unknown, event: string, tail: string, tools?: string[]): string | null {
   const list = (hooks as Record<string, unknown> | undefined)?.[event];
-  if (!Array.isArray(list)) return false;
-  return list.some((entry) => {
+  if (!Array.isArray(list)) return null;
+  for (const entry of list) {
     const e = entry as { command?: unknown; matcher?: unknown; hooks?: Array<{ command?: unknown }> };
     const commands = [e.command, ...(Array.isArray(e.hooks) ? e.hooks.map((h) => h?.command) : [])];
-    if (!commands.includes(command)) return false;
-    if (!tools) return true;
+    const hit = commands.find((c): c is string => typeof c === "string" && gnomonTail(c) === tail);
+    if (!hit) continue;
+    if (!tools) return hit;
     const m = typeof e.matcher === "string" ? e.matcher : "";
-    if (m === "" || m === "*") return true;
+    if (m === "" || m === "*") return hit;
     try {
       const re = new RegExp(`^(?:${m})$`);
-      return tools.every((t) => re.test(t));
+      if (tools.every((t) => re.test(t))) return hit;
     } catch {
-      return false;
+      // a matcher that does not compile selects nothing
     }
-  });
+  }
+  return null;
+}
+
+/** A hook file that has gnomon's guard in it at all: an install, perhaps older or edited. */
+const COMMITTED_GUARD = /guard --from (?:claude-code|cursor)\b|gnomon-guard: generated by/;
+
+/** Why a hook's program cannot run, when it is an absolute path that is not there. */
+function absentProgram(command: string): string | null {
+  const p = hookProgram(command);
+  return p && !existsSync(p) ? `its command runs ${p}, which does not exist: the host would run every call unguarded` : null;
 }
 
 /**
@@ -526,10 +763,20 @@ function runs(hooks: unknown, event: string, command: string, tools?: string[]):
  */
 export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.ProcessEnv = process.env): GuardStatus {
   const repo = guardRepo(dir);
-  const status: GuardStatus = { schema: "gnomon.guard.status/1", governed: repo !== null, project: repo?.project ?? null, hosts: [], findings: [] };
+  const status: GuardStatus = {
+    schema: "gnomon.guard.status/1",
+    governed: repo !== null,
+    project: repo?.project ?? null,
+    hosts: [],
+    findings: [],
+    sessions_seen: 0,
+    last_decision: null,
+    sessions: [],
+    unguarded_sessions: [],
+  };
   if (!repo) return status;
   const installed = readJson(join(repo.stateDir, "installed.json")) ?? {};
-  const recorded = (host: string) => installed[host] as { file?: string; sha256?: string } | undefined;
+  const recorded = (host: string) => installed[host] as { file?: string; sha256?: string; at?: string } | undefined;
   const committed = (file: string) => committedAtHead(repo.toplevel, relative(repo.toplevel, file));
   const claudeDir = env.CLAUDE_CONFIG_DIR ? resolve(env.CLAUDE_CONFIG_DIR) : join(homedir(), ".claude");
 
@@ -537,7 +784,9 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
     const atHead = committed(file);
     const rec = recorded(host);
     const live = existsSync(file) ? readFileSync(file) : null;
-    const expected = (atHead !== null && present(lf(atHead)) === null) || rec !== undefined || expect.includes(host);
+    // Committed with gnomon's guard in it — even an older or edited one — is expected.
+    const expected =
+      (atHead !== null && (present(lf(atHead)) === null || COMMITTED_GUARD.test(lf(atHead)))) || rec !== undefined || expect.includes(host);
     const at = (state: HookState, detail: string): HookStatus => ({ host, state, file, detail });
     if (live === null) return expected ? at("missing", "the hook file is gone") : at("not_installed", "");
     const wrong = present(lf(live));
@@ -561,14 +810,14 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
         } catch {
           return "it is not JSON Claude Code can read";
         }
-        const tools = CLAUDE_CODE_MATCHER.split("|");
-        if (!runs(hooks, "PreToolUse", CLAUDE_CODE_GUARD_COMMAND, tools)) {
-          return runs(hooks, "PreToolUse", CLAUDE_CODE_GUARD_COMMAND)
-            ? `its PreToolUse matcher no longer covers ${CLAUDE_CODE_MATCHER}`
+        const cmd = runs(hooks, "PreToolUse", CC_GUARD_TAIL, CLAUDE_CODE_MATCHED_TOOLS);
+        if (!cmd) {
+          return runs(hooks, "PreToolUse", CC_GUARD_TAIL)
+            ? `its PreToolUse matcher does not cover ${CLAUDE_CODE_MATCHER} (an older install? \`gnomon guard install claude-code --write\` updates it)`
             : `no PreToolUse hook runs \`${CLAUDE_CODE_GUARD_COMMAND}\``;
         }
-        if (!runs(hooks, "SessionStart", "gnomon check --hook session-start")) return "no SessionStart hook records the session's base";
-        return null;
+        if (!runs(hooks, "SessionStart", CC_START_TAIL)) return "no SessionStart hook records the session's base";
+        return absentProgram(cmd);
       },
       () => {
         for (const f of [claudeFile, join(repo.project, ".claude", "settings.local.json"), join(claudeDir, "settings.json"), join(claudeDir, "settings.local.json")]) {
@@ -580,13 +829,22 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
   );
   const plugin = join(repo.project, ".opencode", "plugins", "gnomon-guard.js");
   status.hosts.push(
-    judge("opencode", plugin, (text) =>
-      text === opencodePlugin()
-        ? null
-        : text.includes(OPENCODE_PLUGIN_MARKER)
-          ? "it is not the plugin this gnomon writes (edited, or an older version): `gnomon guard install opencode --write --force`"
-          : "it is not gnomon's plugin"
-    )
+    judge("opencode", plugin, (text) => {
+      let bin: string[] | null = null;
+      try {
+        const m = /^const GNOMON_ARGV = (.*);$/m.exec(text);
+        const v = m ? (JSON.parse(m[1]!) as unknown) : null;
+        if (Array.isArray(v) && v.length > 0 && v.every((w) => typeof w === "string")) bin = v as string[];
+      } catch {
+        // not this gnomon's plugin: said below
+      }
+      if (bin && text === opencodePlugin(bin)) {
+        return isAbsolute(bin[0]!) && !existsSync(bin[0]!) ? `it runs ${bin[0]}, which does not exist: opencode refuses every call` : null;
+      }
+      return text.includes(OPENCODE_PLUGIN_MARKER)
+        ? "it is not the plugin this gnomon writes (edited, or an older version): `gnomon guard install opencode --write --force`"
+        : "it is not gnomon's plugin";
+    })
   );
   const cursorFile = join(repo.project, ".cursor", "hooks.json");
   status.hosts.push(
@@ -597,12 +855,24 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
       } catch {
         return "it is not JSON Cursor can read";
       }
-      const cmd = "gnomon guard --from cursor --agent cursor";
-      return runs(hooks, "beforeShellExecution", cmd) && runs(hooks, "beforeReadFile", cmd) ? null : `no beforeShellExecution and beforeReadFile hook runs \`${cmd}\``;
+      const shell = runs(hooks, "beforeShellExecution", CURSOR_TAIL);
+      return shell && runs(hooks, "beforeReadFile", CURSOR_TAIL)
+        ? absentProgram(shell)
+        : `no beforeShellExecution and beforeReadFile hook runs \`gnomon ${CURSOR_TAIL}\``;
     })
   );
   for (const h of status.hosts) {
     if (h.state === "missing" || h.state === "modified" || h.state === "disabled") status.findings.push(`${h.host}: ${h.state} — ${relative(repo.project, h.file) || h.file}: ${h.detail}`);
+  }
+  // Liveness (CONTRACTS.md §41): which host sessions reached the guard.
+  const live = guardLiveSessions(repo.project);
+  status.sessions_seen = live.length;
+  status.last_decision = live[0]?.last_decision ?? null;
+  status.sessions = live.slice(0, 50);
+  const cc = status.hosts.find((h) => h.host === "claude-code");
+  if (cc && cc.state !== "not_installed") {
+    const since = recorded("claude-code")?.at ?? live.map((l) => l.started).sort()[0];
+    status.unguarded_sessions = sessionsWithoutGuard(repo.project, since);
   }
   return status;
 }
@@ -616,6 +886,21 @@ function statusGuard(args: GuardArgs, out: (s: string) => void): number {
   else {
     for (const h of st.hosts) out(`${h.host.padEnd(12)} ${h.state.padEnd(14)} ${relative(st.project!, h.file)}${h.detail ? `  ${h.detail}` : ""}`);
     out(st.findings.length ? `\n${st.findings.length} finding(s): a host is not governed the way it was set up to be.` : "\nevery installed hook is in place.");
+    out(
+      st.sessions_seen === 0
+        ? "\nsessions: the guard has not decided a call in this repository yet."
+        : `\nsessions: ${st.sessions_seen} seen, last decision ${st.last_decision}`
+    );
+    for (const l of st.sessions.slice(0, 10)) {
+      out(`  ${l.id.padEnd(40)} ${(l.via ?? "?").padEnd(12)} started ${l.started}  last ${l.last_decision}`);
+    }
+    if (st.unguarded_sessions.length) {
+      out(
+        `\n${st.unguarded_sessions.length} Claude Code session(s) started with no guard decision. If they made tool calls, ` +
+          "the PreToolUse hook did not run; `gnomon check --scorecard` or `--transcript` says which:"
+      );
+      for (const u of st.unguarded_sessions.slice(-10)) out(`  ${u.session}  started ${u.started}`);
+    }
   }
   if (!st.governed) return 10;
   return st.findings.length ? 2 : 0;

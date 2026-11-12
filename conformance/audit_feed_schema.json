@@ -1,0 +1,314 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/eljaplacido/gnomonharness/conformance/audit_feed_schema.json",
+  "title": "gnomon audit feed: guard trail records, liveness record, scorecard (CONTRACTS.md §41)",
+  "$comment": "Each definition is self-contained and uses only type, required, properties, additionalProperties, items and enum, so a small checker can validate against it (packages/gnomon-cli/src/scorecard.test.ts does, against records the real binary wrote). The top-level oneOf accepts any one guard trail record.",
+  "oneOf": [
+    {"$ref": "#/definitions/guard_session_start"},
+    {"$ref": "#/definitions/guard_session_resume"},
+    {"$ref": "#/definitions/guard_decision"},
+    {"$ref": "#/definitions/guard_session_end"}
+  ],
+  "definitions": {
+    "guard_session_start": {
+      "type": "object",
+      "required": ["seq", "ts", "kind", "prev", "surface_hash", "harness", "cwd", "mode"],
+      "properties": {
+        "seq": {"type": "integer"},
+        "ts": {"type": "string"},
+        "kind": {"type": "string", "enum": ["session_start"]},
+        "prev": {"type": ["string", "null"]},
+        "hash": {"type": "string"},
+        "surface_hash": {"type": ["string", "null"]},
+        "harness": {"type": "string"},
+        "cwd": {"type": "string"},
+        "mode": {"type": "string", "enum": ["guard"]},
+        "role": {"type": ["string", "null"]},
+        "agent": {"type": "string"},
+        "via": {"type": "string"}
+      },
+      "additionalProperties": false
+    },
+    "guard_session_resume": {
+      "type": "object",
+      "required": ["seq", "ts", "kind", "prev", "resumed"],
+      "properties": {
+        "seq": {"type": "integer"},
+        "ts": {"type": "string"},
+        "kind": {"type": "string", "enum": ["session_resume"]},
+        "prev": {"type": ["string", "null"]},
+        "hash": {"type": "string"},
+        "resumed": {"type": "string"},
+        "surface_hash": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "guard_decision": {
+      "type": "object",
+      "required": ["seq", "ts", "kind", "prev", "tool", "target", "decision", "rule", "base", "surface_hash", "exit"],
+      "properties": {
+        "seq": {"type": "integer"},
+        "ts": {"type": "string"},
+        "kind": {"type": "string", "enum": ["guard"]},
+        "prev": {"type": ["string", "null"]},
+        "hash": {"type": "string"},
+        "tool": {"type": "string"},
+        "target": {"type": "string"},
+        "decision": {"type": "string", "enum": ["allow", "deny", "ask"]},
+        "rule": {
+          "type": ["string", "null"],
+          "enum": [
+            "tools",
+            "malformed",
+            "bash_deny",
+            "bash_allow",
+            "sudo",
+            "sandbox",
+            "surface",
+            "record",
+            "git_hooks",
+            "host_hooks",
+            "write_allow",
+            "outside_root",
+            "secret_path",
+            "ci_path",
+            "network",
+            "url",
+            "repo_code",
+            "approval",
+            "ungoverned",
+            "error",
+            null
+          ]
+        },
+        "pattern": {"type": "string"},
+        "role": {"type": ["string", "null"]},
+        "agent": {"type": "string"},
+        "via": {"type": "string"},
+        "host_tool": {"type": "string"},
+        "host_mode": {"type": "string"},
+        "base": {"type": ["string", "null"]},
+        "surface_hash": {"type": ["string", "null"]},
+        "exit": {"type": "integer", "enum": [0, 2, 3, 10]},
+        "verdict": {"type": "string", "enum": ["allow", "deny", "ask"]},
+        "family": {"type": ["string", "null"], "enum": ["write", "bash", "network", "secrets", "rules", "ci", null]},
+        "level": {"type": ["string", "null"], "enum": ["observe", "advise", "prevent", "enforce", null]},
+        "call_id": {"type": "string"},
+        "delivered": {"type": "boolean", "enum": [false]}
+      },
+      "additionalProperties": false
+    },
+    "guard_session_end": {
+      "type": "object",
+      "required": ["seq", "ts", "kind", "prev"],
+      "properties": {
+        "seq": {"type": "integer"},
+        "ts": {"type": "string"},
+        "kind": {"type": "string", "enum": ["session_end"]},
+        "prev": {"type": ["string", "null"]},
+        "hash": {"type": "string"}
+      }
+    },
+    "liveness_record": {
+      "type": "object",
+      "required": ["schema", "kind", "session", "via", "agent", "started"],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {"type": "string", "enum": ["gnomon.guard.live/1"]},
+        "kind": {"type": "string", "enum": ["session_start"]},
+        "session": {"type": ["string", "null"]},
+        "via": {"type": ["string", "null"]},
+        "agent": {"type": ["string", "null"]},
+        "started": {"type": "string"}
+      }
+    },
+    "scorecard": {
+      "type": "object",
+      "required": [
+        "schema",
+        "governed",
+        "project",
+        "session",
+        "generated",
+        "decisions",
+        "coverage",
+        "liveness",
+        "audit",
+        "checks",
+        "findings",
+        "warnings",
+        "exit"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {"type": "string", "enum": ["gnomon.scorecard/1"]},
+        "governed": {"type": "boolean"},
+        "project": {"type": ["string", "null"]},
+        "session": {"type": ["string", "null"]},
+        "generated": {"type": "string"},
+        "decisions": {
+          "type": "object",
+          "required": [
+            "total",
+            "by_decision",
+            "by_verdict",
+            "by_family",
+            "by_rule",
+            "by_via",
+            "recorded_not_applied",
+            "advise_undelivered"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "total": {"type": "integer"},
+            "by_decision": {"type": "object"},
+            "by_verdict": {"type": "object"},
+            "by_family": {"type": "object"},
+            "by_rule": {"type": "object"},
+            "by_via": {"type": "object"},
+            "recorded_not_applied": {"type": "integer"},
+            "advise_undelivered": {"type": "integer"}
+          }
+        },
+        "coverage": {
+          "type": "object",
+          "required": ["tools", "calls", "governed_calls", "ratio"],
+          "additionalProperties": false,
+          "properties": {
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["tool", "kind", "calls", "governed"],
+                "additionalProperties": false,
+                "properties": {
+                  "tool": {"type": "string"},
+                  "kind": {"type": "string"},
+                  "calls": {"type": "integer"},
+                  "governed": {"type": "boolean"}
+                }
+              }
+            },
+            "calls": {"type": "integer"},
+            "governed_calls": {"type": "integer"},
+            "ratio": {"type": ["number", "null"]},
+            "transcript": {
+              "type": "object",
+              "required": ["session", "tool_uses", "selected", "guard_seen", "gap"],
+              "additionalProperties": false,
+              "properties": {
+                "session": {"type": ["string", "null"]},
+                "tool_uses": {"type": "object"},
+                "selected": {"type": "integer"},
+                "guard_seen": {"type": "boolean"},
+                "gap": {"type": "boolean"}
+              }
+            }
+          }
+        },
+        "liveness": {
+          "type": "object",
+          "required": ["hosts", "sessions_seen", "last_decision", "sessions", "unguarded_sessions"],
+          "additionalProperties": false,
+          "properties": {
+            "hosts": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["host", "state", "file", "detail"],
+                "additionalProperties": false,
+                "properties": {
+                  "host": {"type": "string", "enum": ["claude-code", "opencode", "cursor"]},
+                  "state": {"type": "string", "enum": ["ok", "missing", "modified", "disabled", "not_installed"]},
+                  "file": {"type": "string"},
+                  "detail": {"type": "string"}
+                }
+              }
+            },
+            "sessions_seen": {"type": "integer"},
+            "last_decision": {"type": ["string", "null"]},
+            "sessions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["schema", "kind", "session", "via", "agent", "started", "id", "last_decision"],
+                "additionalProperties": false,
+                "properties": {
+                  "schema": {"type": "string", "enum": ["gnomon.guard.live/1"]},
+                  "kind": {"type": "string", "enum": ["session_start"]},
+                  "session": {"type": ["string", "null"]},
+                  "via": {"type": ["string", "null"]},
+                  "agent": {"type": ["string", "null"]},
+                  "started": {"type": "string"},
+                  "id": {"type": "string"},
+                  "last_decision": {"type": "string"}
+                }
+              }
+            },
+            "unguarded_sessions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["session", "started"],
+                "additionalProperties": false,
+                "properties": {"session": {"type": "string"}, "started": {"type": "string"}}
+              }
+            }
+          }
+        },
+        "audit": {
+          "type": "object",
+          "required": ["dir", "trails", "chain_ok"],
+          "additionalProperties": false,
+          "properties": {
+            "dir": {"type": ["string", "null"]},
+            "trails": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["trail", "kind", "records", "ok", "sealed"],
+                "additionalProperties": false,
+                "properties": {
+                  "trail": {"type": "string"},
+                  "kind": {"type": "string", "enum": ["guard", "check"]},
+                  "records": {"type": "integer"},
+                  "ok": {"type": "boolean"},
+                  "sealed": {"type": "boolean"},
+                  "problem": {"type": "string"}
+                }
+              }
+            },
+            "chain_ok": {"type": "boolean"}
+          }
+        },
+        "checks": {
+          "type": "object",
+          "required": ["recent"],
+          "additionalProperties": false,
+          "properties": {
+            "recent": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["trail", "ts", "base", "head", "role", "exit", "failed"],
+                "additionalProperties": false,
+                "properties": {
+                  "trail": {"type": "string"},
+                  "ts": {"type": ["string", "null"]},
+                  "base": {"type": ["string", "null"]},
+                  "head": {"type": ["string", "null"]},
+                  "role": {"type": ["string", "null"]},
+                  "exit": {"type": ["integer", "null"]},
+                  "failed": {"type": "array", "items": {"type": "string"}}
+                }
+              }
+            }
+          }
+        },
+        "findings": {"type": "array", "items": {"type": "string"}},
+        "warnings": {"type": "array", "items": {"type": "string"}},
+        "exit": {"type": "integer", "enum": [0, 2, 10]}
+      }
+    }
+  }
+}

@@ -9,6 +9,9 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { guardStatus } from "./guard.js";
+import { buildScorecard, livenessGaps, scorecardMarkdown, transcriptLiveness } from "./scorecard.js";
+import { guardSawSession } from "gnomon-core/guard";
 import {
   runCheck,
   readTranscript,
@@ -34,8 +37,10 @@ export interface CheckCliArgs {
 
 export const CHECK_USAGE =
   "Usage: gnomon check --base <rev> [--head <rev>] [--role <role> | --agent <name>]\n" +
-  "                    [--transcript <file> --format <format>] [--json] [--dir <path>]\n" +
+  "                    [--transcript <file> --format <format>] [--session <id>] [--require-guard]\n" +
+  "                    [--json] [--dir <path>]\n" +
   `                    <format>: ${TRANSCRIPT_FORMATS.join(" | ")}\n` +
+  "       gnomon check --scorecard [--session <id>] [--transcript <claude-code.jsonl>] [--json] [--dir <path>]\n" +
   "       gnomon check --install-hook claude-code\n" +
   "       gnomon check --hook session-start|stop   (reads Claude Code hook JSON on stdin)";
 
@@ -65,6 +70,16 @@ export async function cmdCheck(
   if (install !== undefined) return installHook(install, out);
   const hook = flagOf(args, "hook");
   if (hook) return runHook(hook, args, stdin());
+  if (args.flags.scorecard === "true") {
+    const card = buildScorecard({
+      dir: resolve(args.dir ?? process.cwd()),
+      session: flagOf(args, "session"),
+      transcript: flagOf(args, "transcript") ? resolve(flagOf(args, "transcript")!) : undefined,
+      expect: (flagOf(args, "expect") ?? "").split(",").map((x) => x.trim()).filter(Boolean),
+    });
+    out(args.json ? JSON.stringify(card, null, 2) : scorecardMarkdown(card));
+    return card.exit;
+  }
 
   const base = flagOf(args, "base");
   if (!base) {
@@ -84,8 +99,52 @@ export async function cmdCheck(
     agent: flagOf(args, "agent"),
     transcript: transcriptOption(flagOf(args, "transcript"), flagOf(args, "format")),
   });
+  const gap = guardLiveness(args, verdict);
   emit(verdict, args, out);
-  return verdict.exit;
+  // --require-guard: a session the guard never saw is a failure, beside the checks.
+  return gap && args.flags["require-guard"] === "true" ? 2 : verdict.exit;
+}
+
+/**
+ * Liveness (CONTRACTS.md §41): did every host session this change came from
+ * reach `gnomon guard`? Asked when a guard hook is installed or committed, or
+ * `--require-guard` says to. The sessions are the one named (`--session`, or
+ * a Claude Code `--transcript`'s), else every Claude Code session whose
+ * SessionStart hook ran since the hook was installed. A gap is a session whose
+ * transcript has calls the hook selects and no guard decision. Each is added
+ * to the verdict's `warnings`; returns whether there was one.
+ */
+function guardLiveness(args: CheckCliArgs, verdict: CheckVerdict): boolean {
+  const dir = resolve(args.dir ?? process.cwd());
+  const st = guardStatus(dir);
+  const required = args.flags["require-guard"] === "true";
+  if (!st.governed || (!required && st.hosts.every((h) => h.state === "not_installed"))) return false;
+  const warn = (w: string) => (verdict.warnings ??= []).push(w);
+  const transcript = flagOf(args, "transcript");
+  const session = flagOf(args, "session");
+  let gap = false;
+  if (transcript && (flagOf(args, "format") ?? "claude-code") === "claude-code") {
+    const l = transcriptLiveness(dir, resolve(transcript), session);
+    if (l.gap) {
+      gap = true;
+      warn(`liveness: session ${l.session} made ${l.selected} call(s) the guard hook selects, and gnomon guard decided none: the hook did not run`);
+    }
+    return gap;
+  }
+  // A named session the guard saw has no gap; one it did not is looked up.
+  const sessions = session ? (guardSawSession(dir, session) ? [] : [{ session }]) : st.unguarded_sessions;
+  const g = livenessGaps(dir, sessions);
+  for (const x of g.gaps) {
+    gap = true;
+    warn(`liveness: session ${x.session} made ${x.selected} call(s) the guard hook selects, and gnomon guard decided none: the hook did not run (${x.transcript})`);
+  }
+  if (g.unknown.length) {
+    // Without the transcript nobody can tell "no tool call" from "no hook"; with
+    // --require-guard that is not good enough.
+    if (required) gap = true;
+    warn(`liveness: ${g.unknown.length} session(s) with no guard decision and no transcript to tell whether they made tool calls: ${g.unknown.slice(-5).join(", ")}`);
+  }
+  return gap;
 }
 
 // ---------------------------------------------------------------------------
@@ -201,7 +260,22 @@ async function runHook(kind: string, args: CheckCliArgs, raw: string): Promise<n
     verdict.exit === 10 &&
     ((verdict.error !== undefined && /nothing to judge/.test(verdict.error)) ||
       (verdict.error === undefined && !verdict.checks.some((c) => c.status === "error" || c.status === "fail")));
-  if (verdict.exit === 0 || nothing) return 0;
+  // Liveness: this session's calls should each have reached the guard.
+  let unguarded: string | null = null;
+  if (transcriptPath && guardStatus(cwd).hosts.some((h) => h.host === "claude-code" && h.state !== "not_installed")) {
+    const l = transcriptLiveness(cwd, transcriptPath, id);
+    if (l.gap) {
+      unguarded =
+        `gnomon guard: this session made ${l.selected} call(s) the PreToolUse hook selects, and the guard decided none — ` +
+        "the hook did not run (`gnomon guard status` says why). Those calls ran unguarded.";
+    }
+  }
+  if (verdict.exit === 0 || nothing) {
+    if (!unguarded) return 0;
+    console.error(unguarded);
+    return 1; // shown to the operator, never blocks
+  }
+  if (unguarded) console.error(unguarded);
 
   const plain = { color: false } as ResolvedUi;
   for (const line of renderVerdict(verdict, plain)) console.error(line);
