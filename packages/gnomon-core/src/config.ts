@@ -207,6 +207,14 @@ export interface EndpointConfig {
    * sends the role's. sweep_knobs.ts, docs/CONTRACTS.md §32.
    */
   sampling?: string;
+  /**
+   * Anthropic prompt-cache breakpoints (`cache_control`) on requests here.
+   * Undeclared: on for an Anthropic-family target (a `claude-*`,
+   * `anthropic/*` or `*.anthropic.*` model id, or api.anthropic.com), off
+   * everywhere else. `false` never sends them; `true` sends them to a gateway
+   * whose model id does not name Claude. prompt_cache.ts, docs/CONTRACTS.md §41.
+   */
+  prompt_cache?: boolean;
 }
 
 export type EndpointKind = "ollama" | "openai";
@@ -1900,6 +1908,12 @@ export interface RouteTarget {
    * samplingOmitted). Absent, or empty, sends both, as before.
    */
   samplingOmitted?: SamplingParam[];
+  /**
+   * `[endpoints.<name>] prompt_cache`, when declared. Absent means decided
+   * per request by the target (prompt_cache.ts promptCacheOn), so a target
+   * that never asked for it is the object it always was.
+   */
+  promptCache?: boolean;
 }
 
 /** The routing policy, resolved with defaults. */
@@ -2099,6 +2113,7 @@ const ENDPOINT_KEYS = new Set([
   "steer_role",
   "reasoning_effort",
   "sampling",
+  "prompt_cache",
 ]);
 
 /**
@@ -2139,6 +2154,13 @@ export function steerRoleOf(
     return { role: v as SteerRole, source: "declared" };
   }
   return { role: "system", source: "default" };
+}
+
+/** The prompt-cache field of a route target: `promptCache`, only when declared. */
+export function promptCacheFieldsOf(
+  endpoint: { prompt_cache?: unknown } | undefined
+): Pick<RouteTarget, "promptCache"> {
+  return typeof endpoint?.prompt_cache === "boolean" ? { promptCache: endpoint.prompt_cache } : {};
 }
 
 /** The steering fields of a route target: `steerRole`, only when `user` is declared. */
@@ -3716,6 +3738,26 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
       });
     }
 
+    if (block.prompt_cache !== undefined && typeof block.prompt_cache !== "boolean") {
+      problems.push({
+        where,
+        problem: `prompt_cache = ${JSON.stringify(block.prompt_cache)} is not true or false, so it is ignored.`,
+        fix: "prompt_cache = false sends no cache_control breakpoints here; true sends them to any OpenAI-shaped endpoint; no line decides by the model id.",
+        fatal: false,
+      });
+    } else if (
+      block.prompt_cache === true &&
+      endpointKind({ url: block.url as string | undefined, kind: block.kind as EndpointKind | undefined }) ===
+        "ollama"
+    ) {
+      problems.push({
+        where,
+        problem: `prompt_cache = true on an Ollama /api/chat endpoint: that route is never sent cache_control, so the line does nothing.`,
+        fix: "Delete the line, or use the server's OpenAI route with kind = \"openai\".",
+        fatal: false,
+      });
+    }
+
     if (
       block.steer_role !== undefined &&
       !(typeof block.steer_role === "string" && (STEER_ROLES as readonly string[]).includes(block.steer_role))
@@ -4397,6 +4439,7 @@ export function routeRole(
     ...contextWindowOf(config, endpoint.max_context_tokens, { url, kind, model }),
     ...replayFieldsOf(endpoint),
     ...steerFieldsOf(endpoint),
+    ...promptCacheFieldsOf(endpoint),
     // The sweep knobs (sweep_knobs.ts): each absent unless declared, so an
     // undeclared surface builds the target it always did.
     ...knobsOf(roleDef, endpoint, kind),
@@ -4432,6 +4475,7 @@ export function routeRole(
       // By its own URL: the one the fallback is actually sent to.
       ...replayFieldsOf({ ...(fbEndpoint ?? {}), url: fbUrl }, "openai"),
       ...steerFieldsOf(fbEndpoint),
+      ...promptCacheFieldsOf(fbEndpoint),
       ...knobsOf(roleDef, fbEndpoint, fbKind),
     };
   }

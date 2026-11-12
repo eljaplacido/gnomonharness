@@ -107,6 +107,8 @@ export interface CallReceived {
   /** As the provider reported them; absent when it reported none */
   prompt_tokens?: number;
   cached_tokens?: number;
+  /** Prompt tokens written to the provider's cache (Anthropic cache_creation_input_tokens) */
+  cache_write_tokens?: number;
   completion_tokens?: number;
   reasoning_tokens?: number;
   /** Characters of reasoning the reply carried (reasoning_content or reasoning) */
@@ -170,6 +172,7 @@ export interface ModelCallsMeasured {
   metered: number;
   prompt_tokens?: number;
   cached_tokens?: number;
+  cache_write_tokens?: number;
   completion_tokens?: number;
   reasoning_tokens?: number;
   reasoning_chars: number;
@@ -203,24 +206,47 @@ export type CallObserver = (o: CallObservation) => void;
 
 /** Token counts a provider reports beside prompt_tokens and completion_tokens. */
 export interface UsageDetail {
+  /** Prompt tokens read from the provider's cache */
   cached?: number;
+  /** Prompt tokens written to the provider's cache (Anthropic only reports these) */
+  cacheWrite?: number;
   reasoning?: number;
 }
 
 /**
- * Cached prompt tokens and reasoning tokens, from a response or a stream's
- * usage chunk. OpenAI: `prompt_tokens_details.cached_tokens`,
- * `completion_tokens_details.reasoning_tokens`. DeepSeek reports the cache as
- * `prompt_cache_hit_tokens`. Undefined when neither is there.
+ * Cached prompt tokens, cache writes and reasoning tokens, from a response or
+ * a stream's usage chunk. Undefined when none is there.
+ *
+ * Cache reads have four spellings for one number: OpenAI's (and LiteLLM's)
+ * `prompt_tokens_details.cached_tokens`, DeepSeek's `prompt_cache_hit_tokens`,
+ * and Anthropic's `cache_read_input_tokens`, which LiteLLM also passes through
+ * beside its own. A gateway can carry two of them at once, so they are never
+ * summed: the largest is the count, which also keeps a `cached_tokens: 0`
+ * placeholder from hiding a real Anthropic read.
+ *
+ * Cache writes: Anthropic's `cache_creation_input_tokens`, or LiteLLM's
+ * `prompt_tokens_details.cache_creation_tokens`, the largest likewise. They
+ * are not cache hits, so they never enter `cached`.
+ *
+ * Reasoning: `completion_tokens_details.reasoning_tokens`.
  */
 export function readUsageDetail(json: unknown): UsageDetail | undefined {
   const u = (json as { usage?: Record<string, any> } | null)?.usage;
   if (!u || typeof u !== "object") return undefined;
-  const num = (v: unknown) => (typeof v === "number" && isFinite(v) ? v : undefined);
-  const cached = num(u.prompt_tokens_details?.cached_tokens) ?? num(u.prompt_cache_hit_tokens);
+  const num = (v: unknown) => (typeof v === "number" && isFinite(v) && v >= 0 ? v : undefined);
+  const largest = (...vs: unknown[]): number | undefined => {
+    const got = vs.map(num).filter((v): v is number => v !== undefined);
+    return got.length > 0 ? Math.max(...got) : undefined;
+  };
+  const cached = largest(u.prompt_tokens_details?.cached_tokens, u.prompt_cache_hit_tokens, u.cache_read_input_tokens);
+  const cacheWrite = largest(u.cache_creation_input_tokens, u.prompt_tokens_details?.cache_creation_tokens);
   const reasoning = num(u.completion_tokens_details?.reasoning_tokens);
-  if (cached === undefined && reasoning === undefined) return undefined;
-  return { ...(cached !== undefined ? { cached } : {}), ...(reasoning !== undefined ? { reasoning } : {}) };
+  if (cached === undefined && cacheWrite === undefined && reasoning === undefined) return undefined;
+  return {
+    ...(cached !== undefined ? { cached } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+    ...(reasoning !== undefined ? { reasoning } : {}),
+  };
 }
 
 /** Entries kept per list. A 900-second capped run makes about 150 requests. */
@@ -404,17 +430,22 @@ export class CallLedger {
       ...(o.firstByteMs !== undefined ? { first_byte_ms: o.firstByteMs } : {}),
       ...(prompt !== undefined ? { prompt_tokens: prompt } : {}),
       ...(o.detail?.cached !== undefined ? { cached_tokens: o.detail.cached } : {}),
+      ...(o.detail?.cacheWrite !== undefined ? { cache_write_tokens: o.detail.cacheWrite } : {}),
       ...(o.usage?.output !== undefined ? { completion_tokens: o.usage.output } : {}),
       ...(o.detail?.reasoning !== undefined ? { reasoning_tokens: o.detail.reasoning } : {}),
       ...(o.reasoningChars ? { reasoning_chars: o.reasoningChars } : {}),
       ...(o.finishReason ? { finish: o.finishReason } : {}),
     };
     if (o.usage && (o.usage.input !== undefined || o.usage.output !== undefined)) r.metered++;
-    const add = (key: "prompt_tokens" | "cached_tokens" | "completion_tokens" | "reasoning_tokens", v?: number) => {
+    const add = (
+      key: "prompt_tokens" | "cached_tokens" | "cache_write_tokens" | "completion_tokens" | "reasoning_tokens",
+      v?: number
+    ) => {
       if (v !== undefined) r[key] = (r[key] ?? 0) + v;
     };
     add("prompt_tokens", prompt);
     add("cached_tokens", o.detail?.cached);
+    add("cache_write_tokens", o.detail?.cacheWrite);
     add("completion_tokens", o.usage?.output);
     add("reasoning_tokens", o.detail?.reasoning);
     r.reasoning_chars += o.reasoningChars ?? 0;

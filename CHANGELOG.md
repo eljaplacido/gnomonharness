@@ -34,6 +34,30 @@ merged, and no result is claimed for any of them yet. With none declared,
 request bodies are master's — except the network refusal's wording, which the
 long-task tier (a) changes on purpose (below).
 
+### Changed — Anthropic prompt caching over chat/completions (on for Claude targets), CONTRACTS §41
+
+- A request to an Anthropic-family target (a `claude-*`, `anthropic/*` or
+  `*.anthropic.*` model id, or `api.anthropic.com`) carries up to three
+  `cache_control: {"type": "ephemeral"}` breakpoints in the OpenAI content-part
+  form LiteLLM forwards: the system prompt, the last tool definition, and the
+  last non-system message (rolling). Never more than four in all, counting any
+  already there. A string `content` becomes a one-part text array only where a
+  marker goes. Why: cloud-only Claude Haiku cells read `cache_read` 0 on every
+  request, one sending 10.4M uncached prompt tokens. Unmeasured as a change.
+- Never sent to OpenAI's or DeepSeek's own APIs, Ollama's `/api/chat`, or any
+  target whose model id does not name Claude: those request bodies are
+  master's, byte for byte. `[endpoints.<name>] prompt_cache = false` opts out;
+  `true` opts in a gateway whose model alias hides the family.
+- An endpoint that answers 400 naming `cache_control` is sent the call once
+  more without markers and gets none for the rest of the process:
+  `counters.prompt_cache_refused`, one stderr line. The turn record's `wire`
+  says `prompt_cache: true` while markers go out.
+- Usage: Anthropic's `cache_read_input_tokens` is read as cached tokens beside
+  `prompt_tokens_details.cached_tokens` and `prompt_cache_hit_tokens` (the
+  largest, never the sum), and `cache_creation_input_tokens` as the new
+  `cache_write_tokens` in `model_calls`. Anthropic's own `input_tokens` shape
+  counts the cache into the prompt when `prompt_tokens` is absent.
+
 ### Added — `completion_gate = "review_only"` (opt-in, unmeasured), CONTRACTS §30
 
 - `[verify] completion_gate = "review_only"`: the reviewer without the checklist round. The first answer of a turn

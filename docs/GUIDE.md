@@ -758,6 +758,35 @@ kind = "openai"
 steer_role = "user"
 ```
 
+**Prompt caching (Claude).** Anthropic caches a prompt prefix only up to a
+`cache_control` breakpoint the request names, so a Claude endpoint reached
+through chat/completions (directly, or through LiteLLM or OpenRouter) gets up
+to three: on the system prompt, on the last tool definition, and on the last
+non-system message, which moves forward each step. Anthropic's limit is four
+per request and gnomon never passes it. This is on for an Anthropic-family
+target: a model id starting `claude-`, or containing `anthropic/` or
+`anthropic.` (Bedrock's `us.anthropic.…`), or a URL on `api.anthropic.com`.
+Nothing else is sent a marker: OpenAI's and DeepSeek's APIs, Ollama, llama.cpp
+and vLLM get the request they always got. `prompt_cache = false` in an
+`[endpoints.<name>]` block turns it off; `prompt_cache = true` turns it on for
+a gateway whose model alias does not say Claude. An endpoint that refuses the
+markers (a 400 naming `cache_control`) is sent the call once more without them,
+said on stderr, and gets none for the rest of the session
+(`counters.prompt_cache_refused`). The turn record's `wire` says
+`prompt_cache: true` while they go out, and `model_calls` reads the cache from
+`cache_read_input_tokens` as well as `cached_tokens`, with the cache writes as
+`cache_write_tokens`. Prefixes shorter than the model's minimum (up to 4096
+tokens on Haiku 4.5) are not cached, with no error.
+
+```toml
+# Claude through a LiteLLM proxy, markers off
+[endpoints.claude]
+url = "http://127.0.0.1:4000/v1/chat/completions"
+kind = "openai"
+api_key_env = "LITELLM_KEY"
+prompt_cache = false
+```
+
 **llama.cpp needs `--jinja`** for tool calling; the model id is what
 `/v1/models` reports, and `--alias` sets it. Loopback, private-range,
 Tailscale (`100.64–127.x`) and `*.local` addresses are listed as **LOCAL**: no

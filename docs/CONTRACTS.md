@@ -2320,16 +2320,22 @@ interactive exchange, which has no reader for it.
 | key | value |
 |---|---|
 | `metered` | requests whose reply reported usage |
-| `prompt_tokens`, `cached_tokens`, `completion_tokens`, `reasoning_tokens` | summed as the provider reported them; absent when none did |
+| `prompt_tokens`, `cached_tokens`, `cache_write_tokens`, `completion_tokens`, `reasoning_tokens` | summed as the provider reported them; absent when none did |
 | `reasoning_chars` | characters of reasoning the replies carried |
 | `prompt_max` | the largest provider `prompt_tokens` |
 | `over_window` | requests whose provider `prompt_tokens` exceeded their window |
 | `ratio` | provider `prompt_tokens` over `est`, summed over the metered requests, to 3 places |
 | `first`, `calls` | as above. Per request: `i`, `code` (0, or the exit-contract code it failed with), `ms`, `first_byte_ms` (streamed), the four token counts, `reasoning_chars`, `finish` |
 
-Cached tokens are read from `prompt_tokens_details.cached_tokens` (OpenAI) or
-`prompt_cache_hit_tokens` (DeepSeek); reasoning tokens from
-`completion_tokens_details.reasoning_tokens`.
+Cached tokens are read from `prompt_tokens_details.cached_tokens` (OpenAI,
+LiteLLM), `prompt_cache_hit_tokens` (DeepSeek) or `cache_read_input_tokens`
+(Anthropic, as a gateway passes it through): the largest of those present,
+never their sum, since a gateway may carry two spellings of one number.
+`cache_write_tokens` is `cache_creation_input_tokens` (or LiteLLM's
+`prompt_tokens_details.cache_creation_tokens`) and is never counted as cached.
+Reasoning tokens from `completion_tokens_details.reasoning_tokens`. Where a
+reply carries Anthropic's `input_tokens` and no `prompt_tokens`, the prompt is
+`input_tokens + cache_read_input_tokens + cache_creation_input_tokens` (§41).
 
 **The trail: `model_call`.** When `[audit]` is on, one record per request,
 written as the request ends, joining both halves: `i`, `role`, `model`,
@@ -3519,3 +3525,57 @@ body, tool schema and command environment is master's.
 
 **Fixture**: `conformance/sandbox_profile.json`;
 `packages/gnomon-core/src/sandbox_profile.test.ts` asserts the code equals it.
+
+## 41. Anthropic prompt caching — `[endpoints.<name>] prompt_cache`, `counters.prompt_cache_refused`, `v: 1`
+
+**Why.** Anthropic caches a prompt prefix only up to a `cache_control`
+breakpoint the request names. gnomon reaches Claude through OpenAI-shaped
+chat/completions, usually through LiteLLM, and named none: cloud-only Claude
+Haiku cells read `cache_read` 0 on every request, one sending 10.4M uncached
+prompt tokens. Unmeasured as a change.
+
+**Who gets markers** (`prompt_cache.ts` `promptCacheOn`), in this order:
+
+| condition | markers |
+|---|---|
+| `prompt_cache = false` declared | none |
+| Ollama `/api/chat` (`kind = "ollama"`) | none, whatever is declared |
+| refused earlier in the process by this endpoint+model (below) | none |
+| `prompt_cache = true` declared | yes |
+| host `api.anthropic.com` | yes |
+| host `api.openai.com` or `api.deepseek.com` | none |
+| model id matches `(^\|[/:])claude[-_.]` or `(^\|[/:.])anthropic[/.]` (`claude-*`, `anthropic/*`, `us.anthropic.*`, with a `bedrock/`, `vertex_ai/`, `openrouter/` prefix) | yes |
+| anything else | none |
+
+**Where** (`withCacheBreakpoints`), each `{"type": "ephemeral"}`, placed while
+the request holds fewer than four (`MAX_CACHE_BREAKPOINTS`; markers already
+present are counted), in this order:
+
+1. the last content part of the last non-system message that has one (the
+   rolling marker; a late system message is skipped, since a gateway may move
+   it into the system block);
+2. the last content part of the last of the leading system messages;
+3. the last tool definition, as a top-level `cache_control` on the tool object.
+
+A string `content` that gets a marker becomes `[{"type": "text", "text": …,
+"cache_control": …}]`; every other message, and every tool but the last, is
+sent as before. An empty string, an empty array or an empty last text part
+takes no marker.
+
+**Refusal.** A 400 whose body names `cache_control`, to a request that carried
+markers, is returned by `callEndpointOnce` as code 10 with
+`promptCacheRejected`, so the retry wrapper does not resend it. `callEndpoint`
+remembers the endpoint+model for the process (`refusePromptCache`), resends the
+call once with `promptCache: false`, tells the observer about both requests,
+and returns the resend with `promptCacheRefused: true`. The loop counts it in
+`counters.prompt_cache_refused` (on the turn record, so in the trail) and says
+one line on stderr.
+
+**What the record says.** The turn record's `wire` carries `prompt_cache: true`
+while the target gets markers; absent otherwise. `model_calls` (§29) carries
+`cache_write_tokens` beside `cached_tokens`.
+
+**What must not change.** For any target the table above gives "none", every
+request body is master's, byte for byte.
+
+**Tests**: `packages/gnomon-core/src/prompt_cache.test.ts`.
