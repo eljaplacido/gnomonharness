@@ -6,7 +6,7 @@
 # Re-running it is how you update; `gnomon update` runs it for you.
 #
 # WHAT IT DOES, in order, and stops at the first thing that fails:
-#   1. Checks for Node >= 20 and npm. It never installs Node: that needs root,
+#   1. Checks for Node >= 22 and npm. It never installs Node: that needs root,
 #      and a script piped from the internet should not be asking for it. It
 #      prints the command for this OS instead.
 #   2. Resolves the release: the latest one, or GNOMON_VERSION=0.2.3 to pin.
@@ -46,7 +46,7 @@ die() { printf '\ngnomon install: %s\n' "$*" >&2; exit 1; }
 
 # Node's own fetch, for machines with neither curl nor wget — node:22-slim is
 # one, and `gnomon update` runs this script on whatever machine gnomon is on.
-# curl and wget stay first because they honour HTTPS_PROXY and Node 20 does not.
+# curl and wget stay first because they honour HTTPS_PROXY and Node (22 and 24 by default) does not.
 node_get() { # url [dest] — to dest, or to stdout
     node -e '
         const [url, dest] = process.argv.slice(1);
@@ -94,7 +94,7 @@ api() { # path -> stdout. GitHub's REST API, authenticated when a token is set.
 
 node_help() {
     say ""
-    say "gnomon needs Node.js 20 or newer. $1"
+    say "gnomon needs Node.js 22 or newer. $1"
     say "Install it with ONE of these, then re-run this installer:"
     say ""
     case "$OS" in
@@ -185,7 +185,7 @@ main() {
     step "Checking Node.js"
     command -v node >/dev/null 2>&1 || node_help "No \`node\` was found on PATH."
     NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
-    [ "$NODE_MAJOR" -ge 20 ] 2>/dev/null || node_help "This machine has $(node --version 2>/dev/null || echo 'an unreadable node')."
+    [ "$NODE_MAJOR" -ge 22 ] 2>/dev/null || node_help "This machine has $(node --version 2>/dev/null || echo 'an unreadable node')."
     command -v npm >/dev/null 2>&1 || node_help "Node is here but \`npm\` is not (some distros package it separately: apt-get install npm)."
     say "  node $(node --version), npm $(npm --version)"
 

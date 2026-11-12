@@ -5,7 +5,7 @@
 # Re-running it is how you update; `gnomon update` runs it for you.
 #
 # The same steps as scripts/install.sh, and the two must stay in step:
-#   1. Checks for Node >= 20 and npm; never installs Node, prints how instead.
+#   1. Checks for Node >= 22 and npm; never installs Node, prints how instead.
 #   2. Resolves the release: the latest, or $env:GNOMON_VERSION = "0.2.3".
 #   3. Installs the npm package -- from the registry when that version is
 #      published there, otherwise from the release's own tarballs.
@@ -48,7 +48,7 @@ function Install-Gnomon {
     $nodeVersion = First-Line (Invoke-Native node @('--version'))
     $major = 0
     [void][int]::TryParse(($nodeVersion -replace '^v', '').Split('.')[0], [ref]$major)
-    if ($major -lt 20) { Show-NodeHelp "This machine has $nodeVersion." }
+    if ($major -lt 22) { Show-NodeHelp "This machine has $nodeVersion." }
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { Show-NodeHelp 'Node is here but `npm` is not.' }
     Write-Host "  node $nodeVersion, npm $(First-Line (Invoke-Native (Get-Npm) @('--version')))"
 
@@ -201,13 +201,13 @@ function Write-Step([string]$text) {
 
 function Show-NodeHelp([string]$why) {
     Write-Host ''
-    Write-Host "gnomon needs Node.js 20 or newer. $why"
+    Write-Host "gnomon needs Node.js 22 or newer. $why"
     Write-Host 'Install it with ONE of these, then open a new terminal and re-run this installer:'
     Write-Host ''
     Write-Host '  winget install OpenJS.NodeJS.LTS'
     Write-Host '  # or download the LTS installer: https://nodejs.org/en/download'
     Write-Host ''
-    throw 'Node.js >= 20 is required'
+    throw 'Node.js >= 22 is required'
 }
 
 function Invoke-GitHubApi([string]$repo, [string]$path) {

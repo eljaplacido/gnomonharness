@@ -982,7 +982,7 @@ describe("docs/GUIDE.md names only what exists", () => {
   it("every `gnomon <command>` it quotes is dispatched", () => {
     const registry = new Set(CLI_COMMANDS.flatMap((c) => [c.name, ...(c.aliases ?? [])]));
     // The troubleshooting table's first column quotes what gnomon PRINTS
-    // (`gnomon needs Node.js 20 or newer`), which is not a command. Its other
+    // (`gnomon needs Node.js 22 or newer`), which is not a command. Its other
     // columns are checked like the rest of the guide.
     const start = guide.indexOf("## 9. Troubleshooting");
     const end = guide.indexOf("## 10. FAQ");
