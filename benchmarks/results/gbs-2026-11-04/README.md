@@ -5,8 +5,7 @@ v0.1 drafts. They cover the four specs that need no model calls: GBS-OVERHEAD, G
 GBS-AUDIT and GBS-GOVERNANCE. Each was pre-registered and pushed before its first measured
 trial, run against **gnomon v0.4.1 as users install it**, and reported in the GBS-REPORTING
 format. A spec that could not be followed as written got a numbered gap rather than a quiet
-deviation: **50 gaps** in [spec-gaps.md](spec-gaps.md). No peer harness was run; what each
-would need is in [peer-runnability.md](peer-runnability.md).
+deviation: **50 gaps** in [spec-gaps.md](spec-gaps.md). No peer harness was run, and peer results are not published.
 
 **Author-run.** gnomon's authors wrote both the specs and the harness. Read accordingly.
 
@@ -72,14 +71,13 @@ stated.
 
 ```
 common/        INSTALL.md (pinned install), env.sh, hardware.sh/.json
-overhead/      PRE-REGISTRATION.md, README.md, result.json, GAPS.md, PEER.md, runner (overhead.py + N/F0/ACP/M), raw/, traces
-chaos/         PRE-REGISTRATION.md, README.md, result.json, GAPS.md, PEER.md, run_reference.sh, blackbox.mjs, raw/, traces
-audit/         PRE-REGISTRATION.md, README.md, result.json, GAPS.md, PEER.md, run_audit.mjs + adapter + fake model/TSA, raw/, traces
-governance/    PRE-REGISTRATION.md, README.md, result.json, GAPS.md, PEER.md, gov.py + corpora + fake model, raw/
+overhead/      PRE-REGISTRATION.md, README.md, result.json, GAPS.md, runner (overhead.py + N/F0/ACP/M), raw/, traces
+chaos/         PRE-REGISTRATION.md, README.md, result.json, GAPS.md, run_reference.sh, blackbox.mjs, raw/, traces
+audit/         PRE-REGISTRATION.md, README.md, result.json, GAPS.md, run_audit.mjs + adapter + fake model/TSA, raw/, traces
+governance/    PRE-REGISTRATION.md, README.md, result.json, GAPS.md, gov.py + corpora + fake model, raw/
 spec-gaps.md   all 50 gaps, the REPORTING ones in full
-peer-runnability.md
 ```
 
 Existing instruments reused: `gnomon chaos` (#134), the tamper apparatus of
 `auditability-2026-11-03` (#135), and the INJ-2026-11 corpus and fake model from
-`bench/injection-2026-11` (copied, with attribution).
+the private benchmark repository (copied, with attribution).

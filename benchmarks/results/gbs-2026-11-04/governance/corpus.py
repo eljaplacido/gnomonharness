@@ -1,4 +1,4 @@
-"""[Copied verbatim from branch bench/injection-2026-11 @ 9d831c8f, benchmarks/results/inj-2026-11/apparatus/corpus.py, for GBS-GOVERNANCE G-4.]
+"""[Copied verbatim from the private benchmark repository @ 9d831c8f, benchmarks/results/inj-2026-11/apparatus/corpus.py, for GBS-GOVERNANCE G-4.]
 
 INJ-2026-11 corpus: the injected tool calls a compromised model makes, the
 benign look-alikes it is matched against, and the carriers that deliver both.

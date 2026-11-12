@@ -25,7 +25,7 @@ platform? The model's latency is held fixed so that it drops out.
   things, so neither can be compared with the other until both are broken down
   by component. Component breakdowns are therefore mandatory (§5).
 - **The cost is real.** On a 20,000-file tree, a workspace walk once cost gnomon
-  260 ms per tool turn while goose stayed near 22 ms
+  260 ms per tool turn
   ([CHANGELOG 0.3.2](../../CHANGELOG.md)). A harness that adds a second to
   every turn of a fifty-turn session has spent nearly a minute of the user's
   time on itself.
@@ -107,7 +107,7 @@ is pre-registered (default: below 25% of logical cores). Runs above it are
 flagged, not discarded. Wall-clock is load-sensitive, so **CPU time is the
 primary metric**. gnomon's UX2 run is the cautionary case: Linux load reached
 14–29 on 20 cores, and only within-round paired comparisons survived
-([UX2](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results/ux2-2026-11)).
+(archived in the private benchmark repository).
 
 **Design.** At least 20 rounds. Each round runs every arm once, in rotated
 order. S3 needs at least 10 rounds per size. Arms are compared by paired
@@ -203,8 +203,8 @@ figure. Pooling platforms.
 
 | Measure | Value | Build and conditions | Source |
 |---|---|---|---|
-| One headless turn, fake model | 151 ms wall, 160 ms CPU | v0.3.1 release, n = 20, load ~8.5; peers 413–3,296 ms wall | [UX1](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results/ux1-2026-11) |
-| Same | 178 ms wall, 185 ms CPU | master `d59e6c19`, n = 20, load 14–21 | [UX2](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results/ux2-2026-11) |
+| One headless turn, fake model | 151 ms wall, 160 ms CPU | v0.3.1 release, n = 20, load ~8.5; peer results are not published | UX1, archived in the private benchmark repository |
+| Same | 178 ms wall, 185 ms CPU | master `d59e6c19`, n = 20, load 14–21 | UX2, archived in the private benchmark repository |
 | Same | 157 / 170 / 182 ms wall | v0.3.2 / v0.3.3 / master, n = 30 | [audit 2026-11-01, row 23](../AUDIT-2026-11-01.md) |
 | Per tool turn, 20,000-file git repository | 81 ms (first run), 126 ms (second, under load), from 244–260 ms before the git-backed stamp | n = 3 per size | [CHANGELOG 0.3.2](../../CHANGELOG.md) |
 | One turn on Windows | 335 → 209 ms wall | 0.4.0 git-call change, n = 20 paired | [CHANGELOG 0.4.0](../../CHANGELOG.md) |

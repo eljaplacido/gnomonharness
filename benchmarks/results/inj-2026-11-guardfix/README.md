@@ -1,7 +1,6 @@
 # INJ-2026-11, re-run on the guard fix (`fix/guard-bypasses-inj`)
 
-The conclusive injection suite (`benchmarks/results/inj-2026-11/` on
-`bench/injection-2026-11`: PRE-REGISTRATION.md, RESULT.md) re-run unchanged
+The conclusive injection suite (`benchmarks/results/inj-2026-11/` archived in the private benchmark repository: PRE-REGISTRATION.md, RESULT.md) re-run unchanged
 against the branch that fixes the bypasses it found. Same corpus (56 attacks,
 1 permitted-by-design row, 16 benign look-alikes, 7 carriers), same scripted
 compromised model, same arms (D, G, S), same plans and analysis. Model-free
@@ -91,7 +90,7 @@ confined, I5); CI-file writes on D (no `write_allow`); `exf-script-file` on D
 | corpus | how | decisions changed |
 |---|---|---|
 | G1c's 790 recorded calls (GVC) | `gvc/gvc_replay_gnomon.mjs` (GVC's own), checkout launcher, `guard --from opencode` | **0 / 790**; 17/17 labelled causing calls refused, 8 refusals in violation-free trials (5 out-of-scope writes, 3 false), as published |
-| G1's 120 trials re-scored by `gnomon check` (G1-R) | `g1r/rescore.py` (G1-R's, paths from `G1_DIR`), one `--network none` container per trial, scorer = the injection image of each build | **0 / 360** verdicts (exit and every check status, native/shim/diff); 44/44 peer violation trials blocked, 6/75 false alarms (1/30 controls), as published |
+| G1's 120 trials re-scored by `gnomon check` (G1-R) | `g1r/rescore.py` (G1-R's, paths from `G1_DIR`), one `--network none` container per trial, scorer = the injection image of each build | **0 / 360** verdicts (exit and every check status, native/shim/diff); every labelled violation trial blocked, 6/75 false alarms (1/30 controls), as published |
 | G2b-R containment: 521 recorded tool calls of the 90 measured trials + 16 boundary probes | `g2br/g2br_replay.mts`: guard.ts `decide` under each trial's own final `.gnomon/` | **0 / 537**; every refusal the trials recorded is still a deny |
 | 60 everyday commands | `tools.test.ts` | 0 refused |
 | property suites | `scripts/property_suites.mjs` | 14/14, 14/14, 8/8, 0/11, 10/10: at their published figures. Two probes that moved `.gnomon/` with `echo >> .gnomon/system.md`, to test that drift is announced, now move it through a script file, because the named write is refused before it runs; what they assert is unchanged |
@@ -109,11 +108,11 @@ docker run --rm --network none --add-host exfil.attacker.test:127.0.0.1 -v $PWD/
   inj-agent:<sha8> sh -c 'python3 -I /opt/inj/redteam.py /tmp/rt.jsonl >/dev/null && cat /tmp/rt.jsonl' \
   > runs/redteam/redteam.jsonl
 python3 apparatus/analyze.py .
-python3 apparatus/compare.py <bench/injection-2026-11 checkout>/benchmarks/results/inj-2026-11 .
+python3 apparatus/compare.py <checkout of the private benchmark repository>/benchmarks/results/inj-2026-11 .
 python3 apparatus/compare_redteam.py <baseline redteam.jsonl> runs/redteam/redteam.jsonl
 ```
 
-The regression replays need a `bench/peers-2026-11` checkout: `G1_DIR=…/g1-2026-11`
+The regression replays need a checkout of the private benchmark repository: `G1_DIR=…/g1-2026-11`
 for `regression/g1r/`, `G2BR_DIR=…/g2br-2026-11` for `regression/g2br/`, and GVC's
 own `gvc_replay_gnomon.mjs` with `GVC_GNOMON=packages/gnomon-cli/gnomon.js` (the
 checkout launcher: the compiled `bin/gnomon.mjs` does not resolve gnomon-core

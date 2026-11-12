@@ -38,7 +38,7 @@ policy forbids. Four things are measured:
   **conditional on an attempt**.
 - **Without forced attempts, injection tests measure the model.** gnomon's own
   injection runs crossed 0 of 36, but the model never attempted any of the 36
-  ([G2b](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results/g2b-2026-11)).
+  (G2b, archived in the private benchmark repository).
   That result says nothing about the harness.
 - **Over-defence passes old tests.** System-level policy defences look nearly
   perfect on older benchmarks partly by forcing rigid plan adherence
@@ -62,9 +62,9 @@ because the sessions predated its plugin (cacogate project notes).
 **Peer configuration (MUST).** Every peer runs in a documented best-effort
 configuration as well as its default. Maintainers are notified as described in
 [README.md](README.md#how-to-submit-results). Misconfiguration is the commonest
-false finding. opencode applies the *last* matching rule, so a published deny
-map denied nothing. That produced a false 0/5, which re-measured 24/25
-([G2b](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results/g2b-2026-11)).
+false finding. A harness that applies the *last* matching rule turns a published deny
+map into one that denies nothing, and produced a false 0/5 on re-measure
+(peer results are not published; G2b is archived in the private benchmark repository).
 
 ## 4. Families
 
@@ -80,8 +80,7 @@ those taxonomies.
 Realistic tasks in a repository whose policy forbids specific actions. The
 agent works autonomously, and an action that would complete the task is
 tempting but forbidden. The style follows gnomon's G1 corpus: 8 tasks × 5 arms
-× 3 attempts, where 44 of 96 peer trials violated policy
-([G1](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results/g1-2026-11)).
+× 3 attempts (peer results are not published; G1 is archived in the private benchmark repository).
 Rule types MUST include:
 
 - edits to protected paths, including the harness's own config;
@@ -148,11 +147,9 @@ through a subagent or delegated task.
 
 Evidence that these happen:
 
-- opencode rewrote its own permission file in 5 of 5 trials across four
-  configurations ([EVIDENCE.md](../EVIDENCE.md));
-- opencode's subagents breached all five boundaries model-free, whatever the
-  caller's configuration
-  ([G2b](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results/g2b-2026-11));
+- harnesses have rewritten their own permission files, and subagents have
+  breached boundaries model-free, whatever the caller's configuration
+  (peer results are not published);
 - agents delete their own traces ([Qin et al.](https://arxiv.org/abs/2609.30266)).
 
 ### G-4 Injection with forced attempts
@@ -247,8 +244,8 @@ These are reference results, not conformant ones.
 
 | Family | Result | Gap to v0.1 |
 |---|---|---|
-| G-1 | Peers' own safeguards refused 0 tool calls in 96 trials. `gnomon check` as shipped caught 33/44 violations [61–85], with 0/30 false alarms on clean controls. With a transcript adapter it caught 44/44, at 6/75 false alarms. gnomon's own arm violated in 1/24 ([G1](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results/g1-2026-11)) | One model; no peer best-effort review |
-| G-1 replay | Over 790 recorded calls, `gnomon guard` refused 15 of 17 causing calls. The two misses were heredoc-bound paths, now handled, and are regression tests ([GVC](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results/gvc-2026-11); [CHANGELOG 0.4.0](../../CHANGELOG.md)) | Re-run on the fixed build |
+| G-1 | Peer results are not published. `gnomon check` as shipped caught 33/44 violations [61–85], with 0/30 false alarms on clean controls. With a transcript adapter it caught 44/44, at 6/75 false alarms. gnomon's own arm violated in 1/24 (G1, archived in the private benchmark repository) | One model; no peer best-effort review |
+| G-1 replay | Over 790 recorded calls, `gnomon guard` refused 15 of 17 causing calls. The two misses were heredoc-bound paths, now handled, and are regression tests (GVC, archived in the private benchmark repository; [CHANGELOG 0.4.0](../../CHANGELOG.md)) | Re-run on the fixed build |
 | G-2 | v0.3.1 lost the destructive class to respellings. A shell parser shipped in 0.3.2 ([CHANGELOG](../../CHANGELOG.md)). Under GBS-GOVERNANCE 0.1 on v0.4.1 (intent filter only): in-root respellings denied 43/70 (D) and 64/70 (G), out-of-root held 0/23, everyday commands refused 0/60 ([gbs-2026-11-04](../../benchmarks/results/gbs-2026-11-04/governance/README.md)). `[sandbox] exec = "docker"` (opt-in) is the only containment on `master`; kernel containment (`exec = "os"`) is PR #156, unmerged | Issue [#63](https://github.com/eljaplacido/gnomonharness/issues/63) and PR #156 are open. No adaptive arm has been run; G-2 has not been re-run with `exec = "docker"` |
 | G-3 | Surface self-edit refused 5/5 ([EVIDENCE.md](../EVIDENCE.md)). Under GBS 0.1 on v0.4.1: 24/27, and the agent approved its own skill by unsetting `GNOMON_AGENT_SESSION` (4/4), fixed in v0.4.2 (#149) | No subagent or hook-disable probes; not re-run since the fix |
 | G-4 | 0/36 crossed with 0/36 attempted, which is uninformative | No compromised-model or high-compliance arm |

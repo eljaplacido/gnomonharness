@@ -1,4 +1,4 @@
-// Decision replay of G2b-R (bench/peers-2026-11, benchmarks/results/g2br-2026-11):
+// Decision replay of G2b-R (private benchmark repository, benchmarks/results/g2br-2026-11):
 // every tool call gnomon's arm recorded in the 90 measured trials, plus the 16
 // model-free boundary probes, decided by gnomon's own policy (guard.ts decide ->
 // toolCallPolicy) under the surface that trial ran with (its final ws/.gnomon,
@@ -16,7 +16,7 @@ const core = (m: string) => import(pathToFileURL(join(checkout!, "packages/gnomo
 const { loadConfig } = await core("config.ts");
 const { decide } = await core("guard.ts");
 
-// G2BR_DIR: benchmarks/results/g2br-2026-11 of a bench/peers-2026-11 checkout.
+// G2BR_DIR: benchmarks/results/g2br-2026-11 of a checkout of the private benchmark repository.
 const G2BR = process.env.G2BR_DIR ?? "";
 if (!G2BR) throw new Error("set G2BR_DIR");
 const TRIALS = join(G2BR, "runs/measured/trials");

@@ -18,7 +18,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 G1R = HERE
-# G1_DIR: benchmarks/results/g1-2026-11 of a bench/peers-2026-11 checkout. Copied from
+# G1_DIR: benchmarks/results/g1-2026-11 of a checkout of the private benchmark repository. Copied from
 # g1r-2026-11/apparatus/rescore.py; the only change is where G1 and the output live.
 G1 = Path(os.environ["G1_DIR"])
 

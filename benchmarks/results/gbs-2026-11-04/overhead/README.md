@@ -149,4 +149,4 @@ bodies, spawn counts, strace samples, mediation, smoke and aborted rows) · chai
 
 `overhead.py` (fake model and trial loop) · `null_harness.mjs` (N) · `wire_floor.mjs` (F0) ·
 `acp_warm.mjs` (warm-session) · `mediation.mjs` (M) · `run_all.sh`, `run_s3_rerun.sh` ·
-`analyse.py` → `analysis.json` · `result.json` · `GAPS.md` (OVH-1…11) · `PEER.md`
+`analyse.py` → `analysis.json` · `result.json` · `GAPS.md` (OVH-1…11)
