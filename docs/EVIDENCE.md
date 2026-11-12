@@ -141,7 +141,7 @@ them as the project's reading of its own runs, not as a citable table.
 |---|---|
 | **Defaults or a tuned recipe, on Claude Haiku** | gnomon's release defaults did at least as well as the tuned long-task recipe on Claude Haiku, at about half the cost. Recommendation: start from the defaults |
 | **A done check before the final answer** | Opt-in. It made the final answer more honest (fewer "done" claims over unfinished or unverified work); it did not improve task outcomes |
-| **Hybrid: local-first with cloud rescue** (a cloud model takes over a stuck local turn; PR #180, unreleased) | A candidate **cost mode**, not a default. Against cloud-only it spent about 23% of the cloud cost, at −0.07 hidden-test share; against local-only, +0.25 hidden-test share. Not the plan-in-the-cloud hybrid `gnomon setup` proposes (`frontier_plan`), which showed no advantage over cloud-only (R3R, R4H) |
+| **Hybrid: local-first with cloud rescue** (a cloud model takes over a stuck local turn; opt-in, `[roles.<name>.escalate]`) | An opt-in **cost mode**, not a default. Against cloud-only it spent about 23% of the cloud cost, at −0.07 hidden-test share; against local-only, +0.25 hidden-test share. Not the plan-in-the-cloud hybrid `gnomon setup` offers as an opt-in mode (`frontier_plan`), which showed no advantage over cloud-only (R3R, R4H) |
 
 ## Claims with no evidence
 

@@ -1402,9 +1402,10 @@ chosen model server stopped answering (the pull or the speed check).
   written as `role_profile` `local_first`, `frontier_plan`, `all_remote` (all
   three already in §3).
 - `hybrid_control.value`: `off`, `observe`, `ask`, `auto`. It is recorded as a
-  preference with `active: false` and changes nothing until PR #102's
-  `[roles.X.escalate]` exists; `control` enters `gnomon enumerations` with
-  that step (design step 6). The default is `observe`.
+  preference with `active: false` and changes nothing: setup writes no
+  `[roles.<name>.escalate]` block (§42 is declared by hand); `control` enters
+  `gnomon enumerations` if setup ever writes one (design step 6). The default
+  is `observe`.
 - `steps[].id`: `probe`, `recommend`, `choose`, `pull`, `speed`, `cloud`,
   `mode`, `write`.
 - runtime ids: `ollama`, `lmstudio`, `llamacpp`, `vllm`; option `fit`:

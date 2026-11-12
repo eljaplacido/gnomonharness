@@ -9,7 +9,7 @@ lives in one directory called `.gnomon/`. That directory is hashed. Clone the
 repo on another machine and you get the same agent.
 
 ```bash
-# Linux / macOS — needs Node >= 20 (the installer tells you how if it is missing)
+# Linux / macOS — needs Node >= 22 (the installer tells you how if it is missing)
 curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.sh | sh
 ```
 
@@ -45,13 +45,17 @@ installer; see [Install](#install)). Update with `gnomon update`;
    speed check.
 2. **Connect a cloud model (optional).** Pick OpenCode Go, OpenRouter,
    OpenCode Zen or any OpenAI-compatible URL. The key is read hidden and kept
-   outside the repository, as `gnomon key set` does. With one, setup can propose
-   hybrid, where the cloud plans and your machine builds. **Hybrid is opt-in,
-   not a quality upgrade**: on an RTX 5090 it did not beat cloud-only (R3R,
-   R4H); on an NVIDIA GB10 it solved 22/32 against local-only's 16/31
-   (p = 0.07). gnomon's v0.5.0 release runs measured a different mode,
-   local-first with cloud rescue (a cloud model takes over a stuck local turn;
-   PR #180, unreleased): about 23% of the cloud-only arm's cloud cost, at
+   outside the repository, as `gnomon key set` does. Setup then suggests local
+   only or cloud first; it never suggests hybrid. **Hybrid is opt-in, not a
+   quality upgrade**: type `hybrid` (or pass `--mode hybrid`) and the cloud
+   plans while your machine builds. On an RTX 5090 that did not beat
+   cloud-only (R3R, R4H); on an NVIDIA GB10 it solved 22/32 against
+   local-only's 16/31 (p = 0.07). A different mode ships in v0.5.0 as an
+   opt-in cost mode: local-first with cloud rescue, where a cloud model takes
+   over a stuck local turn. You declare it with `[roles.<name>.escalate]`
+   ([Local first, cloud rescue](#local-first-cloud-rescue--rolesnameescalate)); setup
+   does not configure it. In gnomon's v0.5.0
+   release runs it spent about 23% of the cloud-only arm's cloud cost, at
    −0.07 hidden-test share against cloud-only and +0.25 against local-only.
    Choose cloud-only for the best results. See
    [docs/benchmarks/HYBRID.md](docs/benchmarks/HYBRID.md).
@@ -151,6 +155,7 @@ does not. Behaviour is readable because something is holding still.
 - [Known Limits](#known-limits)
 - [Where gnomon sits](docs/POSITIONING.md)
 - [gnomon Bench Standards](docs/benchmarks/README.md): proposed open benchmarks for what the harness decides (draft v0.1)
+- [Benchmark your own harness](benchmarks/kit/README.md): the way gnomon benchmarks itself (method, pre-registration template, a stdlib analyzer, a wire-metering relay, the GBS specs)
 - [Development](#development)
 - [Contributing](#contributing)
 - [License](#license)
@@ -418,7 +423,7 @@ implementations agree.
 > install, launch, first task. This section and the next cover the same ground
 > in more detail.
 
-Node >= 20 and nothing else. **Use the installer below.** It installs the
+Node >= 22 and nothing else. **Use the installer below.** It installs the
 latest release, v0.5.0, together with the native binaries:
 
 ```bash
@@ -427,6 +432,21 @@ curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/sc
 
 ```powershell
 irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.ps1 | iex
+```
+
+Then run `gnomon setup` in your project (it scans the machine, recommends a
+model and writes `.gnomon/` on your yes), or `gnomon dashboard` for the same
+steps in the browser, which ends with the command to start. To go straight
+into setup after the install, add `--setup` (setup still asks before every
+download and write):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.sh | sh -s -- --setup
+```
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.ps1))) -Setup
+# or: $env:GNOMON_SETUP = '1' before the irm | iex line
 ```
 
 From v0.5.0 the package is also on npm:
@@ -442,7 +462,7 @@ npm belongs to an unrelated logging utility). It covers `launch`, `prompt`,
 
 The installer ([`scripts/install.sh`](scripts/install.sh),
 [`scripts/install.ps1`](scripts/install.ps1)) checks Node and, if it is missing
-or older than 20, prints the command for your OS instead of running one as root.
+or older than 22, prints the command for your OS instead of running one as root.
 It resolves the latest published release (`GNOMON_VERSION=0.5.0` pins one; a
 draft release cannot be pinned), installs the
 npm package — from the registry when that version is published there, from
@@ -459,7 +479,9 @@ then re-runs the installer (`--check` only reports). An interactive `launch` or
 `prompt` may print one line, at most once a day, when a newer release exists;
 never under `task`, `--json`, CI or a pipe. `GNOMON_NO_UPDATE_CHECK=1` or
 `gnomon update --notice off` turns it off. The check's cache lives beside the
-binaries, never in `.gnomon/`.
+binaries, never in `.gnomon/`. Every network destination gnomon contacts, and
+how to turn each off, is in [docs/PRIVACY.md](docs/PRIVACY.md). There is no
+telemetry.
 
 **Uninstalling.** `gnomon uninstall` prints the exact commands for how this
 copy was installed. For a default install that is:
@@ -496,7 +518,7 @@ to 0.4.5 never reached the registry; v0.5.0 is the first release published
 there since 0.3.2. An older pin installs from the release tarballs above (the
 installer does this by itself).
 
-Requires **Node ≥ 20** and a model endpoint — [Ollama](https://ollama.com) for
+Requires **Node ≥ 22** and a model endpoint — [Ollama](https://ollama.com) for
 local inference, or any OpenAI-shaped API. A **Rust toolchain** is needed only
 for `surface`, `enumerations`, `session`, `apply` and `simulate`, and only when
 building from source — the installer fetches prebuilt ones. Building from source additionally wants
@@ -604,8 +626,12 @@ One thing to do straight after:
    this machine and shows them as a diff before writing). `init` asks your model host what it has and
    writes real tags — the largest model under ~70B for the reasoning roles, and
    the smallest one still big enough to summarise for `smol`. It records what
-   it found and why, in the file. If nothing was reachable it falls back to
-   generic tags and says so, and those will very likely be wrong.
+   it found and why, in the file. If nothing was reachable it writes the model
+   the catalog recommends for this machine (the tag `gnomon setup` would offer,
+   not installed yet) and says so; `gnomon setup --pull <tag>`, or `ollama
+   serve` if the model is already there, makes it answer, and `gnomon doctor`
+   checks every role. Generic placeholders are left only when nothing in the
+   catalog runs on the machine.
 
 The machine-local directories gnomon writes beside `.gnomon/`
 (`.gnomon-sessions/`, `.gnomon-audit/`, `.gnomon-out/`, `.gnomon-jobs/`,
@@ -2441,6 +2467,9 @@ unchanged. Contract, statuses and limits: [docs/CONTRACTS.md §21](docs/CONTRACT
 
 ## Governing other harnesses
 
+The full guide, with the support matrix, liveness, the audit feed and the
+known bypasses: [docs/GOVERNING-OTHER-HARNESSES.md](docs/GOVERNING-OTHER-HARNESSES.md).
+
 Every rule above is enforced inside gnomon's own tool loop, so work done by
 Claude Code, opencode or a factory's container never meets it. `gnomon check`
 asks the same rules after the fact, of a change any harness made, from the
@@ -2588,17 +2617,25 @@ a write, edit, removal or overwrite of `.claude/settings.json`,
 GBS-LAYER pilot (2026-11-06) removed the hook and switched hooks off in the
 user settings when these were only asked. `gnomon guard status` reports a hook
 that is missing, changed (from HEAD, or from what `install --write` wrote) or
-switched off (`disableAllHooks`): exit 0 none, 2 a finding. The role is `--role`, else `--agent <name>` through
+switched off (`disableAllHooks`): exit 0 none, 2 a finding; `outdated` (an
+older gnomon's unchanged hook) is a warning. It also lists the host sessions
+the guard has decided for, and Claude Code sessions that never reached it;
+`gnomon check --scorecard` summarises a foreign run (decisions, coverage,
+liveness, hash chains, checks) as markdown or JSON. In CI, run it in the job
+where the agent ran and add `--require-guard`. The role is `--role`, else `--agent <name>` through
 `[check.roles]`, as for `check`. With `[audit] enabled = true` every decision
 is appended to `.gnomon-audit/guard-<session>.jsonl`, one sealed hash chain per
 session that `gnomon audit verify` reads.
 
 **Adapters.** `gnomon guard install <harness>` prints what to install, and
-`--write` adds it to this project's own config (never a user-wide one):
+`--write` adds it to this project's own config (never a user-wide one). Each
+hook names a checked absolute path to gnomon, so commit the hook files only if
+every machine has gnomon at the same path (`--bin`); otherwise install with
+`--write --local` on each machine, which keeps the hook out of git:
 
 | Harness | What is installed | deny | ask | allow |
 |---|---|---|---|---|
-| Claude Code | a `PreToolUse` hook on Bash, Write, Edit, MultiEdit, NotebookEdit, Read, WebFetch, Grep and Glob, added beside the `check` SessionStart and Stop hooks (`.claude/settings.json`) | `permissionDecision: "deny"` — Claude reads the reason | `"ask"` — Claude Code prompts. Under `permission_mode: "bypassPermissions"` (`--dangerously-skip-permissions`) nobody is asked, and Claude Code 2.1.319 was seen to run an ask, so it is answered `"deny"` | nothing printed: Claude Code's own permission flow decides |
+| Claude Code | a `PreToolUse` hook on Bash, Write, Edit, MultiEdit, NotebookEdit, Read, Grep, Glob, WebFetch, WebSearch, Agent/Task and every MCP tool (`mcp__.*`), naming an absolute, checked gnomon path, added beside the `check` SessionStart and Stop hooks (`.claude/settings.json`) | `permissionDecision: "deny"` — Claude reads the reason | `"ask"` — Claude Code prompts. Under `permission_mode: "bypassPermissions"` (`--dangerously-skip-permissions`) nobody is asked, and Claude Code 2.1.319 was seen to run an ask, so it is answered `"deny"` | nothing printed: Claude Code's own permission flow decides |
 | opencode 2.2 | a plugin, `.opencode/plugins/gnomon-guard.js`, on `tool.hook("execute.before")` for shell, write, edit, patch, read, grep, glob, webfetch, execute | the call fails with gnomon's reason, which the model reads | opencode's own permission prompt (`permission.hook("evaluate")`). A non-interactive `opencode run` rejects it; `--auto` approves it, as it does every ask | nothing |
 | Cursor | `.cursor/hooks.json`: `beforeShellExecution` and `beforeReadFile` | `permission: "deny"` with `user_message` / `agent_message` | `permission: "ask"` (a read that would be asked is denied: `beforeReadFile` cannot ask) | `{}` |
 | anything else with a pre-tool hook | `gnomon guard` with the call on stdin: `{"tool": "bash", "input": {"command": "…"}, "cwd": "…", "session_id": "…"}` in gnomon's own tool and argument names | exit 2 | exit 3 | exit 0 |
@@ -2620,11 +2657,13 @@ of the hook's matcher.
 **Not done.** Cursor file **writes**: its documented hooks give none before a
 write happens (`afterFileEdit` is after; `preToolUse` does not document Write's
 input), so writes in Cursor are left to `gnomon check`. Grep and Glob are
-decided as a read of where they search. MCP tools and any tool gnomon has no
-rule of its own for (Task, TodoWrite…) are `allow` with rule `ungoverned` — the
-harness's own permissions apply.
+decided as a read of where they search. MCP tools and unknown tools are
+recorded with rule `ungoverned`: allowed with no `[governance]`, asked at
+prevent/enforce under one. Agent/Task are allowed (their calls are decided one
+by one); WebSearch is decided as a network call. See
+[docs/GOVERNING-OTHER-HARNESSES.md](docs/GOVERNING-OTHER-HARNESSES.md).
 
-**Latency**, measured on the gx10 (aarch64) under a load average of ~14:
+**Latency**, measured on an NVIDIA GB10 (aarch64) under a load average of ~14:
 the decision itself takes 3–5 ms (p50; the test suite holds it under 50 ms),
 a whole `gnomon guard` process from the published install about 50–60 ms p50,
 of which a bare `node -e 0` is 22–28 ms. The rules are materialised once per
@@ -2784,7 +2823,10 @@ Six screens, ported from the approved design (#105, Part II):
   you press **Accept** (`setup --yes --expect-proposal <digest>`, so setup
   itself refuses a change that moved since you read it). Below it, what the
   surface routes each role to today, and **Test** per endpoint
-  (`gnomon endpoint test`).
+  (`gnomon endpoint test`). The seventh and last step, **Start**, shows the
+  command to begin in the targeted project, `cd <project> && gnomon launch`
+  (on Windows, `gnomon launch --dir "<project>"`), with a Copy button; the
+  dashboard never runs it.
 - **Session** — one audit trail as a flight recorder: a lane per role (local
   or cloud), blocks of tool calls, a marker for every refusal and approval,
   and how the session ended. Metadata only: recorded prompt and output text
@@ -2841,7 +2883,7 @@ Contract: [CONTRACTS §17](docs/CONTRACTS.md).
 | `gnomon endpoint [add\|test\|list]` | Declare an endpoint end to end — provider, key, model, roles — and prove it runs one token before writing anything. Presets: `opencode-go`, `opencode-zen`, `openrouter`, `ollama`. |
 | `gnomon audit [show\|verify\|anchor\|tamper\|resolve <trail>:<seq> --reason <text>]` | Audit trails. `anchor` delivers queued heads to the `[audit.anchor]` witness now. `tamper` lists `record_tamper` events and exits 3 while any is unresolved; `resolve` is a person's recorded acknowledgement of one. |
 | `gnomon check --base <rev> [--head <rev>] [--role <r> \| --agent <name>] [--transcript <file> --format <fmt>] [--json]` | Judge a change another harness made by this surface's rules as of `<rev>`. Exit 0 held, 2 failed, 10 no verdict. See [Governing other harnesses](#governing-other-harnesses). |
-| `gnomon guard [--from claude-code\|opencode\|cursor] [--tool <kind> --input <json>] [--role <r> \| --agent <name>]` | Decide one tool call another harness is about to make, by the committed rules: allow (0), deny (2), ask (3), no decision (10). `gnomon guard install claude-code\|opencode\|cursor [--write]` installs the hook; `gnomon guard status` reports one missing, changed or switched off (0 none, 2 a finding). See [Before the call](#before-the-call-gnomon-guard). |
+| `gnomon guard [--from claude-code\|opencode\|cursor] [--tool <kind> --input <json>] [--role <r> \| --agent <name>]` | Decide one tool call another harness is about to make, by the committed rules: allow (0), deny (2), ask (3), no decision (10). `gnomon guard install claude-code\|opencode\|cursor [--write [--local]]` installs the hook (`--local` keeps it, which names this machine's gnomon by absolute path, out of git); `gnomon guard status` reports one missing, changed or switched off (0 none, 2 a finding), or `outdated` (an older gnomon's hook, a warning). See [Before the call](#before-the-call-gnomon-guard). |
 | `gnomon dashboard [--port <n>] [--no-open] [--dir <path>]` | A command center in the browser, on 127.0.0.1 only: projects, sessions as a timeline, what the policy refused, audit-chain verification, contracts, token measurements; setup, check, trust and endpoint test as buttons that run those commands, asking first before anything that writes, downloads or spends. Alias: `ui`. See [The command center](#the-command-center--gnomon-dashboard). |
 | `gnomon chaos [--json] [--seed <n>] [--faults <id,...>] [--schedules <s,...>] [--out <file>]` | The fault-injection suite: a scripted model behind a loopback endpoint injects one fault per case into the fixed task set, and each fault is scored announced or silent for `task --json`. Exit 0 every fault announced, 1 one or more silent, 2 the run is void. `chaos list` prints the taxonomy; `chaos serve` runs the endpoint for another harness. See [docs/benchmarks/CHAOS.md](docs/benchmarks/CHAOS.md). |
 | `gnomon surface [hash\|manifest\|paths]` | Inspect the surface. |
@@ -3020,6 +3062,9 @@ what other harnesses do, and says what has and has not been measured. Measured
 results and their caveats are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md) and the
 [August 2026 Terminal-Bench campaign](benchmarks/results/terminal-bench-2026-08/README.md). The
 [benchmark roadmap](docs/BENCHMARK-ROADMAP.md) says what is and is not yet claimable.
+Benchmark your own harness the way gnomon benchmarks itself:
+[benchmarks/kit/](benchmarks/kit/README.md) (method, pre-registration template,
+a stdlib analyzer, a wire-metering relay, the GBS specs).
 
 - **MCP is stdio-only.** `tools.toml`'s `[mcp_servers]` block is wired for the
   **stdio** transport: a pinned server is spawned at startup, its tools are

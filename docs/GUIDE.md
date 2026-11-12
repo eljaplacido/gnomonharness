@@ -96,7 +96,7 @@ flowchart LR
         SURF[".gnomon/ (the surface, hashed)<br/>config.toml, roles.toml, tools.toml<br/>policy.toml, system.md<br/>profiles/, skills/, loops/"]
         RUN[".gnomon-sessions/  .gnomon-audit/<br/>.gnomon-jobs/  .gnomon-out/<br/>.gnomon-loops/  .gnomon-shadow/<br/>(gitignored, never hashed)"]
     end
-    subgraph TS["TypeScript, Node 20+"]
+    subgraph TS["TypeScript, Node 22+"]
         CLI["gnomon-cli<br/>commands, init, check, update"]
         CORE["gnomon-core<br/>turn loop, tools, routing<br/>audit, sessions, skills, MCP, loops"]
         NAT["gnomon-natives<br/>typed wrappers"]
@@ -224,6 +224,11 @@ change *after* another harness made it, before you accept it. The rules come
 from the base revision, so a change that widens its own `write_allow` is still
 judged by the old list.
 
+The full guide to governing another harness (support matrix, governance levels
+for foreign harnesses, host-tool classification, liveness, the audit feed,
+`gnomon check --scorecard` and the known bypasses) is
+[GOVERNING-OTHER-HARNESSES.md](GOVERNING-OTHER-HARNESSES.md).
+
 ### 2.5 Hybrid routing: local and cloud
 
 ```mermaid
@@ -257,7 +262,7 @@ two. A profile with no file is reported at startup and ignored.
 
 | Need | For |
 |---|---|
-| Node 20 or newer, with npm | everything |
+| Node 22 or newer, with npm | everything |
 | A model endpoint: local Ollama, llama.cpp or any OpenAI-compatible server, or a cloud key | any turn |
 | git | `gnomon check`; also what makes `.gnomon/` worth committing |
 | Git for Windows (Windows only) | the POSIX shell the `bash` tool uses on every platform |
@@ -276,7 +281,7 @@ curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/sc
 irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.ps1 | iex
 ```
 
-It checks for Node 20+ and npm (if missing, it prints the command for your OS
+It checks for Node 22+ and npm (if missing, it prints the command for your OS
 and stops; it never installs Node as root), resolves the latest release,
 installs the npm package (from the npm registry when that version is there,
 otherwise from the release's own tarballs; from v0.5.0 a plain
@@ -379,17 +384,20 @@ gnomon setup
 2. **Connect a cloud model (optional).** OpenCode Go, OpenRouter, OpenCode
    Zen or any OpenAI-compatible URL. The key is read hidden and stored where
    `gnomon key set` stores it, never in `.gnomon/`. Checking it with one token
-   is a separate yes. With a cloud model, setup can propose **hybrid**: the
-   cloud plans (`coordinator`, `plan`), this machine builds (everything else;
-   the `frontier_plan` shape of §5.3). Treat it as opt-in, not a quality
+   is a separate yes. With a cloud model, setup suggests local only or cloud
+   first and never suggests **hybrid**; you pick it by typing `hybrid` or with
+   `--mode hybrid`: the cloud plans (`coordinator`, `plan`), this machine
+   builds (everything else; the `frontier_plan` shape of §5.3). Treat it as opt-in, not a quality
    upgrade: on an RTX 5090 an early hybrid lead (R1H) did not reproduce (R3R,
    R4H); on an NVIDIA GB10 it solved 22/32 vs 16/31 local-only (M2, McNemar
    p = 0.07). The v0.5.0 release runs' cost figures (about 23% of cloud-only's
    cloud cost) are for a different mode, local-first with cloud rescue (a
-   cloud model takes over a stuck local turn; PR #180, unreleased), which
-   setup does not propose. See [HYBRID.md](benchmarks/HYBRID.md). A slow or
-   small local model also leads to hybrid, a very slow one to cloud first;
-   those speed thresholds are provisional and say so.
+   cloud model takes over a stuck local turn; opt-in,
+   `[roles.<name>.escalate]`), which ships in v0.5.0 and which setup does not
+   configure (§5.3). See [HYBRID.md](benchmarks/HYBRID.md). A slow,
+   small/medium or CPU-bound local model leads to cloud first, with hybrid
+   named beside it as an opt-in cost mode; those speed thresholds are
+   provisional and say so.
 3. **Accept the diff, then `gnomon launch`.** The change to `.gnomon/` is shown
    as a diff and written only on your yes. The surface hash moves, so a
    surface that now sends a key somewhere new is shown to you for trust at the
@@ -398,8 +406,9 @@ gnomon setup
    doing, and changes nothing.
 
 Hybrid control (`off`, `observe`, `ask`, `auto`) is recorded as a preference,
-`observe` by default. It does nothing until escalation (`[roles.X.escalate]`,
-PR #102) is merged; setup says so when it records it.
+`observe` by default. It does nothing: setup writes no escalation block, and
+local-first cloud rescue is declared by hand with `[roles.<name>.escalate]`
+(§5.3); setup says so when it records it.
 
 For a script: `gnomon setup --json` prints the recommendation and the diff and
 exits 4 without writing; `--yes` writes it, and `--yes --expect-proposal
@@ -430,7 +439,11 @@ which of Ollama, LM Studio (:1234), llama.cpp (:8080) and vLLM (:8000) answer
 on 127.0.0.1. That probe only reads; it writes nothing and chooses nothing. Then the session opens; the banner names the project, role, model,
 and the tools the role does **not** hold. If Ollama is not running, `launch`
 offers a picker first: Guided setup (`gnomon setup`, the default), Ollama,
-OpenRouter, OpenCode Go, OpenCode Zen, Custom or Skip.
+OpenRouter, OpenCode Go, OpenCode Zen, Custom or Skip. When no model server
+answered at all, `init` writes the model the catalog recommends for this
+machine (the tag `gnomon setup` would offer, not installed yet) for every
+role; `gnomon setup --pull <tag>`, or `ollama serve` if the model is already
+there, makes it answer, and `gnomon doctor` checks every role.
 
 ### 4.2 On a cloud model
 
@@ -804,7 +817,7 @@ cloud-only 24/31 (R3R), with no build effect (R4H). On an NVIDIA GB10 it solved
 GPU time costs you (R1H's saving vanished above about $0.42 per GPU-hour).
 
 The v0.5.0 release runs measured a different mode, local-first with cloud
-rescue (a cloud model takes over a stuck local turn; PR #180, unreleased):
+rescue (a cloud model takes over a stuck local turn; opt-in, `[roles.<name>.escalate]`):
 about 23% of the cloud-only arm's cloud cost, at −0.07 hidden-test share
 against cloud-only and +0.25 against local-only. Those figures do not apply to
 the profile below. Use cloud-only when results matter most.
@@ -985,7 +998,7 @@ api_key_env = "OPENAI_API_KEY"   # the NAME of the variable, never the key
 | `gnomon check --base REV [--head REV] [--role R \| --agent N] [--transcript F --format FMT] [--json]` | Judges a change by this surface's rules as they stood at `REV`. Exit 0 held, 2 failed, 10 no verdict. `FMT`: `claude-code`, `opencode`, `goose`, `qwen-code`, `mini-swe-agent` or `gnomon` (its own chained, sealed audit trail). | CI, hooks, other harnesses |
 | `gnomon check --install-hook claude-code` | Prints the Claude Code hooks JSON and writes nothing | Governing Claude Code |
 | `gnomon guard --tool T --input JSON [--role R \| --agent N]`, or `--from claude-code\|opencode\|cursor\|generic` with the call on stdin | Decides one tool call another harness is about to make, by the committed rules: exit 0 allow, 2 deny, 3 ask, 10 no decision (answered as ask) | Governing another agent at run time |
-| `gnomon guard install claude-code\|opencode\|cursor [--write]` | Prints the hook or plugin for that harness; `--write` adds it to this project's config | Setting up `guard` |
+| `gnomon guard install claude-code\|opencode\|cursor [--write [--local]]` | Prints the hook or plugin for that harness; `--write` adds it to this project's config, `--local` keeps it out of git | Setting up `guard` |
 | `gnomon acp [--role R] [--profile N]` | Serves the Agent Client Protocol on stdin/stdout for an editor. Same surface, roles, approvals and audit as `prompt`. | Zed, JetBrains IDEs |
 | `gnomon trust [list \| grant \| revoke]` | What this project's `.gnomon/` grants beyond the defaults, and whether this machine trusts it | A repository you did not write |
 | `gnomon audit [show \| verify]` | Lists trails; checks every chain, seal and signature anchor. `verify` exits 1 on a break or when there is nothing to verify. | Review, release gates |
@@ -1175,11 +1188,20 @@ gnomon guard --role implement --tool bash --input '{"command":"git push --force 
 The rules are the committed ones (the session's starting HEAD, else HEAD),
 never the working tree, so an agent cannot loosen them by editing `.gnomon/`.
 Install the adapter for a harness with `gnomon guard install <harness>`, which
-prints it, or `--write` to add it to this project's config:
+prints it, or `--write` to add it to this project's config. Each hook names a
+checked absolute path to gnomon: commit the hook files only if every machine
+has gnomon at the same path (`--bin`); otherwise install with
+`--write --local` on each machine, which keeps the hook out of git.
+`gnomon guard status` reports each hook (ok, missing, modified, disabled,
+`outdated` for an older gnomon's hook, a warning) and the host sessions the
+guard has decided for; `gnomon check --scorecard` summarises a foreign run
+(decisions, coverage, liveness, hash chains, checks) as markdown or JSON. In
+CI, run it in the job where the agent ran and add `--require-guard`. Details:
+[GOVERNING-OTHER-HARNESSES.md](GOVERNING-OTHER-HARNESSES.md).
 
 | Harness | What is installed |
 |---|---|
-| Claude Code | a `PreToolUse` hook, beside the `check` hooks, in `.claude/settings.json` |
+| Claude Code | a `PreToolUse` hook on Bash, Write, Edit, MultiEdit, NotebookEdit, Read, Grep, Glob, WebFetch, WebSearch, Agent/Task and every MCP tool (`mcp__.*`), beside the `check` hooks, in `.claude/settings.json` (or `.claude/settings.local.json` with `--local`) |
 | opencode 2.2 | a plugin, `.opencode/plugins/gnomon-guard.js` |
 | Cursor | `.cursor/hooks.json` for shell commands and file reads; writes are left to `check` |
 | anything with a pre-tool hook | `gnomon guard --from generic`, with `{"tool": "bash", "input": {"command": "…"}, "cwd": "…", "session_id": "…"}` on stdin |
@@ -1961,7 +1983,7 @@ The record fields and the outcome list are a contract: [CONTRACTS.md §19](CONTR
 | You see | Cause | Fix |
 |---|---|---|
 | `gnomon: command not found` after installing | npm installed under a prefix that is not on `PATH` | The installer printed the line to add, typically `export PATH="$HOME/.local/bin:$PATH"`. Open a new terminal. |
-| Installer: `gnomon needs Node.js 20 or newer` | Node missing or old (Ubuntu 22.04 ships 12, 24.04 ships 18) | Run one of the commands it prints (NodeSource, Homebrew, nvm, winget), then re-run the installer |
+| Installer: `gnomon needs Node.js 22 or newer` | Node missing or old (Ubuntu 22.04 ships 12, 24.04 ships 18) | Run one of the commands it prints (NodeSource, Homebrew, nvm, winget), then re-run the installer |
 | `gnomon native binary not found: "gnomon-surface"` | No native binaries found | Re-run the installer, set `GNOMON_BIN_OVERRIDE` to an unpacked release archive, or `cargo build --release` in a checkout. Only `surface`, `enumerations`, `session`, `apply` and `simulate` need them. |
 | `WARN … has no binaries`, or `FAILED: gnomon is NOT on PATH after pnpm link --global` (from source) | `PNPM_HOME` unset, so no shim was written | `pnpm setup`, open a new terminal, `pnpm run link:global`. Or run `./gnomon` from the checkout. |
 | `Nothing is listening on 127.0.0.1:11434 — the connection was refused` (exit 10) | The local server is not running, or runs on another port | `ollama serve`, or fix `url` under `[endpoints]`. `gnomon endpoint list` shows what answers. |
@@ -2025,7 +2047,12 @@ output). With local endpoints, that stays on your machine or network. The
 other outbound traffic: model-list requests to those endpoints, the update
 check above, MCP servers you declare, a `[shadow]` URL if you enable it,
 `webfetch` (off by default), and whatever commands `bash` runs. There is no
-telemetry.
+telemetry. Every destination, and how to turn each off, is listed in
+[PRIVACY.md](PRIVACY.md).
+
+**Does gnomon phone home?**
+No telemetry. One once-a-day version check in interactive sessions of an npm
+install; `GNOMON_NO_UPDATE_CHECK=1` turns it off. See [PRIVACY.md](PRIVACY.md).
 
 **Which models work?**
 Any chat model behind `kind = "ollama"` or `kind = "openai"` that supports tool
@@ -2153,7 +2180,7 @@ and stop and report at any failure. Do not improvise around a failed step.
 
 1. **Detect the environment.**
    ```bash
-   node --version          # need v20+
+   node --version          # need v22+
    git --version
    gnomon --version        # already installed?
    ```
@@ -2164,7 +2191,8 @@ and stop and report at any failure. Do not improvise around a failed step.
    Node is missing, show the user the command it printed; do not install Node
    as root yourself. Verify: `gnomon --version`, `gnomon enumerations`.
 3. **Initialise** in the project root: `gnomon init`. Read its output (models
-   detected or placeholders, the `[verify]` command). Never `--force` over an
+   detected, or the catalog's recommendation when no server answered, the
+   `[verify]` command). Never `--force` over an
    existing surface without the user's say-so. If the project already has a
    `.gnomon/`, run `gnomon trust` and show the user anything it lists as
    granted beyond the defaults. Whether to trust it is their decision

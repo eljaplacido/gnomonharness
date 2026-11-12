@@ -17,16 +17,20 @@ Once gnomon is installed ([section 2](#2-install)):
    ~10 s speed check.
 2. **Connect a cloud model (optional).** OpenCode Go, OpenRouter, OpenCode Zen
    or any OpenAI-compatible URL; the key is read hidden and kept outside the
-   repository. With one, setup can propose hybrid: the cloud plans, your
-   machine builds. It is opt-in and not a quality upgrade: on an RTX 5090 it
-   did not beat cloud-only (R3R, R4H). gnomon's v0.5.0 release runs measured a
-   different mode, local-first with cloud rescue (a cloud model takes over a
-   stuck local turn; PR #180, unreleased): about 23% of cloud-only's cloud
-   cost, at −0.07 hidden-test share against cloud-only and +0.25 against
-   local-only. See [docs/benchmarks/HYBRID.md](docs/benchmarks/HYBRID.md).
+   repository. Setup then suggests local only or cloud first; it never
+   suggests hybrid. Hybrid (the cloud plans, your machine builds) is opt-in
+   and not a quality upgrade: type `hybrid` or pass `--mode hybrid` to choose
+   it; on an RTX 5090 it did not beat cloud-only (R3R, R4H). A different mode
+   ships in v0.5.0 as an opt-in cost mode: local-first with cloud rescue (a
+   cloud model takes over a stuck local turn), declared by hand with
+   `[roles.<name>.escalate]`; setup does not configure it. In gnomon's v0.5.0
+   release runs it spent about 23% of cloud-only's cloud cost, at −0.07
+   hidden-test share against cloud-only and +0.25 against local-only. See [docs/benchmarks/HYBRID.md](docs/benchmarks/HYBRID.md).
 3. **Accept the diff, look around, then `gnomon launch`.** Setup writes
    `.gnomon/` only after you accept the diff it shows. `gnomon dashboard`
-   opens the same steps and the project's records in a browser (optional).
+   opens the same steps and the project's records in a browser (optional);
+   its last step, Start, shows the exact command to begin, with a Copy
+   button.
    `gnomon doctor` re-checks the machine any time and changes nothing.
 
 `gnomon launch` on its own offers the same guided setup whenever no model
@@ -34,7 +38,7 @@ answers. The sections below are the long way round, step by step.
 
 ## 1. Prerequisites
 
-- **Node ≥ 20** — all the installer below needs
+- **Node ≥ 22** — all the installer below needs
 - From source only: **pnpm 9** (`corepack enable pnpm`) and a **Rust
   toolchain** ([rustup](https://rustup.rs)) for `surface`, `enumerations`,
   `session`, `apply` and `simulate`; `launch`, `prompt`, `task` and `init` work
@@ -61,12 +65,17 @@ curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/sc
 irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.ps1 | iex
 ```
 
-Then `cd my-project && gnomon setup`, optionally `gnomon dashboard`, and
-`gnomon launch`. No registry account, no clone, no pnpm, no Rust, no sudo. This
+Then `cd my-project && gnomon setup` (it scans the machine, recommends a model
+and writes `.gnomon/` on your yes), optionally `gnomon dashboard` for the same
+steps in the browser, and `gnomon launch`. To go straight into setup after the
+install, add `--setup`: `curl -fsSL …/scripts/install.sh | sh -s -- --setup`,
+or in PowerShell `& ([scriptblock]::Create((irm …/scripts/install.ps1))) -Setup`
+(or `$env:GNOMON_SETUP = '1'` before the `irm | iex` line). Setup still asks
+before every download and write. No registry account, no clone, no pnpm, no Rust, no sudo. This
 is the recommended route: it installs the latest release, v0.5.0, with its
 native binaries.
 
-What it does: checks for Node ≥ 20 (if it is missing or old it prints the exact
+What it does: checks for Node ≥ 22 (if it is missing or old it prints the exact
 command for your OS — NodeSource, Homebrew, nvm, winget — and stops; it never
 installs Node as root on its own), resolves the latest release
 (`GNOMON_VERSION=0.5.0` pins one), installs the npm package, and puts the native
@@ -126,7 +135,7 @@ running the version in your own checkout.
 
 ```bash
 # 1. tools (skip any you already have)
-#    Node ≥20:  https://nodejs.org  (or nvm);  then:
+#    Node ≥22:  https://nodejs.org  (or nvm);  then:
 corepack enable pnpm
 pnpm setup            # sets PNPM_HOME. Without it the last step below FAILS.
 exec $SHELL           # pick up PNPM_HOME (or open a new terminal)
@@ -151,7 +160,7 @@ Supported and tested since 2026-09-05: CI runs the full suite on
 
 ```powershell
 winget install --id Git.Git          # also provides the POSIX shell gnomon uses
-winget install --id OpenJS.NodeJS    # Node >= 20
+winget install --id OpenJS.NodeJS    # Node >= 22
 winget install --id Rustlang.Rustup  # Rust, for the native binaries
 ```
 
@@ -207,7 +216,7 @@ Reboot if prompted, then open the **Ubuntu** terminal (Start → "Ubuntu") and r
 the **Linux / macOS** steps above inside it. On Ubuntu/WSL2 the tools install as:
 
 ```bash
-sudo apt update && sudo apt install -y nodejs npm    # or nvm for Node ≥20
+sudo apt update && sudo apt install -y nodejs npm    # or nvm for Node ≥22
 corepack enable pnpm
 curl https://sh.rustup.rs -sSf | sh                  # Rust; then: source "$HOME/.cargo/env"
 git clone https://github.com/eljaplacido/gnomonharness.git ~/gnomon
@@ -303,8 +312,11 @@ Tools (implement): bash, compute, edit, glob, grep, note, read, todo, write
 
 1. **Check the model tags.** `gnomon setup` chooses them for this machine and
    shows them as a diff before writing. Without it, `init` asks your model host what it has and
-   writes real model tags. If nothing was reachable it falls back to generic
-   tags — which will be wrong. Point them at models you actually have with
+   writes real model tags. If nothing was reachable it writes the model the
+   catalog recommends for this machine (not installed yet): `gnomon setup
+   --pull <tag>`, or `ollama serve` if you already have it, makes it answer,
+   and `gnomon doctor` checks every role. Or point the roles at models you
+   actually have with
    `/models`, which writes the file that routes each role. By hand, edit the
    profile your `role_profile` names (`.gnomon/profiles/local_first.toml` in a
    scaffolded project), because it is merged over `.gnomon/roles.toml`.

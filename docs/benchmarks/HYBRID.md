@@ -237,11 +237,11 @@ gnomon's hybrid results do not conform yet:
   $/solved, under the same limits. R1's summary is archived outside this
   repository. M2 has PC ahead of local-only, 22/32 vs 16/31, and no cloud arm.
 - **v0.5.0 release campaign (2026-11-12).** Hybrid local-first with cloud
-  rescue (a cloud model takes over a stuck local turn; PR #180, unreleased),
+  rescue (a cloud model takes over a stuck local turn; opt-in, `[roles.<name>.escalate]`),
   run on a PR #180 build, spent about 23% of the cloud-only arm's cloud cost,
   at −0.07 hidden-test share against cloud-only and +0.25 against local-only.
-  This is not the plan-in-the-cloud hybrid (PC) that `gnomon setup` proposes,
-  and the figures do not carry over to it. It is a candidate cost mode, not a
+  This is not the plan-in-the-cloud hybrid (PC) that `gnomon setup` offers as an opt-in mode,
+  and the figures do not carry over to it. It is an opt-in cost mode, not a
   default.
 
 Read under §8, the honest statement today is: quality non-inferiority is not
