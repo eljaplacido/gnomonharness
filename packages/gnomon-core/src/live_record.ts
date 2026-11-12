@@ -20,6 +20,8 @@
  *   SIGTERM, SIGINT or SIGHUP arrived (`stop_reason: "killed"`,
  *   `stop_detail.signal`). The caller then appends a `turn` audit record and
  *   `session_end`, and lets the signal end the process as it would have.
+ *   Or gnomon itself threw after the run started (`fail`, `stop_reason:
+ *   "apparatus"`, 10): the caller records it the same way and returns it.
  *
  * What it must never do is change the turn. It is told, never asked: the turn
  * hands it a reader at the start, it reads the state at each step and copies
@@ -147,6 +149,17 @@ export function killedNote(signal: KillSignal): string {
   return `_[gnomon: ${signal} ended the process before the turn concluded; this record holds the steps up to then]_`;
 }
 
+/**
+ * The `output` of a record ended by gnomon's own throw after the run started.
+ * Never "could not start": the run did start, and its steps are in the record.
+ */
+export function failedNote(why: string): string {
+  return `_[gnomon: the run failed after it started (${why}); this record holds the steps up to then]_`;
+}
+
+/** The native code of a failed record: 10, `launch_failed`, the harness's own failure (CONTRACTS §1). */
+export const FAILED_CODE = 10;
+
 export interface LiveRecordOptions {
   /** The audit directory, or null when `[audit]` is off: nothing is written. */
   dir: string | null;
@@ -187,7 +200,8 @@ export class LiveRecord implements TurnLive {
   }
 
   /**
-   * The killed record, once kill() has written one. After that the record is
+   * The killed record, once kill() has written one (or fail(): a run ended
+   * from outside its turn is ended the same way). After that the record is
    * terminal: open, step and close write nothing, because the process is on
    * its way out and the trail is already sealed.
    */
@@ -210,6 +224,11 @@ export class LiveRecord implements TurnLive {
 
   step(): void {
     if (this.current) this.write(this.build());
+  }
+
+  /** The running turn as it stands, as the turn reports it; null when none is running or attached. */
+  soFar(): TurnSoFar | null {
+    return this.current && this.read ? this.read() : null;
   }
 
   /** The turn ended: write the record it returned, marked final. */
@@ -247,9 +266,34 @@ export class LiveRecord implements TurnLive {
     return { record, fresh: true };
   }
 
-  /** The turn as it stands: partial, or killed by `signal`. */
-  private build(signal?: KillSignal): LiveTaskRecord {
+  /**
+   * gnomon itself threw after the run started -- not a tool, whose failures
+   * are results the model reads, but the code around them -- and the throw
+   * left runTask. With a turn running, its record as it stands is written
+   * final as `apparatus` (10) with `output` saying what threw, and returned
+   * with `fresh: true`; the caller records the turn in the trail. Terminal,
+   * as a kill's record is (`killed` returns it, and nothing rewrites it).
+   * Otherwise as kill(): the record that already ended the run, or null.
+   *
+   * Before this the throw reached `gnomon task`'s catch, which printed
+   * "could not start" with tool_steps 0 and duration 0, and the file here
+   * stayed `partial` (dc1, 2026-11-12, after 58 tool calls).
+   */
+  fail(why: string): { record: LiveTaskRecord; fresh: boolean } | null {
+    if (!this.current) return this.concluded ? { record: this.concluded, fresh: false } : null;
+    const record = this.build(undefined, why);
+    this.current = null;
+    this.read = null;
+    this.concluded = record;
+    this.killedRecord = record;
+    this.write(record);
+    return { record, fresh: true };
+  }
+
+  /** The turn as it stands: partial, killed by `signal`, or failed with `why`. */
+  private build(signal?: KillSignal, why?: string): LiveTaskRecord {
     const { open: t, started } = this.current!;
+    const failed = why !== undefined;
     const now = this.read?.();
     const usage = now?.usage;
     const degradations = t.degradations?.() ?? [];
@@ -265,13 +309,13 @@ export class LiveRecord implements TurnLive {
       model: now?.model ?? t.model,
       ...(endpoint !== undefined ? { endpoint } : {}),
       input: t.input,
-      output: signal ? killedNote(signal) : "",
-      code: UNFINISHED_CODE,
+      output: signal ? killedNote(signal) : failed ? failedNote(why) : "",
+      code: failed ? FAILED_CODE : UNFINISHED_CODE,
       bucket: "apparatus_failure",
       tool_steps: now?.toolSteps ?? 0,
       tool_log: now ? [...now.toolLog] : [],
       skills: [...t.skills],
-      stop_reason: signal ? "killed" : "in_progress",
+      stop_reason: signal ? "killed" : failed ? "apparatus" : "in_progress",
       ...(signal ? { stop_detail: { signal } } : {}),
       counters: now ? structuredClone(now.counters) : emptyCounters(),
       ...(stages.length > 0 ? { stages: [...stages] } : {}),
@@ -285,7 +329,7 @@ export class LiveRecord implements TurnLive {
         ...(now?.toolTimes && now.toolTimes.length > 0 ? { tool_calls: now.toolTimes.map((t) => ({ ...t })) } : {}),
         ...(now?.toolInFlight ? { tool_in_flight: { ...now.toolInFlight } } : {}),
       },
-      record_state: signal ? "final" : "partial",
+      record_state: signal || failed ? "final" : "partial",
       session: this.opts.session,
       turn: t.turn,
       ...(now?.endpoint_url !== undefined ? { endpoint_url: now.endpoint_url } : {}),

@@ -317,6 +317,7 @@ reasoning; delivering the idle nudge locally is untested); SW1/LG2 test them.
 ### Fixed
 
 - **Dotfile writes no longer fail on Linux**: every containment check read `rel.startsWith("..")`, so `.gitignore`'s temp file `..gitignore.<pid>.<hex>.tmp` (and a `..data` directory) counted as outside the root and every edit or write of a dotfile failed with 11; the ~30 sites share `escapesBase` (rel_path.ts), true only for a `..` component or an absolute path (dc1, 2026-11-12).
+- **A late failure is no longer reported as "could not start"**: a pre-image the `[verify] test_must_fail_first` re-run cannot put back now refuses the check ("not re-run: …") instead of throwing out of the turn, and any throw in `gnomon task` after the run started ends it on its own record (`final`, code 10, `stop_reason: "apparatus"`, the steps, tokens and clock so far, the trail sealed) rather than the CLI's "could not start" with `tool_steps: 0` and a `partial` live record (dc1 lost a 58-call run this way; CONTRACTS `stop_reason`, §28).
 
 - **A read-only directory below another project ran the project's surface.**
   `gnomon init` in a read-only directory keeps its surface in the state

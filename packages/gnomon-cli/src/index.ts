@@ -1716,8 +1716,15 @@ async function cmdTask(args: CliArgs): Promise<void> {
     // No .gnomon/ above the cwd, a --dir without one, a --role the surface
     // does not define: the throw used to reach main's catch and exit 1. It
     // gets the same record shape as a fatal surface, so --json still parses.
+    // But only a throw from before the run started could not start. One
+    // after it (runTask set interrupt.fail when its live record opened) ends
+    // that run on its own record -- code 10, stop_reason "apparatus", its
+    // steps and clock, the trail sealed -- printed below like any other. dc1
+    // (2026-11-12) lost a 58-call run to this catch as "could not start",
+    // tool_steps 0, duration 0. (A throw inside the turn no longer leaves
+    // runTask at all: the turn ends on it.)
     const why = err instanceof Error ? err.message : String(err);
-    record = unstartedTaskRecord(text, args.role, `gnomon task could not start: ${why}`);
+    record = (await interrupt.fail?.(err)) ?? unstartedTaskRecord(text, args.role, `gnomon task could not start: ${why}`);
   }
   releaseSignals();
 

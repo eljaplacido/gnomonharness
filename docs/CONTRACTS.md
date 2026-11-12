@@ -66,7 +66,7 @@ every `TaskRecord`.
 | `step_wall` | `max_steps_total` was reached |
 | `cancelled` | the operator stopped it |
 | `truncated` | the backend cut the reply off at its output limit, and the bounded re-asks did not finish it: a cut text reply stands as the answer (a `result`); cut tool calls in a row end on the `refusal` floor with `stop_detail.repeats` |
-| `apparatus` | the run never reached the model — the surface itself could not be used |
+| `apparatus` | the run never reached the model — the surface itself could not be used; or, in `gnomon task`, gnomon itself threw after the run started (the loop, not a tool: a tool's failure is a result the model reads), and the run ended on the record as it stood: `final`, code `10`, the steps and clock up to then, `output` a note saying what threw, never "could not start" (§28) |
 | `malformed` | replies in a row offered no usable tool call, past `[turn] max_consecutive_malformed` repair turns |
 | `endpoint_error` | the turn's last model request failed and the turn ended on it: no key (10), no reply in time (11), the provider unreachable or erroring past the transport grace (12), or the context could not be fitted (13); the code says which, and the bucket is `apparatus_failure` |
 | `tamper` | a tool call, or something between calls, changed gnomon's own records and gnomon did not make the change; the turn stops with a refusal (3) and a `record_tamper` record |
@@ -2189,6 +2189,7 @@ The killed `turn` audit record carries it too, beside `tokens_in`.
 | `final` | the turn's own | The turn ended. Rewritten no more; in a session the next turn starts a new partial record in the same file. |
 | `final` | `killed` | SIGINT, SIGTERM or SIGHUP arrived mid-turn. `stop_detail.signal` names it; `output` is a note, never the model's text. |
 | `final` | `deadline` | `gnomon task --deadline` stopped the turn itself (§31). Written as any final record is, with the turn's own code and bucket. |
+| `final` | `apparatus` | `gnomon task` only: gnomon itself threw after the run started. Code `10`, the steps, tokens and clock up to then; `output` is a note (`the run failed after it started (…)`), never the model's text. The `turn` audit record and `session_end` follow, as for a kill, and `--json` prints this record. Before it, the throw reached the CLI, which printed "could not start" with `tool_steps: 0` and `duration_ms: 0` and left this file `partial` (dc1, 2026-11-12). |
 
 A partial or killed record carries `code: 11` (`timed_out`) and `bucket:
 "apparatus_failure"`: the turn did not end, it was ended, so it is neither a
