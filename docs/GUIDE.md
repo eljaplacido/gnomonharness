@@ -766,6 +766,12 @@ gnomon endpoint add --name llamacpp --url http://127.0.0.1:8080/v1/chat/completi
 
 ### 5.3 Hybrid: plan in the cloud, implement locally
 
+Hybrid is an opt-in **cost mode**, not a default and not a quality upgrade. In
+gnomon's v0.5.0 release runs, local-first with cloud rescue spent about 23% of
+the cloud-only arm's cloud cost, at −0.07 hidden-test share against cloud-only
+and +0.25 against local-only. Use it when cloud spend matters more than the
+last few points; use cloud-only when results matter most.
+
 Declare the cloud endpoint, write a second profile, and choose between the two
 profiles.
 
