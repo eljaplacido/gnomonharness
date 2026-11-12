@@ -1569,6 +1569,34 @@ describe("model API errors", () => {
     expect(answer).toContain("gnomon setup --cloud-endpoint");
   }, 15_000);
 
+  it("a refused OpenAI-compatible local endpoint is not told to start Ollama", async () => {
+    // llama-server, LM Studio or vLLM on loopback: someone's own server.
+    const config: any = loadConfig("../..");
+    config.config = { ...config.config, resilience: { attempts: 3, backoff_ms: 1500 } };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const route = {
+      model: "qwen3.6-35b", temperature: 0, top_p: 1,
+      target: { model: "qwen3.6-35b", temperature: 0, top_p: 1, url: "http://127.0.0.1:8080/v1/chat/completions", kind: "openai", endpoint: "llama" },
+    } as any;
+    let answer = "";
+    await withFetch(
+      (async () => { throw refusedLocally(); }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state, "implement", route, [{ role: "user", content: "hi" }], quietDeps([])
+        );
+        expect(turn.code).toBe(12);
+        answer = turn.content;
+      }
+    );
+    expect(answer).toContain("Nothing is listening on 127.0.0.1:8080");
+    expect(answer).toContain('Start the server behind "llama" (llama-server, LM Studio, vLLM');
+    expect(answer).toContain("    gnomon endpoint list");
+    expect(answer).toContain("gnomon doctor");
+    expect(answer).toContain("gnomon setup --cloud-endpoint");
+    expect(answer).not.toMatch(/ollama serve|Start Ollama|--pull/);
+  }, 15_000);
+
   it("honours a DECLARED transport_grace_ms for a refused local socket", async () => {
     // Someone who wrote the grace down may be starting the server in another
     // terminal. Ten refusals is ~1s of 1ms-doubling backoff -- past nothing

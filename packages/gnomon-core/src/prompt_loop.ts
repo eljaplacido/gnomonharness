@@ -2294,19 +2294,28 @@ async function callEndpointOnce(
       // server that is installed, get the model the project names, or use a
       // cloud model instead -- each through `gnomon setup`, which asks before
       // it downloads or writes anything.
+      //
+      // Only an Ollama endpoint is told to start Ollama and pull a tag. An
+      // OpenAI-compatible one on loopback (llama-server, LM Studio, vLLM) is
+      // someone's own server: telling them to start Ollama would be wrong,
+      // and setup's --pull would fetch into a runtime they do not use.
       const ollamaish = (target.kind ?? "ollama") === "ollama";
-      const pull = ollamaish && target.model ? target.model : "<tag>";
+      const which = target.endpoint ? ` ("${target.endpoint}", ${target.url})` : ` (${target.url})`;
+      const todo = ollamaish
+        ? `Start Ollama, download the model this project names, or use a cloud ` +
+          `model instead (setup asks before it downloads or writes anything):\n\n` +
+          `    ollama serve\n` +
+          `    gnomon setup --pull ${target.model || "<tag>"}\n`
+        : `Start the server behind ${target.endpoint ? `"${target.endpoint}"` : "it"} ` +
+          `(llama-server, LM Studio, vLLM or whichever serves ${where}), or use ` +
+          `a cloud model instead (setup asks before it writes anything):\n\n` +
+          `    gnomon endpoint list    # every endpoint and what answers\n`;
       return {
         content:
           `Nothing is listening on ${where} — the connection was refused, ` +
           `so no model server is running there.\n\n` +
-          `This is a local endpoint` +
-          (target.endpoint ? ` ("${target.endpoint}", ${target.url})` : ` (${target.url})`) +
-          `, so gnomon cannot start it for you. Start Ollama, download the ` +
-          `model this project names, or use a cloud model instead (setup asks ` +
-          `before it downloads or writes anything):\n\n` +
-          `    ollama serve\n` +
-          `    gnomon setup --pull ${pull}\n` +
+          `This is a local endpoint${which}, so gnomon cannot start it for you. ` +
+          todo +
           `    gnomon setup --cloud-endpoint opencode-go --cloud-model <id>\n` +
           `    gnomon setup        # or choose step by step\n\n` +
           `If the server IS running, it is on a different port than the surface ` +
