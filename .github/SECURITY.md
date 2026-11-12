@@ -105,12 +105,15 @@ verification" say what each check proves and what it does not.
 gnomon is a **local coding-agent harness** — it runs in the developer's
 terminal. It reaches the network only where the surface says so: a role's
 model endpoint (which may be a cloud API), the opt-in `webfetch` tool (gated by
-`[sandbox] network`), a configured stdio MCP server, and whatever `bash`
-commands the role's `bash_allow` permits. There is no telemetry and no
-background service. The one request gnomon makes without being asked is a
-once-a-day newer-version check in interactive sessions of an npm-installed
-copy (`GNOMON_NO_UPDATE_CHECK=1` turns it off). [docs/PRIVACY.md](../docs/PRIVACY.md)
-lists every network destination, when it is contacted and how to turn it off.
+`[sandbox] network`), a configured stdio MCP server, whatever `bash` commands
+the role's `bash_allow` permits, and the opt-in `[shadow] url` and
+`[audit.anchor]` witness. There is no telemetry and no background service.
+Apart from those declared destinations, the one request gnomon makes without
+being asked is a once-a-day newer-version check in interactive sessions of an
+npm-installed copy (`GNOMON_NO_UPDATE_CHECK=1` turns it off).
+[docs/PRIVACY.md](../docs/PRIVACY.md) lists every network destination,
+including the opt-in ones a surface can declare, when each is contacted and
+how to turn it off.
 
 Key security boundaries:
 

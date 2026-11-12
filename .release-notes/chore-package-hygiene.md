@@ -4,7 +4,7 @@
 
 ### Added
 - Every npm package (`gnomon-harness`, `gnomon-core`, `gnomon-natives`, `gnomon-tui`) now ships a README, so its npmjs.com page is no longer blank. LICENSE still comes from `pnpm pack`, which copies the workspace root's LICENSE into each tarball.
-- `docs/PRIVACY.md`: every network destination of the CLI, the dashboard and the installers, when each one is contacted, and how to turn it off, checked against the source. There is no telemetry. The only request gnomon makes without being asked is the once-a-day update check (`GNOMON_NO_UPDATE_CHECK=1`).
+- `docs/PRIVACY.md`: every network destination of the CLI, the dashboard and the installers, including the opt-in ones a `.gnomon/` surface can declare (`[shadow] url`, `[audit.anchor]`) and the model-readiness check that `gnomon launch` and `gnomon doctor` send to role endpoints. For each: when it is contacted and how to turn it off, checked against the source. There is no telemetry. Apart from the endpoints and witnesses the surface declares, the only request gnomon makes without being asked is the once-a-day update check (`GNOMON_NO_UPDATE_CHECK=1`).
 - `.gitleaks.toml` and a "Synthetic secrets in this repository" section in `.github/SECURITY.md`. The private-key blocks and tokens under `benchmarks/results/` are injection-test canaries (`INJCANARY-…` and `GBSCANARY-…`). We checked them, and the allowlist names exactly those.
 - CI: `ts-tests` now runs on Node 22 and Node 24. The Node 22 job keeps the existing check name.
 
