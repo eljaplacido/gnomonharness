@@ -51,15 +51,44 @@ owner still have to do.
    checkpoint-then-grind #179); Anthropic prompt caching; hand-off note fix;
    first-run journey; guard liveness + audit scorecard; benchmark kit; package
    hygiene.
-3. If #180 changes what `gnomon setup` proposes (it currently suggests hybrid
-   for a usable-but-slow local model with a cloud model given), re-read
-   README "Get started" step 2, GETTING_STARTED step 2 and GUIDE §4 step 2:
-   they say setup "can propose hybrid" and call it an opt-in cost mode.
+3. **Cloud-rescue gate (PR #180).** The v0.5.0 release runs' hybrid figures
+   (~23% of cloud-only's cloud cost, −0.07 vs cloud-only, +0.25 vs local-only)
+   were measured on a PR #180 build: local-first with cloud rescue,
+   `[roles.<name>.escalate]`. origin/master f466dfcca has no escalation
+   (setup_wizard.ts:81-82 still says it waits on PR #102). This branch
+   therefore words the mode as **unreleased** and keeps it apart from the
+   hybrid `gnomon setup` proposes (`frontier_plan`: the cloud plans, this
+   machine builds), whose own evidence (R3R, R4H) shows no advantage over
+   cloud-only. Every site carries the literal `PR #180, unreleased`:
+   `grep -rn "PR #180, unreleased" README.md GETTING_STARTED.md CHANGELOG.md llms.txt site docs`
+   (README step 2, GETTING_STARTED step 2, GUIDE §4 step 2 and §5.3,
+   CHANGELOG [0.5.0] intro, llms.txt, site/llms.txt, site/index.html hero KPI,
+   §8 IV, "What did not work", §9 HYBRID bullet, limits list, EVIDENCE
+   "What the v0.5.0 recommendations rest on", HYBRID.md §10,
+   FINDINGS-2026-11-04).
+   - **If #180 merges for v0.5.0:** replace each `PR #180, unreleased` with
+     ``opt-in, `[roles.<name>.escalate]` `` (Markdown) or
+     `opt-in, <code class="inline">[roles.&lt;name&gt;.escalate]</code>`
+     (site/index.html; plain `[roles.<name>.escalate]` in the llms.txt
+     files), and "candidate cost mode" / "measured as a cost mode" with
+     "opt-in cost mode". Keep the sentences that separate it from setup's
+     `frontier_plan` proposal: #180 does not change setup_wizard.ts, so setup
+     still does not configure an escalate block. If #180 (or a later PR) makes
+     setup propose rescue, re-read README/GETTING_STARTED/GUIDE step 2 again.
+   - **If #180 does not merge:** leave the wording as is, and delete the
+     CHANGELOG `TODO: hybrid local-first rescue v2 (#180 …)` line.
+   - Same issue outside this branch: `feat/first-run-journey` (4976a2023)
+     puts the rescue figure into `packages/gnomon-cli/catalog/models.toml`
+     `hybrid.evidence`, which setup prints when it proposes the
+     `frontier_plan` hybrid. That integrator should lead that text with the
+     plan-in-the-cloud evidence (R3R/R4H: no advantage over cloud-only) and
+     label the 23% as a different, rescue mode (unreleased unless #180 merges).
 
 ## README notes
 
 None outstanding: README, GETTING_STARTED and GUIDE were in this brief and are
-edited on the branch.
+edited on the branch. The cloud-rescue wording in them follows step 3 of
+"Integrator: before merging".
 
 ## Owner actions (not done here)
 

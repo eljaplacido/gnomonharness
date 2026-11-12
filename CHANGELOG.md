@@ -37,9 +37,11 @@ as this one. From 0.5.0 the release is also published to npm as
 the defaults: on Claude Haiku they did at least as well as a tuned long-task
 recipe at about half the cost. A done check before the final answer is opt-in;
 it makes the final answer more honest, not the outcome better. Hybrid
-local-first with cloud rescue is an opt-in cost mode, not a default: about 23%
-of cloud-only's cloud cost, −0.07 hidden-test share against cloud-only and
-+0.25 against local-only.
+local-first with cloud rescue (PR #180, unreleased) measured as a cost mode,
+not a default: about 23% of cloud-only's cloud cost, −0.07 hidden-test share
+against cloud-only and +0.25 against local-only. Those figures are not for the
+plan-in-the-cloud hybrid `gnomon setup` proposes, which showed no advantage
+over cloud-only (R3R, R4H).
 
 The new keys below (`soft_timeout = "handle"`, `finish_gate = "v2"`,
 `deliverable_first`, `first_token_timeout_ms`, `[governance]` levels) are

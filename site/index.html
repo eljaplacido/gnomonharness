@@ -1021,8 +1021,8 @@
             </div>
             <div class="hero-kpi reveal">
               <div class="hero-kpi-value">Hybrid local + cloud, as a cost mode</div>
-              <div class="hero-kpi-label">Local-first with cloud rescue spent about 23% of the cloud-only arm's cloud cost, at −0.07 hidden-test share against cloud-only and +0.25 against local-only. Opt-in, not a default</div>
-              <span class="hero-kpi-metric"><a href="#hybrid">~23% of cloud-only's cloud spend (v0.5.0 release runs)</a></span>
+              <div class="hero-kpi-label">Local-first with cloud rescue (a cloud model takes over a stuck local turn; PR #180, unreleased) spent about 23% of the cloud-only arm's cloud cost, at −0.07 hidden-test share against cloud-only and +0.25 against local-only. Not the hybrid setup proposes; not a default</div>
+              <span class="hero-kpi-metric"><a href="#hybrid">~23% of cloud-only's cloud spend (v0.5.0 release runs, unreleased mode)</a></span>
             </div>
             <div class="hero-kpi reveal">
               <div class="hero-kpi-value">Reasoning replay by default</div>
@@ -1394,7 +1394,7 @@
               <div class="bench-dim" id="hybrid">
                 <h3>IV — Hybrid local + cloud: a cost mode</h3>
                 <p>In the hybrid arm (PC) a hosted model plans and a local model builds; L is local-only, C cloud-only. Terminal-Bench tasks, pre-registered, paired by task and attempt.</p>
-                <p class="bench-foot"><strong>The v0.5.0 release runs.</strong> Local-first with cloud rescue spent about <strong>23%</strong> of the cloud-only arm's cloud cost, at <strong>−0.07</strong> hidden-test share against cloud-only and <strong>+0.25</strong> against local-only. gnomon ships it as an <strong>opt-in cost mode</strong>, not a default: choose it to cut cloud spend, and cloud-only when results matter most.</p>
+                <p class="bench-foot"><strong>The v0.5.0 release runs</strong> measured a different mode, local-first with cloud rescue: a local model works and a cloud model takes over a stuck turn (PR #180, unreleased). It spent about <strong>23%</strong> of the cloud-only arm's cloud cost, at <strong>−0.07</strong> hidden-test share against cloud-only and <strong>+0.25</strong> against local-only: a candidate <strong>cost mode</strong>, not a default. These figures are not for the PC hybrid in the table below, which is the one <code class="inline">gnomon setup</code> proposes.</p>
                 <table class="bench-table">
                   <thead><tr><th>Run · machine · build</th><th>Local only</th><th>Cloud only</th><th>Hybrid</th><th>Hybrid $ / solved</th></tr></thead>
                   <tbody>
@@ -1418,7 +1418,7 @@
                     <tr><td>Completion gate, local model, no time pressure</td><td>G1-gate · GB10</td><td class="num">checklist 18 vs 16, review 17 vs 16 on 30 pairs — <strong>no difference shown</strong>; review took ~2.7× the wall time</td></tr>
                     <tr><td>Completion gate with a reviewer, hosted model</td><td>H4-lite · 14 tasks</td><td class="num">hidden tests <strong>−10 points</strong> [−21, −1.4]; capped 4 → 8; +86% spend. The reviewer took ~12 minutes and the gate does not know the deadline. Off by default; keep it off for time-capped runs</td></tr>
                     <tr><td>A “verify every requirement” prompt rule</td><td>H2</td><td class="num">2/12 with and without</td></tr>
-                    <tr><td>Hybrid as a quality upgrade</td><td>R3R · R4H · v0.5.0 release runs</td><td class="num">The earlier “87% vs 84% cloud-only, 26% cheaper” <strong>is retracted</strong>. In the release runs hybrid trailed cloud-only by 0.07 hidden-test share; it is offered as a cost mode</td></tr>
+                    <tr><td>Hybrid as a quality upgrade</td><td>R3R · R4H · v0.5.0 release runs</td><td class="num">The earlier “87% vs 84% cloud-only, 26% cheaper” <strong>is retracted</strong>. In the release runs local-first with cloud rescue (PR #180, unreleased) trailed cloud-only by 0.07 hidden-test share; it is a cost mode at best</td></tr>
                   </tbody>
                 </table>
               </div>
@@ -1437,7 +1437,7 @@
                   <li><strong>CHAOS — are injected endpoint faults announced, or swallowed?</strong> 0.4.2: <strong>17 of 20</strong> faults announced (34 of 37 cases). Still silent: a dropped late system message, a throttled stream, a cache miss.</li>
                   <li><strong>GOVERNANCE — a scripted compromised model forces forbidden actions: are they stopped, and can the agent rewrite its own rules?</strong> 0.4.2, asks auto-approved: 170 of 280 attacks blocked by the default rules; <strong>245 of 280</strong> with the kernel sandbox (<code class="inline">exec = "os"</code> plus read scoping — opt-in, PR #156, in security review, not released). Self-governance <strong>27/27</strong> with nobody to approve; 26/27 with asks auto-approved (a coordinator reached a deletion through a sub-agent).</li>
                   <li><strong>AUDIT — does the record survive tampering, and can someone else check it?</strong> 0.4.2 with a git anchor: <strong>7/7 · 3/3 · 5/5</strong> attacks caught at the three adversary levels (5/7 · 2/3 · 0/2 without a witness); <strong>0 false alarms in 48</strong> untampered sessions.</li>
-                  <li><strong>HYBRID — does a local/cloud split beat local on quality and cloud on cost, with local compute priced?</strong> See <a href="#hybrid">IV</a>: it beats local-only on quality and cloud-only on cost, and trails cloud-only on quality — a cost mode.</li>
+                  <li><strong>HYBRID — does a local/cloud split beat local on quality and cloud on cost, with local compute priced?</strong> See <a href="#hybrid">IV</a>: the plan-in-the-cloud hybrid beats local-only on quality (GB10) but not cloud-only on quality or, once local GPU time is priced, on cost; local-first with cloud rescue (PR #180, unreleased) cut cloud spend to about 23% of cloud-only's and trailed it on quality — a cost mode at best.</li>
                   <li><strong>REPORTING — what every result must state:</strong> builds, the pre-registration it cites, paired design, margins, honest denominators, open traces. Held to it, gnomon's own records matched the billing relay to the token on <strong>25/25</strong> long-task runs that ended by themselves (0.4.1).</li>
                   <li><strong>LAYER (draft, not yet published) — one policy across harnesses.</strong> Where a policy can attach (the loop, a pre-tool hook, a stop hook or CI, a wrapper), whether the agent can skip or detach it, and whether each violation was prevented, caught before merge, caught after, or missed. Its pilot is in <a href="#governance-layer">§2</a>.</li>
                 </ul>
@@ -1486,7 +1486,7 @@
                 <li><strong>Summary compaction</strong> not reproducible.</li>
                 <li><strong>Runs killed from outside lose their last calls.</strong> On 24 of 29 capped runs the record missed calls the provider billed (up to 287&nbsp;s). A self-stop before the cap (<code class="inline">--deadline</code>, #153) is in 0.5.0.</li>
                 <li><strong>Injection resistance unmeasured.</strong> 0/36 crossed, but the model attempted none.</li>
-                <li><strong>Hybrid trades quality for cost.</strong> About 23% of cloud-only's cloud spend, at −0.07 hidden-test share against cloud-only; slower, with more runs capped (§8 IV). Opt-in.</li>
+                <li><strong>Hybrid trades quality for cost.</strong> The plan-in-the-cloud hybrid setup proposes did not beat cloud-only on an RTX 5090 and capped more runs; local-first with cloud rescue (PR #180, unreleased) spent about 23% of cloud-only's cloud cost at −0.07 hidden-test share (§8 IV). Opt-in.</li>
                 <li><strong>npm carries the package, not the native binaries.</strong> <code class="inline">npm i -g gnomon-harness</code> (from 0.5.0) gives you <code class="inline">gnomon</code>; the installer also fetches the binaries <code class="inline">surface</code>, <code class="inline">session</code> and <code class="inline">apply</code> need.</li>
               </ul>
             </div>

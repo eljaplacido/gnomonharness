@@ -184,5 +184,5 @@ determinism, capability boundaries, disclosure, auditability — measured
 exhaustively rather than sampled. Task success rates have been measured
 repeatedly: "no difference" against a peer on v0.2, and since then gnomon-only
 results that changed defaults (reasoning replay) or kept features opt-in (the
-completion gate, the done check, hybrid as a cost mode). That is a result, and
+completion gate, the done check, hybrid local + cloud). That is a result, and
 it is why this document leads with the properties.

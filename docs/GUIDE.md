@@ -379,13 +379,14 @@ gnomon setup
    Zen or any OpenAI-compatible URL. The key is read hidden and stored where
    `gnomon key set` stores it, never in `.gnomon/`. Checking it with one token
    is a separate yes. With a cloud model, setup can propose **hybrid**: the
-   cloud plans (`coordinator`, `plan`), this machine builds (everything else).
-   Treat hybrid as an opt-in **cost mode**, not a quality upgrade: in gnomon's
-   v0.5.0 release runs, local-first with cloud rescue spent about 23% of
-   cloud-only's cloud cost, at −0.07 hidden-test share against cloud-only and
-   +0.25 against local-only. On an RTX 5090 an early hybrid lead (R1H) did not
-   reproduce (R3R, R4H); on an NVIDIA GB10 it solved 22/32 vs 16/31 local-only
-   (M2, McNemar p = 0.07). See [HYBRID.md](benchmarks/HYBRID.md). A slow or
+   cloud plans (`coordinator`, `plan`), this machine builds (everything else;
+   the `frontier_plan` shape of §5.3). Treat it as opt-in, not a quality
+   upgrade: on an RTX 5090 an early hybrid lead (R1H) did not reproduce (R3R,
+   R4H); on an NVIDIA GB10 it solved 22/32 vs 16/31 local-only (M2, McNemar
+   p = 0.07). The v0.5.0 release runs' cost figures (about 23% of cloud-only's
+   cloud cost) are for a different mode, local-first with cloud rescue (a
+   cloud model takes over a stuck local turn; PR #180, unreleased), which
+   setup does not propose. See [HYBRID.md](benchmarks/HYBRID.md). A slow or
    small local model also leads to hybrid, a very slow one to cloud first;
    those speed thresholds are provisional and say so.
 3. **Accept the diff, then `gnomon launch`.** The change to `.gnomon/` is shown
@@ -766,11 +767,17 @@ gnomon endpoint add --name llamacpp --url http://127.0.0.1:8080/v1/chat/completi
 
 ### 5.3 Hybrid: plan in the cloud, implement locally
 
-Hybrid is an opt-in **cost mode**, not a default and not a quality upgrade. In
-gnomon's v0.5.0 release runs, local-first with cloud rescue spent about 23% of
-the cloud-only arm's cloud cost, at −0.07 hidden-test share against cloud-only
-and +0.25 against local-only. Use it when cloud spend matters more than the
-last few points; use cloud-only when results matter most.
+This hybrid is opt-in, not a default and not a quality upgrade. On an RTX 5090
+an early lead over cloud-only (R1H) did not reproduce: hybrid 19/31 against
+cloud-only 24/31 (R3R), with no build effect (R4H). On an NVIDIA GB10 it solved
+22/32 against local-only's 16/31 (M2, p = 0.07). Its cost depends on what local
+GPU time costs you (R1H's saving vanished above about $0.42 per GPU-hour).
+
+The v0.5.0 release runs measured a different mode, local-first with cloud
+rescue (a cloud model takes over a stuck local turn; PR #180, unreleased):
+about 23% of the cloud-only arm's cloud cost, at −0.07 hidden-test share
+against cloud-only and +0.25 against local-only. Those figures do not apply to
+the profile below. Use cloud-only when results matter most.
 
 Declare the cloud endpoint, write a second profile, and choose between the two
 profiles.

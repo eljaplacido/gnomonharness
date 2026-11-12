@@ -46,12 +46,15 @@ installer; see [Install](#install)). Update with `gnomon update`;
 2. **Connect a cloud model (optional).** Pick OpenCode Go, OpenRouter,
    OpenCode Zen or any OpenAI-compatible URL. The key is read hidden and kept
    outside the repository, as `gnomon key set` does. With one, setup can propose
-   hybrid, where the cloud plans and your machine builds. **Hybrid is an
-   opt-in cost mode, not a quality upgrade.** In gnomon's v0.5.0 release runs,
-   local-first with cloud rescue spent about 23% of the cloud-only arm's cloud
-   cost, at −0.07 hidden-test share against cloud-only and +0.25 against
-   local-only. Choose it to cut cloud spend; choose cloud-only for the best
-   results. See [docs/benchmarks/HYBRID.md](docs/benchmarks/HYBRID.md).
+   hybrid, where the cloud plans and your machine builds. **Hybrid is opt-in,
+   not a quality upgrade**: on an RTX 5090 it did not beat cloud-only (R3R,
+   R4H); on an NVIDIA GB10 it solved 22/32 against local-only's 16/31
+   (p = 0.07). gnomon's v0.5.0 release runs measured a different mode,
+   local-first with cloud rescue (a cloud model takes over a stuck local turn;
+   PR #180, unreleased): about 23% of the cloud-only arm's cloud cost, at
+   −0.07 hidden-test share against cloud-only and +0.25 against local-only.
+   Choose cloud-only for the best results. See
+   [docs/benchmarks/HYBRID.md](docs/benchmarks/HYBRID.md).
 3. **Accept the diff, then `gnomon launch`.** Setup shows its change to
    `.gnomon/` as a diff and writes it only on your yes; `gnomon dashboard`
    shows the same steps and the project's records in a browser. `gnomon doctor`
