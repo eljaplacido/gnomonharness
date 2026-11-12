@@ -4,7 +4,8 @@
 > current.** Its "validly claimable" list predates the corrections in
 > [EVIDENCE.md](EVIDENCE.md): the goose comparison is no longer a valid baseline,
 > "13–43× leaner" is retracted, and the "hybrid flailed" note below was
-> superseded by the 2026-11 hybrid campaigns (R1H, R3R, R4H, M2). The current
+> superseded by the 2026-11 gnomon-only hybrid campaigns (R1H, R3R, R4H, M2).
+> Every peer figure here is from August–September 2026. The current
 > benchmark plan is [benchmarks/ROADMAP.md](benchmarks/ROADMAP.md); the current
 > claim-to-evidence map is [EVIDENCE.md](EVIDENCE.md).
 

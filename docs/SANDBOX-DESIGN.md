@@ -2,8 +2,7 @@
 
 > **For what `exec = "docker"` defends against today, read
 > [THREAT-MODEL-EXEC.md](THREAT-MODEL-EXEC.md).** The docker parts of this
-> note predate PR #158 (on `master`; in v0.4.5, drafted but not yet
-> published): "repo mounted and writable" is no longer the
+> note predate PR #158 (first released in v0.5.0): "repo mounted and writable" is no longer the
 > whole story (gnomon's state and git's control files are mounted read-only,
 > capabilities are dropped, and host-side gnomon treats everything the
 > container can write as untrusted). This file is kept as the design history

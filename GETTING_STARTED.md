@@ -17,16 +17,17 @@ Once gnomon is installed ([section 2](#2-install)):
    ~10 s speed check.
 2. **Connect a cloud model (optional).** OpenCode Go, OpenRouter, OpenCode Zen
    or any OpenAI-compatible URL; the key is read hidden and kept outside the
-   repository. With one, setup suggests hybrid: the cloud plans, your machine
-   builds. On an NVIDIA GB10 that solved 22/32 against 16/31 local-only
-   (+17 points, McNemar p = 0.07). The earlier RTX 5090 result (87% vs 84%
-   cloud-only, at 26% lower cost per solved task) did not reproduce on v0.4.0
-   (hybrid 19/31 against cloud-only 24/31), and not because of the build
-   (R4H: 20 vs 19, p = 1.0); see
-   [docs/benchmarks/HYBRID.md](docs/benchmarks/HYBRID.md).
-3. **Accept the diff, then `gnomon launch`.** Setup writes `.gnomon/` only
-   after you accept the diff it shows. `gnomon doctor` re-checks the machine
-   any time and changes nothing.
+   repository. With one, setup can propose hybrid: the cloud plans, your
+   machine builds. It is opt-in and not a quality upgrade: on an RTX 5090 it
+   did not beat cloud-only (R3R, R4H). gnomon's v0.5.0 release runs measured a
+   different mode, local-first with cloud rescue (a cloud model takes over a
+   stuck local turn; PR #180, unreleased): about 23% of cloud-only's cloud
+   cost, at −0.07 hidden-test share against cloud-only and +0.25 against
+   local-only. See [docs/benchmarks/HYBRID.md](docs/benchmarks/HYBRID.md).
+3. **Accept the diff, look around, then `gnomon launch`.** Setup writes
+   `.gnomon/` only after you accept the diff it shows. `gnomon dashboard`
+   opens the same steps and the project's records in a browser (optional).
+   `gnomon doctor` re-checks the machine any time and changes nothing.
 
 `gnomon launch` on its own offers the same guided setup whenever no model
 answers. The sections below are the long way round, step by step.
@@ -60,14 +61,15 @@ curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/sc
 irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.ps1 | iex
 ```
 
-Then `cd my-project && gnomon launch`. No registry account, no clone, no pnpm,
-no Rust, no sudo. This is the recommended route: it installs the latest
-published GitHub release (v0.4.3 as of 2026-11-07).
+Then `cd my-project && gnomon setup`, optionally `gnomon dashboard`, and
+`gnomon launch`. No registry account, no clone, no pnpm, no Rust, no sudo. This
+is the recommended route: it installs the latest release, v0.5.0, with its
+native binaries.
 
 What it does: checks for Node ≥ 20 (if it is missing or old it prints the exact
 command for your OS — NodeSource, Homebrew, nvm, winget — and stops; it never
 installs Node as root on its own), resolves the latest release
-(`GNOMON_VERSION=0.4.3` pins one), installs the npm package, and puts the native
+(`GNOMON_VERSION=0.5.0` pins one), installs the npm package, and puts the native
 binaries in `~/.local/share/gnomon/bin` (`%LOCALAPPDATA%\gnomon\bin` on Windows),
 where `surface`, `enumerations`, `session`, `apply` and `simulate` find them
 with no environment variable. Every download is checked against the release's
@@ -84,41 +86,38 @@ package fails in dpkg while the distro's `npm` and `libnode-dev` are installed.
 ### By hand — the same packages, no script
 
 ```bash
-V=0.4.3
+V=0.5.0
 B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz \
          $B/gnomon-tui-$V.tgz  $B/gnomon-harness-$V.tgz
 ```
 
 ```powershell
-$V="0.4.3"
+$V="0.5.0"
 $B="https://github.com/eljaplacido/gnomonharness/releases/download/v$V"
 npm i -g "$B/gnomon-core-$V.tgz" "$B/gnomon-natives-$V.tgz" "$B/gnomon-tui-$V.tgz" "$B/gnomon-harness-$V.tgz"
 ```
 
-Two blocks because they have to be: `V=0.4.3` is not an assignment in
+Two blocks because they have to be: `V=0.5.0` is not an assignment in
 PowerShell and `\` is not its line continuation. The four are one package split
 up — `gnomon-harness` is the CLI and the other three its libraries — so npm
 needs all four URLs; from the registry, one name is enough (below). This
 route does not fetch the native binaries; see
 [Prebuilt binaries](#prebuilt-binaries--if-you-would-rather-not-install-rust).
 
-### From npm — currently behind
+### From npm
 
 ```bash
 npm i -g gnomon-harness
 ```
 
-The package is `gnomon-harness` and the command is `gnomon` (the name `gnomon`
-on npm belongs to an unrelated logging utility). **The registry copy is 0.3.2**
-(2026-11-07): releases after it have not been published to npm yet, so this
-installs a version three minor releases behind the installer's. Prefer the
-one-liner above. From the registry the four packages are one name because npm
-resolves the three libraries by name; the installer uses the registry only
-when the release it is installing is there, and the release's own tarballs
-otherwise, which is how it installs 0.4.x today. The registry route also does
-not fetch the native binaries `surface`, `enumerations`, `session`, `apply` and
-`simulate` need.
+Available from v0.5.0. The package is `gnomon-harness` and the command is
+`gnomon` (the name `gnomon` on npm belongs to an unrelated logging utility).
+From the registry the four packages are one name because npm resolves the
+three libraries by name. Versions 0.3.3 to 0.4.5 were never published there;
+the installer installs an older pin from the release's own tarballs. The
+registry route does not fetch the native binaries `surface`, `enumerations`,
+`session`, `apply` and `simulate` need; the one-liner above does.
 
 Everything below is the from-source path — for working ON gnomon, or for
 running the version in your own checkout.
