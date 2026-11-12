@@ -1544,6 +1544,7 @@ describe("model API errors", () => {
     const state: any = { config, exchanges: [], currentRole: "implement" };
     const said: string[] = [];
     const started = Date.now();
+    let answer = "";
     await withFetch(
       (async () => { throw refusedLocally(); }) as unknown as typeof fetch,
       async () => {
@@ -1551,12 +1552,49 @@ describe("model API errors", () => {
           state, "implement", loopbackRoute, [{ role: "user", content: "hi" }], quietDeps(said)
         );
         expect(turn.code).toBe(12);
+        answer = turn.content;
       }
     );
     // Seconds, not a minute: one 1.5s wait, and the next would not fit.
     expect(Date.now() - started).toBeLessThan(promptLoop.LOCAL_REFUSED_GRACE_MS + 1000);
     expect(said.some((l) => l.includes(`of ${promptLoop.LOCAL_REFUSED_GRACE_MS}ms`))).toBe(true);
     expect(said.some((l) => l.includes("Nothing is listening on 127.0.0.1:9"))).toBe(true);
+    // The guidance comes ONCE, as the turn's answer: the early line says what
+    // is wrong, and the commands are not printed on the way as well.
+    expect(said.join("\n")).not.toContain("ollama serve");
+    expect(said.join("\n")).not.toContain("gnomon setup");
+    expect(answer).toContain("Nothing is listening on 127.0.0.1:9");
+    expect(answer).toContain("    ollama serve");
+    expect(answer).toContain("    gnomon setup --pull m\n");
+    expect(answer).toContain("gnomon setup --cloud-endpoint");
+  }, 15_000);
+
+  it("a refused OpenAI-compatible local endpoint is not told to start Ollama", async () => {
+    // llama-server, LM Studio or vLLM on loopback: someone's own server.
+    const config: any = loadConfig("../..");
+    config.config = { ...config.config, resilience: { attempts: 3, backoff_ms: 1500 } };
+    const state: any = { config, exchanges: [], currentRole: "implement" };
+    const route = {
+      model: "qwen3.6-35b", temperature: 0, top_p: 1,
+      target: { model: "qwen3.6-35b", temperature: 0, top_p: 1, url: "http://127.0.0.1:8080/v1/chat/completions", kind: "openai", endpoint: "llama" },
+    } as any;
+    let answer = "";
+    await withFetch(
+      (async () => { throw refusedLocally(); }) as unknown as typeof fetch,
+      async () => {
+        const turn = await promptLoop.runAgenticTurn(
+          state, "implement", route, [{ role: "user", content: "hi" }], quietDeps([])
+        );
+        expect(turn.code).toBe(12);
+        answer = turn.content;
+      }
+    );
+    expect(answer).toContain("Nothing is listening on 127.0.0.1:8080");
+    expect(answer).toContain('Start the server behind "llama" (llama-server, LM Studio, vLLM');
+    expect(answer).toContain("    gnomon endpoint list");
+    expect(answer).toContain("gnomon doctor");
+    expect(answer).toContain("gnomon setup --cloud-endpoint");
+    expect(answer).not.toMatch(/ollama serve|Start Ollama|--pull/);
   }, 15_000);
 
   it("honours a DECLARED transport_grace_ms for a refused local socket", async () => {

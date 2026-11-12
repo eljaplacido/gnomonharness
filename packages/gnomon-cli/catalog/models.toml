@@ -18,11 +18,19 @@
 #                 library lists (qwen3.6:35b read from an installed manifest on
 #                 as_of); mem_gb is an estimate with a 32k-token context.
 #                 `measured = false` prints "not measured by gnomon".
+#
+# gnomon-only figures throughout: what gnomon itself measured, never a
+# comparison with another harness.
+#
+# Cloud, 2026-11-12: on Claude Haiku, gnomon's DEFAULTS did at least as well
+# as the tuned recipe (checkpoint-then-grind, the done check) at about half
+# its cost, so setup recommends the defaults and no recipe. The done check
+# stays opt-in: it made final reports more honest, not outcomes better.
 
-as_of = "2026-11-03"
+as_of = "2026-11-12"
 label = "2026-11"
 stale_after_days = 180
-source = "gnomon benchmark runs R1, R1H and BUD (benchmarks/results/*-2026-11, branch bench/peers-2026-11); sizes from ollama.com/library"
+source = "gnomon's own benchmark runs, 2026-11 (R1, R1H, BUD, M2, the local-first rescue runs and the 2026-11-12 Haiku runs); sizes from ollama.com/library"
 
 [budget]
 # How much of each kind of memory a model may use, for an installed model this
@@ -48,16 +56,19 @@ local_only_min_prefill_tps = 500  # and prompt processing at or above
 cloud_first_below_gen_tps = 10    # generation below: too slow for a task; cloud first
 
 [hybrid]
-# What setup cites when it suggests hybrid; kept consistent with
-# docs/benchmarks/HYBRID.md. R1H's RTX 5090 lead (2026-11, gnomon d59e6c19)
-# did not reproduce: R3R re-ran its lane on v0.4.0 and the hybrid fell behind
-# cloud-only; R4H ran R1H's build and v0.4.1 side by side and found no build
-# effect (20 vs 19, McNemar p = 1.0). Cause open. The GB10 results stand.
-# evidence_unified's cloud-only half (21/32 vs 23/32) is R1, whose summary is
-# not yet committed to bench/peers-2026-11; the local-only half is M2 (committed).
-evidence = "On an RTX 5090, cloud plans + local builds showed no measured advantage over cloud-only: an earlier lead did not reproduce (R3R: 19/31 vs 24/31 cloud-only on v0.4.0; R4H: no build effect). See docs/benchmarks/HYBRID.md."
-evidence_unified = "On an NVIDIA GB10 the same split solved 22/32 vs 16/31 local-only (M2, McNemar p = 0.07), and 21/32 vs 23/32 cloud-only (R1): no difference from cloud-only shown."
-run = "R1H, R3R, R4H, R1 and M2, 2026-11 (benchmarks/results/*-2026-11 on branch bench/peers-2026-11)"
+# What setup cites beside its suggestion when a cloud model is configured.
+# Hybrid here is what setup writes: frontier_plan, a cloud model plans and
+# the local model builds. The conclusion of gnomon's 2026-11 runs: it is a
+# COST mode, opted into, not a default and not a quality gain. It showed no
+# advantage over cloud-only on an RTX 5090 (R1H's early lead did not
+# reproduce in R3R; R4H found no build effect). The GB10 results stand.
+# Not cited, because setup cannot write it yet (it needs escalation,
+# [roles.X.escalate]): local-first with cloud rescue spent about 23% of the
+# cloud-only run's cloud cost, for a hidden-test share 0.07 below cloud-only
+# and 0.25 above local-only.
+evidence = "Hybrid (a cloud model plans, the local model builds) is an opt-in cost mode, not a quality gain: in gnomon's 2026-11 runs it showed no advantage over cloud-only on an RTX 5090. It keeps the build tokens on this machine; choose it when cloud cost matters more than the last few points."
+evidence_unified = "On an NVIDIA GB10 the plan/build split solved 22/32 vs 16/31 local-only (M2, McNemar p = 0.07), and 21/32 vs 23/32 cloud-only (R1): no difference from cloud-only shown."
+run = "gnomon's own 2026-11 runs: R1H, R3R, R4H, R1 and M2"
 
 # Models, best first. A machine is offered every entry it clears; the first
 # one that fits is the recommendation.
@@ -150,9 +161,10 @@ note = "Answers and calls tools, but is a weak coder: a cloud model should do th
 #
 # Read with the later runs (2026-11-07 truth pass). RTX 5090: R1H (build
 # d59e6c19) is the best of three runs of that lane; R3R (v0.4.0) solved 22/29
-# and LG1 (v0.4.2) 18/32, same model, same cap. GB10: R1's summary.txt is not
-# yet committed to bench/peers-2026-11; M2 (committed, v0.4.0) solved 16/31 on
-# the same machine and model. setup prints only `solved`/`of` and the run name.
+# and LG1 (v0.4.2) 18/32, same model, same cap. GB10: M2 (v0.4.0) solved
+# 16/31 on the same machine and model. As of 2026-11-12 these rows stand: no
+# later gnomon-only run of qwen3.6-35b working alone replaces them. setup
+# prints only `solved`/`of` and the run name.
 
 [[measured]]
 tag = "qwen3.6:35b"
@@ -183,4 +195,4 @@ run = "R1, 2026-11 (16 Terminal-Bench tasks x 2, 900 s cap); speeds from the ser
 [[cloud]]
 preset = "opencode-go"
 model = "deepseek-v4.1-flash"
-note = "the cloud model in R1H and R1"
+note = "the cloud model in gnomon's own R1H and R1 runs"

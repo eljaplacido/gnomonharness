@@ -134,7 +134,7 @@ const FAKE_DIGEST = "d".repeat(64);
  * runs the way their --json contracts say, and leaves a `marker` for anything
  * else, which the tests assert never appears.
  */
-function writeFakeCli(dir: string, help = ["setup", "doctor", "key", "endpoint", "trust", "check", "dashboard"]) {
+function writeFakeCli(dir: string, help = ["setup", "doctor", "key", "endpoint", "trust", "check", "dashboard", "launch"]) {
   const entry = join(dir, "fake-gnomon.mjs");
   const log = join(dir, "spawns.jsonl");
   const marker = join(dir, "spawned-something-else");
@@ -331,6 +331,8 @@ describe("each endpoint, against fixture projects", () => {
     const m = await get("/api/meta");
     expect(m.json.schema).toBe(DASHBOARD_SCHEMA);
     expect(m.json.read_only).toBe(false);
+    // The Start step quotes its command for this shell.
+    expect(m.json.platform).toBe(process.platform);
     expect(m.json.projects.map((p: DashboardProject) => p.id)).toEqual(projects.map((p) => p.id));
     expect(m.json.actions).toEqual(DASHBOARD_ACTIONS);
   });
@@ -475,7 +477,7 @@ describe("each endpoint, against fixture projects", () => {
 
   it("setup: doctor.scan spawns `gnomon doctor --json --dir ROOT` in the project when the CLI has it", async () => {
     const s = await get(`/api/setup?project=${projects[0]!.id}`);
-    expect(s.json.commands).toEqual({ doctor: true, setup: true, key: true, endpoint: true, trust: true, check: true });
+    expect(s.json.commands).toEqual({ doctor: true, setup: true, key: true, endpoint: true, trust: true, check: true, launch: true });
     expect(s.json.declared.roles.length).toBeGreaterThan(0);
     expect(s.json.has_surface).toBe(true);
     // What the cloud step offers comes from setup's own presets and catalog.

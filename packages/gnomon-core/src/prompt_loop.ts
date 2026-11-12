@@ -1451,8 +1451,16 @@ export async function callEndpointWithRetry(
         // This changes only WHEN they find out. How LONG they wait is the
         // grace above, which for a refused local socket is short unless the
         // surface declared one -- see the comment on the loopback branch.
+        //
+        // Except the refused LOCAL socket on its short grace: the whole of
+        // what to do is the turn's answer a few seconds later, and printing it
+        // here as well put the same paragraph on a first run's screen twice
+        // (2026-11-12). Its first line says what is wrong now; the guidance
+        // comes once, when the grace is spent.
         if (transportTries === 1 && r.content) {
-          say(paint(ui, "yellow", `  ${r.content.split("\n").join("\n  ")}`));
+          const once = r.refusedLocally && !resilience.transport_grace_declared;
+          const shown = once ? r.content.split("\n")[0]! : r.content;
+          say(paint(ui, "yellow", `  ${shown.split("\n").join("\n  ")}`));
           say(paint(ui, "gray", `  Retrying for up to ${Math.round(graceMs / 1000)}s in case it is starting up.`));
         }
         say(
@@ -2398,18 +2406,39 @@ async function callEndpointOnce(
       } catch {
         /* keep the raw URL */
       }
+      // What to do, as an indented block so the answer renderer keeps each
+      // command on its own line (two-space lines were reflowed into one run
+      // of prose). Named in the order a first run needs them: start the
+      // server that is installed, get the model the project names, or use a
+      // cloud model instead -- each through `gnomon setup`, which asks before
+      // it downloads or writes anything.
+      //
+      // Only an Ollama endpoint is told to start Ollama and pull a tag. An
+      // OpenAI-compatible one on loopback (llama-server, LM Studio, vLLM) is
+      // someone's own server: telling them to start Ollama would be wrong,
+      // and setup's --pull would fetch into a runtime they do not use.
+      const ollamaish = (target.kind ?? "ollama") === "ollama";
+      const which = target.endpoint ? ` ("${target.endpoint}", ${target.url})` : ` (${target.url})`;
+      const todo = ollamaish
+        ? `Start Ollama, download the model this project names, or use a cloud ` +
+          `model instead (setup asks before it downloads or writes anything):\n\n` +
+          `    ollama serve\n` +
+          `    gnomon setup --pull ${target.model || "<tag>"}\n`
+        : `Start the server behind ${target.endpoint ? `"${target.endpoint}"` : "it"} ` +
+          `(llama-server, LM Studio, vLLM or whichever serves ${where}), or use ` +
+          `a cloud model instead (setup asks before it writes anything):\n\n` +
+          `    gnomon endpoint list    # every endpoint and what answers\n`;
       return {
         content:
           `Nothing is listening on ${where} — the connection was refused, ` +
-          `so no server is running there.\n\n` +
-          `This is a local endpoint` +
-          (target.endpoint ? ` ("${target.endpoint}", ${target.url})` : ` (${target.url})`) +
-          `, so gnomon cannot start it for you. Start the model server, then ` +
-          `retry:\n` +
-          `  ollama serve            # if this endpoint is Ollama\n` +
-          `  gnomon endpoint list    # lists every endpoint and what answers\n\n` +
+          `so no model server is running there.\n\n` +
+          `This is a local endpoint${which}, so gnomon cannot start it for you. ` +
+          todo +
+          `    gnomon setup --cloud-endpoint opencode-go --cloud-model <id>\n` +
+          `    gnomon setup        # or choose step by step\n\n` +
           `If the server IS running, it is on a different port than the surface ` +
-          `declares — check [endpoints] in .gnomon/config.toml.`,
+          `declares — check [endpoints] in .gnomon/config.toml; \`gnomon doctor\` ` +
+          `shows every role and what answers.`,
         refusedLocally: true,
         code: classifyFailure({
           errName: err instanceof Error ? err.name : undefined,

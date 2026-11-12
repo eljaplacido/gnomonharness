@@ -10,7 +10,7 @@
  *   4. a short speed check, only on a yes (`--speed-check` off a terminal);
  *   5. optionally a cloud model, its key read hidden and stored outside the
  *      repository, exactly as `gnomon key set` does;
- *   6. suggest a mode: local only, hybrid or cloud first;
+ *   6. suggest a mode: local only or cloud first (hybrid is opted into);
  *   7. show the change to `.gnomon/` as a diff, and write it only when a
  *      person accepts it (or `--yes` does, for a script).
  *
@@ -360,7 +360,8 @@ function isLoopback(url: string): boolean {
 
 /**
  * A cloud model the surface already routes a role to, with its key held:
- * "a cloud endpoint is configured", which is when hybrid is suggested.
+ * "a cloud endpoint is configured", which is when setup names hybrid as the
+ * opt-in cost mode beside its suggestion.
  */
 function configuredCloud(texts: SurfaceTexts, deps: SetupDeps): { choice: CloudChoice; model: string } | undefined {
   const blocks = configTextEndpoints(texts["config.toml"]);
@@ -544,8 +545,9 @@ export async function runSetup(opts: SetupOptions, deps: SetupDeps): Promise<Set
     if (ollama?.state !== "serving") {
       report.pull.status = "no_runtime";
       say(`  Ollama is not running on this machine, so ${chosen.tag} cannot be pulled now.`);
-      say("    Install it from https://ollama.com/download (or open the Ollama app), then:");
-      say(`    ${command}`);
+      say("    Start it (or open the Ollama app; get it from https://ollama.com/download), then pull:");
+      say("    ollama serve");
+      say(`    gnomon setup --pull ${chosen.tag}`);
       if (chosen.entry?.llamacpp) say(`  With llama.cpp instead (it manages its own files): ${chosen.entry.llamacpp}`);
       say("  LM Studio and vLLM also manage their own models: load it there. Then run `gnomon setup` again.");
       step("pull", "no_runtime");
@@ -744,13 +746,19 @@ export async function runSetup(opts: SetupOptions, deps: SetupDeps): Promise<Set
   if (!chosen && !cloud) {
     step("mode", "no_model");
     const cloudHint = `--cloud-endpoint opencode-go --cloud-model ${catalog.cloud.find((c) => c.preset === "opencode-go")?.model ?? "NAME"}`;
+    // Said once: when the download step already printed how to start Ollama
+    // and pull (no_runtime), only the cloud alternative is new here.
+    const ollamaUp = probe.runtimes.some((r) => r.id === "ollama" && r.state === "serving");
+    const local =
+      rec.top && !rec.top.installed && report.pull?.status !== "no_runtime"
+        ? `  Local: gnomon setup --pull ${rec.top.tag}   (${rec.top.status}` +
+          (ollamaUp ? ")\n" : "; start Ollama first: ollama serve)\n")
+        : "";
     return done(
       SETUP_EXIT.needsConsent,
       "No model to set up: no local model is installed" + (report.pull ? " and none was downloaded" : "") + ", and no cloud model was given.\n" +
-        (rec.top && !rec.top.installed
-          ? `  This machine can run ${rec.top.tag} (${rec.top.status}): gnomon setup --pull ${rec.top.tag}   (Ollama must be running)\n`
-          : "") +
-        `  Or connect a cloud model: gnomon setup ${cloudHint}\n` +
+        local +
+        `  ${local ? "Cloud" : "Or a cloud model"}: gnomon setup ${cloudHint}\n` +
         "Nothing was written."
     );
   }
