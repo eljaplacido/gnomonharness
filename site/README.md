@@ -39,8 +39,8 @@ The page follows the repository's benchmark policy for v0.5.0:
   2026-11-08, each with its date (the 2026-09-02 tie, 50.0% vs 47.1%; context
   on the wire, 4.66×, 2026-09-05);
 - no links to `bench/*` branches of the public repository;
-- the test count is the `<!-- TESTCOUNT -->` marker in the hero status line and
-  in `llms.txt`, filled in from the release-candidate run.
+- the test count in the hero status line and in `llms.txt` is the total of
+  the release-candidate run, the same total as README's status line.
 
 ## Accessibility
 
