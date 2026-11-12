@@ -40,7 +40,7 @@ export const CHECK_USAGE =
   "                    [--transcript <file> --format <format>] [--session <id>] [--require-guard]\n" +
   "                    [--json] [--dir <path>]\n" +
   `                    <format>: ${TRANSCRIPT_FORMATS.join(" | ")}\n` +
-  "       gnomon check --scorecard [--session <id>] [--transcript <claude-code.jsonl>] [--json] [--dir <path>]\n" +
+  "       gnomon check --scorecard [--session <id>] [--transcript <claude-code.jsonl>] [--require-guard] [--json] [--dir <path>]\n" +
   "       gnomon check --install-hook claude-code\n" +
   "       gnomon check --hook session-start|stop   (reads Claude Code hook JSON on stdin)";
 
@@ -76,6 +76,7 @@ export async function cmdCheck(
       session: flagOf(args, "session"),
       transcript: flagOf(args, "transcript") ? resolve(flagOf(args, "transcript")!) : undefined,
       expect: (flagOf(args, "expect") ?? "").split(",").map((x) => x.trim()).filter(Boolean),
+      requireGuard: args.flags["require-guard"] === "true",
     });
     out(args.json ? JSON.stringify(card, null, 2) : scorecardMarkdown(card));
     return card.exit;

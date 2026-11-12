@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cmdGuard, gnomonTail, resolveGnomonBin, shellCommand, CLAUDE_CODE_MATCHER, type GuardStatus } from "./guard.js";
+import { cmdGuard, gnomonTail, machineSpecific, resolveGnomonBin, shellCommand, CLAUDE_CODE_MATCHER, type GuardStatus } from "./guard.js";
 import { cmdCheck } from "./check.js";
 import type { Scorecard } from "./scorecard.js";
 
@@ -56,6 +56,7 @@ function cc(session: string, tool_name: string, tool_input: Record<string, unkno
   return r.stdout.trim() ? JSON.parse(r.stdout).hookSpecificOutput.permissionDecision : "allow";
 }
 
+const statusCode = (dir: string): Promise<number> => cmdGuard(["status", "--dir", dir, "--json"], () => {});
 const status = async (dir: string): Promise<GuardStatus> => {
   const lines: string[] = [];
   await cmdGuard(["status", "--dir", dir, "--json"], (s) => lines.push(s));
@@ -136,9 +137,25 @@ describe("gnomon guard install writes an absolute gnomon path, or refuses", () =
     );
     git("add", "-A");
     git("commit", "-qm", "old hooks");
+    // An older gnomon's hook is `outdated`, a warning: an upgrade alone must not read as tampering.
     let st = await status(r);
-    expect(st.hosts.find((h) => h.host === "claude-code")).toMatchObject({ state: "modified" });
+    expect(st.hosts.find((h) => h.host === "claude-code")).toMatchObject({ state: "outdated", detail: expect.stringMatching(/older gnomon's PreToolUse matcher/) });
+    expect(st.findings).toEqual([]);
+    expect(st.warnings.join("\n")).toMatch(/claude-code: outdated/);
+    expect(await statusCode(r)).toBe(0);
+    const card = JSON.parse((await check({ scorecard: "true" })).out) as Scorecard;
+    expect(card.findings).toEqual([]);
+    expect(card.warnings.join("\n")).toMatch(/claude-code: outdated/);
+    // The same matcher with the guard's matcher widened by hand is not gnomon's: modified.
+    const settings = readFileSync(join(r, ".claude/settings.json"), "utf-8");
+    writeFileSync(join(r, ".claude/settings.json"), settings.replace("Read|WebFetch|Grep|Glob", "Read|Grep"));
+    expect((await status(r)).hosts.find((h) => h.host === "claude-code")).toMatchObject({ state: "modified" });
+    writeFileSync(join(r, ".claude/settings.json"), settings);
     expect(await cmdGuard(["install", "claude-code", "--write", "--dir", r])).toBe(0);
+    // Updated by install and not committed yet: still outdated (HEAD holds the older hook), not modified.
+    st = await status(r);
+    expect(st.hosts.find((h) => h.host === "claude-code")).toMatchObject({ state: "outdated", detail: expect.stringMatching(/commit the file/) });
+    expect(await statusCode(r)).toBe(0);
     const s = JSON.parse(readFileSync(join(r, ".claude/settings.json"), "utf-8"));
     expect(s.hooks.PreToolUse).toHaveLength(1);
     expect(s.hooks.SessionStart).toHaveLength(1);
@@ -169,6 +186,39 @@ describe("gnomon guard install writes an absolute gnomon path, or refuses", () =
     expect(gnomonTail("echo hi")).toBeNull();
     expect(shellCommand(["/a b/gnomon"], "guard")).toBe(process.platform === "win32" ? `"/a b/gnomon" guard` : `'/a b/gnomon' guard`);
   });
+
+  it("says when the path is this machine's: under $HOME, or under a versioned (nvm) directory", () => {
+    const home = process.platform === "win32" ? "C:\\Users\\u" : "/home/u";
+    const j = (...p: string[]) => (process.platform === "win32" ? p.join("\\") : p.join("/"));
+    expect(machineSpecific([j(home, ".nvm/versions/node/v22.22.2/bin/node"), j(home, "src/gnomon/gnomon.js")], home)).toMatch(
+      /versioned directory \(v22\.22\.2\)[\s\S]*under your home directory/
+    );
+    expect(machineSpecific([j(home, "bin/gnomon")], home)).toMatch(/under your home directory/);
+    if (process.platform !== "win32") {
+      expect(machineSpecific(["/usr/local/bin/gnomon"], home)).toBeNull();
+      expect(machineSpecific(["/home/user2/bin/gnomon"], home)).toBeNull();
+    }
+    expect(machineSpecific(["gnomon"], home)).toBeNull();
+  });
+
+  it("--local keeps the hook out of git: Claude Code's settings.local.json, or .git/info/exclude; status follows it", async () => {
+    const r = governedRepo();
+    expect(await cmdGuard(["install", "claude-code", "--write", "--local", "--dir", r])).toBe(0);
+    expect(existsSync(join(r, ".claude/settings.json"))).toBe(false);
+    const local = JSON.parse(readFileSync(join(r, ".claude/settings.local.json"), "utf-8"));
+    expect(local.hooks.PreToolUse[0].matcher).toBe(CLAUDE_CODE_MATCHER);
+    expect(await cmdGuard(["install", "opencode", "--write", "--local", "--dir", r])).toBe(0);
+    // Neither shows up as something to commit.
+    expect(git("status", "--porcelain", "--untracked-files=all")).toBe("");
+    expect(readFileSync(join(r, ".git/info/exclude"), "utf-8")).toMatch(/^\/\.opencode\/plugins\/gnomon-guard\.js$/m);
+    let st = await status(r);
+    expect(st.hosts.find((h) => h.host === "claude-code")).toMatchObject({ state: "ok", file: expect.stringMatching(/settings\.local\.json$/) });
+    expect(st.hosts.find((h) => h.host === "opencode")!.state).toBe("ok");
+    // A local hook is still watched: removing it is a finding.
+    rmSync(join(r, ".claude/settings.local.json"));
+    st = await status(r);
+    expect(st.hosts.find((h) => h.host === "claude-code")).toMatchObject({ state: "missing", file: expect.stringMatching(/settings\.local\.json$/) });
+  }, 60_000);
 });
 
 // ---------------------------------------------------------------------------
@@ -317,6 +367,33 @@ describe("gnomon check --scorecard", () => {
       else process.env.CLAUDE_CONFIG_DIR = prev;
       rmSync(cfg, { recursive: true, force: true });
     }
+  }, 60_000);
+
+  it("--require-guard: a card with no evidence the guard ran fails (a fresh clone with the hooks committed passes without it)", async () => {
+    const r = governedRepo();
+    // No hook at all.
+    let res = await check({ scorecard: "true", "require-guard": "true" });
+    expect(res.code).toBe(2);
+    expect((JSON.parse(res.out) as Scorecard).findings.join("\n")).toMatch(/no guard hook is installed or committed/);
+    // Hooks committed, nothing decided: what a CI checkout sees.
+    expect(await cmdGuard(["install", "claude-code", "--write", "--dir", r])).toBe(0);
+    git("add", "-A");
+    git("commit", "-qm", "hooks");
+    res = await check({ scorecard: "true" });
+    let card = JSON.parse(res.out) as Scorecard;
+    expect([res.code, card.findings]).toEqual([0, []]);
+    expect(card.warnings.join("\n")).toMatch(/has not decided a single call[\s\S]*fresh clone or CI checkout/);
+    res = await check({ scorecard: "true", "require-guard": "true" });
+    card = JSON.parse(res.out) as Scorecard;
+    expect(res.code).toBe(2);
+    expect(card.findings.join("\n")).toMatch(/has not decided a single call/);
+    // A named session the guard never saw fails too; once it decides, the card passes.
+    res = await check({ scorecard: "true", "require-guard": "true", session: "s-1" });
+    expect(res.code).toBe(2);
+    expect(cc("s-1", "Read", { file_path: join(r, "src/a.ts") })).toBe("allow");
+    res = await check({ scorecard: "true", "require-guard": "true", session: "s-1" });
+    expect([res.code, (JSON.parse(res.out) as Scorecard).findings]).toEqual([0, []]);
+    expect((await check({ scorecard: "true", "require-guard": "true" })).code).toBe(0);
   }, 60_000);
 
   it("is exit 10 where no .gnomon/ governs", async () => {

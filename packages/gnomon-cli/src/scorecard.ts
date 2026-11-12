@@ -215,6 +215,16 @@ export interface ScorecardOptions {
   /** A Claude Code transcript of the run (JSONL). */
   transcript?: string;
   expect?: string[];
+  /**
+   * `--require-guard`: no evidence that the guard ran is a finding, not a
+   * warning — no hook installed, a hook that has decided nothing (with no
+   * transcript to show there was nothing to decide), a named session the
+   * guard never saw, or a session whose transcript cannot be found. The card
+   * reads the guard's records where the agent ran (this machine's gnomon
+   * state and the audit directory); a fresh clone or CI checkout has neither,
+   * so there it can only fail, never pass, under this flag.
+   */
+  requireGuard?: boolean;
 }
 
 export function buildScorecard(opts: ScorecardOptions): Scorecard {
@@ -256,6 +266,7 @@ export function buildScorecard(opts: ScorecardOptions): Scorecard {
   }
   const project = st.project;
   card.findings.push(...st.findings);
+  card.warnings.push(...st.warnings);
 
   let auditDir = join(project, ".gnomon-audit");
   try {
@@ -315,8 +326,18 @@ export function buildScorecard(opts: ScorecardOptions): Scorecard {
   }
 
   const expected = st.hosts.some((h) => h.state !== "not_installed");
-  if (expected && card.liveness.sessions_seen === 0) {
-    card.warnings.push("a guard hook is installed, and the guard has not decided a single call in this repository");
+  const strict = opts.requireGuard === true;
+  /** A finding under --require-guard, a warning otherwise. */
+  const liveness = (s: string) => (strict ? card.findings : card.warnings).push(s);
+  const seen = session ? card.liveness.sessions.length : card.liveness.sessions_seen;
+  if (strict && !expected) card.findings.push("--require-guard: no guard hook is installed or committed for any host");
+  if (expected && seen === 0 && !card.coverage.transcript) {
+    liveness(
+      session
+        ? `the guard has no record of session ${session}: it decided nothing for it (give --transcript to tell no selected call from a hook that did not run)`
+        : "a guard hook is installed, and the guard has not decided a single call in this repository. Its records live in this " +
+            "machine's gnomon state and the audit directory: a fresh clone or CI checkout has neither, so run the card where the agent ran, or give --transcript"
+    );
   }
   if (card.liveness.unguarded_sessions.length) {
     const g = livenessGaps(project, card.liveness.unguarded_sessions);
@@ -325,7 +346,7 @@ export function buildScorecard(opts: ScorecardOptions): Scorecard {
       card.findings.push(`session ${x.session}: its transcript has ${x.selected} call(s) the guard hook selects, and the guard decided none — the hook did not run`);
     }
     if (g.unknown.length) {
-      card.warnings.push(
+      liveness(
         `${g.unknown.length} Claude Code session(s) started with no guard decision and no transcript found to tell whether they made tool calls (${g.unknown.slice(-5).join(", ")})`
       );
     }

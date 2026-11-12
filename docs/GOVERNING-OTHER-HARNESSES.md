@@ -35,11 +35,11 @@ gnomon init                                 # scaffolds .gnomon/, with [governan
 #   cursor      = "implement"
 git add .gnomon && git commit -m "gnomon surface"   # the guard reads COMMITTED rules only
 
-gnomon guard install claude-code --write    # .claude/settings.json: SessionStart, PreToolUse, Stop
-gnomon guard install opencode --write       # .opencode/plugins/gnomon-guard.js
-gnomon guard install cursor --write         # .cursor/hooks.json
-git add .claude .opencode .cursor && git commit -m "gnomon guard hooks"
-gnomon guard status                         # every installed hook in place?
+# each machine that runs an agent (yours, a teammate's, a CI runner):
+gnomon guard install claude-code --write --local   # .claude/settings.local.json: SessionStart, PreToolUse, Stop
+gnomon guard install opencode --write --local      # .opencode/plugins/gnomon-guard.js, kept out of git
+gnomon guard install cursor --write --local        # .cursor/hooks.json, kept out of git
+gnomon guard status                                # every installed hook in place?
 ```
 
 `install` writes the **absolute path** of a gnomon that answers `gnomon guard`
@@ -50,9 +50,35 @@ which in our own test was an older gnomon without `guard`; the hook could not
 run and the host carried on without it. Re-running `install` after an upgrade
 updates the existing entries in place.
 
-Committing the hook files matters: `guard status` then reports a removed or
-edited hook as a finding, and the `host_hooks` rule denies an agent's attempt
-to change them.
+**That path belongs to the machine that ran `install`.** From a checkout it is
+something like `~/.nvm/versions/node/v22.22.2/bin/node ~/src/gnomon/…/gnomon.js`:
+a teammate's or a CI clone does not have it, and the next Node upgrade removes
+it. A hook that cannot start is a non-blocking error to Claude Code, so a
+committed hook file with such a path lets every call through unguarded on every
+other machine, and `guard status` only notices on that machine. So:
+
+- `--local` keeps the hook out of git. Claude Code reads
+  `.claude/settings.local.json`, which stays uncommitted; for opencode and
+  Cursor the file is listed in `.git/info/exclude`. Each machine runs `install`
+  once. `guard status` and the `host_hooks` rule cover the local files too:
+  `install` records what it wrote, so a removed or edited local hook is still a
+  finding on that machine.
+- Committing the hook files instead (`git add .claude .opencode .cursor`) works
+  only when every machine has gnomon at the same path: install with
+  `--bin /usr/local/bin/gnomon` (or another shared path). Without `--local`,
+  `install` warns when the path is under your home directory or a versioned
+  (nvm-style) directory. The committed paths also show the installer's home
+  directory and user name to anyone who can read the repository. A committed
+  hook gives `guard status` a reference on every clone: a removed or edited
+  hook is a finding wherever it is checked out.
+- The opencode plugin also reads `$GNOMON_GUARD_BIN`, so a machine whose gnomon
+  is elsewhere can point a committed plugin at it.
+
+After an upgrade, a hook an earlier gnomon wrote and nobody changed is
+`outdated` in `guard status`, a warning with exit 0. It says to re-run
+`install --write`, and after that to commit the file if it is committed.
+`modified` (a finding, exit 2) is kept for a hook that differs from what any
+gnomon wrote.
 
 For a harness gnomon has no adapter for, call the generic form from its hook:
 
@@ -124,7 +150,7 @@ it. Under a declared `[governance]` the guard writes its trail whether or not
 
 | Host tool | Decided as | Result |
 |---|---|---|
-| WebSearch (Claude Code), websearch/codesearch (opencode) | `websearch`, family `network` | as webfetch without the URL rules: denied under `[sandbox] network = false`; asked for a role without webfetch (the `gnomon init` roles hold none) and when the gate asks for webfetch |
+| WebSearch (Claude Code), websearch/codesearch (opencode) | `websearch`, family `network` | as webfetch without the URL rules: denied (rule `network`) under `[sandbox] network = false` whatever the role holds, which is the `gnomon init` surface; where the network is allowed, asked for a role without webfetch and when the gate asks for webfetch |
 | Agent / Task (Claude Code), task (opencode) | `agent` | allowed and recorded; every call the subagent makes reaches the same hook |
 | TodoWrite and similar bookkeeping | itself | allowed and recorded |
 | MCP tools (`mcp__<server>__<tool>`) and anything unknown | itself, rule `ungoverned` | no `[governance]`: allowed, as before. Under one: recorded, allowed at observe/advise, **asked at prevent/enforce** (the strictest level the surface sets for write, bash, network, secrets or ci). gnomon cannot see what an MCP tool does, so it never says yes on its own |
@@ -173,6 +199,15 @@ without reading gnomon's code (§41; JSON Schema:
   Exit 0 with no finding, 2 with one. Without `--json` it prints markdown, for
   a PR comment.
 
+The scorecard reads the guard's records where the agent ran: liveness is in
+this machine's gnomon state and the trails in `.gnomon-audit/`, which is not
+committed. A fresh clone or CI checkout has neither, so there a card with no
+decisions passes, with only a warning. Run it on the machine (or in the job)
+where the agent ran, give it the host's transcript (`--transcript`), or add
+`--require-guard`. That flag makes missing evidence a finding: no hook
+installed, a hook that decided nothing, a named session the guard never saw,
+or sessions whose transcript cannot be found.
+
 The values a record can carry are published by `gnomon enumerations`:
 `audit_kind`, `guard_decision`, `guard_rule`, `guard_tool`, `governance_level`,
 `governance_family`.
@@ -180,8 +215,10 @@ The values a record can carry are published by `gnomon enumerations`:
 Typical consumers:
 
 ```bash
-# CI: fail the job when the agent's run was not fully governed
-gnomon check --scorecard --json > scorecard.json || exit 1
+# CI, in the job where the agent ran (same machine, same checkout): fail when the
+# run was not fully governed. --require-guard turns "no evidence the guard ran"
+# into a failure; without it a checkout with no guard records passes.
+gnomon check --scorecard --require-guard --json > scorecard.json || exit 1
 
 # a person or a PR comment
 gnomon check --scorecard --session "$SESSION" --transcript "$TRANSCRIPT" > scorecard.md

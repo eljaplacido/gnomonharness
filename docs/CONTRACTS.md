@@ -740,7 +740,7 @@ selects them since v0.5.0, the opencode plugin sends every tool). The document's
 
 | Host tool | Decided as (`tool`) | Decision |
 |---|---|---|
-| Claude Code `WebSearch`, opencode `websearch`/`codesearch` | `websearch` | as `webfetch` without the URL rules: `ask` with rule `tools` when the role holds no `webfetch` (as `execute` without `bash`), `deny` with `network` under `[sandbox] network = false`, `approval` when the gate asks for webfetch; family `network` |
+| Claude Code `WebSearch`, opencode `websearch`/`codesearch` | `websearch` | as `webfetch` without the URL rules: `deny` with `network` under `[sandbox] network = false`, checked first and whatever the role holds; otherwise `ask` with rule `tools` when the role holds no `webfetch` (as `execute` without `bash`) and `approval` when the gate asks for webfetch; family `network` |
 | Claude Code `Agent`/`Task`, opencode `task` | `agent` | `allow`, rule `ungoverned`, never levelled: a subagent does nothing itself, and each call it makes reaches the same hook |
 | opencode `list` | `glob` | a glob of `*` in the listed directory: a read of where it lists |
 | opencode `multiedit` | `edit` | an edit of its file |
@@ -845,15 +845,29 @@ host starts; in the 2026-11-12 governance test that was an older gnomon with no
 fails to start is a non-blocking error to it). Re-running install over an older
 install updates its entries in place (program and matcher), never adding a
 second copy; a command counts as gnomon's when its program part names gnomon.
+The path is the installing machine's. `--local` keeps the hook out of git:
+Claude Code's goes into `.claude/settings.local.json`; the opencode plugin and
+Cursor's `hooks.json` are written where they always are and listed in
+`.git/info/exclude` (a tracked file is warned of, not untracked). Without
+`--local`, `install` warns on stderr when a program path is under the home
+directory or a versioned directory (`/v22.22.2/`), which another clone will not
+have. The exit is the same either way.
 
 **`gnomon guard status`** (`--dir`, `--expect <hosts>`, `--json`, schema
 `gnomon.guard.status/1`) says, per host (`claude-code`, `opencode`,
 `cursor`), whether the hook `gnomon guard install` wrote is still there:
-`ok`, `missing`, `modified` (the guard hook is gone from the file, its matcher
-no longer covers the selected tools, the absolute program it runs does not
-exist, or the file differs from HEAD or from what `install --write`
+`ok`, `outdated` (the hook an earlier release wrote, unchanged: a Claude Code
+PreToolUse matcher from `OLDER_CLAUDE_CODE_MATCHERS`, or an opencode plugin
+whose sha256 is a known earlier one; or a hook `install --write` updated whose
+update is not committed while HEAD holds gnomon's older one), `missing`,
+`modified` (the guard hook is gone from the file, its matcher no longer covers
+the selected tools and is not an earlier gnomon's, the absolute program it runs
+does not exist, or the file differs from HEAD or from what `install --write`
 recorded), `disabled` (`disableAllHooks` in the project, local or user Claude
-Code settings) or `not_installed`. A host is expected when a hook file with
+Code settings) or `not_installed`. Claude Code's file is
+`.claude/settings.local.json` when `install --local` recorded it, or when only
+it holds gnomon's hook, else `.claude/settings.json`. `outdated` is listed in
+`warnings`, not `findings`, and does not change the exit. A host is expected when a hook file with
 gnomon's guard in it is committed at HEAD, `install --write` recorded it, or
 `--expect` names it. It also says which host sessions reached the guard
 (§41): `sessions_seen`, `last_decision`, `sessions` and
@@ -3640,10 +3654,16 @@ Read back by:
   printed to the operator (exit 1, which Claude Code shows and does not block
   on).
 
-**`gnomon check --scorecard [--session <id>] [--transcript <file>] [--json]
-[--dir <path>]`** — schema `gnomon.scorecard/1`. One document summarising a
-foreign run, read-only. Markdown without `--json`, for a person or a PR
-comment.
+**`gnomon check --scorecard [--session <id>] [--transcript <file>]
+[--require-guard] [--json] [--dir <path>]`** — schema `gnomon.scorecard/1`.
+One document summarising a foreign run, read-only. Markdown without `--json`,
+for a person or a PR comment. It reads the records where the agent ran
+(liveness in this machine's gnomon state, trails in the audit directory); a
+fresh clone or CI checkout has neither, and with no `--transcript` or
+`--require-guard` its card passes with a warning. `--require-guard` makes the
+absence of evidence a finding: no hook installed or committed, a hook that has
+decided nothing (or nothing for `--session`) with no transcript given, and
+sessions with no decision whose transcript cannot be found.
 
 | Key | Meaning |
 |---|---|
@@ -3653,7 +3673,7 @@ comment.
 | `audit` | `dir`, `trails` (each guard trail and the ten latest check trails: `records`, `ok` = the hash chain holds, `sealed`, `problem`?), `chain_ok` |
 | `checks` | `recent`: the ten latest recorded `gnomon check` verdicts (`ts`, `base`, `head`, `role`, `exit`, `failed` check ids) |
 | `findings` | what fails the card: a hook missing, modified or switched off; a hash chain that does not hold; a session whose transcript shows selected calls the guard never decided; the latest recorded check failed |
-| `warnings` | what a reader should know and does not fail it: calls to tools no rule governs, unsealed trails, sessions with no decision and no transcript to tell, a hook that has decided nothing, a guard with no trail (`[audit]` off) |
+| `warnings` | what a reader should know and does not fail it: an `outdated` hook, calls to tools no rule governs, unsealed trails, sessions with no decision and no transcript to tell, a hook that has decided nothing (these two are findings under `--require-guard`), a guard with no trail (`[audit]` off) |
 | `exit` | 0 no finding, 2 a finding, 10 not governed |
 
 Also `schema`, `governed`, `project`, `session`, `generated`.

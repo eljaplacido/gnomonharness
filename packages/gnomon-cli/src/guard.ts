@@ -17,7 +17,7 @@ import { accessSync, constants as fsConstants, existsSync, mkdirSync, readdirSyn
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
-import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   GUARD_HARNESSES,
   GUARD_TOOLS,
@@ -38,7 +38,7 @@ import {
 
 export const GUARD_USAGE = `Usage: gnomon guard --tool <${GUARD_TOOLS.join("|")}> --input <json> [options]
        gnomon guard [--from generic|claude-code|opencode|cursor] [options] < call.json
-       gnomon guard install claude-code|opencode|cursor [--write] [--dir <path>] [--bin <path>]
+       gnomon guard install claude-code|opencode|cursor [--write [--local]] [--dir <path>] [--bin <path>]
        gnomon guard status [--dir <path>] [--expect claude-code,opencode,cursor] [--json]
 
 Options:
@@ -54,9 +54,13 @@ Exit (generic and opencode): 0 allow, 2 deny, 3 ask, 10 no decision (answered as
 claude-code and cursor answer in their own hook format and exit 0.
 install writes the absolute path of a gnomon that answers \`gnomon guard\` (--bin, else
 $GNOMON_GUARD_BIN, else the gnomon running the install, else the one on PATH), and refuses
-(exit 10) when none does.
-status: 0 every installed hook is in place, 2 a hook is missing, changed or switched off,
-10 not governed. It also lists the host sessions the guard has decided for.`;
+(exit 10) when none does. That path is this machine's: --local keeps the hook out of git
+(Claude Code: .claude/settings.local.json; opencode, cursor: .git/info/exclude), so each
+machine installs its own. Without --local it warns when the path is under your home
+directory or a versioned (nvm) directory, which another clone will not have.
+status: 0 every installed hook is in place (an older gnomon's hook is \`outdated\`, a
+warning), 2 a hook is missing, changed or switched off, 10 not governed. It also lists the
+host sessions the guard has decided for.`;
 
 export interface GuardArgs {
   sub?: string;
@@ -197,6 +201,15 @@ export const CLAUDE_CODE_MATCHED_TOOLS = [
   "Agent",
   "Task",
   "mcp__server__tool",
+];
+/**
+ * PreToolUse matchers earlier gnomon releases wrote (v0.3.3–v0.4.x). A hook
+ * with one of them is an older install, not an edit: `guard status` reports
+ * it `outdated` (a warning) rather than `modified`.
+ */
+export const OLDER_CLAUDE_CODE_MATCHERS: readonly string[] = [
+  "Bash|Write|Edit|MultiEdit|NotebookEdit|Read|WebFetch|Grep|Glob",
+  "Bash|Write|Edit|MultiEdit|NotebookEdit|Read|WebFetch",
 ];
 const CC_GUARD_TAIL = "guard --from claude-code --agent claude-code";
 const CC_START_TAIL = "check --hook session-start";
@@ -366,7 +379,69 @@ export function resolveGnomonBin(given?: string, env: NodeJS.ProcessEnv = proces
   };
 }
 
+/**
+ * Why a hook program is particular to this machine, or null: a path under the
+ * installer's home directory (another clone has another home, and the path
+ * names the user) or under a versioned directory such as nvm's
+ * `.../node/v22.22.2/bin/node` (the next Node upgrade removes it). A hook that
+ * names such a path and is committed starts nowhere else, and Claude Code runs
+ * a hook that cannot start as a non-blocking error: every call unguarded.
+ */
+export function machineSpecific(bin: string[], home: string = homedir()): string | null {
+  const why: string[] = [];
+  const win = process.platform === "win32";
+  const norm = (p: string) => (win ? p.toLowerCase() : p);
+  for (const p of bin) {
+    if (!isAbsolute(p)) continue;
+    const ver = /[\\/](v?\d+\.\d+\.\d+)[\\/]/.exec(p);
+    if (ver) why.push(`${p} is under a versioned directory (${ver[1]}), which an upgrade removes`);
+    else if (home && norm(p).startsWith(norm(home.endsWith(sep) ? home : home + sep))) why.push(`${p} is under your home directory`);
+  }
+  return why.length ? why.join("; ") : null;
+}
+
+/** git in `cwd`: stdout, or null when it fails (not a repository, no git). */
+function gitOut(cwd: string, args: string[]): string | null {
+  const r = spawnSync("git", args, { cwd, encoding: "utf-8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] });
+  return r.status === 0 ? r.stdout.trim() : null;
+}
+
+/**
+ * Keep a hook file out of git for `install --local`: Claude Code's
+ * settings.local.json, or a plugin / hooks file listed in .git/info/exclude
+ * (never in a committed .gitignore). Returns what to tell the operator.
+ */
+function keepLocal(project: string, file: string): string {
+  const top = gitOut(project, ["rev-parse", "--show-toplevel"]);
+  if (top === null) return `${file} is not in a git repository; nothing to keep out of git`;
+  const rel = relative(top, file).split(sep).join("/");
+  if (gitOut(top, ["ls-files", "--error-unmatch", "--", rel]) !== null) {
+    return `warning: ${rel} is tracked by git, so --local cannot keep it out of commits; \`git rm --cached ${rel}\` untracks it`;
+  }
+  if (spawnSync("git", ["check-ignore", "-q", "--", rel], { cwd: top, stdio: "ignore", timeout: 10_000 }).status === 0) return `${rel} is ignored by git`;
+  const exclude = gitOut(top, ["rev-parse", "--git-path", "info/exclude"]);
+  if (exclude === null) return `warning: could not find .git/info/exclude; keep ${rel} out of commits yourself`;
+  const at = resolve(top, exclude);
+  try {
+    mkdirSync(dirname(at), { recursive: true });
+    const cur = existsSync(at) ? readFileSync(at, "utf-8") : "";
+    writeFileSync(at, `${cur}${cur && !cur.endsWith("\n") ? "\n" : ""}/${rel}\n`);
+    return `${rel} added to ${relative(top, at) || at}: git leaves it uncommitted`;
+  } catch (err) {
+    return `warning: could not write ${at} (${err instanceof Error ? err.message : String(err)}); keep ${rel} out of commits yourself`;
+  }
+}
+
 export const OPENCODE_PLUGIN_MARKER = "gnomon-guard: generated by `gnomon guard install opencode`";
+
+/**
+ * sha256 of the opencode plugins earlier releases wrote (LF line ends): v0.3.3,
+ * and v0.4.0–v0.4.5. Such a plugin is an older install (`outdated`), not an edit.
+ */
+const OLDER_OPENCODE_PLUGINS: readonly string[] = [
+  "c534f73fb92945e058bb42885611bab238ff58955ec4bce7b8101033ed8a6702",
+  "3eb618d7057a08b7dc5ecdea0f1918f37b213009aaa3392823d70e09b8abd2e6",
+];
 
 /**
  * The opencode V2 (2.2.x) plugin. A file in `.opencode/plugins/` is loaded for
@@ -553,10 +628,16 @@ function mergeHooks(project: string, file: string, fragment: { hooks: Record<str
  * (`.claude/settings.json`, `.opencode/plugins/`, `.cursor/hooks.json`) —
  * never into a user-wide config: a hook runs commands on the operator's
  * machine in every project, and that is theirs to place.
+ *
+ * The hook names this machine's gnomon by absolute path. `--local` keeps it
+ * out of git (Claude Code: `.claude/settings.local.json`; opencode and Cursor:
+ * the file is listed in `.git/info/exclude`), so each machine installs its
+ * own; without it, a path under $HOME or a versioned directory is warned of.
  */
 function installGuard(args: GuardArgs, out: (s: string) => void): number {
   const target = args.positional[0];
   const write = args.flags.write === "true";
+  const local = args.flags.local === "true";
   const project = resolve(args.flags.dir ?? process.cwd());
   if (target !== "claude-code" && target !== "opencode" && target !== "cursor") {
     console.error(`gnomon guard install: claude-code, opencode or cursor (got "${target ?? ""}")\n\n${GUARD_USAGE}`);
@@ -568,14 +649,36 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
     return 10;
   }
   const bin = resolved.argv;
+  /** After a write: keep it local (--local), or say when the path will not travel. */
+  const travel = (file: string) => {
+    if (local) {
+      console.error(`gnomon guard: ${keepLocal(project, file)}`);
+      return;
+    }
+    const why = machineSpecific(bin);
+    if (!why) return;
+    console.error(
+      [
+        `gnomon guard: warning: the hook runs ${bin.join(" ")}, a path only this machine has (${why}).`,
+        "  Committed, it starts nowhere else: on a teammate's or a CI clone the host cannot start the",
+        "  hook, and Claude Code then runs every call unguarded. Re-run with --local to keep it out of",
+        "  git (each machine installs its own), or --bin <a path every machine has>.",
+      ].join("\n")
+    );
+  };
   switch (target) {
     case "claude-code": {
       const fragment = claudeCodeHooks(bin);
       if (write) {
-        const file = join(project, ".claude", "settings.json");
+        const shared = join(project, ".claude", "settings.json");
+        const file = local ? join(project, ".claude", "settings.local.json") : shared;
         const added = mergeHooks(project, file, fragment);
         recordInstall(project, "claude-code", file, bin);
         console.error(added.length ? `gnomon guard: added ${added.join(", ")} to ${file}` : `gnomon guard: ${file} already has these hooks`);
+        if (local && existsSync(shared) && COMMITTED_GUARD.test(readFileSync(shared, "utf-8"))) {
+          console.error(`gnomon guard: warning: ${shared} also runs gnomon's guard; Claude Code runs both. Remove the hooks there.`);
+        }
+        travel(file);
         return 0;
       }
       out(JSON.stringify(fragment, null, 2));
@@ -592,7 +695,8 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
           "                nothing, so Claude Code's own permission prompt still applies. MCP tools",
           "                are recorded as ungoverned, and asked under a declared [governance]",
           `Every hook runs ${bin.join(" ")}: an absolute path, so a host that starts with`,
-          "another gnomon (or none) on its PATH still runs this one.",
+          "another gnomon (or none) on its PATH still runs this one. It is this machine's path:",
+          "`--write --local` writes .claude/settings.local.json instead, which stays out of git.",
           "  Stop          `gnomon check` on everything the session changed",
           "",
           "The role comes from [check.roles] in .gnomon/policy.toml: claude-code = \"implement\".",
@@ -610,6 +714,7 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
         writeFileIn(project, file, opencodePlugin(bin));
         recordInstall(project, "opencode", file, bin);
         console.error(`gnomon guard: wrote ${file}`);
+        travel(file);
         return 0;
       }
       out(opencodePlugin(bin));
@@ -630,6 +735,7 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
         const added = mergeHooks(project, file, fragment);
         recordInstall(project, "cursor", file, bin);
         console.error(added.length ? `gnomon guard: added ${added.join(", ")} to ${file}` : `gnomon guard: ${file} already has these hooks`);
+        travel(file);
         return 0;
       }
       out(JSON.stringify(fragment, null, 2));
@@ -680,7 +786,13 @@ function recordInstall(project: string, host: string, file: string, bin: string[
   }
 }
 
-export type HookState = "ok" | "missing" | "modified" | "disabled" | "not_installed";
+/**
+ * `outdated`: the hook an earlier gnomon release wrote, unchanged since (its
+ * Claude Code matcher, or its opencode plugin), or a hook `install --write`
+ * brought up to date whose update is not committed yet. A warning, not a
+ * finding: `modified` is kept for a hook that differs from what gnomon wrote.
+ */
+export type HookState = "ok" | "outdated" | "missing" | "modified" | "disabled" | "not_installed";
 export interface HookStatus {
   host: string;
   state: HookState;
@@ -695,6 +807,8 @@ export interface GuardStatus {
   hosts: HookStatus[];
   /** One line per host whose hook is missing, changed or switched off. */
   findings: string[];
+  /** One line per host whose hook an older gnomon wrote (`outdated`): not a finding. */
+  warnings: string[];
   /** How many host sessions the guard has decided for in this repository (CONTRACTS.md §41). */
   sessions_seen: number;
   /** The latest decision for any of them, ISO 8601; null when there was none. */
@@ -724,7 +838,7 @@ const readJson = (f: string): Record<string, unknown> | null => {
  * program runs it), and, given `tools`, whose matcher selects every one of
  * them; null when there is none.
  */
-function runs(hooks: unknown, event: string, tail: string, tools?: string[]): string | null {
+function runs(hooks: unknown, event: string, tail: string, tools?: string[], matchers?: readonly string[]): string | null {
   const list = (hooks as Record<string, unknown> | undefined)?.[event];
   if (!Array.isArray(list)) return null;
   for (const entry of list) {
@@ -732,8 +846,12 @@ function runs(hooks: unknown, event: string, tail: string, tools?: string[]): st
     const commands = [e.command, ...(Array.isArray(e.hooks) ? e.hooks.map((h) => h?.command) : [])];
     const hit = commands.find((c): c is string => typeof c === "string" && gnomonTail(c) === tail);
     if (!hit) continue;
-    if (!tools) return hit;
     const m = typeof e.matcher === "string" ? e.matcher : "";
+    if (matchers) {
+      if (matchers.includes(m)) return hit;
+      continue;
+    }
+    if (!tools) return hit;
     if (m === "" || m === "*") return hit;
     try {
       const re = new RegExp(`^(?:${m})$`);
@@ -769,6 +887,7 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
     project: repo?.project ?? null,
     hosts: [],
     findings: [],
+    warnings: [],
     sessions_seen: 0,
     last_decision: null,
     sessions: [],
@@ -780,25 +899,54 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
   const committed = (file: string) => committedAtHead(repo.toplevel, relative(repo.toplevel, file));
   const claudeDir = env.CLAUDE_CONFIG_DIR ? resolve(env.CLAUDE_CONFIG_DIR) : join(homedir(), ".claude");
 
-  const judge = (host: string, file: string, present: (text: string) => string | null, extra?: () => string | null): HookStatus => {
+  /**
+   * `present` says what is wrong with a hook file's text: null when it is the
+   * hook this gnomon writes, `{ older }` when it is one an earlier release
+   * wrote, else why it is not gnomon's hook.
+   */
+  type Present = string | { older: string } | null;
+  const judge = (host: string, file: string, present: (text: string) => Present, extra?: () => string | null): HookStatus => {
     const atHead = committed(file);
     const rec = recorded(host);
     const live = existsSync(file) ? readFileSync(file) : null;
     // Committed with gnomon's guard in it — even an older or edited one — is expected.
     const expected =
-      (atHead !== null && (present(lf(atHead)) === null || COMMITTED_GUARD.test(lf(atHead)))) || rec !== undefined || expect.includes(host);
+      (atHead !== null && (typeof present(lf(atHead)) !== "string" || COMMITTED_GUARD.test(lf(atHead)))) || rec !== undefined || expect.includes(host);
     const at = (state: HookState, detail: string): HookStatus => ({ host, state, file, detail });
     if (live === null) return expected ? at("missing", "the hook file is gone") : at("not_installed", "");
     const wrong = present(lf(live));
-    if (wrong !== null) return expected ? at("modified", wrong) : at("not_installed", "");
-    if (atHead !== null && lf(atHead) !== lf(live)) return at("modified", "it differs from the version committed at HEAD");
-    if (atHead === null && rec?.sha256 && rec.sha256 !== sha256(lf(live))) return at("modified", "it changed since `gnomon guard install` wrote it");
+    if (typeof wrong === "string") return expected ? at("modified", wrong) : at("not_installed", "");
+    if (wrong !== null && !expected) return at("not_installed", "");
+    // install --write wrote exactly this file: what differs from HEAD is its own update.
+    const installed = rec?.sha256 === sha256(lf(live));
+    let note = "";
+    if (atHead !== null && lf(atHead) !== lf(live)) {
+      if (!(wrong === null && installed)) return at("modified", "it differs from the version committed at HEAD");
+      if (COMMITTED_GUARD.test(lf(atHead))) {
+        const off = extra?.();
+        if (off) return at("disabled", off);
+        return at("outdated", "`gnomon guard install` updated it and HEAD still holds the older hook: commit the file");
+      }
+      note = "installed, not committed yet";
+    }
+    if (atHead === null && rec?.sha256 && !installed) return at("modified", "it changed since `gnomon guard install` wrote it");
     const off = extra?.();
     if (off) return at("disabled", off);
-    return at("ok", "");
+    if (wrong !== null) return at("outdated", wrong.older);
+    return at("ok", note);
   };
 
-  const claudeFile = join(repo.project, ".claude", "settings.json");
+  // Claude Code: the project's settings.json, or settings.local.json when
+  // `install --write --local` put the hook there (or only it holds one).
+  const claudeShared = join(repo.project, ".claude", "settings.json");
+  const claudeLocal = join(repo.project, ".claude", "settings.local.json");
+  const holdsGuard = (f: string) => existsSync(f) && COMMITTED_GUARD.test(readFileSync(f, "utf-8"));
+  const sharedAtHead = committed(claudeShared);
+  const claudeFile =
+    basename(recorded("claude-code")?.file ?? "") === "settings.local.json" ||
+    (!holdsGuard(claudeShared) && !(sharedAtHead !== null && COMMITTED_GUARD.test(lf(sharedAtHead))) && holdsGuard(claudeLocal))
+      ? claudeLocal
+      : claudeShared;
   status.hosts.push(
     judge(
       "claude-code",
@@ -812,8 +960,19 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
         }
         const cmd = runs(hooks, "PreToolUse", CC_GUARD_TAIL, CLAUDE_CODE_MATCHED_TOOLS);
         if (!cmd) {
+          const older = runs(hooks, "PreToolUse", CC_GUARD_TAIL, undefined, OLDER_CLAUDE_CODE_MATCHERS);
+          if (older) {
+            if (!runs(hooks, "SessionStart", CC_START_TAIL)) return "no SessionStart hook records the session's base";
+            return (
+              absentProgram(older) ?? {
+                older:
+                  "an older gnomon's PreToolUse matcher: WebSearch, Agent/Task and MCP calls are not put to the guard. " +
+                  "`gnomon guard install claude-code --write` updates it",
+              }
+            );
+          }
           return runs(hooks, "PreToolUse", CC_GUARD_TAIL)
-            ? `its PreToolUse matcher does not cover ${CLAUDE_CODE_MATCHER} (an older install? \`gnomon guard install claude-code --write\` updates it)`
+            ? `its PreToolUse matcher does not cover ${CLAUDE_CODE_MATCHER}, and is not one gnomon wrote`
             : `no PreToolUse hook runs \`${CLAUDE_CODE_GUARD_COMMAND}\``;
         }
         if (!runs(hooks, "SessionStart", CC_START_TAIL)) return "no SessionStart hook records the session's base";
@@ -841,8 +1000,11 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
       if (bin && text === opencodePlugin(bin)) {
         return isAbsolute(bin[0]!) && !existsSync(bin[0]!) ? `it runs ${bin[0]}, which does not exist: opencode refuses every call` : null;
       }
+      if (text.includes(OPENCODE_PLUGIN_MARKER) && OLDER_OPENCODE_PLUGINS.includes(sha256(text))) {
+        return { older: "an older gnomon's plugin: it runs whatever `gnomon` is on PATH. `gnomon guard install opencode --write` updates it" };
+      }
       return text.includes(OPENCODE_PLUGIN_MARKER)
-        ? "it is not the plugin this gnomon writes (edited, or an older version): `gnomon guard install opencode --write --force`"
+        ? "it is not the plugin this gnomon or an earlier release wrote (edited?): `gnomon guard install opencode --write` rewrites it"
         : "it is not gnomon's plugin";
     })
   );
@@ -862,7 +1024,9 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
     })
   );
   for (const h of status.hosts) {
-    if (h.state === "missing" || h.state === "modified" || h.state === "disabled") status.findings.push(`${h.host}: ${h.state} — ${relative(repo.project, h.file) || h.file}: ${h.detail}`);
+    const line = `${h.host}: ${h.state} — ${relative(repo.project, h.file) || h.file}: ${h.detail}`;
+    if (h.state === "missing" || h.state === "modified" || h.state === "disabled") status.findings.push(line);
+    else if (h.state === "outdated") status.warnings.push(line);
   }
   // Liveness (CONTRACTS.md §41): which host sessions reached the guard.
   const live = guardLiveSessions(repo.project);
@@ -886,6 +1050,7 @@ function statusGuard(args: GuardArgs, out: (s: string) => void): number {
   else {
     for (const h of st.hosts) out(`${h.host.padEnd(12)} ${h.state.padEnd(14)} ${relative(st.project!, h.file)}${h.detail ? `  ${h.detail}` : ""}`);
     out(st.findings.length ? `\n${st.findings.length} finding(s): a host is not governed the way it was set up to be.` : "\nevery installed hook is in place.");
+    for (const w of st.warnings) out(`warning: ${w}`);
     out(
       st.sessions_seen === 0
         ? "\nsessions: the guard has not decided a call in this repository yet."
