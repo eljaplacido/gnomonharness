@@ -93,8 +93,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3200 TypeScript tests (2667 core, 508 cli, 18
-> natives, 7 tui) and 63 Rust tests — **3263 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3259 TypeScript tests (2726 core, 508 cli, 18
+> natives, 7 tui) and 63 Rust tests — **3322 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -847,6 +847,61 @@ variable is actually set in your shell:
 "Not configured" and "configured but nothing routes to it" look identical in a
 plain listing, so the listing says which.
 
+#### Local first, cloud rescue — `[roles.<name>.escalate]`
+
+A role can run on a local model and move a turn that gets stuck to a stronger
+one, once:
+
+```toml
+[roles.implement.escalate]
+model = "<cloud-model-id>"
+endpoint = "openrouter"
+on = ["stuck", "deadline_share", "stall", "step_wall"]
+# carry = "conversation"           # default; "handover" = the bounded summary only
+# stuck_failures = 4               # `stuck`: failed tool calls in a row
+# stuck_steps = 12                 # `stuck`: calls in a row that changed no file
+# deadline_share = 0.5             # `deadline_share`: share of the --deadline budget
+# max_handoffs = 1                 # per run (one `gnomon task`) or session
+# max_steps = 12                   # calls the rescue is guaranteed; default: the role's max_steps
+```
+
+| Trigger | Fires when |
+|---|---|
+| `stall` | the turn would stop because the model repeats a call without progress |
+| `step_wall` | the turn would stop at `max_steps_total` |
+| `budget_50` | half of `max_steps_total` is used and the turn has not ended, or half of the `gnomon task --deadline` budget has passed |
+| `stuck` | `stuck_failures` tool calls in a row failed, or `stuck_steps` in a row changed no file |
+| `deadline_share` | `deadline_share` of the `--deadline` budget has passed (never without a deadline) |
+| `verify_failed` | the declared `[verify]` check still fails after its last round |
+| `apparatus` | the role's endpoint is down after retries and after any `fallback` |
+
+The rest of the turn runs on the escalation model. By default (`carry =
+"conversation"`) it is given the conversation as it stands, plus a takeover
+note: why the model changed, the files changed so far, the steps and seconds
+left, and the checkpoint's state under `[turn] continue_after_answer`. With
+`carry = "handover"` it is not given the
+transcript: it gets a **handover** of at most 8,000 characters, with the task,
+the files changed so far (from `git status`), the last twelve actions and their
+outcomes, the checklist, what the first model last said, and the failing check
+when there was one. The files on disk are the state. `apparatus` is the
+exception: the first model was not stuck, so the conversation is passed on as
+it stands.
+
+**Not a fallback.** `fallback` retries one *call* that failed on another
+endpoint, and the next call goes back to the primary. `escalate` moves the
+*rest of the turn*, for a reason the role declared, and says so: an
+`escalation` audit record, a line on the terminal, and `escalation` in the
+turn record and in `gnomon task --json` (the trigger, the step, both models,
+the handover's size, the model the turn ended on, and each model's usage under
+`volatile`). Both can be declared; `fallback` is tried first.
+
+**Once per turn, once per run by default** (`max_handoffs`). Off unless declared. The block is part of the surface, so it moves the surface hash. A rescue that stalls ends the turn the way any stall does;
+it is never escalated again. **Budgets.** The rescue runs on what is left of
+`max_steps_total`, raised only to give it its `max_steps`; time is never
+extended. A role without the block behaves exactly as it did, and never
+calls the escalation endpoint. The startup banner prints `Escalates to: …` under
+the model, and `/endpoints` lists the role under `escalation for:`.
+
 #### `[context]` — conversation history
 
 ```toml
@@ -951,6 +1006,9 @@ deadline_margin_ms = 30000        # gnomon task --deadline: stop this long befor
 deliverable_first = false         # gnomon task --deadline: name the task's missing outputs at 40% and 70%
 deadline_note = "plan"            # gnomon task --deadline: "continue" = one keep-going note at 80%, "none" = no time note, "upfront" = budget stated once in request 1 (TEMPORARY, for SW1)
 prompt_profile = "default"        # "unattended": no stop sentences, edge-case/measurement lines, nudge 0; "peer": no stop sentences, nudge 0
+continue_after_answer = false     # gnomon task --deadline: an early answer becomes a checkpoint, one "improve it" continuation, restore if worse
+continue_min_remaining = 0.3333   # gnomon task --deadline: share of the budget that must be left for the continuation
+# checkpoint_check = "pytest -q"  # the check the checkpoint and the final are scored with (absent: the last passing test command)
 ```
 
 Every value shown is the default, so a surface that omits the block — or writes
@@ -989,6 +1047,8 @@ nothing in the record could say so.
 | `deadline_note` | **Temporary** (deleted after the SW1 sweep). Read only under `gnomon task --deadline`. `"plan"` (default): the notes above, "Plan the rest of the work, and checking it, to finish inside that." `"continue"`: one note at 80%, "There is enough time left for substantial work; keep going and make sure the required outputs exist."; the deliverable-first note then ends "then keep improving it." `"none"`: no time note at all (the self-stop stays); a missing output is still named, without a countdown. `"upfront"`: the first request says "You have N minutes of wall time for this run; this overrides any time stated in the task.", and no countdown follows. [CONTRACTS §39](docs/CONTRACTS.md). |
 | `prompt_profile` | `"default"`: system.md as written. `"unattended"` (opt-in, declared only, never inferred from a TTY or the environment): drops the scaffold's "Verify in proportion to the task …" and "Once it works … stop." sentences, adds "Test edge cases, then submit" and two measurement lines (reproduce a timed gate literally, cold, with a 2x margin; for black-box parity compare exact strings over many random probes and round fitted constants), and makes `nudge_after_idle` 0 unless declared. `"peer"`: the same two sentences dropped and the nudge 0, nothing added. For long unattended runs; daily development keeps the default. [CONTRACTS §39](docs/CONTRACTS.md). |
 | `deliverable_first` | Read only under `gnomon task --deadline`; off by default. `true`: the output paths the task text names (an absolute path, or a quoted filename with an extension, after "write", "save", "create", "produce" and the like) are checked at 40% and 70% of the budget, and the ones that do not exist yet are named in that request's time note with "Write a first complete version now, then improve it." Nothing missing, nothing is added. Dependency manifests ("write any dependencies to `requirements.txt`") are not outputs, and a named file that exists when the run starts is not checked. [CONTRACTS §35](docs/CONTRACTS.md). |
+| `continue_after_answer` | Read only under `gnomon task --deadline`; off by default (opt-in, unmeasured). `true`: an answer given with at least `continue_min_remaining` (default 1/3) of the budget left, after every gate accepted it, becomes a checkpoint — the working tree is copied outside the root (nothing is written into it) — and the model gets one message: "Your result is saved as a checkpoint. About N minutes remain. Run the task's checks or tests, … If you make it worse, it will be restored." No countdown follows. At the run's end the final tree is scored with `checkpoint_check` (else the last test command that passed in the turn) and the checkpoint is restored if the final scores worse; with no check the final is kept, unverified. Audit kind `checkpoint`. [CONTRACTS §41](docs/CONTRACTS.md). |
+| `continue_min_remaining`, `checkpoint_check`, `continue_message`, `continue_max_rounds`, `continue_until_s` | See `continue_after_answer`; `continue_max_rounds` (1 to 20, default 1) lets each later answer take a new checkpoint (only if the check scores it no worse) and send the continuation again, until the rounds are used or `continue_until_s` seconds or fewer remain; `continue_message` (a non-empty string, `{minutes}` = minutes left) replaces the continuation text; declared without it they do nothing (a warning). |
 
 Values are floored where a zero would mean the opposite of what it reads:
 `max_run_notes = 0` would keep *every* note (`slice(-0)` returns the whole
@@ -1224,6 +1284,7 @@ endpoint = "zen"
 | `max_steps_total` | Where a turn actually stops. Defaults to `max_steps × 8`. Set it equal to `max_steps` to stop at the first checkpoint. |
 | `converge_after` | Opt-in. A step-budget fraction past which the harness urges *submit or conclude* as the budget depletes. Absent = full exploration. |
 | `fallback` | Second endpoint tried when the primary fails or times out. |
+| `escalate` | A stronger model that takes over the rest of a stuck turn, once. See [Local first, cloud rescue](#local-first-cloud-rescue--rolesnameescalate). |
 
 ### `tools.toml`
 

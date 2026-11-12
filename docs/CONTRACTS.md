@@ -79,6 +79,10 @@ a turn's own loop. They are here because a consumer reads them on the same
 records: `gnomon task --json`, the `turn` audit record, and
 `<session>.record.json`.
 
+After an escalation (section 11), `stop_reason` is how the escalated model
+ended the turn; what moved the turn is `escalation.trigger`, never a
+`stop_reason` value.
+
 `apparatus` exists because every failure of that kind previously borrowed
 `answered`, which recorded a run that never started as a turn that concluded.
 
@@ -3520,3 +3524,186 @@ body, tool schema and command environment is master's.
 
 **Fixture**: `conformance/sandbox_profile.json`;
 `packages/gnomon-core/src/sandbox_profile.test.ts` asserts the code equals it.
+
+## 41. Checkpoint, then grind — `[turn] continue_after_answer`, `continue_min_remaining`, `checkpoint_check`, `continue_message`, `continue_max_rounds`, `continue_until_s`, audit kind `checkpoint`, `counters.checkpoint`, `v: 1`
+
+**Why.** Under a real budget the model often answers with a third or more of
+it unused (FG1, CF1: answers 9-13 minutes early; research note 12 §1). An
+anytime harness keeps the first complete answer as a best-so-far and spends
+the rest improving it, guarded so the extra time can only help: if the
+improved tree scores worse on a visible check, the best-so-far is restored.
+
+| key (config.toml `[turn]`) | values | absent |
+|---|---|---|
+| `continue_after_answer` | `true`, `false` | `false`: nothing here runs |
+| `continue_min_remaining` | a fraction in (0, 1) | `1/3` |
+| `checkpoint_check` | a shell command | the most recent test command the model ran with exit 0 in this turn |
+| `continue_message` | a non-empty string; `{minutes}` is replaced by the minutes left (at least 1) | the continuation text below |
+| `continue_max_rounds` | an integer 1 to 20 | `1`: one continuation, as before |
+| `continue_until_s` | a positive number of seconds | the first checkpoint and later rounds need `continue_min_remaining` of the budget; with it, more than this many seconds left |
+
+**Validation.** A non-boolean `continue_after_answer`, a
+`continue_min_remaining` outside (0, 1), an empty or non-string
+`checkpoint_check` and an empty or non-string `continue_message` are fatal
+surface findings; any of the last three declared without
+`continue_after_answer = true` is a warning (it does nothing). All four are
+in `BLOCK_KEYS` and in `.gnomon/config.toml`, so they move the
+surface hash.
+
+**What must not change.** With the key absent or `false`, and with it `true`
+but no `--deadline` (interactive sessions never have one), every request body
+is the one the same run sends with nothing declared, and no `checkpoint`
+event or counter is written (`checkpoint_grind.test.ts`).
+
+**`continue_after_answer = true`, under `gnomon task --deadline` only, at depth 0.**
+
+- When the model answers, after every end-of-turn stage (the declared
+  `[verify]` check, the todo gate, the completion gate, the finish gate) has
+  accepted the answer, and at least `continue_min_remaining` of the budget is
+  left before the self-stop, the turn does not end. Once per run.
+- **Snapshot.** The tree under the working root is copied, content-addressed,
+  into a new private directory under the OS temp directory (`gnomon-ckpt-*`),
+  never into the root: the graded tree gains no file. Excluded, and never
+  touched by a restore: `.git`, `.gnomon`, `.gnomon-audit`,
+  `.gnomon-sessions`, `.gnomon-loops`, `.gnomon-jobs`, `.gnomon-out`.
+  Symlinks are kept as links; unreadable paths are recorded and left alone.
+  A temp directory inside the root, or a tree of more than 100 000 files or
+  2 GiB, takes no checkpoint (`checkpoint_skipped`) and the answer is
+  accepted as before. The store is removed when the run is judged.
+- **The check** is fixed at that moment: `checkpoint_check` (`configured`),
+  else the most recent bash command of this turn that exited 0 and matches
+  the stall detectors' test pattern (`session`), else none (`none`). It is
+  run once on the checkpoint, through the bash tool (sandbox, governance;
+  ungated unless approval is `always`, as `[verify]` is), never as a job.
+  Its score is the exit status and the passing-test count the output reports
+  (pytest, jest/vitest, cargo, unittest, `go test -v`).
+- **The continuation**: ONE user message marked `[gnomon] `: `Your result is
+  saved as a checkpoint. About N minutes remain. Run the task's checks or
+  tests, find what still fails or is untested against the task's
+  requirements, and improve it. If you make it worse, it will be restored.`
+  `continue_message` replaces this text (the `[gnomon] ` prefix stays; `{minutes}`
+  becomes the minutes left); under `deadline_note = "none"` every sentence of it
+  that holds `{minutes}` is dropped. Under `deadline_note = "none"` the minutes sentence is left out. After it
+  no countdown note (§31, §39) is sent; a deliverable-first note (§35) can
+  still name a missing output, alone.
+- **Rounds** (`continue_max_rounds` > 1; at 1 nothing below happens and the record is unchanged). While fewer than `continue_max_rounds`
+  continuations have been sent and more than `continue_until_s` seconds remain (with `continue_until_s` absent: at least
+  `continue_min_remaining` of the budget; with it declared the first checkpoint needs more than that many seconds too), each accepted
+  answer is scored by the same check and compared with the best checkpoint so far. Not worse: the tree becomes the new best checkpoint
+  (the old store is dropped); worse, or the check could not run on it: the best stays; no usable check at all: every round takes a
+  new checkpoint and the end keeps the final tree, unverified. The continuation is sent again. Audit `checkpoint` event
+  `checkpoint_round`: `round` (continuations sent so far), `decision` (`new_best`, `kept_best`, `unverified_new`), `why` (a skipped
+  snapshot keeps the best), `content_hash` (of the best), `left_ms`, `check_source`, `best_score`, `round_score`.
+  `counters.checkpoint.rounds` counts the continuations; the end events carry `rounds`. The end decision below compares the best
+  checkpoint with the final tree.
+- **The end** — the run's next accepted answer, the deadline's self-stop, or
+  a step-wall/stall stop: running jobs are stopped, then the check runs on the
+  final tree, bounded by the deadline less a quarter of the margin (at most
+  5 s). Worse — the check fails where it passed on the checkpoint, or fewer
+  tests pass — restores the checkpoint (files created since removed, changed
+  ones rewritten, new empty directories removed) and the trail says whether
+  the restored tree's hash is the checkpoint's. Equal or better keeps the
+  final. No check, a check that could not run on the checkpoint (126, 127, a
+  timeout), or no time left to run it keeps the final, unverified. An Esc
+  cancel keeps the tree as it is.
+- Once per run: under a declared `[chain]` only the first stage that answers
+  in time takes it. Headless only in practice: interactive sessions have no
+  `--deadline`.
+
+**What the record says.**
+
+- `counters.checkpoint`: `{v: 1, outcome, check_source?, left_s?}`, `outcome`
+  one of `not_reached`, `skipped`, `continued`, `restored`, `kept`,
+  `kept_unverified`.
+- Audit kind `checkpoint`, `event`:
+  - `checkpoint`: `content_hash` (sha256 over the sorted entries), `files`,
+    `bytes`, `left_ms`, `share_left`, `check_source`, `command` (redacted),
+    `checkpoint_score`;
+  - `checkpoint_skipped`: `why`, `left_ms`;
+  - `checkpoint_restored`, `checkpoint_kept`, `checkpoint_kept_unverified`:
+    `how` (`answer`, `deadline`, `stop`), `checkpoint_hash`, `check_source`,
+    `command`, `checkpoint_score`, `final_score`, `why`; a restore adds
+    `rewritten`, `removed`, `verified`.
+
+**A benchmark arm** declares, on top of its base surface:
+
+```toml
+[turn]
+continue_after_answer = true
+```
+
+and runs `gnomon task --deadline <cap less the copy-out time>`.
+
+**Fixture**: `conformance/checkpoint_grind.json`;
+`packages/gnomon-core/src/checkpoint_grind.test.ts` asserts the code equals it.
+
+---
+
+## 42. Escalation — local first, cloud rescue
+
+What `[roles.<name>.escalate]` records when it moves a turn to its declared
+model (README, "Local first, cloud rescue"). A role without the block produces
+none of the fields below, and its records are byte-for-byte what they were.
+
+**Triggers** — `on` is a list of these; anything else is a fatal surface problem.
+
+| trigger | fires when | what the escalated model is given |
+|---|---|---|
+| `stall` | the stall check would have ended the turn (`stop_reason` `stall`) | a handover |
+| `step_wall` | `max_steps_total` would have ended the turn | a handover |
+| `budget_50` | after a step, when half of `max_steps_total` is used, or half of a declared time budget (`TurnDeps.deadline`, which #93's `--deadline` sets) has passed | a handover |
+| `verify_failed` | the declared `[verify]` check still fails after its last round | a handover, with the check's output |
+| `apparatus` | the role's endpoint failed in a way retries and `fallback` did not fix (bucket `apparatus_failure`) | the conversation as it stands |
+| `stuck` | after a step, when `stuck_failures` (default 4) tool calls in a row failed (a tool error or a non-zero shell exit), or `stuck_steps` (default 12) in a row changed no file | per `carry` |
+| `deadline_share` | after a step, when `deadline_share` (default 0.5) of the `--deadline` budget has passed; never without a deadline | per `carry` |
+
+**What is carried** — `carry = "conversation"` (the default since v2): the
+conversation as it stands, with a takeover note appended on the steering
+channel (a user message marked `[gnomon]`): why the model changed, the files
+changed so far, the last commands it ran that were not read-only (at most 5,
+with their exit status), the steps and seconds left, the checkpoint's state when
+`[turn] continue_after_answer` is on, and a failing check's output. The files
+come from git; where git cannot say (no repository, as in a benchmark
+container), from the paths the turn's `write`/`edit` calls wrote merged with a
+stat scan of the tree against one taken at turn start (only with an `escalate`
+block and no git answer; null past 20,000 files), the heading saying so, and
+"unknown" when neither is available. Both notes list at most 40 paths and clip
+each listed path or command to 200 characters; the note is cut at 8,000
+characters in all. Recorded as
+`carried: "context"`, `handover_chars` = the note's length. `carry =
+"handover"`: the bounded handover (≤ 8,000 characters) in place of the
+transcript, `carried: "handover"` (PR #102's rule; the rows above that say "a
+handover"). `apparatus` always carries the conversation, with no note. The
+files on disk are shared either way; the checkpoint (§41) belongs to the turn
+and carries over unchanged.
+
+At most one escalation per turn, and at most `max_handoffs` (default 1) per run
+or session. The escalated model is never itself escalated. Off by default: a
+role without the block takes no new code path.
+
+**Audit record** — kind `escalation`, written once at the move. Keys: `role`,
+`depth`, `trigger`, `at_step`, `from` and `to` (`{ model, endpoint }`),
+`carried` (`handover` | `context`), `handover_chars`, `elapsed_ms` (from the
+start of the run's `--deadline` clock, or of the turn), `max_steps_total_after`
+(only when the move raised the wall), `detail` (`stuck` only: `failures` |
+`no_progress`), `tokens_before` (`{ input, output }`, the backend's count so
+far, when it reported one) and `handover` (the text, under `[audit] record =
+"full"` only). The record's `ts` is the time of the move. The tokens after
+the move are the turn record's `escalation.usage_after`. The `turn` record carries the same
+`escalation` object as the turn result.
+
+**Task record** — `gnomon task --json` carries `escalation`: `trigger`,
+`at_step`, `from`, `to`, `carried`, `handover_chars`, `max_steps_total_after`?,
+`detail`?, and `final_model` (the model the turn ended on). Each model's backend
+usage is under `volatile.escalation_usage` (`before`, `after`, and
+`elapsed_ms`), beside the other token counts, because it is not reproducible.
+
+**Surface hash** — the block lives in `roles.toml` or a profile, so declaring,
+changing or removing it moves the surface hash like any other key. Both are absent when nothing moved.
+
+**Fixture**: `conformance/escalation_record.json`.
+`packages/gnomon-core/src/escalation.test.ts` asserts the code's
+`ESCALATE_TRIGGERS`, the trigger table above and the fixture are one set, and
+checks the keys of a real audit record and task record against it. It also
+runs each trigger against scripted endpoints, the once-per-turn rule, and that
+a role without the block never calls its escalation endpoint.

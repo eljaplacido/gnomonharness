@@ -918,8 +918,8 @@ async function endpointAdd(
     console.log(`\n  "${name}" is already declared, and points somewhere else:`);
     console.log(`    ${existing.url}`);
     const roles = describeEndpoints(config).find((r) => r.name === name);
-    if (roles && (roles.primary.length > 0 || roles.fallback.length > 0)) {
-      console.log(`    used by: ${[...roles.primary, ...roles.fallback].join(", ")}`);
+    if (roles && (roles.primary.length > 0 || roles.fallback.length > 0 || roles.escalation.length > 0)) {
+      console.log(`    used by: ${[...roles.primary, ...roles.fallback, ...roles.escalation].join(", ")}`);
     }
     const go = interactive
       ? await ask(`  Overwrite it? [y/N] `, "n")

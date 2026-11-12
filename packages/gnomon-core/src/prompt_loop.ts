@@ -14,7 +14,7 @@ import { pinCredentials, holdCredentials, heldNotice, type CredentialPin } from 
 import { pinSandbox, applySandboxPin, describeLoosening, type SandboxPin } from "./sandbox_pin.js";
 import { checkCitations } from "./citations.js";
 import { mustFailFirst, readVerifyExit } from "./must_fail_first.js";
-import { resolve, dirname, join, basename, sep } from "node:path";
+import { resolve, dirname, join, basename, sep, relative } from "node:path";
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, realpathSync, renameSync } from "node:fs";
 import { readRegular } from "./root_fs.js";
 import { createHash } from "node:crypto";
@@ -74,6 +74,8 @@ import {
   taskResilience,
   workRootOf,
   steerRoleOf,
+  type EscalateTrigger,
+  type EscalateRoute,
 } from "./config.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence,
   safeForPrompt, traceLines, isEmptyReasoning, terminalWidth,
@@ -103,8 +105,8 @@ import {
   DEADLINE_ABORT,
 } from "./tools.js";
 import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
-import { StallSignals, type StallSignalCounters } from "./stall_signals.js";
-import { JobTable, scratchDirs } from "./tools.js";
+import { StallSignals, STALL_SIGNAL_PATTERNS, normalizeCommand, type StallSignalCounters } from "./stall_signals.js";
+import { JobTable, scratchDirs, statSnapshot, statChangedPaths } from "./tools.js";
 import { resolveSandboxProfile, sandboxProfileRecord } from "./sandbox_profile.js";
 import { JOB_TOOL, resolveSoftTimeout } from "./soft_shell.js";
 import {
@@ -145,6 +147,20 @@ import {
   missingDeliverables,
   resolveDeliverableFirst,
 } from "./deliverable_first.js";
+import {
+  continuationText,
+  decideCheckpoint,
+  dropCheckpoint,
+  isTestCommand,
+  passCount,
+  resolveCheckpointGrind,
+  restoreCheckpoint,
+  roundDecision,
+  takeCheckpoint,
+  type CheckScore,
+  type CheckSource,
+  type TreeCheckpoint,
+} from "./checkpoint_grind.js";
 import {
   CallLedger,
   legBudget,
@@ -385,6 +401,8 @@ export interface PromptState {
    * the rest of the session (adaptReplayReasoning).
    */
   replayReasoningLearned?: Set<string>;
+  /** Escalations ("local first, cloud rescue") made this session, against `[roles.<name>.escalate] max_handoffs`. */
+  escalations?: number;
   /**
    * Endpoint+model pairs that refused a request because it carried
    * reasoning_content gnomon replayed by default. Replay stays off for them
@@ -1001,6 +1019,22 @@ export function readUsage(json: unknown): TokenUsage | undefined {
 }
 
 /** Add one call's usage into a running total for the turn. */
+/** What `total` added since `before`: the usage of one part of a turn. */
+export function usageSince(
+  before: TokenUsage | undefined,
+  total: TokenUsage | undefined
+): TokenUsage | undefined {
+  if (!total) return undefined;
+  if (!before) return { ...total };
+  const sub = (a?: number, b?: number) =>
+    a === undefined ? undefined : Math.max(0, a - (b ?? 0));
+  return {
+    input: sub(total.input, before.input),
+    output: sub(total.output, before.output),
+    ...(total.ms !== undefined ? { ms: sub(total.ms, before.ms) } : {}),
+  };
+}
+
 export function addUsage(
   total: TokenUsage | undefined,
   next: TokenUsage | undefined
@@ -2840,7 +2874,7 @@ export const STEER_CLOSE = "[/gnomon]";
  * message, sent after the rejected answer, in the role the stage chose.
  */
 interface EndOfTurnHandBack {
-  stage: "verify" | "todo_gate" | "completion_gate" | "finish_gate";
+  stage: "verify" | "todo_gate" | "completion_gate" | "finish_gate" | "checkpoint";
   role: "system" | "user";
   content: string;
 }
@@ -3034,6 +3068,8 @@ export interface EndpointRow {
   primary: string[];
   /** Roles naming it only as a fallback */
   fallback: string[];
+  /** Roles naming it as where a stuck turn escalates ([roles.<name>.escalate]) */
+  escalation: string[];
   /**
    * A model to test with — the first role that routes here. Without one there
    * is nothing to probe: an endpoint has no opinion about auth until it is
@@ -3052,10 +3088,12 @@ export function describeEndpoints(config: GnomonConfig): EndpointRow[] {
     const cls = endpointClass(endpoint.url, endpointKind(endpoint), endpoint.provider);
     const primary = roles.filter((r) => (config.roles[r]?.endpoint ?? "local") === name);
     const fallback = roles.filter((r) => config.roles[r]?.fallback?.endpoint === name);
+    const escalation = roles.filter((r) => config.roles[r]?.escalate?.endpoint === name);
     const probeModel =
       (primary[0] ? config.roles[primary[0]]?.model : undefined) ??
-      (fallback[0] ? config.roles[fallback[0]]?.fallback?.model : undefined);
-    return { name, endpoint, where: cls.where, provider: cls.provider, primary, fallback, probeModel };
+      (fallback[0] ? config.roles[fallback[0]]?.fallback?.model : undefined) ??
+      (escalation[0] ? config.roles[escalation[0]]?.escalate?.model : undefined);
+    return { name, endpoint, where: cls.where, provider: cls.provider, primary, fallback, escalation, probeModel };
   });
 }
 
@@ -3160,6 +3198,9 @@ export async function checkRoleModels(
       if (config.roles[r]?.fallback?.endpoint === row.name) {
         consider(r + " (fallback)", config.roles[r]?.fallback?.model);
       }
+      if (config.roles[r]?.escalate?.endpoint === row.name) {
+        consider(r + " (escalation)", config.roles[r]?.escalate?.model);
+      }
     }
     if (checks.length > 0) out.set(row.name, checks);
   }
@@ -3206,11 +3247,12 @@ export function printEndpoints(
     // An endpoint nothing points at is declared, not used. Saying so is the
     // difference between "it is not configured" and "it is configured and
     // nothing routes to it" — which look identical from a listing.
-    if (row.primary.length === 0 && row.fallback.length === 0) {
+    if (row.primary.length === 0 && row.fallback.length === 0 && row.escalation.length === 0) {
       console.log(`      used by: (no role — declared but nothing routes here)`);
     } else {
       if (row.primary.length > 0) console.log(`      used by: ${row.primary.join(", ")}`);
       if (row.fallback.length > 0) console.log(`      fallback for: ${row.fallback.join(", ")}`);
+      if (row.escalation.length > 0) console.log(`      escalation for: ${row.escalation.join(", ")}`);
     }
 
     if (ep.api_key_env) {
@@ -3398,6 +3440,30 @@ export interface TurnDeps {
   unattended?: boolean;
 }
 
+/**
+ * The sessions whose run already took its one checkpoint: a declared [chain]
+ * runs several depth-0 turns in one `gnomon task`, and the continuation is
+ * once per run, not once per stage.
+ */
+const CHECKPOINT_TAKEN = new WeakSet<object>();
+
+/** counters.checkpoint (checkpoint_grind.ts, CONTRACTS §41). */
+export interface CheckpointCounters {
+  v: 1;
+  /**
+   * `not_reached`: no answer came with enough of the budget left (or none came);
+   * `skipped`: the snapshot could not be taken, so no continuation was sent;
+   * `continued`: the continuation was sent and the run has not ended yet;
+   * `restored` / `kept` / `kept_unverified`: the end decision.
+   */
+  outcome: "not_reached" | "skipped" | "continued" | "restored" | "kept" | "kept_unverified";
+  check_source?: CheckSource;
+  /** Continuations sent, when `[turn] continue_max_rounds` > 1 (absent otherwise). */
+  rounds?: number;
+  /** Seconds of the budget left when the checkpoint was taken */
+  left_s?: number;
+}
+
 /** See TurnDeps.deadline. All times are epoch milliseconds. */
 export interface TurnDeadline {
   /** The budget: the deadline less when the run started */
@@ -3575,6 +3641,255 @@ export interface TurnResult {
    * bash and read by nothing at all.
    */
   surface_changed?: SurfaceDrift[];
+  /**
+   * Set when the turn moved to its role's escalation model ("local first,
+   * cloud rescue"): why, when, from where to where, how big the handover was,
+   * and the backend usage on each side of the move. Absent when nothing moved,
+   * so a turn record without an escalation is byte-identical to before.
+   */
+  escalation?: EscalationRecord;
+}
+
+/**
+ * One move of a turn to its role's escalation model.
+ *
+ * Not a verdict and not a second outcome: the turn still has exactly one
+ * bucket, from how it ended. This records that the ending came from a
+ * different model than the one it started on, and why.
+ */
+export interface EscalationRecord {
+  trigger: EscalateTrigger;
+  /** Tool calls the turn had made when it moved */
+  at_step: number;
+  from: { model: string; endpoint?: string };
+  to: { model: string; endpoint?: string };
+  /**
+   * What the escalation model was given: "handover" — a compact summary in
+   * place of the transcript (`carry = "handover"`); "context" — the
+   * conversation as it stood, plus a takeover note (`carry = "conversation"`,
+   * the default, and always for `apparatus`).
+   */
+  carried: "handover" | "context";
+  /** Characters of handover text sent (0 when the context was carried) */
+  handover_chars: number;
+  /** The step ceiling after the move, when it had to be raised */
+  max_steps_total_after?: number;
+  /** `stuck` only: which signal fired, "failures" or "no_progress" */
+  detail?: "failures" | "no_progress";
+  /** Milliseconds from the start of the run (the --deadline clock) or of the turn to the move */
+  elapsed_ms?: number;
+  /** The model the turn ended on */
+  final_model: string;
+  /** Backend-reported usage before and after the move; volatile run to run */
+  usage_before?: TokenUsage;
+  usage_after?: TokenUsage;
+}
+
+/** The most a handover carries, in characters. */
+export const HANDOVER_MAX_CHARS = 8000;
+
+export interface HandoverInput {
+  /** The request the turn was answering */
+  request: string;
+  trigger: EscalateTrigger;
+  stepsUsed: number;
+  stepsLeft: number;
+  /** Paths changed in the worktree so far */
+  changed: string[];
+  /** Where `changed` came from when git could not say (takeoverChanged) */
+  changedVia?: ChangedVia;
+  /** The last actions and their outcomes, oldest first */
+  recent: string[];
+  todos: Array<{ content: string; status: string }>;
+  /** What the first model last said */
+  lastNote?: string;
+  /** Output of a declared check that failed */
+  verifyOutput?: string;
+}
+
+const HANDOVER_WHY: Record<EscalateTrigger, string> = {
+  stall: "the previous model repeated a call without making progress",
+  step_wall: "the previous model used its whole step budget",
+  budget_50: "half of the budget is spent and the task is not done",
+  verify_failed: "the repository's declared check still fails",
+  apparatus: "the previous model's endpoint stopped answering",
+  stuck: "the previous model was stuck (repeated failures, or no file changed for many steps)",
+  deadline_share: "the declared share of the time budget is spent and the task is not done",
+};
+
+export interface TakeoverInput {
+  trigger: EscalateTrigger;
+  stepsUsed: number;
+  stepsLeft: number;
+  changed: string[];
+  /** Where `changed` came from when git could not say (takeoverChanged) */
+  changedVia?: ChangedVia;
+  /** The last test/check commands and their exit status, oldest first */
+  checks?: HandoffCheck[];
+  /** Seconds left before the deadline, under --deadline */
+  leftS?: number;
+  /** The checkpoint state (checkpoint_grind.ts), when one is declared */
+  checkpoint?: string;
+  verifyOutput?: string;
+}
+
+/** How a hand-off learned what changed, when git could not say. */
+export type ChangedVia = "fallback" | "unknown";
+
+/** A test or check command the first model ran, and how it exited (null: unknown). */
+export interface HandoffCheck {
+  command: string;
+  exit: number | null;
+}
+
+/** The most paths a hand-off lists, the most checks, and the longest of either line. */
+export const HANDOFF_MAX_PATHS = 40;
+export const HANDOFF_MAX_CHECKS = 5;
+const HANDOFF_LINE_CHARS = 200;
+
+/**
+ * What changed, for a hand-off: git first, and only where git cannot say
+ * (`git` null: no repository, git missing or failing) the union of the paths
+ * gnomon's own write/edit calls wrote this turn and a stat scan of the tree
+ * against its turn-start scan (`scanned`, null when either scan was not
+ * taken). Neither fallback available: "unknown", which the note says rather
+ * than "(none detected)".
+ *
+ * HY3 (2026-11-12): 22 of 28 escalated cells told the cloud model "(none
+ * detected)" because /app in the task containers has no .git, while the local
+ * model had rewritten up to 27 files. The cloud model's first moves went on
+ * rediscovering the disk.
+ */
+export function takeoverChanged(
+  git: string[] | null,
+  written: readonly string[],
+  scanned: string[] | null
+): { changed: string[]; changedVia?: ChangedVia } {
+  if (git !== null) return { changed: git };
+  if (scanned === null && written.length === 0) return { changed: [], changedVia: "unknown" };
+  const all = new Set<string>([...written, ...(scanned ?? [])]);
+  return { changed: [...all].sort(), changedVia: "fallback" };
+}
+
+function renderChanged(changed: string[], via: ChangedVia | undefined): string {
+  const clip = (p: string) => (p.length > HANDOFF_LINE_CHARS ? `${p.slice(0, HANDOFF_LINE_CHARS)}…` : p);
+  const heading =
+    via === "fallback"
+      ? "## Files changed so far (no git answer: from gnomon's write/edit calls and a scan of the tree)"
+      : "## Files changed so far";
+  const body =
+    changed.length > 0
+      ? changed.slice(0, HANDOFF_MAX_PATHS).map((p) => `- ${clip(p)}`).join("\n") +
+        (changed.length > HANDOFF_MAX_PATHS ? `\n- … and ${changed.length - HANDOFF_MAX_PATHS} more` : "")
+      : via === "unknown"
+      ? "(unknown: git could not say and the tree could not be scanned; list the files on disk)"
+      : "(none detected)";
+  return `${heading}\n${body}`;
+}
+
+function renderChecks(checks: HandoffCheck[] | undefined): string {
+  if (!checks || checks.length === 0) return "";
+  const clip = (c: string) => {
+    const one = c.replace(/\s+/g, " ").trim();
+    return one.length > HANDOFF_LINE_CHARS ? `${one.slice(0, HANDOFF_LINE_CHARS)}…` : one;
+  };
+  const lines = checks
+    .slice(-HANDOFF_MAX_CHECKS)
+    .map((c) => `- \`${clip(c.command)}\` → ${c.exit === null ? "exit unknown" : `exit ${c.exit}`}`);
+  return `## Its last commands and how they exited\n${lines.join("\n")}`;
+}
+
+/**
+ * `carry = "conversation"`: the note appended to the conversation as the
+ * escalation model takes over. The conversation above it is kept; this says
+ * why the model changed, what is on disk and what is left. Bounded like the
+ * handover.
+ */
+export function buildTakeoverNote(t: TakeoverInput, maxChars: number = HANDOVER_MAX_CHARS): string {
+  const tail = (text: string, n: number): string =>
+    text.length > n ? `[cut]…${text.slice(-n)}` : text;
+  const parts = [
+    `A different model takes over this task from here, because ` +
+      `${HANDOVER_WHY[t.trigger]}, after ${t.stepsUsed} tool call(s). The conversation above is ` +
+      `the previous model's work. The files on disk are the current state: check them rather than ` +
+      `trusting what was said, then finish the task. About ${t.stepsLeft} tool call(s) are left` +
+      (t.leftS !== undefined ? `, and about ${Math.round(t.leftS)} s of wall time.` : "."),
+    renderChanged(t.changed, t.changedVia),
+    renderChecks(t.checks),
+    t.checkpoint ? `## Checkpoint\n${t.checkpoint}` : "",
+    t.verifyOutput ? `## The failing check\n${tail(t.verifyOutput, 1500)}` : "",
+  ].filter((p) => p.length > 0);
+  const out = parts.join("\n\n");
+  return out.length > maxChars ? `${out.slice(0, maxChars - 20)}\n…[note cut]` : out;
+}
+
+/**
+ * What the escalation model is told instead of the transcript.
+ *
+ * Bounded on purpose: a stuck model's transcript is mostly the being-stuck,
+ * and resending it costs the escalation model the most where it is most
+ * expensive. The files on disk are the state; this says where to look.
+ */
+export function buildHandover(h: HandoverInput, maxChars: number = HANDOVER_MAX_CHARS): string {
+  const clip = (text: string, n: number): string =>
+    text.length > n ? `${text.slice(0, n)}…[cut]` : text;
+  const tail = (text: string, n: number): string =>
+    text.length > n ? `[cut]…${text.slice(-n)}` : text;
+  const parts = [
+    `You are taking over a task another model started. It stopped because ` +
+      `${HANDOVER_WHY[h.trigger]}, after ${h.stepsUsed} tool call(s). You have ` +
+      `about ${h.stepsLeft} tool call(s) left. The files on disk are the current ` +
+      `state: inspect them rather than trusting this summary, then finish the task.`,
+    `## The task\n${clip(h.request.trim(), 3000)}`,
+    renderChanged(h.changed, h.changedVia),
+    h.recent.length > 0
+      ? `## Its last actions and their outcomes\n${h.recent.slice(-12).map((r) => `- ${clip(r, 300)}`).join("\n")}`
+      : "",
+    h.todos.length > 0
+      ? `## Its checklist\n${h.todos.slice(0, 20).map((t) => `- [${t.status === "completed" ? "x" : " "}] ${clip(t.content, 200)}`).join("\n")}`
+      : "",
+    h.lastNote && h.lastNote.trim() ? `## What it last said\n${clip(h.lastNote.trim(), 800)}` : "",
+    h.verifyOutput ? `## The failing check\n${tail(h.verifyOutput, 1500)}` : "",
+  ].filter((p) => p.length > 0);
+  const out = parts.join("\n\n");
+  return out.length > maxChars ? `${out.slice(0, maxChars - 20)}\n…[handover cut]` : out;
+}
+
+/**
+ * A bash command worth naming in a hand-off as a check: any command that is
+ * not only reading (a test run, a build, a script run against the data). The
+ * read test comes first and alone: `test_command` also matches test-file
+ * paths, so `cat tests/test_x.py` would otherwise count as a check, take one
+ * of the few slots and read as a passing test run.
+ */
+function isHandoffCheck(command: string): boolean {
+  return !STALL_SIGNAL_PATTERNS.read_command.test(normalizeCommand(command));
+}
+
+/** Paths git reports as changed or new in the worktree. Null when git cannot say. */
+function gitChangedPaths(root: string): string[] | null {
+  let r: ReturnType<typeof safeGit>;
+  try {
+    r = safeGit(["--no-optional-locks", "status", "--porcelain=v1", "-z", "--untracked-files=all"], {
+      cwd: root,
+      timeout: 10_000,
+      stdio: ["ignore", "pipe", "ignore"],
+      hot: true,
+    });
+  } catch {
+    return null;
+  }
+  if (r.status !== 0 || typeof r.stdout !== "string") return null;
+  const out: string[] = [];
+  const entries = r.stdout.split("\0");
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i];
+    if (e.length < 4) continue;
+    out.push(e.slice(3));
+    // A rename or copy carries its source as the next NUL-separated field.
+    if (e[0] === "R" || e[0] === "C") i++;
+  }
+  return out;
 }
 
 /**
@@ -4243,6 +4558,11 @@ export interface TurnCounters {
    * yet (`[turn] deliverable_first`, deliverable_first.ts). Absent when none were.
    */
   deliverable_first_notes?: number;
+  /**
+   * `[turn] continue_after_answer` under `--deadline` (checkpoint_grind.ts,
+   * CONTRACTS §41): what became of the checkpoint. Absent when not declared.
+   */
+  checkpoint?: CheckpointCounters;
   /**
    * Streamed requests aborted because no token arrived within `[resilience]
    * first_token_timeout_ms`, and asked again under the retry budget. Absent
@@ -5083,7 +5403,9 @@ async function agenticTurn(
     typeof roleDef.max_steps === "number" ? roleDef.max_steps : loop.max_steps;
   // max_steps is a checkpoint; this is the wall. A session left running for
   // hours cannot be asked to notice a stall and re-prompt by hand.
-  const maxTotal =
+  // `let` only so an escalation can guarantee the escalated model its declared
+  // minimum of calls (EscalateDef.max_steps); nothing else moves the wall.
+  let maxTotal =
     typeof roleDef.max_steps_total === "number"
       ? roleDef.max_steps_total
       : maxSteps * loop.legs;
@@ -5164,6 +5486,25 @@ async function agenticTurn(
   // the moment a fallback fires, and the record has to follow the request
   // rather than the declaration.
   let usedTarget = route.target;
+  // Local first, cloud rescue. `active` is where model calls go: the declared
+  // route until a declared trigger moves the turn, once, to the role's
+  // escalation model for the rest of it. Absent escalation, `active` is
+  // `route.target` for the whole turn and nothing below behaves differently.
+  const escalateDecl: EscalateRoute | undefined = route.escalate;
+  let active: RouteTarget = route.target;
+  let escalation: EscalationRecord | undefined;
+  let lastVerifyOutput: string | undefined;
+  // The last actions and their outcomes, for a handover. Kept only when an
+  // escalation is declared, so a turn without one does no extra work.
+  const recentActions: string[] = [];
+  // For the same hand-off, where git cannot say what changed: the paths this
+  // turn's write/edit calls wrote (root-relative, first-write order), and the
+  // last few test/check commands with their exit status.
+  const handoffWritten: string[] = [];
+  const handoffChecks: HandoffCheck[] = [];
+  // `stuck`: tool calls in a row that failed. Counted only with a block.
+  let failStreak = 0;
+  const turnStartedAt = (deps.clock ?? Date.now)();
   // One re-prompt for an empty completion, per nudge cycle — not one per turn.
   //
   // The nudge re-fires every nudge_after_idle calls for as long as the turn
@@ -5258,6 +5599,109 @@ async function agenticTurn(
   if (todoGateOn) {
     counters.todo_gate = { v: 1, max_rounds: TODO_GATE_ROUNDS, rounds: 0, open: 0, outcome: "not_reached" };
   }
+  // Checkpoint, then grind (`[turn] continue_after_answer`, checkpoint_grind.ts,
+  // CONTRACTS §41). Only under `--deadline` (stopClock) and only for the turn
+  // a person asked for. Off, nothing below reads it.
+  const grind = depth === 0 && stopClock ? resolveCheckpointGrind(config) : undefined;
+  const grindOn = grind?.on === true;
+  const grindState: {
+    phase: "waiting" | "continued" | "done";
+    cp?: TreeCheckpoint;
+    check?: { command: string; source: CheckSource };
+    score?: CheckScore;
+    checkMs?: number;
+    /** Continuations sent so far (`continue_max_rounds`; 1 after the first checkpoint). */
+    rounds: number;
+  } = { phase: "waiting", rounds: 0 };
+  // The most recent test command the model ran with exit 0 in this turn.
+  let lastPassingTest: string | undefined;
+  if (grindOn) counters.checkpoint = { v: 1, outcome: "not_reached" };
+  // Run the checkpoint's check as the declared [verify] check runs: through
+  // the bash tool, sandbox and governance included, ungated unless approval
+  // is "always". Never as a job, never cut by the turn's own abort (the end
+  // check runs after the deadline's self-stop), and bounded by `untilMs`.
+  const runGrindCheck = async (command: string, untilMs: number): Promise<CheckScore> => {
+    const t0 = Date.now();
+    const out = await executeTool(
+      "bash",
+      { command },
+      {
+        ...ctx,
+        gate: gate === "always" ? "always" : "never",
+        allow: "strict" as SurfaceConsent,
+        signal: undefined,
+        jobs: undefined,
+        timedOutCommands: undefined,
+        deadlineAt: untilMs,
+      },
+      new Set(["bash"])
+    );
+    grindState.checkMs = Date.now() - t0;
+    const read = readVerifyExit(out);
+    return {
+      exit: read.exit,
+      ...((n) => (n !== undefined ? { passed: n } : {}))(passCount(out.content)),
+      ...(out.code !== 0 && /timeout/.test(out.summary) ? { timed_out: true } : {}),
+    };
+  };
+  // The end of a run that took a checkpoint: score the final tree with the
+  // checkpoint's check and restore the checkpoint if the final is worse.
+  // Called once, from the turn's next answer or from the deadline's stop.
+  const finishCheckpoint = async (how: "answer" | "deadline" | "stop"): Promise<void> => {
+    if (!grindOn || grindState.phase !== "continued" || !grindState.cp) return;
+    grindState.phase = "done";
+    const cp = grindState.cp;
+    const cc = counters.checkpoint!;
+    // Jobs still running are stopped first: they must not write past the decision.
+    await jobs?.closeAll("turn_end");
+    let final: CheckScore | undefined;
+    let why: string | undefined;
+    if (!grindState.check) why = "no check";
+    else if (grindState.score && (grindState.score.timed_out || grindState.score.exit === 126 || grindState.score.exit === 127))
+      why = "the check could not run on the checkpoint";
+    else {
+      // The time the check may take: up to the deadline itself, less a
+      // reserve for the restore and the record; it needs at least as long as
+      // it took on the checkpoint.
+      const at = stopClock!.at;
+      const reserve = Math.min(5_000, Math.floor(stopClock!.marginMs / 4));
+      const untilMs = at - reserve;
+      const room = untilMs - Date.now();
+      if (room < Math.max(200, (grindState.checkMs ?? 0) * 1.2)) why = "no time left to run the check";
+      else {
+        deps.progress.stop();
+        say(paint(deps.ui, "cyan", `  ⚙ checkpoint`) + paint(deps.ui, "gray", ` scoring the final tree: ${grindState.check.command}`));
+        final = await runGrindCheck(grindState.check.command, untilMs);
+        if (final.timed_out) why = "the check did not finish in the time left";
+      }
+    }
+    const verdict = decideCheckpoint(grindState.check ? grindState.score : undefined, why ? undefined : final);
+    const base = {
+      role,
+      how,
+      step: steps,
+      checkpoint_hash: cp.hash,
+      check_source: grindState.check?.source ?? "none",
+      ...(grindState.check ? { command: deps.audit?.action(grindState.check.command) ?? grindState.check.command } : {}),
+      ...(grindState.score ? { checkpoint_score: grindState.score } : {}),
+      ...(final ? { final_score: final } : {}),
+      ...(why ? { why } : {}),
+      ...((grind?.max_rounds ?? 1) > 1 ? { rounds: grindState.rounds } : {}),
+    };
+    if (verdict === "checkpoint_restored") {
+      const r = restoreCheckpoint(cp);
+      cc.outcome = "restored";
+      deps.audit?.write("checkpoint", { event: "checkpoint_restored", ...base, ...r });
+      warn(paint(deps.ui, "yellow", `  ⚙ checkpoint — the final tree scored worse; checkpoint restored (${r.rewritten} rewritten, ${r.removed} removed${r.verified ? "" : ", NOT verified"})`));
+      toolLog.push(`checkpoint — restored`);
+    } else {
+      cc.outcome = verdict === "checkpoint_kept" ? "kept" : "kept_unverified";
+      deps.audit?.write("checkpoint", { event: verdict, ...base });
+      say(paint(deps.ui, "gray", `  ⚙ checkpoint — final tree kept${verdict === "checkpoint_kept" ? "" : ` (unverified: ${why ?? "no usable check"})`}`));
+      toolLog.push(`checkpoint — ${cc.outcome}`);
+    }
+    dropCheckpoint(cp);
+  };
   // The compat edit's tiers and the package-index allowlist: counted on every
   // turn of a surface that declares them, zeros included (§32).
   if (editVariant === "compat") counters.edit_match = { exact: 0, whitespace: 0, indentation: 0 };
@@ -5318,6 +5762,12 @@ async function agenticTurn(
   // reports the whole dirty tree as the turn's doing -- including for a
   // read-only role that only called `read`. One git call, taken once.
   const treeBaseline = treeSnapshot(workRootOf(state.config));
+  // Where git cannot say (no repository: a benchmark container's /app), a stat
+  // scan of the tree, so a hand-off can still name what the first model
+  // changed, shell writes included. Only with an escalation declared, and only
+  // without git: everywhere else this is no work at all.
+  const scanBaseline =
+    escalateDecl && treeBaseline === null ? statSnapshot(workRootOf(state.config)) : null;
   // The reasoning behind the reply a turn ends on, kept for the exchange when
   // either endpoint this role can reach replays reasoning -- not only the one
   // that answered. A turn answered by the fallback, or by the tool-less
@@ -5374,7 +5824,12 @@ async function agenticTurn(
 
   // A cancelled turn still changed the tree if it got that far, and that is
   // exactly when someone wants to know what it left behind.
-  const cancelled = (): TurnResult => {
+  const cancelled = async (): Promise<TurnResult> => {
+    // `--deadline` stopped a run that took a checkpoint: judge it now, before
+    // the tree is measured. A cancel that is not the deadline (Esc) is a
+    // person stopping the run, and their tree is left as it is.
+    if (stopClock && deps.signal?.reason === DEADLINE_ABORT) await finishCheckpoint("deadline");
+    else if (grindState.cp && grindState.phase === "continued") dropCheckpoint(grindState.cp);
     flushFold();
     counters.tree_delta = measureTreeDelta(workRootOf(state.config), treeBaseline);
     // `--deadline` aborted the turn: the same ending, said as what it was.
@@ -5411,7 +5866,7 @@ async function agenticTurn(
     // No answer was produced, so there is nothing to cite-check. Left unset
     // rather than zeroed: "no citations checked" and "checked, none found"
     // are different facts.
-    return {
+    return withEscalation({
     content: CANCELLED,
     code: settle(code, 2),
     model: usedModel,
@@ -5426,7 +5881,7 @@ async function agenticTurn(
     counters,
     modelCalls: measured(),
     surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
-    };
+    });
   };
 
   /**
@@ -5898,6 +6353,158 @@ async function agenticTurn(
     deps.progress.start(`${route.model}`);
   }
 
+  /** What changed so far, for a hand-off: git first, then the fallbacks (takeoverChanged). */
+  const handoffChangedNow = (): { changed: string[]; changedVia?: ChangedVia } => {
+    const root = workRootOf(state.config);
+    const git = gitChangedPaths(root);
+    if (git !== null) return takeoverChanged(git, [], null);
+    const now = scanBaseline ? statSnapshot(root) : null;
+    return takeoverChanged(null, handoffWritten, scanBaseline && now ? statChangedPaths(scanBaseline, now) : null);
+  };
+  /**
+   * Move the rest of this turn to the role's escalation model, if `trigger` is
+   * one it declared and nothing has moved yet. Returns whether it moved.
+   *
+   * Once per turn, by construction: a rescue that can itself be rescued is a
+   * routing loop, and the second move would hide the first in the record.
+   */
+  const escalateNow = (
+    trigger: EscalateTrigger,
+    opts: { lastNote?: string; verifyOutput?: string; detail?: "failures" | "no_progress" } = {}
+  ): boolean => {
+    if (!escalateDecl || escalation || !escalateDecl.on.includes(trigger)) return false;
+    // At most `max_handoffs` per run (default 1), whatever the number of turns.
+    if ((state.escalations ?? 0) >= escalateDecl.max_handoffs) return false;
+    state.escalations = (state.escalations ?? 0) + 1;
+    const keepContext = trigger === "apparatus" || escalateDecl.carry === "conversation";
+    const nowMs = (deps.clock ?? Date.now)();
+    const elapsedMs = Math.max(0, nowMs - (deps.deadline?.started_at ?? turnStartedAt));
+    // The escalation runs on what is left of the step budget, raised only to
+    // guarantee its declared floor (always needed for step_wall). Time is never
+    // extended: a --deadline still means what it said.
+    const floor = escalateDecl.max_steps ?? maxSteps;
+    let raisedTo: number | undefined;
+    if (maxTotal - steps < floor) {
+      maxTotal = steps + floor;
+      raisedTo = maxTotal;
+    }
+    let handover = "";
+    if (keepContext && trigger !== "apparatus") {
+      const cpText = grindOn
+        ? grindState.cp
+          ? `A checkpoint of an earlier answer was taken (phase ${grindState.phase}). At the end the ` +
+            `final tree is scored${grindState.check ? ` with \`${grindState.check.command}\`` : ""} and the ` +
+            `checkpoint is restored if the final tree scores worse.`
+          : `No checkpoint has been taken yet: the first answer that comes with enough time left is checkpointed.`
+        : undefined;
+      handover = buildTakeoverNote({
+        trigger,
+        stepsUsed: steps,
+        stepsLeft: Math.max(0, maxTotal - steps),
+        ...handoffChangedNow(),
+        checks: handoffChecks,
+        ...(stopClock ? { leftS: Math.max(0, stopClock.stopAt - nowMs) / 1000 } : {}),
+        ...(cpText ? { checkpoint: cpText } : {}),
+        verifyOutput: opts.verifyOutput,
+      });
+    } else if (!keepContext) {
+      const lastUser = [...messages].reverse().find((m) => m.role === "user");
+      handover = buildHandover({
+        request: typeof lastUser?.content === "string" ? lastUser.content : "",
+        trigger,
+        stepsUsed: steps,
+        stepsLeft: Math.max(0, maxTotal - steps),
+        ...handoffChangedNow(),
+        recent: recentActions,
+        todos: state.todos ?? [],
+        lastNote: opts.lastNote,
+        verifyOutput: opts.verifyOutput,
+      });
+    }
+    escalation = {
+      trigger,
+      at_step: steps,
+      from: { model: usedModel, endpoint: usedTarget.endpoint },
+      to: { model: escalateDecl.model, endpoint: escalateDecl.endpoint },
+      carried: keepContext ? "context" : "handover",
+      handover_chars: handover.length,
+      ...(raisedTo !== undefined ? { max_steps_total_after: raisedTo } : {}),
+      ...(opts.detail ? { detail: opts.detail } : {}),
+      elapsed_ms: elapsedMs,
+      final_model: escalateDecl.model,
+      ...(turnUsage ? { usage_before: { ...turnUsage } } : {}),
+    };
+    deps.audit?.write("escalation", {
+      role,
+      depth,
+      trigger,
+      at_step: steps,
+      from: escalation.from,
+      to: escalation.to,
+      carried: escalation.carried,
+      handover_chars: escalation.handover_chars,
+      ...(raisedTo !== undefined ? { max_steps_total_after: raisedTo } : {}),
+      ...(opts.detail ? { detail: opts.detail } : {}),
+      elapsed_ms: elapsedMs,
+      // The backend's count so far, all on the first model. The count after
+      // the move is on the turn record (escalation.usage_after).
+      ...(turnUsage ? { tokens_before: { input: turnUsage.input ?? 0, output: turnUsage.output ?? 0 } } : {}),
+      // The handover text itself only under record = "full"; metadata keeps
+      // its size and the decision, never content.
+      handover: handover ? deps.audit.text(handover) : undefined,
+    });
+    deps.progress.stop();
+    warn(
+      paint(
+        deps.ui,
+        "yellow",
+        `  [escalate] ${trigger} — continuing on ${escalateDecl.model} at ` +
+          `${escalateDecl.endpoint || escalateDecl.url}` +
+          (keepContext
+            ? " with the conversation so far" + (handover ? ` and a ${handover.length}-character note` : "")
+            : ` with a ${handover.length}-character handover`) +
+          (raisedTo !== undefined ? ` (step ceiling raised to ${raisedTo})` : "")
+      )
+    );
+    active = escalateDecl;
+    usedModel = escalateDecl.model;
+    usedTarget = escalateDecl;
+    if (!keepContext) {
+      const system = messages[0]?.role === "system" ? messages[0] : undefined;
+      working.length = 0;
+      if (system) working.push(system);
+      working.push({ role: "user", content: handover });
+    } else if (handover) {
+      // On the steering channel: a user message marked [gnomon], which every
+      // chat template accepts after an assistant or tool message.
+      working.push({ role: "user", content: STEER_PREFIX + handover });
+    }
+    failStreak = 0;
+    // The new model starts with clean loop-detection state: the old model's
+    // repetition is not the new model's.
+    recentCalls.length = 0;
+    callsSinceWrite = 0;
+    callsAtLastNudge = 0;
+    consecutiveMalformed = 0;
+    consecutiveEmpty = 0;
+    verifyRounds = 0;
+    deps.progress.start(`${escalateDecl.model} — escalated (${trigger})`);
+    return true;
+  };
+
+  /** Every return carries the escalation, completed with the final model and usage. */
+  const withEscalation = (r: TurnResult): TurnResult =>
+    escalation
+      ? {
+          ...r,
+          escalation: {
+            ...escalation,
+            final_model: usedModel,
+            ...(turnUsage ? { usage_after: usageSince(escalation.usage_before, turnUsage) } : {}),
+          },
+        }
+      : r;
+
   // `--deadline`: the next fraction of the budget whose note is still unsent.
   let deadlineNoteNext = 0;
   // `[turn] deadline_note = "upfront"`: whether the budget has been stated.
@@ -5937,9 +6544,12 @@ async function agenticTurn(
       const now = (deps.clock ?? Date.now)();
       const used = (now - d.started_at) / Math.max(1, d.total_ms);
       let crossed = false;
+      // After a checkpoint's continuation (checkpoint_grind.ts) no countdown
+      // follows: the continuation said the time once.
+      const grinding = grindState.cp !== undefined;
       while (deadlineNoteNext < d.notes.length && used >= d.notes[deadlineNoteNext]!) {
         deadlineNoteNext++;
-        crossed = true;
+        if (!grinding) crossed = true;
       }
       let missing: string[] = [];
       if (deliverables) {
@@ -5978,7 +6588,7 @@ async function agenticTurn(
         working.push({
           role: "system",
           content:
-            style === "none" || style === "upfront"
+            style === "none" || style === "upfront" || grinding
               ? deliverableNote(missing, "continue")
               : deadlineNoteText(style, formatSpan(left), formatSpan(d.total_ms)) +
                 (missing.length > 0 ? ` ${deliverableNote(missing, style)}` : ""),
@@ -5990,7 +6600,7 @@ async function agenticTurn(
     // result per call: between two batches the request grows only at its
     // end, so the endpoint's cached prefix stays valid (context_hygiene.ts).
     if (mask) {
-      const next = onFallback && route.fallback ? route.fallback : route.target;
+      const next = escalation ? active : onFallback && route.fallback ? route.fallback : route.target;
       const window = resolveContext(config, next).max_context_tokens;
       const batch = maskObservations(working, observations, mask, window, lastChangeSeq);
       if (batch) {
@@ -6021,7 +6631,13 @@ async function agenticTurn(
     }
 
     let result: InferenceResult;
-    if (onFallback && route.fallback) {
+    if (escalation) {
+      // Escalated: the rest of the turn is on the escalation model, and the
+      // primary's fallback no longer applies.
+      usedModel = active.model;
+      usedTarget = active;
+      result = await call(active);
+    } else if (onFallback && route.fallback) {
       usedModel = route.fallback.model;
       usedTarget = route.fallback;
       result = await call(route.fallback);
@@ -6034,7 +6650,7 @@ async function agenticTurn(
 
     if (deps.signal?.aborted) return cancelled();
 
-    if (result.code !== 0 && route.fallback && !onFallback) {
+    if (result.code !== 0 && route.fallback && !onFallback && !escalation) {
       // Announced on the spinner ONLY, until 2026-09-05. `progress.update` is
       // overwritten by the very next frame, and `gnomon task` in a script has
       // no scrollback to overwrite — so the single most consequential thing
@@ -6080,6 +6696,15 @@ async function agenticTurn(
           )
         );
       }
+    }
+
+    // apparatus: the endpoint is down after retries (and after any fallback).
+    // Not the same as fallback: this moves the REST of the turn, once, and
+    // carries the conversation, since the first model was not stuck.
+    if (result.code !== 0 && mapBucket(result.code) === "apparatus_failure" && escalateNow("apparatus")) {
+      result = await call(active);
+      usedModel = active.model;
+      if (deps.signal?.aborted) return cancelled();
     }
 
     code = worse(code, result.code);
@@ -6624,6 +7249,7 @@ async function agenticTurn(
             // Already reported above, with the audit record saying why.
           } else if (!passed || pinsNothing) {
             verifyOutcome = "failed";
+            lastVerifyOutput = `$ ${verify.command}\n${check.content}`;
             // `warn`: a declared check failing is not chatter, and on
             // `gnomon task --json` it was the one line saying so (gnomon chaos,
             // late_system_dropped: a check that failed every round it was given
@@ -6948,8 +7574,137 @@ async function agenticTurn(
         }
         return null;
       };
+      const endCheckpoint = async (): Promise<EndOfTurnHandBack | null> => {
+        // Checkpoint, then grind (`[turn] continue_after_answer`,
+        // checkpoint_grind.ts, CONTRACTS §41). After every gate has accepted
+        // the answer: the answer's tree is the checkpoint. Once per run.
+        if (!grindOn) return null;
+        if (grindState.phase === "continued") {
+          // `continue_max_rounds` > 1: while rounds are left and time remains, this answer's tree is scored against the best checkpoint
+          // and the continuation is sent again; otherwise the run ends as it always did (the best checkpoint vs the final tree).
+          const maxRounds = grind!.max_rounds ?? 1;
+          const dd = stopClock!;
+          const leftNowMs = Math.max(0, dd.stopAt - (deps.clock ?? Date.now)());
+          const timeOk =
+            grind!.until_s !== undefined ? leftNowMs / 1000 > grind!.until_s : leftNowMs / Math.max(1, dd.total_ms) >= grind!.min_remaining;
+          if (maxRounds > 1 && grindState.rounds < maxRounds && timeOk && result.code === 0 && !emptyTerminus && lastFinishReason !== "length") {
+            const cc = counters.checkpoint!;
+            let now: CheckScore | undefined;
+            if (grindState.check) {
+              deps.progress.stop();
+              now = await runGrindCheck(grindState.check.command, dd.stopAt - dd.marginMs);
+            }
+            let decision = roundDecision(grindState.score, now, grindState.check !== undefined);
+            let ncp: TreeCheckpoint | undefined;
+            let why: string | undefined;
+            if (decision !== "kept_best") {
+              const t = takeCheckpoint(workRootOf(state.config));
+              if ("skipped" in t) {
+                decision = "kept_best";
+                why = t.skipped;
+              } else ncp = t;
+            }
+            if (ncp) {
+              dropCheckpoint(grindState.cp!);
+              grindState.cp = ncp;
+              if (now) grindState.score = now;
+            }
+            grindState.rounds++;
+            cc.rounds = grindState.rounds;
+            deps.audit?.write("checkpoint", {
+              event: "checkpoint_round",
+              role,
+              step: steps,
+              round: grindState.rounds,
+              decision,
+              ...(why ? { why } : {}),
+              content_hash: grindState.cp!.hash,
+              left_ms: leftNowMs,
+              check_source: grindState.check?.source ?? "none",
+              ...(grindState.score ? { best_score: grindState.score } : {}),
+              ...(now ? { round_score: now } : {}),
+            });
+            say(
+              paint(deps.ui, "cyan", `  ⚙ checkpoint`) +
+                paint(deps.ui, "gray", ` round ${grindState.rounds}: ${decision}; ${formatSpan(leftNowMs)} left — continuing`)
+            );
+            toolLog.push(`checkpoint — round ${grindState.rounds} ${decision}`);
+            return {
+              stage: "checkpoint",
+              role: "user",
+              content: STEER_PREFIX + continuationText(leftNowMs, dd.style !== "none", grind?.message),
+            };
+          }
+          await finishCheckpoint("answer");
+          return null;
+        }
+        if (
+          grindState.phase !== "waiting" ||
+          CHECKPOINT_TAKEN.has(state) ||
+          result.code !== 0 ||
+          emptyTerminus ||
+          lastFinishReason === "length"
+        ) {
+          return null;
+        }
+        const d = stopClock!;
+        const now = (deps.clock ?? Date.now)();
+        const leftMs = Math.max(0, d.stopAt - now);
+        const share = leftMs / Math.max(1, d.total_ms);
+        if (share < grind!.min_remaining || (grind!.until_s !== undefined && leftMs / 1000 <= grind!.until_s)) {
+          grindState.phase = "done";
+          return null;
+        }
+        grindState.phase = "done";
+        CHECKPOINT_TAKEN.add(state);
+        const cc = counters.checkpoint!;
+        const root = workRootOf(state.config);
+        const cp = takeCheckpoint(root);
+        if ("skipped" in cp) {
+          cc.outcome = "skipped";
+          deps.audit?.write("checkpoint", { event: "checkpoint_skipped", role, step: steps, why: cp.skipped, left_ms: leftMs });
+          say(paint(deps.ui, "gray", `  ⚙ checkpoint — not taken (${cp.skipped}); answer accepted`));
+          return null;
+        }
+        const command = grind!.check ?? lastPassingTest;
+        const check = command ? { command, source: (grind!.check ? "configured" : "session") as CheckSource } : undefined;
+        deps.progress.stop();
+        say(paint(deps.ui, "cyan", `  ⚙ checkpoint`) + paint(deps.ui, "gray", ` ${cp.files.size} file(s) saved; ${formatSpan(leftMs)} left — continuing`));
+        let score: CheckScore | undefined;
+        if (check) score = await runGrindCheck(check.command, d.stopAt - d.marginMs);
+        grindState.cp = cp;
+        grindState.check = check;
+        grindState.score = score;
+        grindState.phase = "continued";
+        grindState.rounds = 1;
+        if ((grind!.max_rounds ?? 1) > 1) cc.rounds = 1;
+        cc.outcome = "continued";
+        cc.check_source = check?.source ?? "none";
+        cc.left_s = Math.round(leftMs / 1000);
+        deps.audit?.write("checkpoint", {
+          event: "checkpoint",
+          role,
+          step: steps,
+          content_hash: cp.hash,
+          files: cp.files.size,
+          bytes: cp.bytes,
+          left_ms: leftMs,
+          share_left: Math.round(share * 1000) / 1000,
+          check_source: check?.source ?? "none",
+          ...(check ? { command: deps.audit?.action(check.command) ?? check.command } : {}),
+          ...(score ? { checkpoint_score: score } : {}),
+        });
+        toolLog.push(`checkpoint — taken, continuing`);
+        // The time it took to score the checkpoint came out of the budget.
+        const leftNow = Math.max(0, d.stopAt - (deps.clock ?? Date.now)());
+        return {
+          stage: "checkpoint",
+          role: "user",
+          content: STEER_PREFIX + continuationText(leftNow, d.style !== "none", grind?.message),
+        };
+      };
       let endHandBack: EndOfTurnHandBack | null = null;
-      for (const stage of [endVerify, endTodoGate, endCompletionGate, endFinishGate]) {
+      for (const stage of [endVerify, endTodoGate, endCompletionGate, endFinishGate, endCheckpoint]) {
         endHandBack = await stage();
         if (endHandBack) break;
       }
@@ -6963,6 +7718,17 @@ async function agenticTurn(
         continue;
       }
 
+      // verify_failed: the declared check still fails after every round this
+      // model was given. The escalation model gets the check's output and a
+      // fresh set of rounds.
+      if (
+        result.code === 0 &&
+        verifyOutcome === "failed" &&
+        escalateNow("verify_failed", { lastNote: result.content, verifyOutput: lastVerifyOutput })
+      ) {
+        continue;
+      }
+
       // Measured at the end of the turn, from git — never the model's account.
       // Nothing may be still held back when the turn ends: a folded chunk
       // printed after the answer would describe work the reader has already
@@ -6973,7 +7739,7 @@ async function agenticTurn(
       flushFold();
       counters.tree_delta = measureTreeDelta(workRootOf(state.config), treeBaseline);
       stampCitations(counters, result.content, workRootOf(state.config));
-      return {
+      return withEscalation({
         content: noteMarkupInAnswer(result.content, counters),
         code: settle(code, result.code),
         model: usedModel,
@@ -6999,7 +7765,7 @@ async function agenticTurn(
         counters,
         modelCalls: measured(),
         surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
-      };
+      });
     }
 
     // Stalled? Repeating one call verbatim is not progress, and on autopilot
@@ -7075,6 +7841,13 @@ async function agenticTurn(
     //
     // A ceiling a turn can walk through is worse than no ceiling: it is the one
     // bound an unattended session has, and the number in roles.toml was not it.
+    // stall / step_wall: the turn is about to stop without an answer it chose.
+    // A declared escalation takes it over instead of wrapping it up. The reply
+    // that hit the wall or repeated is dropped, as it would be here anyway.
+    if (!malformedOut && (stalled || wall) && escalateNow(stalled ? "stall" : "step_wall", { lastNote: result.content })) {
+      continue;
+    }
+
     if (malformedOut || cutOut || stalled || wall) {
       const note = cutOut
         ? `Stopped: ${consecutiveCut} repl${consecutiveCut === 1 ? "y" : "ies"} in a row had a ` +
@@ -7106,7 +7879,7 @@ async function agenticTurn(
           `an edit you did not make as though you made it. Then say what you ` +
           `were unable to examine, so the answer is legibly partial.`,
       });
-      const closingTarget = adaptTarget(state, route.target);
+      const closingTarget = adaptTarget(state, active);
       let closing = await callEndpoint(
         closingTarget,
         working,
@@ -7144,10 +7917,12 @@ async function agenticTurn(
       // printed after the answer would describe work the reader has already
       // been given conclusions about.
       await jobs?.closeAll("turn_end");
+      // A run that took a checkpoint is judged on whatever ending it got.
+      await finishCheckpoint("stop");
       flushFold();
       counters.tree_delta = measureTreeDelta(workRootOf(state.config), treeBaseline);
       stampCitations(counters, content, workRootOf(state.config));
-      return {
+      return withEscalation({
         // The wall and stall paths are where markup actually survived: a turn
         // cut off mid-emission still returns whatever it had.
         content: noteMarkupInAnswer(content, counters),
@@ -7172,7 +7947,7 @@ async function agenticTurn(
         counters,
         modelCalls: measured(),
         surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
-      };
+      });
     }
 
     if (checkpoint) {
@@ -7453,6 +8228,24 @@ async function agenticTurn(
       code = worse(code, outcome.code);
       if (outcome.surface_drift) surfaceChanges.push(outcome.surface_drift);
       toolLog.push(outcome.summary);
+      if (escalateDecl && !escalation) {
+        recentActions.push(`${call.name} ${describeCall(call)} → ${outcome.summary}`.trim());
+        if (recentActions.length > 12) recentActions.shift();
+        if ((call.name === "write" || call.name === "edit") && outcome.code === 0 && typeof call.args?.path === "string") {
+          const root = workRootOf(state.config);
+          const rel = relative(root, resolve(root, String(call.args.path))).split(sep).join("/");
+          if (!handoffWritten.includes(rel) && handoffWritten.length < 1000) handoffWritten.push(rel);
+        } else if (call.name === "bash" && typeof call.args?.command === "string") {
+          const command = String(call.args.command);
+          if (isHandoffCheck(command)) {
+            handoffChecks.push({ command, exit: typeof outcome.shell_exit === "number" ? outcome.shell_exit : null });
+            if (handoffChecks.length > HANDOFF_MAX_CHECKS) handoffChecks.shift();
+          }
+        }
+        const failed =
+          outcome.code !== 0 || (call.name === "bash" && outcome.shell_exit !== undefined && outcome.shell_exit !== 0);
+        failStreak = failed ? failStreak + 1 : 0;
+      }
       tally(call.name, "calls");
       const outcomeBucket = mapBucket(outcome.code);
       if (outcomeBucket === "refusal") {
@@ -7503,6 +8296,12 @@ async function agenticTurn(
       if (gateOn && gateState.rounds > 0 && call.name === "bash" && outcome.code === 0) {
         gateState.checksSince++;
         counters.completion_gate!.checks++;
+      }
+      // For the checkpoint (checkpoint_grind.ts): the most recent test command
+      // that exited 0 is the check the checkpoint is scored with.
+      if (grindOn && call.name === "bash" && outcome.code === 0 && readVerifyExit(outcome).passed) {
+        const command = String(call.args?.command ?? "");
+        if (isTestCommand(command)) lastPassingTest = command;
       }
       // For the finish gate: the calls that ran (its claim/evidence check), and
       // any tool call that ran after it handed back.
@@ -7766,7 +8565,50 @@ async function agenticTurn(
       }, "converge"));
       deps.progress.start(`${usedModel} — ${steps} tool call(s), converging`);
     }
+
+    // budget_50: half the step budget (or of a declared deadline) is spent and
+    // the turn has not ended. Checked after the calls ran, so the move happens
+    // between steps, never in the middle of one.
+    if (escalateDecl && !escalation && escalateDecl.on.includes("budget_50")) {
+      const halfSteps = maxTotal > 0 && steps * 2 >= maxTotal;
+      const halfTime =
+        deps.deadline !== undefined &&
+        deps.deadline.total_ms > 0 &&
+        ((deps.clock ?? Date.now)() - deps.deadline.started_at) * 2 >= deps.deadline.total_ms;
+      if (halfSteps || halfTime) escalateNow("budget_50", { lastNote: lastRationale });
+    }
+    // deadline_share: the declared share of the --deadline budget has passed.
+    // Time only: without a deadline it never fires.
+    if (escalateDecl && !escalation && escalateDecl.on.includes("deadline_share")) {
+      const d = deps.deadline;
+      if (
+        d !== undefined &&
+        d.total_ms > 0 &&
+        (deps.clock ?? Date.now)() - d.started_at >= escalateDecl.deadline_share * d.total_ms
+      ) {
+        escalateNow("deadline_share", { lastNote: lastRationale });
+      }
+    }
+    // stuck: the executor is stuck, by either signal -- this many tool calls
+    // in a row that failed, or this many that changed no file.
+    if (escalateDecl && !escalation && escalateDecl.on.includes("stuck")) {
+      if (failStreak >= escalateDecl.stuck_failures) {
+        escalateNow("stuck", { lastNote: lastRationale, detail: "failures" });
+      } else if (callsSinceWrite >= escalateDecl.stuck_steps) {
+        escalateNow("stuck", { lastNote: lastRationale, detail: "no_progress" });
+      }
+    }
   }
+}
+
+/**
+ * The startup line for a role that escalates, or undefined when it does not.
+ * Said up front because "this turn may end on a different, billed model" is
+ * the thing an operator most needs to know before typing.
+ */
+export function describeEscalation(e: EscalateRoute | undefined): string | undefined {
+  if (!e) return undefined;
+  return `Escalates to: ${e.model} at ${e.endpoint || e.url}, once per turn, on ${e.on.join(", ")}`;
 }
 
 /**
@@ -8187,7 +9029,15 @@ export interface TaskRecord {
     deadline?: { at: string; budget_ms: number; margin_ms: number; source: "flag" | "env" };
     /** `counters.completion_gate.ms`, moved here: the gate's clock. §30. */
     completion_gate_ms?: number;
+    /** With an escalation: the usage before and after the move. */
+    escalation_usage?: { before?: TokenUsage; after?: TokenUsage; elapsed_ms?: number };
   };
+  /**
+   * Present only when the turn moved to its role's escalation model: the
+   * trigger, the step, from and to, what was carried and its size, and the
+   * model the turn ended on. Usage on each side is under `volatile`.
+   */
+  escalation?: Omit<EscalationRecord, "usage_before" | "usage_after" | "elapsed_ms">;
 }
 
 /** One tool call's timing, as the record and the trail carry it (TB4). */
@@ -8969,6 +9819,7 @@ export async function runTask(
     stop_reason: turn.stop_reason,
     stop_detail: turn.stop_detail,
     counters: turn.counters,
+    ...(turn.escalation ? { escalation: turn.escalation } : {}),
     tokens_in: turn.usage?.input,
     tokens_out: turn.usage?.output,
     skills: active.map((sk) => sk.id),
@@ -9074,7 +9925,17 @@ export async function runTask(
       // Wall-clock spent in the completion gate, reviewer included. Present
       // only when a gate is declared.
       ...(turn.counters.completion_gate ? { completion_gate_ms: turn.counters.completion_gate.ms ?? 0 } : {}),
+      ...(turn.escalation
+        ? {
+            escalation_usage: {
+              before: turn.escalation.usage_before,
+              after: turn.escalation.usage_after,
+              ...(turn.escalation.elapsed_ms !== undefined ? { elapsed_ms: turn.escalation.elapsed_ms } : {}),
+            },
+          }
+        : {}),
     },
+    ...(turn.escalation ? { escalation: escalationFields(turn.escalation) } : {}),
   };
   // The live record, final. Before the checkpoint below, which records the
   // state of every record file: written after it, the next session would
@@ -9095,6 +9956,12 @@ export async function runTask(
   // The shadow was flushed and closed above, before the turn record.
 
   return record;
+}
+
+/** The reproducible part of an escalation, for a record outside `volatile`. */
+function escalationFields(e: EscalationRecord): Omit<EscalationRecord, "usage_before" | "usage_after" | "elapsed_ms"> {
+  const { usage_before: _b, usage_after: _a, elapsed_ms: _e, ...fields } = e;
+  return fields;
 }
 
 // ---------------------------------------------------------------------------
@@ -11134,6 +12001,7 @@ export async function runSessionTurn(
     // this turn was recorded: answers still in flight are `pending`, and
     // `session_end` carries the final count. Absent without a [shadow].
     shadow: deps.shadow?.coverage(),
+    ...(turn.escalation ? { escalation: turn.escalation } : {}),
     surface_hash: deps.surfaceHash,
     input: deps.audit.text(cleanedInput),
     output: deps.audit.text(turn.content),
@@ -11415,7 +12283,10 @@ export async function runPromptLoop(
   }
 
   console.log(`Role: ${state.currentRole}`);
-  console.log(`Model: ${routeRole(config, state.currentRole).model}`);
+  const startRoute = routeRole(config, state.currentRole);
+  console.log(`Model: ${startRoute.model}`);
+  const escLine = describeEscalation(startRoute.escalate);
+  if (escLine) console.log(escLine);
   console.log("");
 
   // Line-driven input with a queue: anything typed while the model is

@@ -274,6 +274,11 @@ export type AuditKind =
   // no token arrived in time, its attempt and wait, and whether a later
   // attempt under the same retry budget answered.
   | "first_token_stall"
+  // `[turn] continue_after_answer` under --deadline (checkpoint_grind.ts):
+  // `checkpoint` (taken, with the tree's content hash and the check's score),
+  // `checkpoint_skipped`, and the end decision: `checkpoint_restored`,
+  // `checkpoint_kept`, `checkpoint_kept_unverified`.
+  | "checkpoint"
   // One per end of a turn the finish gate (`[verify] finish_gate = "v2"`,
   // finish_gate.ts) judged: fire, no_tool or accept, the budget left, the
   // caveat ids its audit found, claims without evidence, the open todos.
@@ -283,6 +288,12 @@ export type AuditKind =
   // before it) and what came back (provider tokens, reasoning, code, clock).
   // Metadata only: no prompt or response text. mediators.ts.
   | "model_call"
+  // A turn moved to its role's escalation model ("local first, cloud rescue"):
+  // the trigger, the step, from where to where, and the handover's size. Its
+  // own kind because it is a routing decision inside a turn, not a turn, and a
+  // reader asking "which model did this work" has to find it without parsing
+  // turn records.
+  | "escalation"
   | "session_end";
 
 export interface AuditRecord {

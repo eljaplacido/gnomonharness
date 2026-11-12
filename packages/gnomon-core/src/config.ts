@@ -24,6 +24,7 @@ import { COMPLETION_GATE_MODES, auditCompletionGate } from "./completion_gate.js
 import { auditSoftShell } from "./soft_shell.js";
 import { auditSandboxProfile } from "./sandbox_profile.js";
 import { auditDeliverableFirst } from "./deliverable_first.js";
+import { auditCheckpointGrind } from "./checkpoint_grind.js";
 import {
   CONTINUE_NOTE_AT,
   auditLongTaskProfile,
@@ -460,6 +461,90 @@ export interface FallbackDef {
   api_key_env?: string;
 }
 
+/**
+ * Why a stuck turn may move to its role's escalation model ("local first,
+ * cloud rescue"). A published enumeration: a trigger outside it is a fatal
+ * surface problem, because an escalation that can never fire is a declared
+ * behaviour that silently does not exist.
+ *
+ *   stall          the loop stopped a call repeating without progress
+ *   step_wall      the turn reached max_steps_total
+ *   budget_50      half the step budget (or of a declared --deadline) is spent
+ *                  and the turn has not ended
+ *   verify_failed  the declared [verify] check still fails after every round
+ *   apparatus      the model endpoint failed after retries (and after any
+ *                  [roles.<name>.fallback])
+ */
+export type EscalateTrigger =
+  | "stall"
+  | "step_wall"
+  | "budget_50"
+  | "verify_failed"
+  | "apparatus"
+  | "stuck"
+  | "deadline_share";
+export const ESCALATE_TRIGGERS: readonly EscalateTrigger[] = [
+  "stall",
+  "step_wall",
+  "budget_50",
+  "verify_failed",
+  "apparatus",
+  "stuck",
+  "deadline_share",
+];
+
+/** `[roles.<name>.escalate] carry`: what the escalated model is given. */
+export type EscalateCarry = "conversation" | "handover";
+export const ESCALATE_CARRY: readonly EscalateCarry[] = ["conversation", "handover"];
+
+/** Defaults for the `stuck` and `deadline_share` triggers' knobs. */
+export const ESCALATE_DEFAULTS = {
+  stuck_failures: 4,
+  stuck_steps: 12,
+  deadline_share: 0.5,
+  max_handoffs: 1,
+  carry: "conversation" as EscalateCarry,
+} as const;
+
+/**
+ * `[roles.<name>.escalate]`: the model a stuck turn continues on.
+ *
+ * Unlike `fallback`, which retries ONE request elsewhere when an endpoint does
+ * not answer and returns to the primary on the next step, an escalation moves
+ * the REST of the turn, once, and only when a declared trigger fires.
+ */
+export interface EscalateDef extends FallbackDef {
+  /** Triggers that move the turn; see EscalateTrigger. Absent or empty: never. */
+  on?: string[];
+  /**
+   * The fewest tool calls the escalated part is guaranteed. The escalation runs
+   * on what is left of the step budget; when less than this is left (always
+   * the case for `step_wall`), the wall is raised so this many remain. Default:
+   * the role's max_steps (one leg). Time is never extended.
+   */
+  max_steps?: number;
+  /**
+   * What the escalated model is given. "conversation" (default): the
+   * conversation as it stands, plus a handover note (why, the files changed,
+   * the checkpoint, the steps left); the files on disk are shared. "handover":
+   * the bounded handover alone, in place of the transcript (PR #102's rule).
+   * `apparatus` always carries the conversation.
+   */
+  carry?: string;
+  /** `stuck`: this many tool calls in a row that failed (tool error or a non-zero shell exit). Default 4. */
+  stuck_failures?: number;
+  /** `stuck`: this many tool calls in a row that changed no file. Default 12. */
+  stuck_steps?: number;
+  /** `deadline_share`: fires once this share (0 < x < 1) of the `--deadline` budget has passed. Default 0.5. */
+  deadline_share?: number;
+  /**
+   * Handoffs per run (one `gnomon task`, or one interactive session). Default
+   * 1. A turn moves at most once whatever this says; a higher number lets a
+   * later turn of the same session move again.
+   */
+  max_handoffs?: number;
+}
+
 export interface RoleDef {
   model?: string;
   /** A number, or `"provider"` to send none (sweep_knobs.ts). Absent is 0.2. */
@@ -594,6 +679,8 @@ export interface RoleDef {
    */
   governance?: Record<string, unknown>;
   fallback?: FallbackDef;
+  /** Local first, cloud rescue: where a stuck turn continues. See EscalateDef. */
+  escalate?: EscalateDef;
   // Legacy field (kept for compat with older role files)
   profile?: string;
   allowed_edit_formats?: string[];
@@ -2649,6 +2736,12 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "todo_gate",
       "deadline_note",
       "prompt_profile",
+      "continue_after_answer",
+      "continue_min_remaining",
+      "checkpoint_check",
+      "continue_message",
+      "continue_max_rounds",
+      "continue_until_s",
     ],
   ],
   [
@@ -2690,7 +2783,7 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
   ["policy.toml", "governance", [...GOVERNANCE_KEYS, "paths"]],
 ];
 
-const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "fallback", "max_steps", "max_steps_total", "max_tokens", "model", "exec", "image", "profile", "reasoning_effort", "task_allow", "temperature", "tools", "top_p", "write_allow", "governance"]);
+const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "escalate", "fallback", "max_steps", "max_steps_total", "max_tokens", "model", "exec", "image", "profile", "reasoning_effort", "task_allow", "temperature", "tools", "top_p", "write_allow", "governance"]);
 
 /**
  * Spellings people reach for when they mean to supply a secret directly.
@@ -3253,6 +3346,7 @@ problems.push(...auditFinishGate(config));
 problems.push(...auditSweepKnobs(config, (ep) => endpointKind(ep)));
 problems.push(...auditSoftShell(config));
 problems.push(...auditDeliverableFirst(config));
+problems.push(...auditCheckpointGrind(config));
 problems.push(...auditLongTaskProfile(config));
 problems.push(...auditSandboxProfile(config));
 
@@ -3785,7 +3879,64 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
     const targets: Array<[string, string | undefined, string | undefined]> = [
       [`[roles.${role}]`, def?.endpoint, def?.model],
       [`[roles.${role}.fallback]`, def?.fallback?.endpoint, def?.fallback?.model],
+      [`[roles.${role}.escalate]`, def?.escalate?.endpoint, def?.escalate?.model],
     ];
+
+    if (def?.escalate) {
+      const where = `.gnomon/roles.toml [roles.${role}.escalate]`;
+      const on = def.escalate.on;
+      const unknown = (Array.isArray(on) ? on : []).filter(
+        (t) => !(ESCALATE_TRIGGERS as readonly string[]).includes(String(t))
+      );
+      if (on !== undefined && !Array.isArray(on)) {
+        problems.push({
+          where,
+          problem: `on must be a list of triggers.`,
+          fix: `on = ["stall", "step_wall"] — any of ${ESCALATE_TRIGGERS.join(", ")}.`,
+          fatal: true,
+        });
+      } else if (unknown.length > 0) {
+        problems.push({
+          where,
+          problem: `on names ${unknown.map((t) => `"${t}"`).join(", ")}, which ${unknown.length === 1 ? "is" : "are"} not a trigger.`,
+          fix: `Triggers: ${ESCALATE_TRIGGERS.join(", ")}.`,
+          fatal: true,
+        });
+      } else if (!on || on.length === 0) {
+        problems.push({
+          where,
+          problem: `declares an escalation model but no trigger, so it never fires.`,
+          fix: `Add on = [...] with any of ${ESCALATE_TRIGGERS.join(", ")}, or remove the block.`,
+          fatal: false,
+        });
+      }
+      const e = def.escalate as EscalateDef;
+      if (e.carry !== undefined && !(ESCALATE_CARRY as readonly string[]).includes(String(e.carry))) {
+        problems.push({
+          where,
+          problem: `carry = "${String(e.carry)}" is not one of ${ESCALATE_CARRY.join(", ")}.`,
+          fix: `carry = "conversation" (default) or "handover".`,
+          fatal: true,
+        });
+      }
+      for (const k of ["stuck_failures", "stuck_steps", "max_handoffs"] as const) {
+        const v = e[k];
+        if (v !== undefined && !(typeof v === "number" && Number.isInteger(v) && v >= 1)) {
+          problems.push({ where, problem: `${k} must be a whole number of at least 1.`, fix: `${k} = ${ESCALATE_DEFAULTS[k]}`, fatal: true });
+        }
+      }
+      if (e.deadline_share !== undefined && !(typeof e.deadline_share === "number" && e.deadline_share > 0 && e.deadline_share < 1)) {
+        problems.push({ where, problem: `deadline_share must be a number between 0 and 1.`, fix: `deadline_share = 0.5`, fatal: true });
+      }
+      if (!def.escalate.model) {
+        problems.push({
+          where,
+          problem: `has no model.`,
+          fix: `Add model = "<id the escalation endpoint serves>".`,
+          fatal: true,
+        });
+      }
+    }
 
     for (const [block, endpoint, model] of targets) {
       if (endpoint === undefined && model === undefined) continue;
@@ -4356,7 +4507,15 @@ function knobsOf(
 export function routeRole(
   config: GnomonConfig,
   role: string
-): { model: string; temperature: number; top_p: number; description?: string; target: RouteTarget; fallback?: RouteTarget } {
+): {
+  model: string;
+  temperature: number;
+  top_p: number;
+  description?: string;
+  target: RouteTarget;
+  fallback?: RouteTarget;
+  escalate?: EscalateRoute;
+} {
   const roleDef = getRole(config, role);
 
   // Role-level overrides take precedence
@@ -4436,7 +4595,67 @@ export function routeRole(
     };
   }
 
-  return { model, temperature, top_p, description, target, fallback };
+  let escalate: EscalateRoute | undefined;
+  const esc = roleDef.escalate;
+  const on = (Array.isArray(esc?.on) ? esc.on : []).filter((t): t is EscalateTrigger =>
+    (ESCALATE_TRIGGERS as readonly string[]).includes(t)
+  );
+  if (esc?.model && on.length > 0) {
+    const escEndpointName = esc.endpoint ?? (esc.url ? undefined : DEFAULT_ENDPOINT);
+    const escEndpoint = escEndpointName ? resolveEndpoint(config, escEndpointName) : undefined;
+    const escUrl = esc.url ?? escEndpoint?.url ?? "";
+    const escKind = endpointKind(escEndpoint ?? { url: esc.url }, "openai");
+    // Built as the fallback is: the escalated part of the turn runs on the
+    // endpoint's own streaming, timeouts, output limit, context window,
+    // reasoning replay, steering and sweep knobs, exactly as a role routed
+    // there would. (#102 carried only url/kind, so an escalated turn lost
+    // e.g. `replay_reasoning` and streaming that the same endpoint declares.)
+    escalate = {
+      model: esc.model,
+      temperature,
+      top_p,
+      url: escUrl,
+      apiKeyEnv: esc.api_key_env ?? escEndpoint?.api_key_env,
+      endpoint: escEndpointName,
+      kind: escKind,
+      stream: resolveStream(escEndpoint ?? { url: esc.url }, "openai", config.config.defaults?.stream),
+      streamIdleMs: resilience.stream_idle_timeout_ms,
+      streamTotalMs: resilience.stream_total_timeout_ms,
+      ...firstTokenOf(resilience),
+      maxTokens: resolveMaxTokens(config, roleDef, escEndpoint),
+      ...contextWindowOf(config, escEndpoint?.max_context_tokens, { url: escUrl, kind: escKind, model: esc.model }),
+      ...replayFieldsOf({ ...(escEndpoint ?? {}), url: escUrl }, "openai"),
+      ...steerFieldsOf(escEndpoint),
+      ...knobsOf(roleDef, escEndpoint, escKind),
+      on,
+      ...(typeof esc.max_steps === "number" && esc.max_steps > 0 ? { max_steps: Math.floor(esc.max_steps) } : {}),
+      carry: esc.carry === "handover" ? "handover" : ESCALATE_DEFAULTS.carry,
+      stuck_failures: posInt(esc.stuck_failures) ?? ESCALATE_DEFAULTS.stuck_failures,
+      stuck_steps: posInt(esc.stuck_steps) ?? ESCALATE_DEFAULTS.stuck_steps,
+      deadline_share:
+        typeof esc.deadline_share === "number" && esc.deadline_share > 0 && esc.deadline_share < 1
+          ? esc.deadline_share
+          : ESCALATE_DEFAULTS.deadline_share,
+      max_handoffs: posInt(esc.max_handoffs) ?? ESCALATE_DEFAULTS.max_handoffs,
+    };
+  }
+
+  return { model, temperature, top_p, description, target, fallback, ...(escalate ? { escalate } : {}) };
+}
+
+/** A resolved `[roles.<name>.escalate]`: where to go, and when. */
+export interface EscalateRoute extends RouteTarget {
+  on: EscalateTrigger[];
+  max_steps?: number;
+  carry: EscalateCarry;
+  stuck_failures: number;
+  stuck_steps: number;
+  deadline_share: number;
+  max_handoffs: number;
+}
+
+function posInt(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : undefined;
 }
 
 /**
