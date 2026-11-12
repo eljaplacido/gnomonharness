@@ -66,11 +66,22 @@ describe("gnomon-natives surface", () => {
   });
 
   describe("enumerations", () => {
-    it("returns exactly 6 keys", () => {
+    it("returns exactly 10 keys", () => {
       const e = enumerations();
-      expect(Object.keys(e)).toHaveLength(6);
+      expect(Object.keys(e)).toHaveLength(10);
       expect(Object.keys(e)).toEqual(
-        expect.arrayContaining(["edit_format", "sandbox", "approval", "role_profile", "governance_level", "governance_family"])
+        expect.arrayContaining([
+          "edit_format",
+          "sandbox",
+          "approval",
+          "role_profile",
+          "governance_level",
+          "governance_family",
+          "audit_kind",
+          "guard_decision",
+          "guard_rule",
+          "guard_tool",
+        ])
       );
     });
 

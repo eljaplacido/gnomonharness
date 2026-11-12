@@ -42,6 +42,12 @@ export interface Enumerations {
   role_profile: string[];
   governance_level: string[];
   governance_family: string[];
+  /** Every audit record kind (CONTRACTS.md §41). */
+  audit_kind: string[];
+  /** `gnomon guard` decisions, rules and tool kinds (CONTRACTS.md §10). */
+  guard_decision: string[];
+  guard_rule: string[];
+  guard_tool: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -350,8 +356,9 @@ export function listPaths(dir?: string): string[] {
 
 /**
  * Load the enumerations contract from the gnomon-enums binary.
- * Returns the 6 top-level keys: edit_format, sandbox, approval, role_profile,
- * governance_level, governance_family.
+ * Returns the 10 top-level keys: edit_format, sandbox, approval, role_profile,
+ * governance_level, governance_family, audit_kind, guard_decision, guard_rule,
+ * guard_tool.
  */
 export function enumerations(): Enumerations {
   const result = spawnSync(nativeBin("gnomon-enums"), [], {

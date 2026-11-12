@@ -285,6 +285,47 @@ export type AuditKind =
   | "model_call"
   | "session_end";
 
+/**
+ * Every AuditKind, in the order declared above: the published enumeration
+ * `audit_kind` (`gnomon enumerations`, CONTRACTS.md §3 and §41; issue #113,
+ * Rule 6). The two assertions below fail the build when a kind is added to the
+ * type and not here, or here and not to the type.
+ */
+export const AUDIT_KINDS = [
+  "session_start",
+  "session_resume",
+  "turn",
+  "chain_stage",
+  "tool_call",
+  "approval",
+  "verify",
+  "bootstrap",
+  "context_mask",
+  "degradation",
+  "check",
+  "trust",
+  "guard",
+  "skill_accept",
+  "skill_reject",
+  "skill_trial",
+  "record_tamper",
+  "record_tamper_resolved",
+  "record_notice",
+  "mcp_tools",
+  "stall_signal",
+  "completion_gate",
+  "todo_gate",
+  "job",
+  "deliverable_first",
+  "first_token_stall",
+  "finish_gate",
+  "model_call",
+  "session_end",
+] as const satisfies readonly AuditKind[];
+type MissingAuditKind = Exclude<AuditKind, (typeof AUDIT_KINDS)[number]>;
+const _everyAuditKindListed: [MissingAuditKind] extends [never] ? true : MissingAuditKind = true;
+void _everyAuditKindListed;
+
 export interface AuditRecord {
   seq: number;
   ts: string;

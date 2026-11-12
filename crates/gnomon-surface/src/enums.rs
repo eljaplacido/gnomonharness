@@ -3,7 +3,10 @@
 //! Usage:
 //!   gnomon-enums [--json]
 //!
-//! Output conforms to conformance/enumerations_schema.json.
+//! Output conforms to conformance/enumerations_schema.json. The TypeScript
+//! constants each list mirrors (AUDIT_KINDS, GUARD_DECISIONS, GUARD_RULES,
+//! GUARD_TOOLS) are held to conformance/enumerations_golden.json by
+//! packages/gnomon-core/src/guard.test.ts.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +20,14 @@ pub struct Enumerations {
     pub governance_level: Vec<String>,
     /// The families every policy rule is assigned to (docs/CONTRACTS.md §36).
     pub governance_family: Vec<String>,
+    /// Every audit record `kind` a trail may hold (docs/CONTRACTS.md §41; #113).
+    pub audit_kind: Vec<String>,
+    /// `gnomon guard` decisions (docs/CONTRACTS.md §10).
+    pub guard_decision: Vec<String>,
+    /// `gnomon guard` rules (docs/CONTRACTS.md §10).
+    pub guard_rule: Vec<String>,
+    /// The tool kinds `gnomon guard` decides a call as (docs/CONTRACTS.md §10).
+    pub guard_tool: Vec<String>,
 }
 
 impl Enumerations {
@@ -34,6 +45,70 @@ impl Enumerations {
                 "secrets".into(),
                 "rules".into(),
                 "ci".into(),
+            ],
+            audit_kind: vec![
+                "session_start".into(),
+                "session_resume".into(),
+                "turn".into(),
+                "chain_stage".into(),
+                "tool_call".into(),
+                "approval".into(),
+                "verify".into(),
+                "bootstrap".into(),
+                "context_mask".into(),
+                "degradation".into(),
+                "check".into(),
+                "trust".into(),
+                "guard".into(),
+                "skill_accept".into(),
+                "skill_reject".into(),
+                "skill_trial".into(),
+                "record_tamper".into(),
+                "record_tamper_resolved".into(),
+                "record_notice".into(),
+                "mcp_tools".into(),
+                "stall_signal".into(),
+                "completion_gate".into(),
+                "todo_gate".into(),
+                "job".into(),
+                "deliverable_first".into(),
+                "first_token_stall".into(),
+                "finish_gate".into(),
+                "model_call".into(),
+                "session_end".into(),
+            ],
+            guard_decision: vec!["allow".into(), "deny".into(), "ask".into()],
+            guard_rule: vec![
+                "tools".into(),
+                "malformed".into(),
+                "bash_deny".into(),
+                "bash_allow".into(),
+                "sudo".into(),
+                "sandbox".into(),
+                "surface".into(),
+                "record".into(),
+                "git_hooks".into(),
+                "host_hooks".into(),
+                "write_allow".into(),
+                "outside_root".into(),
+                "secret_path".into(),
+                "ci_path".into(),
+                "network".into(),
+                "url".into(),
+                "repo_code".into(),
+                "approval".into(),
+                "ungoverned".into(),
+                "error".into(),
+            ],
+            guard_tool: vec![
+                "bash".into(),
+                "write".into(),
+                "edit".into(),
+                "read".into(),
+                "webfetch".into(),
+                "grep".into(),
+                "glob".into(),
+                "execute".into(),
             ],
         }
     }
@@ -67,6 +142,8 @@ mod tests {
         assert!(json.contains("role_profile"));
         assert!(json.contains("governance_level"));
         assert!(json.contains("governance_family"));
+        assert!(json.contains("audit_kind"));
+        assert!(json.contains("guard_rule"));
 
         // Must be valid JSON
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -79,6 +156,10 @@ mod tests {
         assert_eq!(obj.get("role_profile").unwrap().as_array().unwrap().len(), 3);
         assert_eq!(obj.get("governance_level").unwrap().as_array().unwrap().len(), 4);
         assert_eq!(obj.get("governance_family").unwrap().as_array().unwrap().len(), 6);
+        assert_eq!(obj.get("audit_kind").unwrap().as_array().unwrap().len(), 29);
+        assert_eq!(obj.get("guard_decision").unwrap().as_array().unwrap().len(), 3);
+        assert_eq!(obj.get("guard_rule").unwrap().as_array().unwrap().len(), 20);
+        assert_eq!(obj.get("guard_tool").unwrap().as_array().unwrap().len(), 8);
     }
 
     #[test]
@@ -93,6 +174,10 @@ mod tests {
         assert_eq!(enums.role_profile, decoded.role_profile);
         assert_eq!(enums.governance_level, decoded.governance_level);
         assert_eq!(enums.governance_family, decoded.governance_family);
+        assert_eq!(enums.audit_kind, decoded.audit_kind);
+        assert_eq!(enums.guard_decision, decoded.guard_decision);
+        assert_eq!(enums.guard_rule, decoded.guard_rule);
+        assert_eq!(enums.guard_tool, decoded.guard_tool);
     }
 
     #[test]
@@ -125,12 +210,15 @@ mod tests {
         // Should not have any extra keys
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let obj = parsed.as_object().unwrap();
-        assert_eq!(obj.len(), 6);
+        assert_eq!(obj.len(), 10);
         assert!(obj.contains_key("edit_format"));
         assert!(obj.contains_key("sandbox"));
         assert!(obj.contains_key("approval"));
         assert!(obj.contains_key("role_profile"));
         assert!(obj.contains_key("governance_level"));
         assert!(obj.contains_key("governance_family"));
+        for k in ["audit_kind", "guard_decision", "guard_rule", "guard_tool"] {
+            assert!(obj.contains_key(k));
+        }
     }
 }

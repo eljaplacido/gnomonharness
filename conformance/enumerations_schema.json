@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
-  "required": ["edit_format", "sandbox", "approval", "role_profile", "governance_level", "governance_family"],
+  "required": ["edit_format", "sandbox", "approval", "role_profile", "governance_level", "governance_family", "audit_kind", "guard_decision", "guard_rule", "guard_tool"],
   "additionalProperties": false,
   "properties": {
     "edit_format": {
@@ -39,6 +39,30 @@
       "items": { "enum": ["write", "bash", "network", "secrets", "rules", "ci"] },
       "minItems": 6,
       "maxItems": 6
+    },
+    "audit_kind": {
+      "type": "array",
+      "items": { "enum": ["session_start", "session_resume", "turn", "chain_stage", "tool_call", "approval", "verify", "bootstrap", "context_mask", "degradation", "check", "trust", "guard", "skill_accept", "skill_reject", "skill_trial", "record_tamper", "record_tamper_resolved", "record_notice", "mcp_tools", "stall_signal", "completion_gate", "todo_gate", "job", "deliverable_first", "first_token_stall", "finish_gate", "model_call", "session_end"] },
+      "minItems": 29,
+      "maxItems": 29
+    },
+    "guard_decision": {
+      "type": "array",
+      "items": { "enum": ["allow", "deny", "ask"] },
+      "minItems": 3,
+      "maxItems": 3
+    },
+    "guard_rule": {
+      "type": "array",
+      "items": { "enum": ["tools", "malformed", "bash_deny", "bash_allow", "sudo", "sandbox", "surface", "record", "git_hooks", "host_hooks", "write_allow", "outside_root", "secret_path", "ci_path", "network", "url", "repo_code", "approval", "ungoverned", "error"] },
+      "minItems": 20,
+      "maxItems": 20
+    },
+    "guard_tool": {
+      "type": "array",
+      "items": { "enum": ["bash", "write", "edit", "read", "webfetch", "grep", "glob", "execute"] },
+      "minItems": 8,
+      "maxItems": 8
     }
   }
 }
