@@ -613,6 +613,45 @@ function capital(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+/** The tags `gnomon init` writes when no model server answered, and why. */
+export interface StarterModels {
+  large: string;
+  small: string;
+  /** The provenance comment for roles.toml, `# `-led lines. */
+  note: string;
+  catalogLabel: string;
+  downloadGb?: number;
+}
+
+/**
+ * What `gnomon init` writes when nothing answered at detection time: the tag
+ * `gnomon setup` would recommend for this machine, rather than a generic
+ * placeholder that `gnomon doctor` then flags and nothing will ever serve.
+ *
+ * Only an Ollama pull the machine can run (the scaffold's `local` endpoint is
+ * Ollama on 127.0.0.1:11434), and the same tag for smol: setup never
+ * downloads a second model, so one `gnomon setup --pull <tag>` makes every
+ * role answer. Undefined when the catalog has nothing this machine runs, or
+ * when its pick is already installed somewhere (then detection, or setup,
+ * knows better than a starter tag); the caller keeps the placeholders.
+ */
+export function starterModels(probe: MachineProbe, catalog: Catalog, opts: { now?: Date } = {}): StarterModels | undefined {
+  const rec = recommend(probe, catalog, opts);
+  const top = rec.top;
+  if (!top || top.installed || top.runtime !== "ollama" || !top.entry) return undefined;
+  return {
+    large: top.tag,
+    small: top.tag,
+    catalogLabel: catalog.label,
+    downloadGb: top.downloadGb,
+    note:
+      `# No model server answered at 'gnomon init' time, so these are the model\n` +
+      `# catalog's recommendation for this machine (catalog ${catalog.label}), not yet\n` +
+      `# installed. \`gnomon setup\` downloads it on your yes (or points the roles\n` +
+      `# at a model you have); \`gnomon doctor\` says whether every role answers.`,
+  };
+}
+
 /** The recommendation as the lines setup and doctor print. */
 export function formatRecommendation(rec: Recommendation, opts: { max?: number } = {}): string[] {
   const lines: string[] = [];

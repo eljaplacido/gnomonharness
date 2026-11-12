@@ -17,6 +17,7 @@ import {
   formatRecommendation,
   catalogEntryFor,
   staleLine,
+  starterModels,
   PROFILE_FOR,
   SUGGESTIONS,
 } from "./catalog.js";
@@ -223,6 +224,29 @@ describe("the recommendation, per machine", () => {
     expect(rec.top).toBeUndefined();
     expect(rec.notes.join(" ")).toMatch(/start with a cloud model/);
     expect(suggestMode({ memory: rec.memory, hasCloud: false }, catalog).mode).toBe("cloud_first");
+  });
+});
+
+describe("what `gnomon init` writes when no model server answered", () => {
+  // Not the generic qwen2.5 placeholders, which nothing on the machine serves
+  // and `gnomon doctor` flags: the tag `gnomon setup` would recommend, so one
+  // `gnomon setup --pull <tag>` makes every role answer.
+  it("the catalog's pick for the machine, for every role, with its provenance", async () => {
+    const s = starterModels(await probeOf(MACHINES.gb10()), catalog, { now: NOW })!;
+    expect(s).toMatchObject({ large: "qwen3.6:35b", small: "qwen3.6:35b", catalogLabel: catalog.label, downloadGb: 23.9 });
+    expect(s.note.split("\n").every((l) => l.startsWith("# "))).toBe(true);
+    expect(s.note).toContain("gnomon setup");
+    expect(s.note).toContain("not yet");
+    expect(starterModels(await probeOf(MACHINES.mac16()), catalog, { now: NOW })?.large).toBe("qwen3:8b");
+  });
+
+  it("nothing when nothing in the catalog runs here: the placeholders stay", async () => {
+    expect(starterModels(await probeOf(MACHINES.tiny4()), catalog, { now: NOW })).toBeUndefined();
+  });
+
+  it("nothing when the pick is already installed: detection, not a starter tag, decides that case", async () => {
+    const probe = await probeOf(withUrls(MACHINES.gb10(), ollamaServing({ "qwen3.6:35b": 23.9e9 })));
+    expect(starterModels(probe, catalog, { now: NOW })).toBeUndefined();
   });
 });
 

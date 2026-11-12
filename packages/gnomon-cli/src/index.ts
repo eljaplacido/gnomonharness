@@ -119,6 +119,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initSurface } from "./init.js";
 import {
+  detectModels,
+  type ModelChoice,
   looksLikeChatModel,
   suggestChatModel,
   looksLikeTrialTier,
@@ -139,7 +141,7 @@ import {
 import { pendingMigrations, applyMigrations, MIGRATIONS } from "./migrate.js";
 import { cmdUpdate, cmdUninstall, maybeNotifyUpdate } from "./update.js";
 import { probeMachine, formatProbe, probeAtInit } from "./probe.js";
-import type { Suggestion } from "./catalog.js";
+import type { Suggestion, StarterModels } from "./catalog.js";
 import type { HybridControl } from "./setup_wizard.js";
 // Cold paths, loaded by the command that needs them: `gnomon-tui`, `check`,
 // `setup` (wizard, catalog, host effects) and `doctor`. A bundle or a
@@ -1984,9 +1986,36 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
   // surface is exactly what it was. Read-only commands and 127.0.0.1 GETs, each
   // with a deadline (probe.ts). Not for --from or --no-verify (probeAtInit).
   const probing = probeAtInit(args) ? probeMachine().catch(() => null) : null;
+  // Init's own detection, beside the probe. When nothing answered, the tag
+  // `gnomon setup` would recommend for this machine is written instead of
+  // generic placeholders nothing will ever serve and `gnomon doctor` flags.
+  // When the catalog has nothing this machine runs, or the probe failed, the
+  // placeholders stay. Not for --from or --no-verify (no probe): those
+  // scaffolds are byte for byte what they were.
+  let chosen: ModelChoice | undefined;
+  let starter: StarterModels | undefined;
+  if (probing) {
+    const [detected, probe] = await Promise.all([detectModels(), probing]);
+    chosen = detected;
+    if (detected.fallback && probe) {
+      try {
+        const { loadCatalog, defaultCatalogPath, starterModels } = await import("./catalog.js");
+        starter = starterModels(probe, loadCatalog(defaultCatalogPath()));
+      } catch {
+        starter = undefined; // a catalog that will not load keeps the placeholders
+      }
+      if (starter) chosen = { ...detected, large: starter.large, small: starter.small, note: starter.note };
+    }
+  }
   let result;
   try {
-    result = await initSurface({ dir: args.dir, force: args.force, from: args.from, noVerify: args.noVerify });
+    result = await initSurface({
+      dir: args.dir,
+      force: args.force,
+      from: args.from,
+      noVerify: args.noVerify,
+      ...(chosen ? { models: chosen } : {}),
+    });
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
@@ -2018,15 +2047,26 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
   const models = result.models;
   if (models) {
     console.log("");
-    if (models.fallback) {
+    if (models.fallback && starter) {
+      // The catalog's pick, not installed: say so, and the one command that
+      // installs it. Launch offers that setup itself right after this.
+      const size = starter.downloadGb !== undefined ? ` (~${starter.downloadGb} GB download)` : "";
+      console.log(`Models: ${models.fallback}, so the catalog's pick for this machine was written:`);
+      console.log(`  ${models.large}${size}, for every role. It is not installed yet.`);
+      if (!opts.launching) {
+        console.log(`  Install it:   gnomon setup   (asks first; or: gnomon setup --pull ${models.large})`);
+        console.log("  By hand:      gnomon endpoint add   (a model you already have, local or cloud)");
+      }
+    } else if (models.fallback) {
       // Placeholders, and say what replaces them. "Very likely wrong -- edit
-      // them" named the problem and no way out of it; the way out is one
-      // command that lists what an endpoint serves and proves a tag works.
+      // them" named the problem and no way out of it; the way out is setup,
+      // which recommends a model this machine runs, or `endpoint add`, which
+      // lists what an endpoint serves and proves a tag works.
       console.log(`Models: ${models.fallback}, so placeholder tags were written`);
       console.log(`  (${models.large}, ${models.small}).`);
       if (!opts.launching) {
-        console.log("  Replace them with a model you have:  gnomon endpoint add --preset ollama");
-        console.log("  (or --preset openrouter | opencode-go | opencode-zen, or no flag to choose)");
+        console.log("  Set one up:   gnomon setup   (scans this machine, recommends, asks before writing)");
+        console.log("  By hand:      gnomon endpoint add --preset ollama | openrouter | opencode-go | opencode-zen");
       }
     } else {
       console.log(`Models: detected ${models.detected.length} on this machine.`);
@@ -2063,13 +2103,16 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
   if (opts.launching) return;
   console.log("");
   console.log("Next:");
-  console.log(`  1. Check ${where.label} — the model tags must be ones you`);
-  console.log("     actually have. `/models` lists them.");
+  console.log("  1. `gnomon setup` — scan this machine, pick a model it can run (or a cloud");
+  console.log("     model), and write it here on your yes. `gnomon dashboard` does the same");
+  console.log("     in the browser. By hand instead: `gnomon endpoint add`.");
+  console.log(`     The tags live in ${where.label}.`);
   if (where.profile) {
     console.log(`     (role_profile = "${where.profile}" is merged over roles.toml,`);
     console.log("      so that file is what these roles are routed by.)");
   }
-  console.log("  2. Run `gnomon launch` in this directory.");
+  console.log("  2. `gnomon doctor` — check that every role's model answers.");
+  console.log("  3. `gnomon launch` in this directory.");
   console.log("");
   console.log("Approval is on_write: reads are free, writes show a diff first.");
 }
@@ -2105,7 +2148,8 @@ async function cmdLaunch(args: CliArgs): Promise<void> {
     await offerModelSetup(args, target, { showProbe: !fresh });
   } else if (fresh) {
     console.log("");
-    console.log("If those model tags are not ones you have, `gnomon endpoint add` sets one up.");
+    console.log("If no model answers yet: `gnomon setup` recommends one for this machine and sets it up");
+    console.log("(or `gnomon endpoint add` for one you have). `gnomon doctor` checks every role.");
   }
   console.log("");
 
@@ -2160,7 +2204,8 @@ async function offerModelSetup(args: CliArgs, target: string, opts: { showProbe?
     if (pick === "skip") {
       console.log(
         "  Skipped. The session starts, but nothing will answer until a model does:\n" +
-          "    gnomon endpoint add --preset ollama | openrouter | opencode-go | opencode-zen"
+          "    gnomon setup            # recommends one for this machine, asks before downloading\n" +
+          "    gnomon endpoint add     # a model you already have, local or cloud"
       );
       return;
     }
@@ -2575,8 +2620,9 @@ function showHelp(): void {
 Commands:
   launch [--dir <path>] [--from <path>]
     Start working here. Creates .gnomon/ if it is missing, then opens the
-    interactive loop. This is the one command to remember. When no model
-    answers, it offers the guided setup first.
+    interactive loop. This is the one command to remember. On a terminal,
+    when no model answers, it offers the guided setup (gnomon setup) first;
+    off one it says which command sets one up.
 
   setup [--json] [--yes] [--pull TAG] [--model TAG] [--speed-check]
         [--mode local|hybrid|cloud] [--cloud-endpoint URL|preset|name]

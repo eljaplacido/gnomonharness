@@ -140,6 +140,23 @@ describe("downloads happen only when a person or --pull names the model", () => 
     expect(r.exit).toBe(SETUP_EXIT.needsConsent);
     expect(listing(dir)).toEqual([]);
     expect(r.why).toContain("gnomon setup --pull qwen3.6:35b");
+    // Ollama is up here: no "start it" line.
+    expect(r.why).not.toContain("ollama serve");
+    expect(r.why).toContain("--cloud-endpoint");
+  });
+
+  it("off a terminal with no model server at all: one message names the pull, `ollama serve` and the cloud way", async () => {
+    const dir = tmpProject();
+    const h = harness(MACHINES.gb10());
+    const r = await runSetup(opts(dir), h.deps);
+    expect(r.exit).toBe(SETUP_EXIT.needsConsent);
+    expect(listing(dir)).toEqual([]);
+    expect(r.why).toContain("gnomon setup --pull qwen3.6:35b");
+    expect(r.why).toContain("ollama serve");
+    expect(r.why).toMatch(/gnomon setup --cloud-endpoint opencode-go --cloud-model \S+/);
+    // Said once: the narrative before it does not print the same commands.
+    expect(h.said.join("\n").split("gnomon setup --pull").length - 1).toBe(1);
+    expect(h.said.join("\n").split("ollama serve").length - 1).toBe(1);
   });
 
   it("--yes alone never downloads", async () => {
@@ -183,7 +200,9 @@ describe("downloads happen only when a person or --pull names the model", () => 
     expect(r.pull?.status).toBe("no_runtime");
     const text = h.said.join("\n");
     expect(text).toContain("https://ollama.com/download");
-    expect(text).toContain("ollama pull qwen3.6:35b");
+    // How to get there, once: start the server, then pull through setup.
+    expect(text).toContain("ollama serve");
+    expect(text).toContain("gnomon setup --pull qwen3.6:35b");
     // llama.cpp manages its own files: the instruction, never a download.
     expect(text).toMatch(/With llama\.cpp instead[^\n]*llama-server -m <file>\.gguf --jinja/);
   });
