@@ -3,7 +3,12 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.sh | sh
 #
-# Re-running it is how you update; `gnomon update` runs it for you.
+# and to go straight on to choosing a model, in the project you are in:
+#
+#   curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.sh | sh -s -- --setup
+#
+# Re-running it is how you update; `gnomon update` runs it for you (never
+# with --setup).
 #
 # WHAT IT DOES, in order, and stops at the first thing that fails:
 #   1. Checks for Node >= 20 and npm. It never installs Node: that needs root,
@@ -20,7 +25,15 @@
 #   records for the asset). A mismatch, or a file with no digest at all,
 #   aborts the install before anything is installed.
 #
+# Options:
+#   --setup             after installing, run `gnomon setup` in the current
+#                       directory, interactively, on this terminal. It asks
+#                       before every download and write, exactly as typed by
+#                       hand: --setup never answers yes for you (no --yes).
+#   -h, --help          print this and exit, installing nothing
+#
 # Environment:
+#   GNOMON_SETUP=1      the same as --setup
 #   GNOMON_VERSION      install this release instead of the latest (0.2.3 or v0.2.3)
 #   GNOMON_NPM_PREFIX   npm prefix to install into (default: npm's global prefix
 #                       when writable, else ~/.local — no sudo either way)
@@ -165,7 +178,28 @@ fetch_verified() { # name -> $WORK/name
     say "  verified $1"
 }
 
+usage() {
+    say "Usage: install.sh [--setup] [--help]"
+    say ""
+    say "  --setup   after installing, run \`gnomon setup\` here, interactively (it asks"
+    say "            before every download and write; nothing is answered for you)"
+    say ""
+    say "  curl -fsSL https://raw.githubusercontent.com/$REPO/master/scripts/install.sh | sh -s -- --setup"
+}
+
 main() {
+    # ── arguments ─────────────────────────────────────────────────────────
+    # Read before anything is checked or fetched, so a typo installs nothing.
+    RUN_SETUP=0
+    [ "${GNOMON_SETUP:-}" = "1" ] && RUN_SETUP=1
+    for arg in "$@"; do
+        case "$arg" in
+            --setup) RUN_SETUP=1 ;;
+            -h | --help) usage; exit 0 ;;
+            *) usage >&2; die "unknown argument: $arg" ;;
+        esac
+    done
+
     # ── platform ──────────────────────────────────────────────────────────
     case "$(uname -s)" in
         Linux) OS=linux ;;
@@ -350,12 +384,49 @@ main() {
             ;;
     esac
 
+    if [ "$RUN_SETUP" = "1" ]; then
+        run_setup
+    fi
+
     say ""
     say "Next:"
-    say "  cd your-project && gnomon launch"
+    if [ "$RUN_SETUP" != "1" ]; then
+        say "  cd your-project && gnomon setup       # scan this machine, pick a model, write .gnomon/"
+    fi
+    say "  gnomon dashboard                      # the same steps in the browser, then the command to start"
+    say "  cd your-project && gnomon launch      # start working (offers setup first if no model answers)"
     say ""
     say "Update later with \`gnomon update\` (or re-run this installer);"
     say "\`gnomon uninstall\` prints how to remove it."
+}
+
+# `gnomon setup`, interactively, in the directory the installer was run from.
+# Under `curl | sh` the script itself is on stdin, so setup reads the terminal
+# instead. With no terminal at all it does not run: setup asks before every
+# download and write, and nothing here may answer for the person (no --yes).
+run_setup() {
+    step "gnomon setup (in $PWD)"
+    if [ "$PWD" = "$HOME" ]; then
+        say "  This is your home directory: setup would propose a .gnomon/ here."
+        say "  Decline it and run \`gnomon setup\` inside a project instead, if that is not what you want."
+    fi
+    # A subshell: a failed redirection on a special builtin ends a POSIX
+    # shell, and /dev/tty exists but will not open without a controlling
+    # terminal (a CI job, a container without -t).
+    if ! (exec </dev/tty) 2>/dev/null; then
+        say "  No terminal to ask on, so setup did not run (it never answers for you)."
+        say "  Run it yourself:  cd your-project && gnomon setup"
+        return 0
+    fi
+    set +e
+    "$GNOMON" setup </dev/tty
+    rc=$?
+    set -e
+    case "$rc" in
+        0) ;;
+        4) say "  Setup wrote nothing (it needs your yes, or a model). Run \`gnomon setup\` again any time." ;;
+        *) say "  gnomon setup exited $rc. Run \`gnomon setup\` again, or \`gnomon doctor\` to see why." ;;
+    esac
 }
 
 main "$@"

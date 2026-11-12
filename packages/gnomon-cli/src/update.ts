@@ -494,8 +494,10 @@ export async function cmdUpdate(opts: UpdateOptions): Promise<number> {
   // binaries in the same run — and running it is exactly what a new user did,
   // so the update path cannot drift from the install path. The prefix is
   // passed so it updates THIS copy rather than installing a second one.
+  // GNOMON_SETUP is cleared: an update never walks into the setup wizard,
+  // even when the person's environment asks the installer for it.
   console.log(`\nRunning the installer for ${latest.version}…\n`);
-  const code = await runInstaller({ GNOMON_VERSION: latest.version, GNOMON_NPM_PREFIX: method.prefix });
+  const code = await runInstaller({ GNOMON_VERSION: latest.version, GNOMON_NPM_PREFIX: method.prefix, GNOMON_SETUP: "0" });
   if (code !== 0) console.error(`\nThe installer exited ${code}; the copy you have is unchanged or partly updated.`);
   return code;
 }
