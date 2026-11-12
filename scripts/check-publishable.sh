@@ -42,6 +42,23 @@ if grep -q '^src/' <<<"$LIST"; then
     exit 1
 fi
 
+# Every one of the four is a page on npmjs.com and a licence obligation. Each
+# needs its own README.md (the npm page is blank without one) and LICENSE.
+# LICENSE is not committed per package: `pnpm pack` copies the workspace
+# root's LICENSE into a package that has none, so this checks the result of
+# that convention rather than a file on disk. No source maps (their `sources`
+# point at src/, which is not shipped), no tests, no fixtures, no TypeScript
+# sources, nothing that looks like a credential.
+for tgz in "$TMP"/*.tgz; do
+    name=$(basename "$tgz")
+    files=$(tar -tzf "$tgz" | sed 's|^package/||')
+    for want in README.md LICENSE package.json; do
+        grep -qx "$want" <<<"$files" || { echo "FAIL: $want missing from $name"; exit 1; }
+    done
+    bad=$(grep -E '\.map$|(^|/)(test-fixtures|__tests__|fixtures)/|\.test\.(js|ts|d\.ts)$|(^|/)src/.*\.ts$|(^|/)\.env|\.key$|\.pem$|(^|/)\.npmrc$|auth\.json$|credentials\.json$' <<<"$files" || true)
+    [ -z "$bad" ] || { echo "FAIL: $name ships files a package must not:"; echo "$bad"; exit 1; }
+done
+
 # Zero third-party runtime dependencies, checked on the PUBLISHED manifest
 # rather than on the workspace one. .github/dependabot.yml defends this
 # property; nothing enforced it.
