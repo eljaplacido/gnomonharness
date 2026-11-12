@@ -437,7 +437,7 @@ describe("the guided path, start to finish", () => {
     expect(r.cloud).toMatchObject({ endpoint: "go", model: "deepseek-v4.1-flash", key_env: "OPENCODE_API_KEY", key_held: true, checked: "skipped" });
     // Hybrid, citing the measurement, with control recorded but not active.
     expect(r.mode).toMatchObject({ suggested: "hybrid", chosen: "hybrid", role_profile: "frontier_plan" });
-    expect(r.mode!.why).toContain("showed no measured advantage over cloud-only");
+    expect(r.mode!.why).toContain("a cost mode, not a quality gain");
     expect(r.mode!.why).not.toContain("87%");
     expect(r.hybrid_control).toMatchObject({ value: "observe", active: false });
     expect(r.hybrid_control!.note).toContain("PR #102");

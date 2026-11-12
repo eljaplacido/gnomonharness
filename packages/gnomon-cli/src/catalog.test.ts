@@ -25,13 +25,13 @@ import { probeMachine, probeHardware } from "./probe.js";
 import { fakeHost, MACHINES, withUrls, ollamaServing, LLAMACPP_MODELS, GiB, type FakeMachine } from "./test_support.js";
 
 const catalog = loadCatalog();
-const NOW = new Date("2026-11-03T12:00:00Z");
+const NOW = new Date("2026-11-12T12:00:00Z");
 const probeOf = (m: FakeMachine) => probeMachine(fakeHost(m));
 const recFor = async (m: FakeMachine, now = NOW) => recommend(await probeOf(m), catalog, { now });
 
 describe("the shipped catalog", () => {
   it("parses, is dated 2026-11, and lists its models best first", () => {
-    expect(catalog.asOf).toBe("2026-11-03");
+    expect(catalog.asOf).toBe("2026-11-12");
     expect(catalog.label).toBe("2026-11");
     expect(catalog.models[0]!.tag).toBe("qwen3.6:35b");
     expect(catalog.models.map((m) => m.tier)).toEqual(["large", "medium", "medium", "small", "tiny"]);
@@ -63,12 +63,15 @@ describe("the shipped catalog", () => {
     expect(lines.join("\n")).not.toMatch(/qwen3\.6:35b[^\n]*not measured/);
   });
 
-  it("labels its speed thresholds provisional, and cites hybrid as HYBRID.md does", () => {
+  it("labels its speed thresholds provisional, and cites hybrid as an opt-in cost mode", () => {
     expect(catalog.speed.provisional).toBe(true);
-    // R1H's RTX 5090 lead (87% vs 84%, 26% cheaper) did not reproduce (R3R, R4H):
-    // the catalog must not quote it as current.
-    expect(catalog.hybrid.evidence).toContain("no measured advantage over cloud-only");
-    expect(catalog.hybrid.evidence).toContain("did not reproduce");
+    // gnomon's 2026-11 conclusion: hybrid is a cost mode, not a default and
+    // not a quality gain. R1H's RTX 5090 lead (87% vs 84%, 26% cheaper) did
+    // not reproduce (R3R, R4H): the catalog must not quote it as current.
+    expect(catalog.hybrid.evidence).toContain("cost mode, not a quality gain");
+    expect(catalog.hybrid.evidence).toContain("about 23% of cloud-only's cloud cost");
+    expect(catalog.hybrid.evidence).toContain("0.07 below cloud-only and 0.25 above local-only");
+    expect(catalog.hybrid.evidence).toContain("no advantage over cloud-only");
     expect(catalog.hybrid.evidence).not.toMatch(/87%|84%|26% lower cost/);
     expect(catalog.hybrid.evidenceUnified).toContain("22/32 vs 16/31 local-only");
     // The file says so in words, where a reviewer reads it.
@@ -92,7 +95,7 @@ describe("a catalog that is wrong is refused, by name", () => {
   });
   it("an unknown tier, a missing date, a model listed twice", () => {
     expect(() => parseCatalog(base.replace('tier = "tiny"', 'tier = "huge"'), "x.toml")).toThrow(/tier must be one of/);
-    expect(() => parseCatalog(base.replace('as_of = "2026-11-03"', 'as_of = "soon"'), "x.toml")).toThrow(/as_of: must be a date/);
+    expect(() => parseCatalog(base.replace('as_of = "2026-11-12"', 'as_of = "soon"'), "x.toml")).toThrow(/as_of: must be a date/);
     expect(() => parseCatalog(base.replace('tag = "qwen3:14b"', 'tag = "qwen3:8b"'), "x.toml")).toThrow(/listed twice/);
   });
   it("a file that cannot be read names the file", () => {
@@ -252,11 +255,11 @@ describe("what `gnomon init` writes when no model server answered", () => {
 
 describe("staleness is said, never fetched", () => {
   it("a catalog more than 180 days old says newer models likely exist", async () => {
-    const late = new Date(Date.parse("2026-11-03T00:00:00Z") + 181 * 86_400_000);
+    const late = new Date(Date.parse("2026-11-12T00:00:00Z") + 181 * 86_400_000);
     const rec = await recFor(MACHINES.gpu32(), late);
-    expect(rec.catalog.stale).toMatch(/catalog from 2026-11-03 \(181 days old\) — newer models likely exist/);
+    expect(rec.catalog.stale).toMatch(/catalog from 2026-11-12 \(181 days old\) — newer models likely exist/);
     expect(rec.notes.join(" ")).toContain("--catalog FILE");
-    expect(staleLine(catalog, new Date(Date.parse("2026-11-03T00:00:00Z") + 180 * 86_400_000))).toBeUndefined();
+    expect(staleLine(catalog, new Date(Date.parse("2026-11-12T00:00:00Z") + 180 * 86_400_000))).toBeUndefined();
   });
 });
 
@@ -272,7 +275,7 @@ describe("the mode it suggests", () => {
   it("a cloud model configured: hybrid, citing the measured result", async () => {
     const s = suggestMode({ local: await local(), memory: await mem(), speed: speed(375, 4000), hasCloud: true }, catalog);
     expect(s.mode).toBe("hybrid");
-    expect(s.why).toContain("showed no measured advantage over cloud-only");
+    expect(s.why).toContain("a cost mode, not a quality gain");
     expect(s.why).not.toContain("87%");
   });
   it("on unified memory, the GB10 result is cited beside it", async () => {
