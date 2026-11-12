@@ -40,7 +40,8 @@ import {
   renameSync,
   realpathSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
+import { escapesBase } from "./rel_path.js";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
@@ -1413,7 +1414,7 @@ export const SELF_IN_ROOT_ENV = "GNOMON_ALLOW_SELF_IN_ROOT";
 
 function isWithin(parent: string, child: string): boolean {
   const rel = relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  return !escapesBase(rel);
 }
 
 function realOrResolved(p: string): string {

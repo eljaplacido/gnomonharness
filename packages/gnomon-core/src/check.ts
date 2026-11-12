@@ -41,7 +41,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { createHash } from "node:crypto";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { escapesBase } from "./rel_path.js";
 import {
   loadConfig,
   recomputeManifest,
@@ -263,7 +264,7 @@ function restoreJournal(path: string, toplevel: string): string[] {
   const restored: string[] = [];
   for (const f of j.files) {
     const rel = relative(root, resolve(f.path));
-    if (!f.path || rel === "" || rel.startsWith("..") || isAbsolute(rel)) continue;
+    if (!f.path || rel === "" || escapesBase(rel)) continue;
     try {
       if (f.b64 === null) {
         removeIn(root, f.path);
@@ -497,7 +498,7 @@ async function judge(
     }
   })();
   const surfaceRel = posix(relative(toplevel, surfaceDir));
-  if (surfaceRel.startsWith("..") || isAbsolute(surfaceRel)) {
+  if (escapesBase(surfaceRel)) {
     throw new CheckCannotRun(`the surface ${surfaceDir} is outside the repository ${toplevel}`);
   }
   const projRel = posix(dirname(surfaceRel)) === "." ? "" : posix(dirname(surfaceRel));
@@ -599,7 +600,7 @@ async function judge(
   const own = [
     ...OWN_STATE.map((d) => (projRel ? `${projRel}/${d}` : d)),
     posix(relative(toplevel, auditSettings.dir)),
-  ].filter((d) => d && !d.startsWith("..") && !isAbsolute(d));
+  ].filter((d) => d && !escapesBase(d));
   const isOwn = (p: string) => own.some((d) => p === d || p.startsWith(`${d}/`));
   const untracked = () =>
     git(toplevel, ["ls-files", "--others", "--exclude-standard", "-z"])

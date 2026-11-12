@@ -21,7 +21,8 @@
  * be writing.
  */
 import { closeSync, constants, existsSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync, chmodSync } from "node:fs";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
+import { escapesBase } from "./rel_path.js";
 import { randomBytes } from "node:crypto";
 import { gnomonDataDir, restrictToOwner } from "./credentials.js";
 
@@ -127,7 +128,7 @@ export function setAside(path: string): string | null {
 export function within(parent: string, child: string): boolean {
   if (child === parent) return true;
   const rel = relative(parent, child);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  return rel !== "" && !escapesBase(rel);
 }
 
 export const containedMode = (mode: string): boolean => mode !== "off";

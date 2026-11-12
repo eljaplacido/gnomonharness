@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { loadConfig, recomputeManifest, resolveExec } from "./config.js";
 import { bashPolicy } from "./tools.js";
+import { escapesBase } from "./rel_path.js";
 import {
   SCAFFOLD_ROLES,
   BASH_PROBES,
@@ -394,7 +395,7 @@ describe("the store is the machine's, not the repository's", () => {
     grantTrust(loadConfig(root)); // default path: under XDG_DATA_HOME (vitest.setup.ts)
 
     expect(existsSync(trustPath())).toBe(true);
-    expect(relative(root, trustPath()).startsWith("..")).toBe(true);
+    expect(escapesBase(relative(root, trustPath()))).toBe(true);
     expect(listing(root)).toEqual(before);
     expect(recomputeManifest(join(root, ".gnomon")).surface_hash).toBe(hashBefore);
     expect(readFileSync(join(root, ".gnomon", "policy.toml"), "utf-8")).toBe(surfaceBefore);

@@ -19,6 +19,9 @@
 export * from "./config.js";
 export * from "./git_safe.js";
 export * from "./root_fs.js";
+// Whether a relative path leaves its base: `..` as a component, not a name
+// that starts with two dots (`.gitignore`'s temp file, `..data`).
+export * from "./rel_path.js";
 // The endpoint's context window, read from its listing for
 // `max_context_tokens = "auto"` (CONTRACTS.md §24).
 export * from "./context_window.js";

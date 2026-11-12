@@ -26,7 +26,8 @@
  */
 
 import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
-import { join, relative, resolve, isAbsolute, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
+import { escapesBase } from "./rel_path.js";
 import { createHash } from "node:crypto";
 import { GnomonConfig } from "./config.js";
 import { resolveAudit, type AuditRecord } from "./audit.js";
@@ -254,7 +255,7 @@ export function mineCandidates(config: GnomonConfig): SkillCandidate[] {
   if (!existsSync(dir)) return [];
   const show = (file: string): string => {
     const rel = relative(root, file);
-    return rel.startsWith("..") || isAbsolute(rel) ? file : rel.split(sep).join("/");
+    return escapesBase(rel) ? file : rel.split(sep).join("/");
   };
 
   type Group = {

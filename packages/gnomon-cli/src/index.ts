@@ -113,6 +113,7 @@ import {
   Enumerations,
 } from "gnomon-natives";
 import { readFileSync, writeFileSync, writeSync, existsSync, readdirSync, mkdirSync} from "node:fs";
+import { setProcessTitle } from "./proc_title.js";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { dirname, join, resolve } from "node:path";
@@ -234,6 +235,11 @@ export function parseArgs(args: string[]): CliArgs {
       // Bare as well. Accepts a role leaving the container it ran in here,
       // for this run, which --trust alone does not (trust.ts).
       result.flags["trust-exec-downgrade"] = "true";
+    } else if (arg === "--task-file") {
+      // Always takes the next argument: `-` (stdin) is its value here, where
+      // the generic branch below would read it as another option.
+      i++;
+      result.flags["task-file"] = args[i] ?? "";
     } else if (arg === "-p") {
       // Already handled above
     } else if (arg.startsWith("-")) {
@@ -1650,14 +1656,36 @@ async function cmdAudit(args: CliArgs): Promise<void> {
 }
 
 async function cmdTask(args: CliArgs): Promise<void> {
-  const text = [args.subcommand, ...args.positional].filter(Boolean).join(" ").trim();
+  let text = [args.subcommand, ...args.positional].filter(Boolean).join(" ").trim();
   // Every way out of this command exits 0, 2 or 10, the bucket, as
   // docs/CONTRACTS.md §1 says it does. A missing task and a missing surface
   // both used to exit 1, which is `failed` in the `result` bucket: a caller
   // switching on the bucket read a task that never started as one that ran.
   // Neither started, so both are launch failures (10).
+  //
+  // `--task-file <path>` (`-` for stdin) reads the text instead, so a wrapper
+  // need not put it on a command line at all. gnomon renames its own
+  // (proc_title.ts), but a wrapper's `sh -c 'gnomon task "..."'` carried the
+  // task text too, and a model's `pkill -f <a word from the task>` matched it.
+  const taskFile = args.flags["task-file"];
+  if (taskFile !== undefined) {
+    if (text) {
+      console.error("gnomon task: give the task as text or with --task-file, not both");
+      process.exit(10);
+    }
+    if (taskFile === "") {
+      console.error("gnomon task: --task-file needs a path, or - for stdin");
+      process.exit(10);
+    }
+    try {
+      text = readFileSync(taskFile === "-" ? 0 : taskFile, "utf-8").trim();
+    } catch (err) {
+      console.error(`gnomon task: --task-file ${taskFile}: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(10);
+    }
+  }
   if (!text) {
-    console.error('Usage: gnomon task "<what to do>" [--role <name>] [--yes] [--json] [--deadline <seconds|ISO time>]');
+    console.error('Usage: gnomon task "<what to do>" | --task-file <path|-> [--role <name>] [--yes] [--json] [--deadline <seconds|ISO time>]');
     process.exit(10);
   }
 
@@ -1716,8 +1744,15 @@ async function cmdTask(args: CliArgs): Promise<void> {
     // No .gnomon/ above the cwd, a --dir without one, a --role the surface
     // does not define: the throw used to reach main's catch and exit 1. It
     // gets the same record shape as a fatal surface, so --json still parses.
+    // But only a throw from before the run started could not start. One
+    // after it (runTask set interrupt.fail when its live record opened) ends
+    // that run on its own record -- code 10, stop_reason "apparatus", its
+    // steps and clock, the trail sealed -- printed below like any other. dc1
+    // (2026-11-12) lost a 58-call run to this catch as "could not start",
+    // tool_steps 0, duration 0. (A throw inside the turn no longer leaves
+    // runTask at all: the turn ends on it.)
     const why = err instanceof Error ? err.message : String(err);
-    record = unstartedTaskRecord(text, args.role, `gnomon task could not start: ${why}`);
+    record = (await interrupt.fail?.(err)) ?? unstartedTaskRecord(text, args.role, `gnomon task could not start: ${why}`);
   }
   releaseSignals();
 
@@ -2680,8 +2715,13 @@ Commands:
 
   task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--dir <path>]
        [--deadline <seconds|ISO time>]
+  task --task-file <path|-> [...the same options]
     Run one task without a terminal and print the result. --json emits a
     record whose only run-to-run differences are under "volatile".
+    --task-file reads the task text from a file, or from stdin with "-",
+    so a wrapper need not put it on a command line, where a model's
+    \`pkill -f <a word from the task>\` would match the wrapper's shell.
+    gnomon's own command line reads "gnomon task" while it runs.
     --deadline (or GNOMON_DEADLINE) gives the run a wall clock: it is told
     the time left, bash timeouts are clamped to it, and before it the turn
     stops itself with stop_reason "deadline", its final record and a
@@ -2836,6 +2876,10 @@ Environment:
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  // First, before anything slow: a long-running command's /proc cmdline is
+  // "gnomon task", not the task text a model's `pkill -f` could match
+  // (proc_title.ts).
+  setProcessTitle(process.argv.slice(2));
   const args = parseArgs(process.argv.slice(2));
 
   // [audit.anchor] delivers sealed heads after the checkpoint at session end.

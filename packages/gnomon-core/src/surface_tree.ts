@@ -19,6 +19,7 @@
  * what is already there.
  */
 import { isAbsolute, relative, resolve } from "node:path";
+import { escapesBase } from "./rel_path.js";
 import { writeFileIn } from "./root_fs.js";
 
 export class SurfaceTreeError extends Error {
@@ -136,7 +137,7 @@ export function writeSurfaceTree(dir: string, entries: readonly SurfaceEntry[], 
     if (bad) throw new SurfaceTreeError(`${JSON.stringify(rel)} has ${bad}; not writing it`);
     const dest = resolve(root, ...rel.split("/"));
     const r = relative(root, dest);
-    if (!r || r.startsWith("..") || isAbsolute(r)) throw new SurfaceTreeError(`${JSON.stringify(rel)} resolves outside ${root}`);
+    if (!r || escapesBase(r)) throw new SurfaceTreeError(`${JSON.stringify(rel)} resolves outside ${root}`);
     writeFileIn(root, dest, bodies[i]!, e.mode === "100755" ? 0o755 : 0o644);
   });
 }

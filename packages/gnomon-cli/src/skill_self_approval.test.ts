@@ -41,6 +41,7 @@ let project = "";
 let bin = "";
 let home = "";
 let harness = "";
+let titled = "";
 
 beforeAll(() => {
   if (!linux) return;
@@ -72,6 +73,16 @@ beforeAll(() => {
       `timeoutMs: 90000, maxOutputBytes: 64000, agentSession: "s-gbs" }, new Set(["bash"]));\n` +
       `process.stdout.write(JSON.stringify({ code: r.code, content: r.content }));\n`
   );
+  // The same stand-in, titled first exactly as main() titles `gnomon task`
+  // (proc_title.ts): its /proc cmdline is then the one string "gnomon task",
+  // which is what a real harness's reads like. Check 3 must still find it.
+  titled = join(tmp, "harness", "titled.mjs");
+  writeFileSync(
+    titled,
+    `import { setProcessTitle } from ${JSON.stringify(pathToFileURL(join(HERE, "proc_title.ts")).href)};\n` +
+      `setProcessTitle(["task", "the task text"]);\n` +
+      `await import(${JSON.stringify(pathToFileURL(harness).href)});\n`
+  );
 });
 
 afterAll(() => {
@@ -87,9 +98,9 @@ const env = (): NodeJS.ProcessEnv => ({
 });
 
 /** One command through the agent's bash tool. Async: the CLI takes a second or two. */
-function asAgent(command: string): Promise<{ code: number; content: string }> {
+function asAgent(command: string, via: string = harness): Promise<{ code: number; content: string }> {
   return new Promise((done, fail) => {
-    const child = spawn(process.execPath, ["--import", TSX, harness, project, command], {
+    const child = spawn(process.execPath, ["--import", TSX, via, project, command], {
       cwd: project,
       env: env(),
       stdio: ["ignore", "pipe", "pipe"],
@@ -161,6 +172,20 @@ describe.skipIf(!linux)("skill accept from the agent's own bash is refused, howe
     ]) {
       const r = await asAgent(command);
       expect(r.content).toMatch(/Not accepted: this is running inside an agent session/);
+      expect(accepted("always-setup")).toBe(false);
+    }
+    expect(acceptRecords()).toBe(0);
+  }, 120_000);
+
+  // Under its process title the harness's cmdline is "gnomon task", one
+  // string; check 3 once missed it, and `exec env -i … script -qec …` (no
+  // marker anywhere above, a terminal from script) accepted the skill.
+  it("the harness under its process title (\"gnomon task\") is still found as an ancestor", async () => {
+    const commands = [`exec env -i PATH="$PATH" HOME="$HOME" ${A}`];
+    if (pty) commands.push(`exec env -i PATH="$PATH" HOME="$HOME" script -qec "${A}" /dev/null`);
+    for (const command of commands) {
+      const r = await asAgent(command, titled);
+      expect(r.content).toMatch(/Not accepted: this is running inside an agent session: ancestor process \d+ is gnomon itself/);
       expect(accepted("always-setup")).toBe(false);
     }
     expect(acceptRecords()).toBe(0);

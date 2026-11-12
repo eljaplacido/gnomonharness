@@ -158,12 +158,15 @@ import {
 } from "./mediators.js";
 import { writeTamperRecord, compareWithCheckpoint, writeCheckpoint } from "./record_tamper.js";
 import {
+  FAILED_CODE,
   LiveRecord,
+  failedNote,
   killedTurnAudit,
   onKillSignal,
   type KillSignal,
   type OpenTurn,
   type TurnLive,
+  type TurnSoFar,
 } from "./live_record.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { AFTER_REFUSAL_REASON, AfterRefusalWindow, resolveAfterRefusal } from "./after_refusal.js";
@@ -3718,7 +3721,9 @@ export type StopReason =
   // The run never reached the model: the surface itself could not be used.
   // Without this, a refusal to start had to borrow "answered", which is how an
   // apparatus failure came to be recorded as a turn that concluded. It IS a
-  // value a return site produces, so Rule 6 is satisfied.
+  // value a return site produces, so Rule 6 is satisfied. In `gnomon task` it
+  // also ends a run gnomon itself threw in after it started (LiveRecord fail,
+  // code 10): the steps up to then are kept, and it is never "could not start"
   | "apparatus"
   // Replies in a row that offered no usable tool call -- arguments that were
   // not a JSON object, a tool the role was not given, a call written out as
@@ -8258,6 +8263,14 @@ export interface RunTaskOptions {
 /** See RunTaskOptions.interrupt. */
 export interface TaskInterrupt {
   kill?: (signal: KillSignal) => TaskRecord | null;
+  /**
+   * Set once the run has started (its live record is open): end it on the
+   * record as it stands because `err` was thrown out of runTask, and return
+   * that record -- final, code 10, stop_reason "apparatus", the steps and
+   * clock so far, the trail sealed. Null when nothing is left to end. What
+   * `gnomon task` prints instead of "could not start" for a run that started.
+   */
+  fail?: (err: unknown) => Promise<TaskRecord | null>;
 }
 
 /** A span of milliseconds as "1h 2m", "7m 30s" or "45s", for the deadline notes. */
@@ -8323,6 +8336,33 @@ export function unstartedTaskRecord(
 }
 
 /**
+ * The turn a throw out of the loop ended: `apparatus` (10) on the steps,
+ * counters and tokens it had -- read off the live record's view of it, which
+ * the turn keeps current at every step -- with a note for `output`
+ * (failedNote), never the model's text. Without a view (no turn attached
+ * yet), the route's model and no steps.
+ */
+export function turnAfterThrow(err: unknown, now: TurnSoFar | null, route: ReturnType<typeof routeRole>): TurnResult {
+  const why = err instanceof Error ? err.message : String(err);
+  return {
+    content: failedNote(why),
+    code: FAILED_CODE,
+    model: now?.model ?? route.model,
+    endpoint: now?.endpoint ?? route.target.endpoint,
+    ...(now?.endpoint_url !== undefined ? { endpoint_url: now.endpoint_url } : {}),
+    ...(now?.wire !== undefined ? { wire: now.wire } : {}),
+    toolSteps: now?.toolSteps ?? 0,
+    toolLog: now ? [...now.toolLog] : [],
+    ...(now?.usage ? { usage: { ...now.usage } } : {}),
+    stop_reason: "apparatus",
+    counters: now
+      ? structuredClone(now.counters)
+      : { writes: 0, worktree_moves: 0, nudges: 0, final_step_was_write: false, per_tool: {} },
+    ...(now?.modelCalls ? { modelCalls: structuredClone(now.modelCalls) } : {}),
+  };
+}
+
+/**
  * Run one task without a terminal.
  *
  * This is the invocation a composition layer can put in a runbook: it takes a
@@ -8332,6 +8372,15 @@ export function unstartedTaskRecord(
  * Approval is refused by default. A non-interactive run has nobody to ask, and
  * silently granting writes because no one is watching would invert the meaning
  * of `approval = "on_write"`.
+ *
+ * A throw before the run starts (no surface, a role it does not define, a root
+ * that cannot be contained) reaches the caller, which says the task could not
+ * start. A throw inside the turn does not: the turn ends `apparatus` (10) on
+ * the steps it had (turnAfterThrow) and the run ends as any run does. dc1
+ * (2026-11-12): the [verify] must-fail-first re-run threw after 58 tool calls,
+ * `gnomon task` printed "could not start" with tool_steps 0 and duration 0,
+ * and the live record was left `partial`. Anything else after the start is
+ * `interrupt.fail`'s, for the caller to end the run on the record as it stands.
  */
 export async function runTask(
   config: GnomonConfig,
@@ -8596,6 +8645,38 @@ export async function runTask(
       }
       return killed.record;
     };
+    // From here the run has started. A throw that leaves runTask after this
+    // point -- outside the turn, which ends itself on one (turnAfterThrow) --
+    // is ended by the caller through this, as the kill above is: on the record
+    // as it stands, final, code 10, stop_reason "apparatus", the steps and the
+    // clock up to then, the `turn` record and session_end in the trail, and
+    // the checkpoint after the record file, as an ordinary ending writes them.
+    // Never "could not start".
+    options.interrupt.fail = async (err) => {
+      const why = err instanceof Error ? err.message : String(err);
+      state.mcp?.close();
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      const ended = live.fail(why);
+      if (!ended) return null;
+      if (ended.fresh) {
+        // What threw may be the trail itself (a full disk, a planted symlink)
+        // or stderr: the record above is already written, and is returned
+        // regardless.
+        try {
+          warn(`  [gnomon] the run failed after it started, after ${ended.record.tool_steps} tool call(s): ${why}`);
+          audit.write("turn", killedTurnAudit(ended.record, (v) => audit.text(v)));
+          audit.write("session_end", { turns: 1, surface_hash });
+          writeCheckpoint(config);
+        } catch {
+          /* said where it could be; the record is what is kept */
+        }
+        sealedByKill = true;
+      }
+      // The --json record a run that ends normally prints: the live file's own
+      // fields (record_state, session, turn, endpoint_url, wire) stay in the file.
+      const { record_state: _state, session: _session, turn: _turn, endpoint_url: _url, wire: _wire, ...record } = ended.record;
+      return record;
+    };
   }
 
   // After session_start, so a shadow that is down at the start is recorded
@@ -8797,6 +8878,27 @@ export async function runTask(
       });
       shadow?.turnEnd(turnInfo, shadowOutcome(turn, turnInfo.t0));
     }
+  } catch (err) {
+    // A throw out of the loop -- not a tool's (executeTool makes that a result
+    // the model reads), but the loop's own, such as the [verify]
+    // must-fail-first re-run in dc1 -- ends the turn on what it had, and the
+    // run ends below as any run does: record guard, `turn` record, the record
+    // file final, session_end, checkpoint. It used to leave runTask, and
+    // `gnomon task` printed "could not start" for a run 58 tool calls in.
+    turn = turnAfterThrow(err, live.soFar(), route);
+    if (chain.length >= 2 && stageRecords.length < chain.length) {
+      stageRecords.push({
+        stage: stageRecords.length + 1,
+        role: live.soFar()?.role ?? chain[stageRecords.length]!,
+        model: turn.model,
+        code: turn.code,
+        bucket: mapBucket(turn.code),
+        stop_reason: turn.stop_reason,
+        tool_steps: turn.toolSteps,
+        output: turn.content,
+      });
+    }
+    warn(`  [gnomon] the turn failed after ${turn.toolSteps} tool call(s): ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     // Subprocesses outlive the turn otherwise, and `gnomon task` is the entry
     // point scripts run in a loop.

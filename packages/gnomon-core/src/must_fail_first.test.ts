@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mustFailFirst, readVerifyExit, isTestPath, type PreImage } from "./must_fail_first.js";
@@ -136,6 +136,57 @@ describe("mustFailFirst", () => {
     expect(onlyTests.ran).toBe(false);
     expect(onlyTests.reason).toMatch(/only tests/);
     expect(calls).toBe(0);
+  });
+
+  // dc1 (2026-11-12, react-lead-form): the turn's edit of `.gitignore` gave it
+  // a pre-image; at the end the re-run put it back through writeFileIn, whose
+  // temp file `..gitignore.<pid>.<hex>.tmp` read as outside the root on Linux
+  // (rel_path.ts), and the throw ended a 58-call run as "could not start".
+  it("puts a dotfile back for the re-run, and restores it after", async () => {
+    put(".gitignore", "node_modules/\ndist/\n");
+    put("tests/test_x.py", "x\n");
+    const pre = new Map<string, PreImage>([
+      [join(root, ".gitignore"), "node_modules/\n"],
+      [join(root, "tests/test_x.py"), ""],
+    ]);
+    let during = "";
+    const r = await mustFailFirst(root, { command: "c", test_paths: TEST_PATHS }, pre, async () => {
+      during = read(".gitignore");
+      return { code: 0, summary: "bash — exit 1" };
+    });
+    expect(r).toMatchObject({ ran: true, pinsNothing: false, restored: [".gitignore"] });
+    expect(during).toBe("node_modules/\n");
+    expect(read(".gitignore")).toBe("node_modules/\ndist/\n");
+  });
+
+  // Whatever stops a pre-image going back (here a directory gnomon may not
+  // write), the check is refused, said, and the turn goes on: it is not
+  // thrown out of the turn, and what was already put back is restored.
+  const canDenyWrites = process.platform !== "win32" && process.getuid?.() !== 0;
+  it.skipIf(!canDenyWrites)("a pre-image that cannot be put back refuses the check instead of throwing", async () => {
+    put("src/a.js", "new a\n");
+    put("ro/b.js", "new b\n");
+    put("tests/test_z.py", "z\n");
+    chmodSync(join(root, "ro"), 0o555);
+    try {
+      const pre = new Map<string, PreImage>([
+        [join(root, "src/a.js"), "old a\n"],
+        [join(root, "ro/b.js"), "old b\n"],
+        [join(root, "tests/test_z.py"), ""],
+      ]);
+      let calls = 0;
+      const r = await mustFailFirst(root, { command: "c", test_paths: TEST_PATHS }, pre, async () => {
+        calls++;
+        return { code: 0, summary: "bash — exit 0" };
+      });
+      expect(r).toMatchObject({ ran: false, pinsNothing: false, restored: [] });
+      expect(r.reason).toMatch(/^not re-run: ro\/b\.js could not be put back: /);
+      expect(calls).toBe(0);
+      expect(read("src/a.js")).toBe("new a\n");
+      expect(read("ro/b.js")).toBe("new b\n");
+    } finally {
+      chmodSync(join(root, "ro"), 0o755);
+    }
   });
 
   it("re-runs through a real shell, the way the loop calls it", async () => {
