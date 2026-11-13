@@ -1,6 +1,6 @@
 """A scripted, compromised OpenAI-compatible model for GBS-GOVERNANCE (no GPU, no cloud).
 
-Adapted from INJ-2026-11's apparatus/fake_model.py (branch bench/injection-2026-11), with
+Adapted from INJ-2026-11's apparatus/fake_model.py (the private benchmark repository), with
 two additions: the port is chosen by the OS and printed (ephemeral, loopback only), and
 a sub-turn (gnomon's `task` tool) gets its own plan, keyed by a marker in its prompt.
 

@@ -14,12 +14,18 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
 import * as promptLoop from "./prompt_loop.js";
-import { verifyTrail, type AuditRecord } from "./audit.js";
+import { AUDIT_KINDS, verifyTrail, type AuditRecord } from "./audit.js";
 import { replay } from "./replay.js";
 import { checkSessionFile, repoStateDir } from "./root_fs.js";
 import {
   GUARD_DECISIONS,
+  GUARD_LIVE_SCHEMA,
+  GUARD_RULES,
+  GUARD_TOOLS,
   fromClaudeCode,
+  guardLiveSessions,
+  guardSawSession,
+  sessionsWithoutGuard,
   fromCursor,
   fromOpencode,
   guardExit,
@@ -45,6 +51,17 @@ const CASES = JSON.parse(readFileSync(resolve(here, "../../../conformance/guard_
     rule: string | null;
     expect: Partial<Record<"never" | "on_write" | "always", GuardDecisionValue>>;
   }>;
+  host_tools: {
+    cases: Array<{
+      name: string;
+      role: string;
+      tool_name: string;
+      tool_input: Record<string, unknown>;
+      decided_as: string;
+      expect: Record<"never" | "on_write", [GuardDecisionValue, string | null]>;
+      levels: { verdict: GuardDecisionValue; rule: string | null; family: string | null; expect: Record<string, GuardDecisionValue> };
+    }>;
+  };
   levels: {
     levels: Array<"observe" | "advise" | "prevent" | "enforce">;
     policy: string;
@@ -510,13 +527,20 @@ describe("gnomon guard — reading other harnesses' hook payloads", () => {
     expect(cc("WebFetch", { url: "https://x", prompt: "p" })).toEqual([{ tool: "webfetch", input: { url: "https://x" } }]);
     expect(cc("Grep", { pattern: "k", path: "/w/src", glob: "*.ts" })).toEqual([{ tool: "grep", input: { pattern: "k", path: "/w/src" } }]);
     expect(cc("Glob", { pattern: "*" })).toEqual([{ tool: "glob", input: { pattern: "*", path: undefined } }]);
-    expect(cc("Task", { prompt: "p" })).toEqual([]);
+    // A subagent is decided as `agent` (recorded, allowed); a web search as `websearch`; MCP by its own name.
+    expect(cc("Task", { prompt: "p", description: "d" })).toEqual([{ tool: "agent", input: { description: "d", subagent_type: undefined } }]);
+    expect(cc("WebSearch", { query: "q" })).toEqual([{ tool: "websearch", input: { query: "q" } }]);
+    expect(cc("mcp__github__create_issue", { title: "t" })).toEqual([]);
     expect(fromClaudeCode({ tool_name: "Bash", tool_input: {}, permission_mode: "bypassPermissions" }).permissionMode).toBe("bypassPermissions");
   });
 
   it("opencode V2: shell, write, edit, patch, read and webfetch events", () => {
     const oc = (tool: string, input: Record<string, unknown>) => fromOpencode({ tool, sessionID: "ses_1", agent: "build", input }).calls;
     expect(oc("shell", { command: "ls", workdir: "/w" })).toEqual([{ tool: "bash", input: { command: "ls" } }]);
+    expect(oc("list", { path: "/w/src" })).toEqual([{ tool: "glob", input: { pattern: "*", path: "/w/src" } }]);
+    expect(oc("multiedit", { filePath: "a", edits: [] })).toEqual([{ tool: "edit", input: { path: "a" } }]);
+    expect(oc("task", { description: "d", prompt: "p" })).toEqual([{ tool: "agent", input: { description: "d", subagent_type: undefined } }]);
+    expect(oc("websearch", { query: "q" })).toEqual([{ tool: "websearch", input: { query: "q" } }]);
     expect(oc("write", { path: "a", content: "c" })).toEqual([{ tool: "write", input: { path: "a", content: "c" } }]);
     expect(oc("edit", { path: "a", oldString: "o", newString: "n" })).toEqual([
       { tool: "edit", input: { path: "a", old_text: "o", new_text: "n" } },
@@ -878,5 +902,133 @@ describe("grep and glob are decided as reads of where they search", () => {
     put(".gnomon/roles.toml", CASES.surface["roles.toml"]! + '\n[roles.shell]\nmodel = "m"\ntools = ["bash"]\n');
     commit("shell role");
     expect(await guardToolCall({ cwd: repo, call: { tool: "grep", input: { pattern: "x" } }, role: "shell" })).toMatchObject({ decision: "deny", rule: "tools" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Host tools gnomon has no tool kind for (guard_cases.json host_tools)
+// ---------------------------------------------------------------------------
+
+describe("host tools that are not gnomon tool kinds: web search, subagents, MCP (conformance/guard_cases.json host_tools)", () => {
+  const payload = (c: (typeof CASES.host_tools.cases)[number], session = "ht") =>
+    fromClaudeCode({ session_id: session, cwd: repo, permission_mode: "default", hook_event_name: "PreToolUse", tool_name: c.tool_name, tool_input: c.tool_input });
+  for (const gate of ["never", "on_write"] as const) {
+    it(`with no [governance], under gate = "${gate}"`, async () => {
+      surface(gate);
+      for (const c of CASES.host_tools.cases) {
+        const v = await guardHarnessRequest(payload(c), { cwd: repo, role: c.role, harness: "claude-code" });
+        expect({ name: c.name, tool: v.tool, decision: v.decision, rule: v.rule, verdict: v.verdict }).toEqual({
+          name: c.name,
+          tool: c.decided_as,
+          decision: c.expect[gate][0],
+          rule: c.expect[gate][1],
+          verdict: undefined,
+        });
+      }
+    });
+  }
+  for (const level of ["observe", "advise", "prevent", "enforce"] as const) {
+    it(`under [governance] level = "${level}"`, async () => {
+      levelSurface(level);
+      for (const c of CASES.host_tools.cases) {
+        const v = await guardHarnessRequest(payload(c), { cwd: repo, role: c.role, harness: "claude-code" });
+        expect({ name: c.name, decision: v.decision, verdict: v.verdict, rule: v.rule, family: v.family }).toEqual({
+          name: c.name,
+          decision: c.levels.expect[level],
+          verdict: c.levels.verdict,
+          rule: c.levels.rule,
+          family: c.levels.family,
+        });
+        // An ungoverned tool is held at the strictest level of the families it could reach.
+        if (c.levels.rule === "ungoverned" && c.levels.verdict === "ask") expect(v.level).toBe(level);
+      }
+    });
+  }
+
+  it("an MCP tool is levelled at the strictest family but rules: one family at prevent is enough to ask", async () => {
+    levelSurface("observe", `secrets = "prevent"\n`);
+    const mcp = CASES.host_tools.cases.find((c) => c.tool_name.startsWith("mcp__"))!;
+    const v = await guardHarnessRequest(payload(mcp), { cwd: repo, role: "implement", harness: "claude-code" });
+    expect([v.decision, v.level]).toEqual(["ask", "prevent"]);
+  });
+
+  it("under bypassPermissions an MCP ask is a deny, as every other ask is", async () => {
+    levelSurface("prevent");
+    const mcp = CASES.host_tools.cases.find((c) => c.tool_name.startsWith("mcp__"))!;
+    const hr = fromClaudeCode({ session_id: "bp", cwd: repo, permission_mode: "bypassPermissions", tool_name: mcp.tool_name, tool_input: {} });
+    const v = await guardHarnessRequest(hr, { cwd: repo, role: "implement", harness: "claude-code" });
+    expect(v.decision).toBe("deny");
+  });
+
+  it("the trail records the host's own tool name and an ungoverned verdict", async () => {
+    levelSurface("observe", "", "", `\n[audit]\nenabled = true\n`);
+    const mcp = CASES.host_tools.cases.find((c) => c.tool_name.startsWith("mcp__"))!;
+    const v = await guardHarnessRequest(payload(mcp, "rec"), { cwd: repo, role: "implement", harness: "claude-code" });
+    expect(v.decision).toBe("allow");
+    const recs = readFileSync(v.audit!.trail, "utf-8").trim().split("\n").map((l) => JSON.parse(l) as AuditRecord);
+    const g = recs.find((r) => r.kind === "guard")!;
+    expect(g).toMatchObject({ tool: mcp.tool_name, rule: "ungoverned", decision: "allow", verdict: "ask", family: null, level: "observe" });
+    expect("host_tool" in g).toBe(false); // the same as tool: not repeated
+    const ws = CASES.host_tools.cases.find((c) => c.tool_name === "WebSearch")!;
+    const w = await guardHarnessRequest(payload(ws, "rec"), { cwd: repo, role: "implement", harness: "claude-code" });
+    const last = readFileSync(w.audit!.trail, "utf-8").trim().split("\n").map((l) => JSON.parse(l) as AuditRecord).filter((r) => r.kind === "guard").pop()!;
+    expect(last).toMatchObject({ tool: "websearch", host_tool: "WebSearch", target: "gnomon harness", family: "network" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Liveness (CONTRACTS.md §44)
+// ---------------------------------------------------------------------------
+
+describe("liveness: the guard says which host sessions reached it", () => {
+  it("writes a session_start record at a session's first decision and touches it at each later one", async () => {
+    surface("never");
+    expect(guardLiveSessions(repo)).toEqual([]);
+    await guardToolCall({ cwd: repo, call: { tool: "read", input: { path: "src/a.ts" } }, role: "implement", session: "s1", agent: "claude-code", harness: "claude-code" });
+    const [first] = guardLiveSessions(repo);
+    expect(first).toMatchObject({ schema: GUARD_LIVE_SCHEMA, kind: "session_start", session: "s1", via: "claude-code", agent: "claude-code", id: "s1" });
+    expect(first!.last_decision >= first!.started).toBe(true);
+    // An ungoverned tool, and a call that could not be decided, are still the session reaching the guard.
+    await guardToolCall({ cwd: repo, call: { tool: "mcp__x__y", input: {} }, role: "implement", session: "s2" });
+    await guardToolCall({ cwd: repo, call: { tool: "read", input: { path: "src/a.ts" } }, session: "s3" }); // no role: ask / error
+    expect(guardLiveSessions(repo).map((l) => l.id).sort()).toEqual(["s1", "s2", "s3"]);
+    expect(guardSawSession(repo, "s1")).toBe(true);
+    expect(guardSawSession(repo, "nope")).toBe(false);
+    // A call that names no session is one record per day.
+    await guardToolCall({ cwd: repo, call: { tool: "read", input: { path: "src/a.ts" } }, role: "implement" });
+    expect(guardLiveSessions(repo).some((l) => /^day-\d{4}-\d{2}-\d{2}$/.test(l.id) && l.session === null)).toBe(true);
+  });
+
+  it("a session the SessionStart hook recorded and the guard never decided for is listed", async () => {
+    const head = surface("never");
+    for (const [id, started] of [["seen", "2026-11-12T10:00:00.000Z"], ["unseen", "2026-11-12T11:00:00.000Z"], ["old", "2026-01-01T00:00:00.000Z"]]) {
+      const f = checkSessionFile(join(repo, ".git"), id!);
+      mkdirSync(dirname(f), { recursive: true });
+      writeFileSync(f, JSON.stringify({ head, untracked: {}, started }));
+    }
+    await guardToolCall({ cwd: repo, call: { tool: "read", input: { path: "src/a.ts" } }, role: "implement", session: "seen" });
+    expect(sessionsWithoutGuard(repo, "2026-11-01T00:00:00.000Z")).toEqual([{ session: "unseen", started: "2026-11-12T11:00:00.000Z" }]);
+    expect(sessionsWithoutGuard(repo).map((s) => s.session)).toEqual(["old", "unseen"]);
+  });
+
+  it("an ungoverned directory records nothing", async () => {
+    sh(["commit", "-q", "--allow-empty", "-m", "empty"]);
+    const v = await guardToolCall({ cwd: repo, call: { tool: "read", input: { path: "x" } }, session: "none" });
+    expect(v.rule).toBe("ungoverned");
+    expect(existsSync(join(repoStateDir(join(repo, ".git")), "guard", "live"))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rule 6: the guard's and the trail's enumerations are published (#113)
+// ---------------------------------------------------------------------------
+
+describe("gnomon enumerations publishes the guard and audit enumerations", () => {
+  it("AUDIT_KINDS, GUARD_DECISIONS, GUARD_RULES and GUARD_TOOLS are conformance/enumerations_golden.json's", () => {
+    const golden = JSON.parse(readFileSync(resolve(here, "../../../conformance/enumerations_golden.json"), "utf-8"));
+    expect(golden.audit_kind).toEqual([...AUDIT_KINDS]);
+    expect(golden.guard_decision).toEqual([...GUARD_DECISIONS]);
+    expect(golden.guard_rule).toEqual([...GUARD_RULES]);
+    expect(golden.guard_tool).toEqual([...GUARD_TOOLS]);
   });
 });

@@ -43,8 +43,7 @@ applicable cases undetected.
 - **Trails come from scripted sessions.** A deterministic fake model wrote
   them through the real v0.4.1 harness (gap AUDIT-1). The false-positive
   corpus is the same kind.
-- **gnomon only.** No peer was run. [PEER.md](PEER.md) says what each would
-  need.
+- **gnomon only.** No peer was run, and peer results are not published.
 - **Only integrity after the fact is measured.** Nothing here says whether
   the record was complete when it was written.
 
@@ -142,7 +141,7 @@ control, are in `result.json` → `traces`.
 | `raw/cases.json`, `raw/runlog.jsonl` | per-case results and the run log |
 | `raw/verifier/*.txt` | the verifier's full output and exit status for every case, misses included |
 | `raw/control-trail-*.jsonl` | each arm's untampered target trail |
-| [GAPS.md](GAPS.md), [PEER.md](PEER.md) | spec gaps, and what a peer needs |
+| [GAPS.md](GAPS.md) | spec gaps |
 
 Reproduce: install per [INSTALL.md](../common/INSTALL.md), then
 `GBS_SCRATCH=<dir> nice -n 19 node run_audit.mjs <workdir> <outdir>` and

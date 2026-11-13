@@ -274,6 +274,11 @@ export type AuditKind =
   // no token arrived in time, its attempt and wait, and whether a later
   // attempt under the same retry budget answered.
   | "first_token_stall"
+  // `[turn] continue_after_answer` under --deadline (checkpoint_grind.ts):
+  // `checkpoint` (taken, with the tree's content hash and the check's score),
+  // `checkpoint_skipped`, and the end decision: `checkpoint_restored`,
+  // `checkpoint_kept`, `checkpoint_kept_unverified`.
+  | "checkpoint"
   // One per end of a turn the finish gate (`[verify] finish_gate = "v2"`,
   // finish_gate.ts) judged: fire, no_tool or accept, the budget left, the
   // caveat ids its audit found, claims without evidence, the open todos.
@@ -283,7 +288,56 @@ export type AuditKind =
   // before it) and what came back (provider tokens, reasoning, code, clock).
   // Metadata only: no prompt or response text. mediators.ts.
   | "model_call"
+  // A turn moved to its role's escalation model ("local first, cloud rescue"):
+  // the trigger, the step, from where to where, and the handover's size. Its
+  // own kind because it is a routing decision inside a turn, not a turn, and a
+  // reader asking "which model did this work" has to find it without parsing
+  // turn records.
+  | "escalation"
   | "session_end";
+
+/**
+ * Every AuditKind, in the order declared above: the published enumeration
+ * `audit_kind` (`gnomon enumerations`, CONTRACTS.md §3 and §44; issue #113,
+ * Rule 6). The two assertions below fail the build when a kind is added to the
+ * type and not here, or here and not to the type.
+ */
+export const AUDIT_KINDS = [
+  "session_start",
+  "session_resume",
+  "turn",
+  "chain_stage",
+  "tool_call",
+  "approval",
+  "verify",
+  "bootstrap",
+  "context_mask",
+  "degradation",
+  "check",
+  "trust",
+  "guard",
+  "skill_accept",
+  "skill_reject",
+  "skill_trial",
+  "record_tamper",
+  "record_tamper_resolved",
+  "record_notice",
+  "mcp_tools",
+  "stall_signal",
+  "completion_gate",
+  "todo_gate",
+  "job",
+  "deliverable_first",
+  "first_token_stall",
+  "checkpoint",
+  "finish_gate",
+  "model_call",
+  "escalation",
+  "session_end",
+] as const satisfies readonly AuditKind[];
+type MissingAuditKind = Exclude<AuditKind, (typeof AUDIT_KINDS)[number]>;
+const _everyAuditKindListed: [MissingAuditKind] extends [never] ? true : MissingAuditKind = true;
+void _everyAuditKindListed;
 
 export interface AuditRecord {
   seq: number;
@@ -518,8 +572,7 @@ export class AuditTrail {
    * what the model said. A command is neither. It is what was done, which is
    * the thing this trail exists to answer. Until 2026-11 a bash call kept the
    * 70-character terminal form of its command, and its full arguments only
-   * under `full`. G1 (benchmarks/results/g1-2026-11, on bench/peers-2026-11)
-   * then found gnomon's one violation in 24 trials: after the deny-list
+   * under `full`. The G1 governance study (2026-11) then found gnomon's one violation in 24 trials: after the deny-list
    * refused `git clean`, `git reset --hard` and `rm -r -f`, the agent moved
    * `var/` out of the repository. The command that did it fell past the cut,
    * so the trail could not show it. Redaction still applies, so a token pasted

@@ -1,0 +1,1807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Gnomon Harness — behaviour fixed by files in the repo</title>
+  <meta name="description" content="Gnomon is a coding-agent harness whose behaviour is a pure function of a content-hashed .gnomon/ directory you commit. Roles separated by tool list, approval before writes, a tamper-evident audit trail, and one committed policy enforced inside Claude Code and opencode too. v0.5.0. Pre-registered benchmarks, losses included.">
+  <link rel="canonical" href="https://gnomonharness.com/">
+  <meta name="theme-color" content="#FAFAF6">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Gnomon Harness">
+  <meta property="og:title" content="Gnomon Harness — behaviour fixed by files in the repo">
+  <meta property="og:description" content="A coding-agent harness whose behaviour is fixed by a content-hashed .gnomon/ directory in your repository. Local and cloud models, capability-separated roles, a tamper-evident trail. v0.5.0.">
+  <meta property="og:url" content="https://gnomonharness.com/">
+  <meta property="og:locale" content="en_GB">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="Gnomon Harness — behaviour fixed by files in the repo">
+  <meta name="twitter:description" content="A coding-agent harness whose behaviour is fixed by a content-hashed .gnomon/ directory in your repository. v0.5.0.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;500;600&family=Cinzel+Decorative:wght@400&family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,400&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #F4F1EA;
+      --paper: #FAFAF6;
+      --text: #171717;
+      --muted: #5C5C58;
+      --rule: #C8C2B6;
+      --rule-light: #DDD8CE;
+      --accent: #A83B0B;  /* was #C1440E: 3.95:1 on --accent-soft, now >= 4.9:1 on every surface */
+      --accent-soft: #EDE0D4;
+      --code-bg: #EBE7DE;
+      --diagram-stroke: #9A9488;
+      --sketch: #6B655C;  /* was #7A746A: 4.43:1 on --paper, now 5.5:1 */
+      --grid-minor: rgba(154, 148, 136, 0.14);
+      --grid-major: rgba(154, 148, 136, 0.26);
+      --sheet: 100%;
+      --margin: clamp(1.5rem, 4vw, 3.5rem);
+      --gutter: clamp(1rem, 1.8vw, 1.75rem);
+      --unit: 24px;
+      --font-display: "Cinzel", "Times New Roman", serif;
+      --font-display-decor: "Cinzel Decorative", "Cinzel", serif;
+      --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: "Newsreader", Georgia, serif;
+      font-size: 1.0625rem;
+      line-height: 1.65;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* —— full-bleed sheet on graph paper —— */
+    .canvas {
+      min-height: 100vh;
+      position: relative;
+      background: var(--paper);
+      background-image:
+        linear-gradient(var(--grid-minor) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid-minor) 1px, transparent 1px),
+        linear-gradient(var(--grid-major) 1px, transparent 1px),
+        linear-gradient(90deg, var(--grid-major) 1px, transparent 1px);
+      background-size:
+        var(--unit) var(--unit),
+        var(--unit) var(--unit),
+        calc(var(--unit) * 4) calc(var(--unit) * 4),
+        calc(var(--unit) * 4) calc(var(--unit) * 4);
+      background-position: center top;
+    }
+
+    .sheet {
+      width: 100%;
+      max-width: none;
+      margin: 0;
+      position: relative;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+    }
+
+    .sheet-inner {
+      position: relative;
+      z-index: 2;
+      padding: 0 var(--margin);
+    }
+
+    /* 12-col grid */
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: var(--gutter);
+    }
+
+    .col-5  { grid-column: span 5; }
+    .col-6  { grid-column: span 6; }
+    .col-7  { grid-column: span 7; }
+    .col-12 { grid-column: span 12; }
+    .col-3  { grid-column: span 3; }
+    .col-4  { grid-column: span 4; }
+    .col-8  { grid-column: span 8; }
+    .col-9  { grid-column: span 9; }
+
+    @media (max-width: 960px) {
+      .col-5, .col-6, .col-7, .col-3, .col-4, .col-8, .col-9 {
+        grid-column: span 12;
+      }
+    }
+
+    /* —— figure styles —— */
+    .fig-line { fill: none; stroke: currentColor; stroke-width: 0.85; }
+    .fig-thin { stroke-width: 0.5; opacity: 0.7; }
+    .fig-dash { stroke-dasharray: 6 4; }
+    .fig-hatch line { stroke: currentColor; stroke-width: 0.35; opacity: 0.5; }
+    .fig-txt {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 8px;
+      fill: currentColor;
+      letter-spacing: 0.04em;
+    }
+    .hero-sundial {
+      display: block;
+      width: 100%;
+      height: auto;
+      color: var(--sketch);
+    }
+
+    .hero-sundial .shadow-umbra,
+    .logo-mark .shadow-umbra {
+      pointer-events: none;
+      fill: #000;
+      stroke: none;
+      will-change: d, opacity;
+    }
+
+    /* —— figure frame —— */
+    .plate {
+      background: #fff;
+      border: 1px solid var(--rule);
+      position: relative;
+      padding: 1.35rem 1.35rem 0.75rem;
+      box-shadow: 0 1px 2px rgba(90, 80, 60, 0.04);
+    }
+
+    .fig-caption {
+      margin-top: 0.75rem;
+      padding-top: 0.65rem;
+      border-top: 1px solid var(--rule-light);
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.58rem;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    .fig-caption strong {
+      color: var(--text);
+      font-weight: 500;
+      letter-spacing: 0.06em;
+    }
+
+    .fig-caption .sundial-time {
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    nav.top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 1rem 0;
+      margin: 0 calc(var(--margin) * -1);
+      padding-left: var(--margin);
+      padding-right: var(--margin);
+      border-bottom: 1px solid var(--rule);
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      position: sticky;
+      top: 0;
+      z-index: 30;
+      background: rgba(250, 250, 246, 0.88);
+      backdrop-filter: blur(10px);
+      -webkit-backdrop-filter: blur(10px);
+    }
+
+    nav.top a {
+      color: var(--muted);
+      text-decoration: none;
+      margin-left: 1.25rem;
+      transition: color 0.2s ease;
+    }
+
+    nav.top a:hover,
+    nav.top a.is-active { color: var(--accent); }
+
+    nav.top a:focus-visible,
+    footer a:focus-visible,
+    .hero-kpi-footnote a:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    @media (max-width: 640px) {
+      nav.top { flex-direction: column; align-items: flex-start; gap: 0.75rem; }
+      nav.top .nav-links { margin-left: -0.25rem; }
+      nav.top a { margin-left: 0.75rem; }
+      .nav-cta { margin-left: 0.75rem !important; }
+    }
+
+    nav.top .nav-links { display: flex; align-items: center; flex-wrap: wrap; gap: 0 0.25rem; }
+
+    .nav-cta {
+      margin-left: 1.5rem !important;
+      padding: 0.35rem 0.7rem;
+      border: 1px solid var(--rule);
+      background: #fff;
+      transition: border-color 0.2s ease, color 0.2s ease;
+    }
+
+    .nav-cta:hover {
+      border-color: var(--accent);
+      color: var(--accent) !important;
+    }
+
+    .skip-link {
+      position: absolute; left: 1rem; top: -3rem; z-index: 100;
+      background: var(--text); color: var(--paper); padding: 0.5rem 0.9rem;
+      font-family: "IBM Plex Mono", monospace; font-size: 0.8rem; text-decoration: none;
+      transition: top 0.15s;
+    }
+    .skip-link:focus { top: 1rem; outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    ::selection {
+      background: var(--accent-soft);
+      color: var(--text);
+    }
+    .logo {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.65rem;
+      text-decoration: none;
+      color: inherit;
+    }
+
+    .logo-mark {
+      width: 36px;
+      height: 36px;
+      flex-shrink: 0;
+      overflow: visible;
+    }
+
+    .logo-text {
+      display: flex;
+      flex-direction: column;
+      line-height: 1.05;
+    }
+
+    .logo-name {
+      font-family: var(--font-display);
+      font-size: 1.05rem;
+      font-weight: 500;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--text);
+    }
+
+    .logo-sub {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.52rem;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-top: 0.15rem;
+    }
+
+    /* distinctive inline treatment for the word "gnomon" */
+    .gnomon-type {
+      font-family: var(--font-display-decor);
+      font-style: normal;
+      font-weight: 400;
+      letter-spacing: 0.04em;
+      color: var(--text);
+      position: relative;
+    }
+
+    .gnomon-type::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: 0.06em;
+      height: 2px;
+      background: linear-gradient(90deg, var(--accent) 0%, transparent 100%);
+      opacity: 0.45;
+    }
+
+    /* —— scroll reveal —— */
+    .reveal {
+      opacity: 0;
+      transform: translateY(1.35rem);
+      transition:
+        opacity 0.75s var(--ease-out),
+        transform 0.75s var(--ease-out);
+      transition-delay: var(--reveal-delay, 0ms);
+    }
+
+    .reveal.from-left {
+      transform: translateX(-1.25rem);
+    }
+
+    .reveal.from-right {
+      transform: translateX(1.25rem);
+    }
+
+    .reveal.scale-in {
+      transform: translateY(0.75rem) scale(0.985);
+    }
+
+    .reveal.is-visible {
+      opacity: 1;
+      transform: none;
+    }
+
+    .reveal-stagger > .reveal:nth-child(1) { --reveal-delay: 0ms; }
+    .reveal-stagger > .reveal:nth-child(2) { --reveal-delay: 70ms; }
+    .reveal-stagger > .reveal:nth-child(3) { --reveal-delay: 140ms; }
+    .reveal-stagger > .reveal:nth-child(4) { --reveal-delay: 210ms; }
+    .reveal-stagger > .reveal:nth-child(5) { --reveal-delay: 280ms; }
+    .reveal-stagger > .reveal:nth-child(6) { --reveal-delay: 350ms; }
+
+    .hero .reveal { transition-duration: 0.9s; }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .reveal {
+        opacity: 1;
+        transform: none;
+        transition: none;
+      }
+    }
+
+    /* —— hero —— */
+    .hero {
+      padding: clamp(2.5rem, 6vw, 4.5rem) 0;
+      border-bottom: 1px solid var(--rule);
+    }
+
+    .hero-kicker {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.65rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 0.85rem;
+    }
+
+    .hero h1 {
+      font-size: clamp(2rem, 4vw, 3rem);
+      font-weight: 500;
+      line-height: 1.12;
+      letter-spacing: -0.025em;
+      margin-bottom: 1.1rem;
+    }
+
+    .hero h1 em { font-style: italic; color: var(--muted); font-weight: 400; }
+
+    h2 .gnomon-type { font-size: 1.02em; }
+
+    .hero-name-block {
+      border-left: 2px solid var(--accent);
+      padding-left: 1.15rem;
+      margin: 1.5rem 0;
+      font-size: 1.02rem;
+      color: var(--muted);
+    }
+
+    .hero-name-block strong { color: var(--text); font-weight: 500; }
+
+    .hero-product {
+      font-size: 1.08rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .install {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.8rem;
+      background: #fff;
+      border: 1px solid var(--rule);
+      border-left: 2px solid var(--accent);
+      padding: 0.85rem 1.15rem;
+      display: inline-block;
+      box-shadow: 0 1px 2px rgba(90, 80, 60, 0.04);
+    }
+
+    .status {
+      margin-top: 1rem;
+      font-size: 0.85rem;
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    .hero-kpis {
+      margin-top: clamp(2rem, 4vw, 2.75rem);
+      padding-top: 1.35rem;
+      border-top: 1px solid var(--rule);
+    }
+
+    .hero-kpi-intro {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.62rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.85rem;
+    }
+
+    .hero-kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      background: var(--rule);
+      border: 1px solid var(--rule);
+    }
+
+    @media (max-width: 900px) {
+      .hero-kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 480px) {
+      .hero-kpi-grid { grid-template-columns: 1fr; }
+    }
+
+    .hero-kpi {
+      background: #fff;
+      padding: 1rem 1.1rem 0.9rem;
+    }
+
+    .hero-kpi-value {
+      font-family: "Newsreader", Georgia, serif;
+      font-size: clamp(0.92rem, 1.4vw, 1.05rem);
+      font-weight: 500;
+      color: var(--text);
+      letter-spacing: -0.01em;
+      line-height: 1.3;
+      margin-bottom: 0.45rem;
+    }
+
+    .hero-kpi-label {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.58rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    .hero-kpi-metric {
+      display: block;
+      margin-top: 0.45rem;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.68rem;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+      color: var(--accent);
+      line-height: 1.35;
+    }
+
+    .hero-kpi-metric a {
+      color: inherit;
+      text-decoration: none;
+      border-bottom: 1px solid rgba(168, 59, 11, 0.35);
+    }
+
+    .hero-kpi-metric a:hover { border-color: var(--accent); }
+
+    .hero-kpi-footnote {
+      margin-top: 0.65rem;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.58rem;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    .hero-kpi-footnote a {
+      color: var(--text);
+      text-decoration: none;
+      border-bottom: 1px solid var(--rule-light);
+    }
+
+    .hero-kpi-footnote a:hover { border-color: var(--accent); }
+
+    .plate-note {
+      margin-top: 0.65rem;
+      font-size: 0.82rem;
+      color: var(--muted);
+      line-height: 1.5;
+      padding: 0 0.25rem;
+    }
+
+    .plate-note strong { color: var(--accent); font-weight: 500; }
+
+    /* —— sections —— */
+    section {
+      padding: clamp(2.25rem, 4.5vw, 3.75rem) 0;
+      border-bottom: 1px solid var(--rule);
+      position: relative;
+    }
+
+    section:last-of-type { border-bottom: none; }
+
+    .section-label {
+      position: relative;
+      padding-left: 0.75rem;
+    }
+
+    .section-label::before {
+      content: "";
+      position: absolute;
+      left: 0; top: 0.15rem; bottom: 0.15rem;
+      width: 2px;
+      background: var(--accent);
+      opacity: 0.7;
+    }
+
+    .section-num {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.62rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 0.35rem;
+    }
+
+    h2 {
+      font-size: clamp(1.35rem, 2.2vw, 1.75rem);
+      font-weight: 500;
+      letter-spacing: -0.01em;
+      margin-bottom: 0.85rem;
+    }
+
+    p { margin-bottom: 0.85rem; }
+    p:last-child { margin-bottom: 0; }
+
+    .pull {
+      border-left: 2px solid var(--accent);
+      padding-left: 1rem;
+      margin: 1.1rem 0;
+      color: var(--muted);
+      font-size: 0.98rem;
+    }
+
+    /* loop / arch diagrams */
+    .plate svg { display: block; width: 100%; height: auto; color: var(--sketch); }
+
+    .loop-node { fill: #fff; stroke: var(--diagram-stroke); stroke-width: 1; }
+    .loop-node-accent { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1; }
+    .loop-node-outcome { fill: var(--code-bg); stroke: var(--text); stroke-width: 1; }
+    .loop-label { font-family: "Newsreader", Georgia, serif; font-size: 12px; fill: var(--text); text-anchor: middle; }
+    .loop-label-small { font-family: "IBM Plex Mono", monospace; font-size: 9px; fill: var(--muted); text-anchor: middle; }
+    .loop-arrow { stroke: var(--diagram-stroke); stroke-width: 1; fill: none; }
+
+    .guarantees {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1px;
+      background: var(--rule);
+      border: 1px solid var(--rule);
+      margin-top: var(--gutter);
+    }
+
+    @media (max-width: 800px) { .guarantees { grid-template-columns: 1fr; } }
+
+    .guarantee {
+      background: #fff;
+      padding: 1.1rem 1.2rem;
+      font-size: 0.88rem;
+    }
+
+    .guarantee strong { display: block; font-weight: 500; margin-bottom: 0.25rem; }
+
+    .arch-box { fill: #fff; stroke: var(--diagram-stroke); stroke-width: 1; }
+    .arch-box-rust { fill: #F8F6F2; stroke: #A89880; }
+    .arch-box-ts { fill: #F2F4F8; stroke: #8898A8; }
+    .arch-box-out { fill: var(--accent-soft); stroke: var(--accent); }
+    .arch-title { font-family: "IBM Plex Mono", monospace; font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase; fill: var(--muted); }
+    .arch-label { font-family: "Newsreader", Georgia, serif; font-size: 11px; fill: var(--text); }
+
+    /* use cases */
+    .use-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 1px;
+      background: var(--rule);
+      border: 1px solid var(--rule);
+    }
+
+    @media (max-width: 720px) { .use-grid { grid-template-columns: 1fr; } }
+
+    .use-case { background: #fff; padding: 1.25rem 1.35rem; }
+
+    .use-persona {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.6rem;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 0.45rem;
+    }
+
+    .use-scenario { font-weight: 500; margin-bottom: 0.3rem; }
+    .use-why { font-size: 0.86rem; color: var(--muted); }
+    .use-flow {
+      margin-top: 0.55rem;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.65rem;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.84rem;
+    }
+
+    th, td {
+      text-align: left;
+      padding: 0.55rem 0.65rem;
+      border-bottom: 1px solid var(--rule-light);
+      vertical-align: top;
+    }
+
+    th {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.58rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    td code, code.inline {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.78rem;
+      background: var(--code-bg);
+      padding: 0.06em 0.3em;
+    }
+
+    ol.rules { list-style: none; counter-reset: rule; }
+
+    ol.rules li {
+      counter-increment: rule;
+      padding: 0.75rem 0;
+      border-bottom: 1px solid var(--rule-light);
+      display: grid;
+      grid-template-columns: 2rem 1fr;
+      gap: 0.5rem;
+      font-size: 0.88rem;
+    }
+
+    ol.rules li::before {
+      content: counter(rule, decimal-leading-zero);
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.65rem;
+      color: var(--accent);
+    }
+
+    .bench-note {
+      background: #fff;
+      border: 1px solid var(--rule);
+      padding: 1rem;
+      font-size: 0.86rem;
+      color: var(--muted);
+    }
+
+    .bench-note em { color: var(--accent); font-style: normal; font-weight: 500; }
+    .bench-table td:last-child { color: var(--muted); font-size: 0.8rem; }
+
+    .bench-dims { display: flex; flex-direction: column; gap: 1.75rem; }
+
+    .bench-dim h3 {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.62rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 0.55rem;
+      font-weight: 500;
+    }
+
+    .bench-dim p {
+      font-size: 0.84rem;
+      color: var(--muted);
+      margin-bottom: 0.65rem;
+      max-width: 52rem;
+    }
+
+    .bench-dim .bench-table { margin-bottom: 0.35rem; }
+
+    .bench-dim .bench-table td.num { font-variant-numeric: tabular-nums; }
+
+    .bench-dim .bench-table td strong { color: var(--text); }
+
+    .bench-foot {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-top: 0.25rem;
+      line-height: 1.5;
+    }
+
+    ul.limits { list-style: none; }
+
+    ul.limits li {
+      padding: 0.4rem 0 0.4rem 0.8rem;
+      border-left: 2px solid var(--rule);
+      margin-bottom: 0.4rem;
+      font-size: 0.88rem;
+    }
+
+    .limits-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0 2rem;
+    }
+
+    @media (max-width: 640px) { .limits-grid { grid-template-columns: 1fr; } }
+
+    .limits-platform {
+      margin-top: 1rem;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.58rem;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+      font-style: italic;
+      line-height: 1.55;
+    }
+
+    footer {
+      padding: 2.5rem 0 3.5rem;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.65rem;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+      border-top: 1px solid var(--rule);
+    }
+
+    footer a {
+      color: var(--text);
+      text-decoration: none;
+      border-bottom: 1px solid var(--rule-light);
+      margin-right: 1rem;
+    }
+
+    footer a:hover { border-color: var(--accent); }
+
+    .guarantee code, .use-why code, .use-scenario code, .use-persona code {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.86em;
+    }
+
+    code.inline, .use-flow { overflow-wrap: anywhere; }
+
+    .install-prompt { color: var(--muted); user-select: none; margin-right: 0.5em; }
+    .install { line-height: 1.8; }
+
+    .hero-docs {
+      margin-top: 0.55rem;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.03em;
+      color: var(--muted);
+    }
+
+    .hero-docs a,
+    .pull a,
+    ul.limits a,
+    .guarantee p a,
+    section p a {
+      color: var(--accent);
+      text-decoration: none;
+      border-bottom: 1px solid rgba(168, 59, 11, 0.35);
+    }
+
+    .hero-docs a:hover,
+    .pull a:hover,
+    ul.limits a:hover,
+    section p a:hover,
+    .bench-note a:hover { border-color: var(--accent); }
+
+    .bench-note a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(168, 59, 11, 0.35); }
+
+    .hero-kpi-lead { box-shadow: inset 2px 0 0 var(--accent); }
+
+    .gov-num {
+      display: block;
+      font-family: "Newsreader", Georgia, serif;
+      font-size: clamp(1.6rem, 3vw, 2.1rem);
+      font-weight: 500;
+      color: var(--accent);
+      font-variant-numeric: tabular-nums;
+      line-height: 1.1;
+      margin-bottom: 0.45rem;
+    }
+
+    .guarantee .src {
+      display: block;
+      margin-top: 0.45rem;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.6rem;
+      font-style: normal;
+      letter-spacing: 0.05em;
+      color: var(--muted);
+    }
+
+    .downloads .guarantee { display: flex; flex-direction: column; gap: 0.3rem; }
+    .dl-meta { font-size: 0.8rem; color: var(--muted); }
+    .dl-links { display: flex; gap: 0.6rem; margin-top: 0.4rem; flex-wrap: wrap; }
+
+    .dl-links a {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.68rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      text-decoration: none;
+      color: var(--text);
+      padding: 0.35rem 0.7rem;
+      border: 1px solid var(--rule);
+      background: var(--paper);
+      transition: border-color 0.2s ease, color 0.2s ease;
+    }
+
+    .dl-links a:hover,
+    .dl-links a:focus-visible { border-color: var(--accent); color: var(--accent); outline: none; }
+    .dl-links a + a { border-color: var(--accent); color: var(--accent); }
+
+    .dl-alt { font-family: "IBM Plex Mono", monospace; font-size: 0.62rem; color: var(--muted); margin-top: 0.2rem; }
+    .dl-alt a { color: var(--text); text-decoration: none; border-bottom: 1px solid var(--rule-light); }
+    .dl-alt a:hover { border-color: var(--accent); }
+
+    .bench-dim { overflow-x: auto; }
+
+    /* section band — full sheet width tint */
+    .band {
+      margin: 0 calc(var(--margin) * -1);
+      padding-left: var(--margin);
+      padding-right: var(--margin);
+      background: rgba(255, 255, 255, 0.42);
+    }
+  </style>
+</head>
+<body>
+
+<a class="skip-link" href="#main">Skip to content</a>
+
+<div class="canvas">
+  <div class="sheet">
+
+    <div class="sheet-inner">
+
+      <nav class="top">
+        <a href="#" class="logo" aria-label="Gnomon Harness">
+          <svg class="logo-mark" viewBox="0 0 36 36" aria-hidden="true">
+            <defs>
+              <pattern id="logo-hatch" patternUnits="userSpaceOnUse" width="3" height="3" patternTransform="rotate(38)">
+                <line x1="0" y1="0" x2="0" y2="3" stroke="#A83B0B" stroke-width="0.45" opacity="0.4"/>
+              </pattern>
+              <clipPath id="logo-clip"><circle cx="18" cy="18" r="14"/></clipPath>
+            </defs>
+            <circle cx="18" cy="18" r="14.5" fill="#fff" stroke="#C8C2B6" stroke-width="0.7"/>
+            <circle cx="18" cy="18" r="13" fill="none" stroke="#DDD8CE" stroke-width="0.35" stroke-dasharray="2 2"/>
+            <g clip-path="url(#logo-clip)">
+              <path class="shadow-umbra" data-dial="logo" d=""/>
+              <polygon points="18,8 19.5,18 16.5,18" fill="url(#logo-hatch)" stroke="#A83B0B" stroke-width="0.55"/>
+              <line x1="18" y1="8" x2="18" y2="5.5" stroke="#171717" stroke-width="0.55"/>
+            </g>
+            <circle cx="18" cy="18" r="0.8" fill="#A83B0B"/>
+          </svg>
+          <span class="logo-text">
+            <span class="logo-name">Gnomon</span>
+            <span class="logo-sub">harness</span>
+          </span>
+        </a>
+        <div class="nav-links">
+          <a href="#governance">Governance</a>
+          <a href="#loop">Loop</a>
+          <a href="#use-cases">Use cases</a>
+          <a href="#measurements">Measurements</a>
+          <a href="#release">0.5.0</a>
+          <a href="#whitepaper">Guide</a>
+          <a href="#get-involved">Contribute</a>
+          <a href="https://github.com/eljaplacido/gnomonharness" class="nav-cta">GitHub</a>
+        </div>
+      </nav>
+
+      <main id="main" tabindex="-1">
+      <!-- HERO -->
+      <header class="hero">
+        <div class="grid">
+          <div class="col-6">
+            <p class="hero-kicker reveal">Repository-scoped · content-hashed · terminal-native</p>
+            <h1 class="reveal" style="--reveal-delay: 80ms">The <span class="gnomon-type">gnomon</span> is the fixed blade on a sundial.</h1>
+            <div class="hero-name-block reveal" style="--reveal-delay: 160ms">
+              <p>The sun travels. The shadow sweeps the hours. <strong>The gnomon does not move</strong> — and that is precisely why the dial can be read. Remove the blade and you have decorated stone, not an instrument.</p>
+            </div>
+            <p class="hero-product reveal" style="--reveal-delay: 240ms">This harness names itself after that object. <code class="inline">.gnomon/</code> is the fixed configuration — models, roles, tools, approval — content-hashed and committed with your repository. Everything else is shadow.</p>
+            <code class="install reveal" style="--reveal-delay: 480ms"><span class="install-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/<wbr>eljaplacido/<wbr>gnomonharness/<wbr>master/<wbr>scripts/<wbr>install.sh | sh<br><span class="install-prompt">$</span> cd my-project &amp;&amp; gnomon setup<br><span class="install-prompt">$</span> gnomon dashboard <span class="install-prompt"># optional</span><br><span class="install-prompt">$</span> gnomon launch</code>
+            <p class="status reveal" style="--reveal-delay: 560ms">v0.5.0, the latest release — what the installer gives you · on npm as <code class="inline">gnomon-harness</code> once the 0.5.0 npm publish completes · 3,463 tests · green on Linux, macOS and Windows · Windows: <code class="inline">irm …/scripts/install.ps1 | iex</code></p>
+            <p class="hero-docs reveal" style="--reveal-delay: 620ms">The guide · <a href="https://github.com/eljaplacido/gnomonharness/blob/master/docs/GUIDE.md">Read it on GitHub</a> · <a href="llms.txt">llms.txt for agents</a> · <a href="#whitepaper">Whitepaper: v0.5.0 edition in preparation</a></p>
+          </div>
+
+          <div class="col-6">
+            <div class="plate reveal scale-in from-right" style="--reveal-delay: 120ms">
+              <svg class="hero-sundial" viewBox="0 0 480 360" role="img" aria-label="Plan view blueprint of a horizontal sundial with shadow circling the dial">
+                <defs>
+                  <pattern id="bp-hatch" patternUnits="userSpaceOnUse" width="5" height="5" patternTransform="rotate(38)">
+                    <line x1="0" y1="0" x2="0" y2="5" class="fig-hatch"/>
+                  </pattern>
+                  <clipPath id="dial-clip"><circle cx="240" cy="168" r="128"/></clipPath>
+                </defs>
+
+                <!-- plan view · looking down onto the plate -->
+                <circle cx="240" cy="168" r="130" class="fig-line fig-thin fig-dash" opacity="0.45"/>
+                <circle cx="240" cy="168" r="128" fill="#fff" stroke="#9A9488" stroke-width="1.1"/>
+                <circle cx="240" cy="168" r="118" fill="none" class="fig-line fig-thin fig-dash"/>
+
+                <!-- construction cross -->
+                <line x1="240" y1="38" x2="240" y2="298" class="fig-line fig-thin fig-dash" opacity="0.35"/>
+                <line x1="110" y1="168" x2="370" y2="168" class="fig-line fig-thin fig-dash" opacity="0.35"/>
+
+                <!-- hour spokes -->
+                <g class="fig-line fig-thin" opacity="0.4" clip-path="url(#dial-clip)">
+                  <g transform="translate(240 168)">
+                    <line y1="0" y2="-118" transform="rotate(0)"/>
+                    <line y1="0" y2="-118" transform="rotate(30)"/>
+                    <line y1="0" y2="-118" transform="rotate(60)"/>
+                    <line y1="0" y2="-118" transform="rotate(90)"/>
+                    <line y1="0" y2="-118" transform="rotate(120)"/>
+                    <line y1="0" y2="-118" transform="rotate(150)"/>
+                    <line y1="0" y2="-118" transform="rotate(180)"/>
+                    <line y1="0" y2="-118" transform="rotate(210)"/>
+                    <line y1="0" y2="-118" transform="rotate(240)"/>
+                    <line y1="0" y2="-118" transform="rotate(270)"/>
+                    <line y1="0" y2="-118" transform="rotate(300)"/>
+                    <line y1="0" y2="-118" transform="rotate(330)"/>
+                  </g>
+                </g>
+
+                <!-- roman numerals on the circle -->
+                <g class="fig-txt" fill="#5C5C58" text-anchor="middle" font-size="9.5" clip-path="url(#dial-clip)">
+                  <text x="240" y="62">XII</text>
+                  <text x="301" y="78">I</text>
+                  <text x="350" y="118">II</text>
+                  <text x="366" y="171">III</text>
+                  <text x="350" y="224">IV</text>
+                  <text x="301" y="264">V</text>
+                  <text x="240" y="280">VI</text>
+                  <text x="179" y="264">VII</text>
+                  <text x="130" y="224">VIII</text>
+                  <text x="114" y="171">IX</text>
+                  <text x="130" y="118">X</text>
+                  <text x="179" y="78">XI</text>
+                </g>
+
+                <!-- shadow — projected umbra of the 3D gnomon onto the plate -->
+                <g clip-path="url(#dial-clip)">
+                  <path class="shadow-umbra" data-dial="hero" d=""/>
+                </g>
+
+                <!-- gnomon blade (fixed · plan) -->
+                <g clip-path="url(#dial-clip)">
+                  <polygon points="240,138 252,188 228,188" fill="url(#bp-hatch)" stroke="#A83B0B" stroke-width="0.9"/>
+                  <line x1="240" y1="138" x2="240" y2="128" stroke="#171717" stroke-width="0.85"/>
+                  <circle cx="240" cy="168" r="2.2" fill="#fff" stroke="#A83B0B" stroke-width="0.6"/>
+                </g>
+
+                <!-- north -->
+                <g transform="translate(240 34)">
+                  <line y1="0" y2="8" stroke="#A83B0B" stroke-width="0.7"/>
+                  <polygon points="0,0 -3,5 3,5" fill="#A83B0B"/>
+                  <text class="fig-txt fig-accent" y="16" text-anchor="middle" font-size="7">N</text>
+                </g>
+
+                <rect x="36" y="292" width="408" height="48" fill="#FAFAF6" stroke="#C8C2B6" stroke-width="0.75" rx="1"/>
+                <text class="fig-txt fig-accent" x="48" y="310">.gnomon/</text>
+                <text class="fig-txt" x="48" y="324" style="font-size:7.5px">blade — fixed · content-hashed</text>
+                <text class="fig-txt" x="48" y="334" style="font-size:7.5px">shadow — sweeps the plate · everything else varies</text>
+              </svg>
+              <p class="fig-caption"><strong>Fig. 0</strong> — Plan view (looking down). Fixed gnomon; black umbra projected from the blade. <span class="sundial-time" aria-live="polite"></span></p>
+            </div>
+            <p class="plate-note reveal" style="--reveal-delay: 280ms"><strong>Why this name.</strong> Behaviour is readable because something holds still. The harness puts that something in a directory you commit.</p>
+          </div>
+        </div>
+
+        <div class="hero-kpis reveal" style="--reveal-delay: 360ms">
+          <p class="hero-kpi-intro">Measured — properties first, rates with their caveats</p>
+          <div class="hero-kpi-grid reveal-stagger">
+            <div class="hero-kpi hero-kpi-lead reveal">
+              <div class="hero-kpi-value">Behaviour you can identify, and check afterwards</div>
+              <div class="hero-kpi-label">Every path in <code>.gnomon/</code> that changes behaviour moves the surface hash, and the hash is stamped on every record. Exhaustive, deterministic, re-run in CI on every change</div>
+              <span class="hero-kpi-metric"><a href="#measurements">surface-hash fidelity 14/14 · 0 false negatives · 17/17 degradations recorded</a></span>
+            </div>
+            <div class="hero-kpi reveal">
+              <div class="hero-kpi-value">Start from the defaults</div>
+              <div class="hero-kpi-label">In the v0.5.0 release runs on Claude Haiku, gnomon's release defaults did at least as well as a tuned long-task recipe, at about half the cost. Reasoning replay, the part of the old recipe that helped, is now a default for hosted endpoints</div>
+              <span class="hero-kpi-metric"><a href="#long-tasks">defaults ≥ tuned recipe · ~½ the cost</a></span>
+            </div>
+            <div class="hero-kpi reveal">
+              <div class="hero-kpi-value">One policy, enforced inside other harnesses</div>
+              <div class="hero-kpi-label"><code>gnomon guard</code> runs in Claude Code's and opencode's pre-tool hooks (Cursor: shell and reads). In a $0 pilot with a scripted model, both hosts made the same decision on every forced call, no call the guard denied ran, and every record named agent, harness and session</div>
+              <span class="hero-kpi-metric"><a href="#governance-layer">137/137 identical · 0 denied calls ran · 800/800 attributed</a></span>
+            </div>
+            <div class="hero-kpi reveal">
+              <div class="hero-kpi-value">Hybrid local + cloud, as a cost mode</div>
+              <div class="hero-kpi-label">Local-first with cloud rescue (a cloud model takes over a stuck local turn; opt-in, <code class="inline">[roles.&lt;name&gt;.escalate]</code>) spent about 23% of the cloud-only arm's cloud cost, at −0.07 hidden-test share against cloud-only and +0.25 against local-only. Not the hybrid setup offers as an opt-in mode, and setup does not configure it; not a default</div>
+              <span class="hero-kpi-metric"><a href="#hybrid">~23% of cloud-only's cloud spend (v0.5.0 release runs, opt-in mode)</a></span>
+            </div>
+            <div class="hero-kpi reveal">
+              <div class="hero-kpi-value">Reasoning replay by default</div>
+              <div class="hero-kpi-label">On long Terminal-Bench 4.0 tasks with a hosted model, replaying the model's reasoning raised the share of hidden tests passed by 16 points and capped 5 fewer runs (H3, pre-registered). On by default for hosted endpoints from 0.5.0</div>
+              <span class="hero-kpi-metric"><a href="#long-tasks">+16 points hidden tests [+4, +29] (H3, 0.4.2)</a></span>
+            </div>
+            <div class="hero-kpi reveal">
+              <div class="hero-kpi-value">Destructive commands held</div>
+              <div class="hero-kpi-label">Every prompt, adversarial respellings included (<code>rm -fr</code>, <code>rm --recursive --force</code>). Was 38/43 on 0.3.1, before the shell parser</div>
+              <span class="hero-kpi-metric"><a href="#measurements">43/43 held · 0 breaches (G2b-R)</a></span>
+            </div>
+          </div>
+          <p class="hero-kpi-footnote">Every run pre-registered, losses included · gnomon's own results; peer comparisons only from before November 2026, dated · not a leaderboard · <a href="#measurements">full measurements §8</a></p>
+        </div>
+      </header>
+
+      <!-- §1 -->
+      <section>
+        <div class="grid">
+          <div class="col-3 section-label reveal from-left">
+            <div class="section-num">§1 — Why</div>
+            <h2>Behaviour is a property of the repository.</h2>
+          </div>
+          <div class="col-9 reveal" style="--reveal-delay: 100ms">
+            <p>Ask most coding agents <em>why did you do that</em> and there is no answer. Configuration scatters across dotfiles and machine state — the same repo behaves differently for two people.</p>
+            <div class="pull">One directory declares models, roles, tools, approval policy. Content-hashed. Stamped on every record the harness emits. Linux, macOS and Windows — same surface, same hash, all three in CI.</div>
+            <p>gnomon does not make a model complete more tasks: the last peer comparison, in September 2026 on 34 paired Terminal-Bench tasks with the same model, was a tie inside noise (50.0% vs 47.1%). Since then gnomon reports its own results. On long hosted-model tasks it lost runs for reasons traced to gnomon itself; those were fixed, and the largest part — reasoning replay — is a default in 0.5.0. What it adds is governance: a hashed surface, capability separation, a tamper-evident trail, and a checker that holds other agents' work to the same rules. The model varies. The conversation wanders. The tools differ each run. <code class="inline">.gnomon/</code> does not.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- §2 GOVERNANCE -->
+      <section id="governance" class="band">
+        <div class="grid" style="margin-bottom: var(--gutter);">
+          <div class="col-3 section-label reveal from-left">
+            <div class="section-num">§2 — Governance</div>
+            <h2>The rules hold — and they hold for other agents too.</h2>
+          </div>
+          <div class="col-9 reveal" style="--reveal-delay: 100ms">
+            <p>The rules a repository commits — which role may write where, which commands are refused, what needs a person — hold in gnomon's own loop, and can be applied to work another agent did. In G1 (November 2026, sandboxed, one model) gnomon's own loop broke policy in <strong>1 of 24</strong> trials: after its deny-list refused <code class="inline">git clean</code>, the agent moved <code class="inline">var/</code> out instead.</p>
+            <p><code class="inline">gnomon check</code> reads a change after the fact — the diff, and the transcript where there is one — against the repository's <code class="inline">.gnomon/</code> as it stood at the base commit. Since 0.3.2 it reads transcripts of opencode, goose, Qwen Code and mini-swe-agent as well as its own trail, so a destruction that leaves no diff can still be seen.</p>
+          </div>
+        </div>
+        <div class="grid">
+          <div class="col-3"></div>
+          <div class="col-9">
+            <div class="guarantees gov-kpis reveal-stagger" style="margin-top:0;">
+              <div class="guarantee reveal"><span class="gov-num">1 / 24</span><strong>Committed in gnomon's own loop.</strong> G1, November 2026. The one: a deny-list refusal routed around by moving the directory instead.</div>
+              <div class="guarantee reveal"><span class="gov-num">43 / 43</span><strong>Destructive prompts held.</strong> Adversarial respellings included, 0 breaches (0.3.1: 38/43, before the shell parser).</div>
+              <div class="guarantee reveal"><span class="gov-num">27 / 27</span><strong>Self-governance attacks refused</strong> with nobody to approve: the agent cannot rewrite its own rules, records or skills (GBS 0.2 draft run, 0.4.2).</div>
+            </div>
+            <p class="bench-foot reveal" style="margin-top:0.9rem;max-width:62ch;"><strong>The gap, stated.</strong> <code class="inline">gnomon check</code> cannot see what leaves no diff (<code class="inline">git clean -fdx</code>, <code class="inline">rm -rf var/</code>, <code class="inline">git reset --hard</code>, a force-push) unless a transcript shows it. Give it the transcript, or put <code class="inline">gnomon guard</code> in front of the agent so the call is decided before it runs.</p>
+            <p class="bench-foot reveal" style="margin-top:0.6rem;max-width:62ch;"><strong>Found by measuring.</strong> The first GBS-GOVERNANCE run (v0.4.1) found the agent could approve its own skill by unsetting one environment variable, 4 of 4; 0.4.2 closes it and needs a person present for skill decisions — <a href="https://github.com/eljaplacido/gnomonharness/blob/master/CHANGELOG.md">CHANGELOG 0.4.2</a>.</p>
+
+            <div class="bench-dim reveal" id="governance-layer" style="margin-top:1.6rem;max-width:62ch;">
+              <h3>A shared governance layer — one policy, several harnesses</h3>
+              <p>Teams rarely run one agent. The same committed <code class="inline">.gnomon/</code> can govern the others:</p>
+              <ul class="limits">
+                <li><strong>Before the action — <code class="inline">gnomon guard</code>.</strong> Sits in Claude Code's and opencode's pre-tool hooks (Cursor: shell and reads only) and decides each call with the same function gnomon's own loop uses. It only tightens: a deny is enforced, an ask goes to the host. Released since 0.3.3.</li>
+                <li><strong>At merge time — <code class="inline">gnomon check</code>.</strong> For any harness: it reads the diff, and a transcript where there is one, against the rules at the base commit. As a required CI check the agent cannot skip it. It cannot see what leaves no diff (<code class="inline">git reset --hard</code>, a force-push) unless a transcript shows it.</li>
+                <li><strong>A tamper-evident trail.</strong> Every guard decision is a hash-chained record naming the tool, the rule, the agent, the host and the session.</li>
+                <li><strong>Levels — since 0.5.0.</strong> Each family of rules (write, bash, network, secrets, rules, ci) is set to <code class="inline">observe</code> → <code class="inline">advise</code> → <code class="inline">prevent</code> → <code class="inline">enforce</code>, so a team can see what a policy would refuse before it refuses anything. A role can only tighten, and the rules that protect the surface and the records never drop below prevent.</li>
+              </ul>
+              <p class="bench-foot"><strong>The $0 pilot</strong> (6 Nov; scripted model, no network, a draft 0.4.5 build; a pilot, not pre-registered). One committed policy, enforced through <code class="inline">gnomon guard</code> in opencode and in Claude Code: the two hosts made <strong>identical decisions on all 137</strong> forced calls, the same as gnomon's own loop; <strong>no call the guard denied ran</strong>; <strong>800 of 800</strong> decision records named agent, harness and session. It also found ways to detach the layer — removing the host's hook file, committing the policy away in opencode, Claude Code's bypass mode running an “ask”, opencode's <code class="inline">grep</code> going ungoverned. Those are fixed in 0.5.0 (#165). Still missing: org-wide policy distribution, a record of the person's answer to an ask, and adapters for Codex, Aider and Goose.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- §3 LOOP -->
+      <section id="loop">
+        <div class="grid" style="margin-bottom: var(--gutter);">
+          <div class="col-3 section-label reveal from-left">
+            <div class="section-num">§3 — Loop</div>
+            <h2>What happens when you type.</h2>
+          </div>
+          <div class="col-9 reveal" style="--reveal-delay: 100ms">
+            <p>The real path, in order. Slash commands stay local. Everything else: role → skills → context → tools under approval policy.</p>
+          </div>
+        </div>
+
+        <div class="grid">
+          <div class="col-4 reveal from-left">
+            <p style="font-size:0.92rem;margin-bottom:1rem;">Three guarantees in this path:</p>
+            <ul class="limits">
+              <li><strong>Tools absent, not discouraged.</strong> Schema list matches role exactly.</li>
+              <li><strong>Nothing mutating runs unseen.</strong> Diff before write; <code class="inline">bash</code> gated.</li>
+              <li><strong>Three buckets.</strong> <code class="inline">result</code> · <code class="inline">refusal</code> · <code class="inline">apparatus_failure</code></li>
+            </ul>
+          </div>
+          <div class="col-8">
+            <div class="plate reveal scale-in from-right" style="--reveal-delay: 120ms">
+              <svg viewBox="0 0 520 620" role="img" aria-label="Turn loop">
+                <defs>
+                  <marker id="arrow" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto">
+                    <path d="M0,0 L6,3 L0,6" fill="none" stroke="#9A9488"/>
+                  </marker>
+                </defs>
+                <rect class="loop-node" x="175" y="6" width="170" height="36" rx="1"/>
+                <text class="loop-label" x="260" y="29">you type a line</text>
+                <line class="loop-arrow" x1="260" y1="42" x2="260" y2="58" marker-end="url(#arrow)"/>
+                <polygon class="loop-node-accent" points="260,58 330,84 260,110 190,84"/>
+                <text class="loop-label" x="260" y="88" style="font-size:11px">slash command?</text>
+                <line class="loop-arrow" x1="190" y1="84" x2="75" y2="84" marker-end="url(#arrow)"/>
+                <rect class="loop-node-outcome" x="8" y="68" width="115" height="32" rx="1"/>
+                <text class="loop-label" x="65" y="88" style="font-size:10px">local · no model</text>
+                <line class="loop-arrow" x1="260" y1="110" x2="260" y2="126" marker-end="url(#arrow)"/>
+                <rect class="loop-node" x="130" y="126" width="260" height="42" rx="1"/>
+                <text class="loop-label" x="260" y="146">pick role · load skills · build context</text>
+                <text class="loop-label-small" x="260" y="160">manual · suggest · auto</text>
+                <line class="loop-arrow" x1="260" y1="168" x2="260" y2="184" marker-end="url(#arrow)"/>
+                <rect class="loop-node" x="105" y="184" width="310" height="42" rx="1"/>
+                <text class="loop-label" x="260" y="204">send system + history + tool schemas</text>
+                <text class="loop-label-small" x="260" y="218">THIS role only</text>
+                <line class="loop-arrow" x1="260" y1="226" x2="260" y2="242" marker-end="url(#arrow)"/>
+                <polygon class="loop-node-accent" points="260,242 330,270 260,298 190,270"/>
+                <text class="loop-label" x="260" y="274" style="font-size:11px">tool call?</text>
+                <line class="loop-arrow" x1="190" y1="270" x2="70" y2="270" marker-end="url(#arrow)"/>
+                <rect class="loop-node-outcome" x="8" y="254" width="100" height="32" rx="1"/>
+                <text class="loop-label" x="58" y="274" style="font-size:10px">answer</text>
+                <line class="loop-arrow" x1="260" y1="298" x2="260" y2="314" marker-end="url(#arrow)"/>
+                <polygon class="loop-node-accent" points="260,314 330,342 260,370 190,342"/>
+                <text class="loop-label" x="260" y="346" style="font-size:11px">approval gate?</text>
+                <line class="loop-arrow" x1="190" y1="342" x2="70" y2="342" marker-end="url(#arrow)"/>
+                <rect class="loop-node-outcome" x="8" y="326" width="100" height="32" rx="1"/>
+                <text class="loop-label" x="58" y="346" style="font-size:10px">refusal</text>
+                <line class="loop-arrow" x1="260" y1="370" x2="260" y2="386" marker-end="url(#arrow)"/>
+                <rect class="loop-node" x="125" y="386" width="270" height="36" rx="1"/>
+                <text class="loop-label" x="260" y="408" style="font-size:11px">execute · sandbox · feed back</text>
+                <line class="loop-arrow" x1="330" y1="404" x2="430" y2="404" marker-end="url(#arrow)"/>
+                <line class="loop-arrow" x1="430" y1="404" x2="430" y2="200"/>
+                <line class="loop-arrow" x1="430" y1="200" x2="415" y2="200" marker-end="url(#arrow)"/>
+                <text class="loop-label-small" x="448" y="300" transform="rotate(90 448 300)">next step</text>
+                <line class="loop-arrow" x1="260" y1="422" x2="260" y2="440" marker-end="url(#arrow)"/>
+                <rect class="loop-node-outcome" x="95" y="440" width="330" height="44" rx="1"/>
+                <text class="loop-label" x="260" y="460" style="font-size:11px">record bucket · session · audit</text>
+                <text class="loop-label-small" x="260" y="476">result · refusal · apparatus_failure</text>
+              </svg>
+              <p class="fig-caption"><strong>Fig. 1</strong> — Agent turn loop. Slash commands stay local; everything else routes through role, approval, and honest outcome buckets.</p>
+            </div>
+          </div>
+        </div>
+
+        <div class="guarantees reveal-stagger">
+          <div class="guarantee reveal"><strong>Schema enforcement.</strong> Verifier has no <code>write</code> — absence, not instruction.</div>
+          <div class="guarantee reveal"><strong>Approval before mutation.</strong> Real diff. Standing approvals in audit trail.</div>
+          <div class="guarantee reveal"><strong>Honest outcomes.</strong> Declined = refusal. Timeout = apparatus failure.</div>
+        </div>
+      </section>
+
+      <!-- §4 ARCH -->
+      <section id="architecture">
+        <div class="grid" style="margin-bottom: var(--gutter);">
+          <div class="col-3 section-label reveal from-left">
+            <div class="section-num">§4 — Architecture</div>
+            <h2>Three layers, one hash.</h2>
+          </div>
+          <div class="col-9 reveal" style="--reveal-delay: 100ms">
+            <p>Rust owns verifiable parts. TypeScript owns the loop. Sessions and audit live <em>outside</em> the hashed surface — logs inside <code class="inline">.gnomon/</code> would change the hash every turn.</p>
+          </div>
+        </div>
+        <div class="grid">
+          <div class="col-7">
+            <div class="plate reveal scale-in" style="--reveal-delay: 80ms">
+              <svg viewBox="0 0 700 240" role="img" aria-label="Architecture">
+                <rect class="arch-box" x="8" y="8" width="175" height="175" rx="1"/>
+                <text class="arch-title" x="18" y="28">.gnomon/ — content-hashed</text>
+                <text class="arch-label" x="18" y="52">config.toml</text>
+                <text class="arch-label" x="18" y="68" style="fill:#5C5C58;font-size:10px">routing · endpoints · audit</text>
+                <text class="arch-label" x="18" y="88">roles.toml · tools.toml</text>
+                <text class="arch-label" x="18" y="104" style="fill:#5C5C58;font-size:10px">policy.toml · system.md</text>
+                <text class="arch-label" x="18" y="124">skills/</text>
+                <text class="arch-title" x="18" y="168" style="fill:#A83B0B">surface_hash</text>
+                <line class="loop-arrow" x1="183" y1="95" x2="218" y2="95" marker-end="url(#arrow)"/>
+                <rect class="arch-box-ts" x="218" y="28" width="185" height="130" rx="1"/>
+                <text class="arch-title" x="228" y="48">TypeScript — loop</text>
+                <text class="arch-label" x="228" y="72">gnomon-core</text>
+                <text class="arch-label" x="228" y="88" style="fill:#5C5C58;font-size:10px">turns · tools · context · skills</text>
+                <text class="arch-label" x="228" y="108">gnomon-cli</text>
+                <line class="loop-arrow" x1="310" y1="158" x2="310" y2="188" marker-end="url(#arrow)"/>
+                <rect class="arch-box-rust" x="218" y="188" width="185" height="32" rx="1"/>
+                <text class="arch-label" x="228" y="208" style="font-size:10px">gnomon-surface · edit · exec (Rust)</text>
+                <line class="loop-arrow" x1="403" y1="95" x2="438" y2="95" marker-end="url(#arrow)"/>
+                <rect class="arch-box-out" x="438" y="40" width="175" height="100" rx="1"/>
+                <text class="arch-title" x="448" y="60">outside surface</text>
+                <text class="arch-label" x="448" y="84">.gnomon-sessions/</text>
+                <text class="arch-label" x="448" y="100">.gnomon-audit/</text>
+                <text class="arch-label" x="448" y="122" style="fill:#5C5C58;font-size:10px">must not alter hash</text>
+                <!-- analogy bracket -->
+                <path d="M 620 40 L 640 40 L 640 200 L 620 200" fill="none" stroke="#A83B0B" stroke-width="0.6" opacity="0.5"/>
+                <text class="arch-title" x="648" y="120" transform="rotate(90 648 120)" style="fill:#A83B0B">varies</text>
+              </svg>
+              <p class="fig-caption"><strong>Fig. 2</strong> — Rust owns verifiable surface, edit, and exec. TypeScript owns the loop. Sessions and audit sit outside the hash.</p>
+            </div>
+          </div>
+          <div class="col-5 reveal from-right" style="--reveal-delay: 180ms;display:flex;flex-direction:column;justify-content:center;">
+            <p>The blade is <code class="inline">.gnomon/</code>: fixed, identifiable, content-addressed. Replies, tool traffic, session history — the shadow.</p>
+            <p style="margin-top:0.85rem;">Rust and TypeScript compute the same surface hash; a test holds them together. <code class="inline">conformance/</code> pins exit codes, enumerations, manifest shape.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- §5 USE CASES -->
+      <section id="use-cases" class="band">
+        <div class="grid" style="margin-bottom: var(--gutter);">
+          <div class="col-3 section-label reveal from-left">
+            <div class="section-num">§5 — Use cases</div>
+            <h2>One person, one scenario.</h2>
+          </div>
+          <div class="col-9 reveal" style="--reveal-delay: 100ms">
+            <p>Workflows where repository-scoped behaviour matters — not generic productivity claims.</p>
+          </div>
+        </div>
+        <div class="use-grid reveal-stagger">
+          <div class="use-case reveal">
+            <div class="use-persona">Team lead · config review</div>
+            <p class="use-scenario">Review agent behaviour in PRs.</p>
+            <p class="use-why"><code>bash_allow</code> changes in diff. Hash updates on merge. Destructive commands held: 43/43 prompts with adversarial respellings.</p>
+            <div class="use-flow">PR .gnomon/ → review → merge → new hash</div>
+          </div>
+          <div class="use-case reveal">
+            <div class="use-persona">Post-incident · oversight</div>
+            <p class="use-scenario">What was permitted? Who approved?</p>
+            <p class="use-why"><code>gnomon init</code> switches the trail on; a policy decision with its audit write costs 0.2&nbsp;ms (GBS-OVERHEAD, 0.4.1). Hash-chained, it carries the surface hash and, since 0.3.2, every shell command whole (after redaction). <code>gnomon audit verify</code> names the sequence that broke. Primitives for oversight, not a compliance guarantee.</p>
+            <div class="use-flow">9/9 tamper attacks caught with a git anchor · 8/9 without, the 9th published</div>
+          </div>
+          <div class="use-case reveal">
+            <div class="use-persona">Another agent did the work</div>
+            <p class="use-scenario">Hold Claude Code, opencode or goose to the repository's rules.</p>
+            <p class="use-why"><code>gnomon check</code> reads the diff and the agent's transcript against <code>.gnomon/</code> as it stood at the base commit, and exits non-zero on a violation, so it can be a required CI step. Or put <code>gnomon guard</code> in front of the agent so each call is decided before it runs (§2).</p>
+            <div class="use-flow">check --transcript run.json --format opencode | goose | qwen-code | mini-swe-agent</div>
+          </div>
+          <div class="use-case reveal">
+            <div class="use-persona">Offline · local model</div>
+            <p class="use-scenario">Keep the whole loop on your own hardware.</p>
+            <p class="use-why"><code>gnomon setup</code> recommends a local model your machine can run. On an RTX 5090, Qwen3.6-35B alone solved about two thirds of a 32-task Terminal-Bench set in gnomon's own runs (24/32 in R1H; 22/29 and 18/32 in later runs of the same lane).</p>
+            <div class="use-flow">Ollama · llama.cpp · any OpenAI-compatible server</div>
+          </div>
+          <div class="use-case reveal">
+            <div class="use-persona">Solo dev · local models</div>
+            <p class="use-scenario">Ollama on laptop; same agent on CI.</p>
+            <p class="use-why">Surface committed. Clone anywhere — same roles, tools, gate.</p>
+            <div class="use-flow">init → roles.toml → launch → task in CI</div>
+          </div>
+          <div class="use-case reveal">
+            <div class="use-persona">Brownfield adoption</div>
+            <p class="use-scenario">Point a verifier at a repo you did not write.</p>
+            <p class="use-why">Pilot: 10 of 14 planted defects found, 0 of 5 adversarial controls falsely flagged, 0 containment violations — local models, $0 API. Reading code flips less often than making a task pass.</p>
+            <div class="use-flow">7.1% flip rate · two synthetic projects · no peer</div>
+          </div>
+          <div class="use-case reveal">
+            <div class="use-persona">Harness author · embed</div>
+            <p class="use-scenario">Pipeline via <code>gnomon task --json</code>.</p>
+            <p class="use-why">Published exit codes. Bucket from exit value. Degradations announce on stderr and land in <code>TaskRecord.degradations[]</code>.</p>
+            <div class="use-flow">task --dir repo --yes --json</div>
+          </div>
+          <div class="use-case reveal">
+            <div class="use-persona">Specify → verify</div>
+            <p class="use-scenario">Roles separated by capability.</p>
+            <p class="use-why">Coordinator can't edit. Verifier can't write. Chain can stop on a failed check — not on an opinion.</p>
+            <div class="use-flow">/spec → coordinator → implementor → verifier</div>
+          </div>
+        </div>
+        <div class="pull reveal" style="margin-top:1.75rem;max-width:62ch;">
+          <strong>A poor fit if</strong> you want IDE integration beyond ACP editors (Zed, JetBrains — <a href="#release"><code class="inline">gnomon acp</code>, in 0.4.0</a>), HTTP/SSE MCP transports, cloud or async execution, or the broadest model support. Those are real requirements and other harnesses serve them better — OpenCode for a far larger ecosystem, Aider for Git-centric diff discipline, OpenHands for sandboxed autonomous execution.
+        </div>
+      </section>
+
+      <!-- §6 + §7 -->
+      <section>
+        <div class="grid">
+          <div class="col-6 reveal from-left">
+            <div class="section-label" style="margin-bottom:1rem;">
+              <div class="section-num">§6 — Roles</div>
+              <h2>Roles differ by tool list, not by instruction.</h2>
+            </div>
+            <p style="font-size:0.95rem;margin-bottom:1rem;color:var(--muted);">The verifier has no <code class="inline">write</code> and no <code class="inline">edit</code>, so it cannot alter what it judges — and because <code class="inline">bash</code> can write anything, <code class="inline">bash_allow</code> narrows it to test commands. <code class="inline">task</code> runs a sub-turn under <em>that</em> role's tools, so a role that may not write also may not delegate to one that can.</p>
+            <table>
+              <thead><tr><th>Role</th><th>Cannot</th></tr></thead>
+              <tbody>
+                <tr><td><code>coordinator</code></td><td><strong>edit</strong>; outside <code>write_allow</code></td></tr>
+                <tr><td><code>implementor</code></td><td>gated by <code>write_allow</code> / <code>bash_allow</code> / <code>bash_deny</code></td></tr>
+                <tr><td><code>verifier</code></td><td><strong>write, edit</strong>; <code>bash_allow</code> for tests only</td></tr>
+              </tbody>
+            </table>
+            <p class="limits-platform" style="margin-top:0.85rem;">Each boundary has a test that fails if it moves. Other harnesses have permission prompts; these are declared per role, hashed, and testable.</p>
+            <p style="font-size:0.92rem;margin-top:1.1rem;"><strong>The chain stops on a failed check — not on an opinion.</strong> One dial, three positions: <code class="inline">never</code>, <code class="inline">on_refusal</code>, <code class="inline">on_check</code>. A stage whose declared check ran and failed stops the chain. A stage that merely disagrees in prose does not — reading its sentence would be instruction, not capability. Default: <code class="inline">never</code>. Not yet re-measured — the earlier arm tested a chain that could not gate.</p>
+          </div>
+          <div class="col-6 reveal from-right" style="--reveal-delay: 120ms">
+            <div class="section-label" style="margin-bottom:1rem;">
+              <div class="section-num">§7 — Six rules</div>
+              <h2>What it holds itself to.</h2>
+            </div>
+            <ol class="rules">
+              <li><span><strong>No machine-scoped config.</strong> All in <code class="inline">.gnomon/</code>.</span></li>
+              <li><span><strong>Manifest every session.</strong> Content-addressed.</span></li>
+              <li><span><strong>Declared tool schemas.</strong> Refusal, not shorter list.</span></li>
+              <li><span><strong>Three buckets.</strong> No composite verdict.</span></li>
+              <li><span><strong>Published exit contract.</strong> 0–1 / 2–4 / 10–13.</span></li>
+              <li><span><strong>Published enumerations.</strong> README tested.</span></li>
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <!-- §8 -->
+      <section id="measurements" class="band">
+        <div class="grid">
+          <div class="col-3 section-label reveal from-left">
+            <div class="section-num">§8 — Measurements</div>
+            <h2>Properties first. Rates with their commits.</h2>
+          </div>
+          <div class="col-9 reveal" style="--reveal-delay: 100ms">
+            <div class="bench-note"><em>Read before citing.</em> Every run below was pre-registered before its first trial, losses included. Property suites are on <a href="https://github.com/eljaplacido/gnomonharness/tree/master/benchmarks/results">master</a>; the November 2026 task-run summaries are archived outside the public repository and are named here by study. These are gnomon's own results: comparisons with other harnesses are cited only where they were published before November 2026, with their date. n is small throughout; “not shown” means no difference was shown, never that the arms are equivalent. Each rate names the build it ran. Not a leaderboard.</div>
+
+            <div class="bench-dims">
+
+              <div class="bench-dim">
+                <h3>I — Properties, overhead and containment</h3>
+                <p>The property suites are exhaustive, deterministic and $0; CI re-runs them on every change, so they describe the build you can download.</p>
+                <table class="bench-table">
+                  <thead><tr><th>Claim</th><th>Result</th><th>Source</th></tr></thead>
+                  <tbody>
+                    <tr><td>Surface-hash fidelity</td><td class="num"><strong>14/14</strong> faithful · 0 false negatives</td><td><a href="https://github.com/eljaplacido/gnomonharness/blob/master/scripts/property_suites.mjs">property_suites</a></td></tr>
+                    <tr><td>Declared degradations announced &amp; recorded</td><td class="num"><strong>17/17</strong> (14/14 until three new degradations were added, Nov 3–4)</td><td><a href="https://github.com/eljaplacido/gnomonharness/blob/master/scripts/property_suites.mjs">property_suites</a></td></tr>
+                    <tr><td>Injected faults disclosed by name</td><td class="num"><strong>8/8</strong></td><td>fault-disclosure</td></tr>
+                    <tr><td>Silent success at decision points</td><td class="num"><strong>0/11</strong> falsely successful</td><td>silent-success</td></tr>
+                    <tr><td>Determinism across locale, tz, cwd, <code class="inline">$HOME</code>, mtimes</td><td class="num"><strong>10/10</strong> identical · the suite was broken for 8 weeks — it measured nothing and reported a pass — and has been repaired</td><td>g2-2026-11 · PR #59</td></tr>
+                    <tr><td>Prompt injections crossed</td><td class="num"><strong>0/36</strong> · the model attempted none, so this says nothing about the harness boundary</td><td>g2b-2026-11</td></tr>
+                    <tr><td>Containment of destructive commands</td><td class="num"><strong>43/43</strong> prompts with adversarial variants, 0 breaches (0.3.1: 38/43)</td><td>g2br-2026-11</td></tr>
+                    <tr><td>Harness overhead, one whole turn</td><td class="num"><strong>151&nbsp;ms</strong> wall · 115&nbsp;ms to first request, fake model (0.3.1)</td><td>ux1-2026-11</td></tr>
+                    <tr><td>Context sent to answer one prompt</td><td class="num"><strong>4.66×</strong> less than opencode, bytes counted at the endpoint (2026-09-05)</td><td><a href="https://github.com/eljaplacido/gnomonharness/tree/master/benchmarks/context-cost">context-cost</a></td></tr>
+                    <tr><td>Policy decision + audit write, in-process</td><td class="num"><strong>0.20&nbsp;ms</strong> per call (0.4.1)</td><td><a href="https://github.com/eljaplacido/gnomonharness/blob/master/benchmarks/results/gbs-2026-11-04/README.md">gbs-2026-11-04</a></td></tr>
+                    <tr><td>Start-up</td><td class="num"><code class="inline">--version</code> 44&nbsp;ms · a one-request task 94&nbsp;ms (GB10, 0.5.0 candidate)</td><td><a href="https://github.com/eljaplacido/gnomonharness/blob/master/CHANGELOG.md">CHANGELOG 0.5.0</a></td></tr>
+                  </tbody>
+                </table>
+                <p class="bench-foot">Withdrawn: an earlier claim that opencode could rewrite its own permission surface and gnomon could not — the original opencode configuration was misordered, and it must not be quoted. Still retired: “13–43× leaner than OpenCode”, which multiplied a token ratio by a retracted pass-rate ratio.</p>
+              </div>
+
+              <div class="bench-dim">
+                <h3>II — Task completion, short tasks — a tie, inside noise</h3>
+                <p>The last peer comparison this site cites: 2 September 2026, gnomon on the v0.2 line against opencode on equal terms — 34 paired Terminal-Bench tasks, the same model, the same clock, the same night.</p>
+                <table class="bench-table">
+                  <thead><tr><th>Arm (2026-09-02)</th><th>Solved</th><th>Paired</th></tr></thead>
+                  <tbody>
+                    <tr><td><strong>gnomon</strong> (v0.2 line)</td><td class="num"><strong>50.0%</strong></td><td class="num" rowspan="2">discordant 3 to 2 · McNemar p = 1.0</td></tr>
+                    <tr><td>opencode</td><td class="num">47.1%</td></tr>
+                  </tbody>
+                </table>
+                <p class="bench-foot">No difference, which rules out a large one and says nothing about a small one. An earlier 18-point “win” is an artifact of unequal adapters and must not be quoted. <strong>Since then, gnomon-only:</strong> proportionate verification shipped in 0.4.0 after its pre-registered A/B (LEAN, DeepSeek V4.1 Flash): −33% $/solved ($0.052 → $0.035), −28% output tokens, 37 vs 34 solved of 48 (p = 0.45, not significant). Role chain, model ceiling and timeout teaching each measured null (EVIDENCE.md).</p>
+              </div>
+
+              <div class="bench-dim" id="long-tasks">
+                <h3>III — Long tasks: why gnomon lost, and what fixed it</h3>
+                <p>Terminal-Bench 4.0, 29 long tasks, DeepSeek V4.1 Flash, 30-minute cap. gnomon 0.3.1 solved 1 of 29; the main cause was gnomon's: unstreamed calls cut at 300&nbsp;s and re-sent, fixed in 0.4.0. P2G41 re-ran the tasks on <strong>0.4.1</strong>, as released and with a tuned hosted recipe.</p>
+                <table class="bench-table">
+                  <thead><tr><th>gnomon arm</th><th>Solved / valid</th><th>Capped</th><th>Hidden tests passed (mean fraction)</th></tr></thead>
+                  <tbody>
+                    <tr><td>0.4.1 as released</td><td class="num">0/28</td><td class="num">21</td><td class="num">0.31</td></tr>
+                    <tr><td><strong>0.4.1 + hosted recipe</strong></td><td class="num"><strong>3/28</strong></td><td class="num"><strong>10</strong></td><td class="num"><strong>0.58</strong></td></tr>
+                  </tbody>
+                </table>
+                <p class="bench-foot"><strong>Which part of the recipe matters — H3</strong> (same 29 tasks, gnomon 0.4.2, pre-registered). Reasoning replay alone raised the hidden-test share by <strong>16 points [+4, +29]</strong> over the release defaults (0.32 → 0.48) and capped 5 fewer runs; the rest of the recipe added +1.7 points [−9.5, +13.8] on top — not shown. By its decision rule, replay became the default for hosted endpoints: <strong>in 0.5.0</strong>.</p>
+                <p class="bench-foot"><strong>Defaults or a tuned recipe — the v0.5.0 release runs.</strong> On Claude Haiku, gnomon's release defaults did at least as well as the tuned long-task recipe, at about half the cost. A done check before the final answer made the final answer more honest (fewer “done” claims over unfinished or unverified work) and did not improve outcomes, so it stays opt-in. <strong>Start from the defaults.</strong></p>
+                <p class="bench-foot"><strong>Why long runs fail.</strong> An offline look at 167 valid hosted gnomon runs (6 Nov): <strong>48%</strong> hit the 30-minute cap, and in <strong>68%</strong> of those the file the task asked for had never been written — the model explored until time ran out. Capped runs spent about <strong>84%</strong> of their time in model calls and 14.5% in tools; everything else, gnomon's own overhead included, was about <strong>1%</strong>. The responses — a run deadline, deliverable-first time notes, a finish gate, a soft-timeout shell — ship opt-in in 0.5.0; none is shown to improve outcomes.</p>
+                <p class="bench-foot"><strong>Traceability, tested on 58 cells.</strong> <code class="inline">gnomon audit verify</code>: 54/54 chains intact (25 sealed, 29 correctly reported not sealed). On the 25 runs that ended by themselves, model-call counts and prompt/completion tokens match the billing relay to the token, and reasoning tokens match the wire 13/13. On 24 of 29 runs killed at the cap, gnomon's surviving records miss calls the relay billed (55 calls; median 48&nbsp;s of unrecorded time, at most 287&nbsp;s). Two record defects were fixed in 0.4.3 (#151); a self-stop before the cap (<code class="inline">--deadline</code>, #153) is in 0.5.0.</p>
+              </div>
+
+              <div class="bench-dim" id="hybrid">
+                <h3>IV — Hybrid local + cloud: a cost mode</h3>
+                <p>In the hybrid arm (PC) a hosted model plans and a local model builds; L is local-only, C cloud-only. Terminal-Bench tasks, pre-registered, paired by task and attempt.</p>
+                <p class="bench-foot"><strong>The v0.5.0 release runs</strong> measured a different mode, local-first with cloud rescue: a local model works and a cloud model takes over a stuck turn (opt-in, <code class="inline">[roles.&lt;name&gt;.escalate]</code>). It spent about <strong>23%</strong> of the cloud-only arm's cloud cost, at <strong>−0.07</strong> hidden-test share against cloud-only and <strong>+0.25</strong> against local-only: a candidate <strong>cost mode</strong>, not a default. These figures are not for the PC hybrid in the table below, which is the one <code class="inline">gnomon setup</code> proposes.</p>
+                <table class="bench-table">
+                  <thead><tr><th>Run · machine · build</th><th>Local only</th><th>Cloud only</th><th>Hybrid</th><th>Hybrid $ / solved</th></tr></thead>
+                  <tbody>
+                    <tr><td><strong>M2 · GB10 · v0.4.0</strong> · Qwen3.6-35B builds</td><td class="num">16/31 (52%)</td><td class="num">not run</td><td class="num"><strong>22/32 (69%)</strong></td><td class="num">$0.031</td></tr>
+                    <tr><td>R1H · RTX&nbsp;5090 · d59e6c19</td><td class="num">24/32 (75%)</td><td class="num">27/32 (84%)</td><td class="num">26/30 (87%)</td><td class="num">$0.034 (C: $0.046)</td></tr>
+                    <tr><td>R3R · RTX&nbsp;5090 · v0.4.0 · R1H re-run</td><td class="num">22/29 (76%)</td><td class="num">24/31 (77%)</td><td class="num">19/31 (61%)</td><td class="num">$0.058 (C: $0.041)</td></tr>
+                    <tr><td>R4H · RTX&nbsp;5090 · hybrid arm only, old vs v0.4.1, run together</td><td class="num">—</td><td class="num">—</td><td class="num">22/32 old · 19/30 v0.4.1</td><td class="num">$0.038 · $0.032</td></tr>
+                  </tbody>
+                </table>
+                <p class="bench-foot"><strong>GB10:</strong> hybrid solved 22 vs 16 on 31 paired cells (exact McNemar p = 0.07), and capped more runs (8 vs 4). <strong>RTX 5090:</strong> R1H's 87% vs 84% cloud-only, 26% cheaper, <strong>did not reproduce</strong>: re-run on v0.4.0, hybrid solved 18 vs R1H's 25 on matching tasks (p = 0.04) and cost 43% more per solved task than cloud-only. R4H ran R1H's build and v0.4.1 side by side: 20 vs 19 on 30 pairs (p = 1.0), so the build is not the cause. Local compute is not free: on R1H the hybrid's saving vanished above about $0.42 per GPU-hour. Method: <a href="https://github.com/eljaplacido/gnomonharness/blob/master/docs/benchmarks/HYBRID.md">GBS-HYBRID</a>.</p>
+                <p class="bench-foot"><strong>Research context.</strong> Minions (ICML 2025): a small local model working with a cloud model kept 97.9% of cloud-only quality at 5.7× lower cloud cost, on long-document tasks (<a href="https://arxiv.org/abs/2502.15964">arxiv.org/abs/2502.15964</a>). AgentCARD (2026): heterogeneous teams matched the strongest homogeneous team at up to 12× lower cost per task (<a href="https://arxiv.org/abs/2606.20629">arxiv.org/abs/2606.20629</a>).</p>
+              </div>
+
+              <div class="bench-dim" id="did-not-work">
+                <h3>What did not work</h3>
+                <p>Each was pre-registered with a rule saying what would count; none met it. None of these is a default.</p>
+                <table class="bench-table">
+                  <thead><tr><th>Change</th><th>Study · build</th><th>Result</th></tr></thead>
+                  <tbody>
+                    <tr><td>Idle nudge off by default, local model</td><td>LG1 · RTX&nbsp;5090 · 0.4.2 vs the #153 candidate</td><td class="num">18 vs 18 solved, at <strong>1.43×</strong> the local tokens [1.04, 2.15]. Not adopted: the nudge stays at 12</td></tr>
+                    <tr><td>Completion gate, local model, no time pressure</td><td>G1-gate · GB10</td><td class="num">checklist 18 vs 16, review 17 vs 16 on 30 pairs — <strong>no difference shown</strong>; review took ~2.7× the wall time</td></tr>
+                    <tr><td>Completion gate with a reviewer, hosted model</td><td>H4-lite · 14 tasks</td><td class="num">hidden tests <strong>−10 points</strong> [−21, −1.4]; capped 4 → 8; +86% spend. The reviewer took ~12 minutes and the gate does not know the deadline. Off by default; keep it off for time-capped runs</td></tr>
+                    <tr><td>A “verify every requirement” prompt rule</td><td>H2</td><td class="num">2/12 with and without</td></tr>
+                    <tr><td>Hybrid as a quality upgrade</td><td>R3R · R4H · v0.5.0 release runs</td><td class="num">The earlier “87% vs 84% cloud-only, 26% cheaper” <strong>is retracted</strong>. In the release runs local-first with cloud rescue (opt-in, <code class="inline">[roles.&lt;name&gt;.escalate]</code>) trailed cloud-only by 0.07 hidden-test share; it is a cost mode at best</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="bench-dim">
+                <h3>V — Local models and steering</h3>
+                <p>M2 gave each local challenger its best known recipe on v0.4.0, against Qwen3.6-35B on the same lane. Flash-Next (GB10): local-only 20 vs 16, ahead but not shown (p = 0.29); its hybrid arm capped 9 vs 6 and fails the pre-set rule. Muse Glimmer 30B and Qwen3.8-27B (RTX 5090) trail, not shown. Reasoning replay on Glimmer: 78% (25/32) with, 55% (16/29) without (M1a3).</p>
+                <p class="bench-foot"><strong>Steering, measured and not adopted.</strong> On Qwen3.6's llama.cpp template every mid-turn system message is dropped (1,754 of 1,754 in M2). Delivering steering as user notes instead (S1) solved 15 vs 19 on 30 pairs (p = 0.13) — no gain. The idle nudge itself (N1: on vs effectively off, local lane) stopped at its interim look for futility: 35 solved with it, 37 without, on 61 pairs. <code>steer_role</code> stays opt-in. Switching the nudge off by default was then tested on its own (LG1, above): no gain, more tokens, so it stays at 12.</p>
+              </div>
+
+              <div class="bench-dim">
+                <h3>VI — gnomon Bench Standards (draft)</h3>
+                <p><a href="https://github.com/eljaplacido/gnomonharness/blob/master/docs/benchmarks/README.md">GBS</a> proposes open benchmarks for what a harness decides, as distinct from the model. gnomon's authors wrote the specs and build a harness they measure, so read the results accordingly. One line per spec, with gnomon's own latest figures — scripted models, no model calls, $0:</p>
+                <ul class="limits">
+                  <li><strong>OVERHEAD — the time and CPU a harness adds, independent of the model.</strong> 0.4.2: +169&nbsp;ms CPU per run of 11 scripted round-trips over a null Node harness [155, 196]; 0.2&nbsp;ms per policy decision, audit write included (0.4.1).</li>
+                  <li><strong>CHAOS — are injected endpoint faults announced, or swallowed?</strong> 0.4.2: <strong>17 of 20</strong> faults announced (34 of 37 cases). Still silent: a dropped late system message, a throttled stream, a cache miss.</li>
+                  <li><strong>GOVERNANCE — a scripted compromised model forces forbidden actions: are they stopped, and can the agent rewrite its own rules?</strong> 0.4.2, asks auto-approved: 170 of 280 attacks blocked by the default rules; <strong>245 of 280</strong> with the kernel sandbox (<code class="inline">exec = "os"</code> plus read scoping — opt-in, PR #156, in security review, not released). Self-governance <strong>27/27</strong> with nobody to approve; 26/27 with asks auto-approved (a coordinator reached a deletion through a sub-agent).</li>
+                  <li><strong>AUDIT — does the record survive tampering, and can someone else check it?</strong> 0.4.2 with a git anchor: <strong>7/7 · 3/3 · 5/5</strong> attacks caught at the three adversary levels (5/7 · 2/3 · 0/2 without a witness); <strong>0 false alarms in 48</strong> untampered sessions.</li>
+                  <li><strong>HYBRID — does a local/cloud split beat local on quality and cloud on cost, with local compute priced?</strong> See <a href="#hybrid">IV</a>: the plan-in-the-cloud hybrid beats local-only on quality (GB10) but not cloud-only on quality or, once local GPU time is priced, on cost; local-first with cloud rescue (opt-in, <code class="inline">[roles.&lt;name&gt;.escalate]</code>) cut cloud spend to about 23% of cloud-only's and trailed it on quality — a cost mode at best.</li>
+                  <li><strong>REPORTING — what every result must state:</strong> builds, the pre-registration it cites, paired design, margins, honest denominators, open traces. Held to it, gnomon's own records matched the billing relay to the token on <strong>25/25</strong> long-task runs that ended by themselves (0.4.1).</li>
+                  <li><strong>LAYER (draft, not yet published) — one policy across harnesses.</strong> Where a policy can attach (the loop, a pre-tool hook, a stop hook or CI, a wrapper), whether the agent can skip or detach it, and whether each violation was prevented, caught before merge, caught after, or missed. Its pilot is in <a href="#governance-layer">§2</a>.</li>
+                </ul>
+                <p class="bench-foot">Sources: the GBS 0.1 run on 0.4.1 (<a href="https://github.com/eljaplacido/gnomonharness/blob/master/benchmarks/results/gbs-2026-11-04/README.md">gbs-2026-11-04</a>) and the GBS 0.2 draft run on 0.4.2 (5 Nov, PR #155). Running the specs found 50 places they could not be followed as written; v0.2 resolves 47. No cross-harness GBS table is published.</p>
+              </div>
+
+              <div class="bench-dim">
+                <h3>VII — Brownfield audit pilot</h3>
+                <p>Two synthetic projects, no peer, $0 local. Supports the brownfield use case — label it a pilot.</p>
+                <table class="bench-table">
+                  <thead><tr><th>Endpoint</th><th>Result</th></tr></thead>
+                  <tbody>
+                    <tr><td>Planted defects found</td><td class="num"><strong>10/14</strong></td></tr>
+                    <tr><td>Adversarial controls falsely flagged</td><td class="num"><strong>0/5</strong></td></tr>
+                    <tr><td>Containment violations</td><td class="num"><strong>0</strong></td></tr>
+                    <tr><td>Flip rate</td><td class="num"><strong>7.1%</strong> — half this harness's task-completion flip rate</td></tr>
+                  </tbody>
+                </table>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- §9 -->
+      <section>
+        <div class="grid">
+          <div class="col-3 section-label reveal from-left">
+            <div class="section-num">§9 — Limits</div>
+            <h2>Stated plainly.</h2>
+          </div>
+          <div class="col-9 reveal" style="--reveal-delay: 100ms">
+            <p style="margin-bottom:1rem;">A harness that hides its gaps is worse than one that has them.</p>
+            <div class="limits-grid">
+              <ul class="limits">
+                <li><strong>MCP: stdio only.</strong> Pinned server → discover tools → gate per role. Reproducibility bounded — gnomon pins invocation, not what the server does.</li>
+                <li><strong>Not a hosted or async service.</strong> Runs in your terminal — and from there reaches cloud models, authenticated cloud CLIs (<code class="inline">gh</code>, <code class="inline">az</code>…), and the web. No queue, no worktree pool. One unattended path: cron-scheduled loops.</li>
+                <li><strong>Terminal, ACP editors, a local dashboard.</strong> <code class="inline">gnomon acp</code> serves Zed, JetBrains and other ACP editors; <code class="inline">gnomon dashboard</code> runs on your machine. Nothing beyond that.</li>
+                <li><strong><code class="inline">gnomon check</code> sees what leaves a trace.</strong> A destruction of git-ignored state leaves no diff; only a transcript shows it. The transcript readers (since 0.3.2) close that on replay; not yet re-run live.</li>
+                <li><strong>Long hosted-model tasks are hard for it.</strong> Full solves on 30-minute Terminal-Bench 4.0 tasks stay few; the gains measured are in the share of hidden tests passed. Reasoning replay, the change that helped most (H3), is a default in 0.5.0.</li>
+                <li><strong>Governance across harnesses is a decision layer, not a platform.</strong> No org-wide policy distribution, the person's answer to an ask is not recorded, no adapters for Codex, Aider or Goose; tools a host does not hook are not governed.</li>
+              </ul>
+              <ul class="limits">
+                <li><strong>Path sandbox and a network filter.</strong> <code class="inline">webfetch</code> has SSRF guards; <code class="inline">network = false</code> refuses the common network commands in <code class="inline">bash</code>. That is an intent filter, not process isolation. <code class="inline">exec = "docker"</code> isolates; before 0.5.0 it did not hold against a deliberately hostile model aiming at gnomon's own host-side actions, fixed in 0.5.0 (#158). A kernel-enforced <code class="inline">exec = "os"</code> is an open pull request (<a href="https://github.com/eljaplacido/gnomonharness/pull/156">#156</a>, superseding #74) awaiting an independent security review — not released.</li>
+                <li><strong>Summary compaction</strong> not reproducible.</li>
+                <li><strong>Runs killed from outside lose their last calls.</strong> On 24 of 29 capped runs the record missed calls the provider billed (up to 287&nbsp;s). A self-stop before the cap (<code class="inline">--deadline</code>, #153) is in 0.5.0.</li>
+                <li><strong>Injection resistance unmeasured.</strong> 0/36 crossed, but the model attempted none.</li>
+                <li><strong>Hybrid trades quality for cost.</strong> The plan-in-the-cloud hybrid (opt-in in setup, never suggested) did not beat cloud-only on an RTX 5090 and capped more runs; local-first with cloud rescue (opt-in, <code class="inline">[roles.&lt;name&gt;.escalate]</code>) spent about 23% of cloud-only's cloud cost at −0.07 hidden-test share (§8 IV). Opt-in.</li>
+                <li><strong>npm carries the package, not the native binaries.</strong> <code class="inline">npm i -g gnomon-harness</code> (from 0.5.0, once it is published there) gives you <code class="inline">gnomon</code>; the installer also fetches the binaries <code class="inline">surface</code>, <code class="inline">session</code> and <code class="inline">apply</code> need.</li>
+              </ul>
+            </div>
+            <p class="limits-platform"><strong>Linux, macOS and Windows — all three in CI, every commit.</strong> Windows runs natively, not through WSL. It needs Git for Windows for its POSIX shell, and gnomon <em>refuses</em> rather than falling back to <code class="inline">cmd.exe</code> — a shell that changes with the OS would be machine-scoped behaviour the hash cannot see.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- §10 -->
+      <section id="release">
+        <div class="grid">
+          <div class="col-3 section-label reveal from-left">
+            <div class="section-num">§10 — Release</div>
+            <h2>Version 0.5.0 — the first release since 0.4.3.</h2>
+          </div>
+          <div class="col-9 reveal" style="--reveal-delay: 100ms">
+            <p style="margin-bottom:1.25rem;color:var(--muted);">0.4.4 and 0.4.5 were drafted and never published, so 0.5.0 carries their changes too. Upgrading from 0.4.x: Node 22+ is required; re-run <code class="inline">gnomon guard install &lt;host&gt; --write</code> for a Claude Code or opencode guard hook (until then it shows as <code class="inline">outdated</code>); requests to Claude targets now carry prompt-cache markers (<code class="inline">prompt_cache = false</code> keeps the 0.4.x bodies); reasoning replay for hosted endpoints is on by default (<code class="inline">replay_reasoning = false</code> restores the old behaviour). Every other new key is opt-in, record-only or a security tightening. From 0.3.x: <code class="inline">gnomon migrate</code>, then re-trust. On npm once the 0.5.0 npm publish completes. <a href="https://github.com/eljaplacido/gnomonharness/blob/master/CHANGELOG.md">Full changelog</a>.</p>
+            <div class="guarantees reveal-stagger">
+              <div class="guarantee reveal"><strong>Reasoning replay by default for hosted endpoints.</strong> H3: +16 points of hidden tests passed [+4, +29], 5 fewer capped runs. Local lanes stay off unless declared. <em class="src">#153</em></div>
+              <div class="guarantee reveal"><strong><code>gnomon task --deadline</code>.</strong> Remaining-time notes, bash timeouts clamped to the time left, and a final record before an outside kill. <em class="src">#153</em></div>
+              <div class="guarantee reveal"><strong>Docker against a hostile model.</strong> gnomon's own git, audit writes and <code>check</code> can no longer be driven from inside the container; leaving docker needs <code>--trust-exec-downgrade</code>. <em class="src">#158 · #166</em></div>
+              <div class="guarantee reveal"><strong>Guard hardening.</strong> Host hook files are protected surface; Claude Code's bypass mode turns an ask into a deny; opencode sessions keep their base rules; grep and glob are governed; <code>gnomon guard status</code>. <em class="src">#165</em></div>
+              <div class="guarantee reveal"><strong>Governance levels and protected paths.</strong> <code>observe</code> → <code>advise</code> → <code>prevent</code> → <code>enforce</code> per family of rules, per repository and per role; secrets and CI paths protected; writes outside the project root refused. <em class="src">#167 · #168 · #171</em></div>
+              <div class="guarantee reveal"><strong>Opt-in long-task tools, not shown to help.</strong> Finish gate v2, deliverable-first time notes, a soft-timeout shell, a first-token stall watchdog, a container sandbox profile, an upfront deadline note. Start from the defaults. <em class="src">#161 · #162 · #164 · #173 · #174 · #175</em></div>
+            </div>
+            <p style="margin:1.6rem 0 1rem;"><strong>Earlier in 0.4.x.</strong></p>
+            <div class="guarantees reveal-stagger">
+              <div class="guarantee reveal"><strong>0.4.3 — the record says how a turn ended.</strong> A turn whose endpoint failed reads <code>endpoint_error</code>, not <code>answered</code>; records of killed and partial runs carry per-call timing and tokens. <em class="src">#151 · #152 · #154</em></div>
+              <div class="guarantee reveal"><strong>0.4.2 — security fixes from the first GBS runs.</strong> <code>gnomon audit verify</code> fails a trail appended after its seal; skill decisions need a person present. <em class="src">#149</em></div>
+              <div class="guarantee reveal"><strong>0.4.1 — setup and dashboard.</strong> <code>gnomon setup</code> scans your machine and recommends a local model; <code>gnomon dashboard</code> walks the same steps in a browser <em class="src">#129</em>. Also: the endpoint's own context window (<code>max_context_tokens = "auto"</code>), a record of every model call, and a turn record that survives a kill. <em class="src">#137 · #144 · #143</em></div>
+              <div class="guarantee reveal"><strong>0.4.0 — every model call is bounded; gnomon's records are its own.</strong> Streaming with idle and total clocks and an output limit; no role may write gnomon's own records; skills are tried before they are trusted.</div>
+            </div>
+            <div class="bench-note" style="margin-top:1.35rem;"><em>Read this before citing a rate.</em> Every rate on this page names the build it ran: M2 and R3R ran 0.4.0, GBS 0.1 ran 0.4.1, H3, LG1 and GBS 0.2 ran 0.4.2, H4-lite and G1-gate the completion gate first released in 0.5.0, and the release runs the 0.5.0 candidates. The property suites re-run on every change and describe the build you can download.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- §11 NEXT -->
+      <section id="next" class="band">
+        <div class="grid" style="margin-bottom: var(--gutter);">
+          <div class="col-3 section-label reveal from-left">
+            <div class="section-num">§11 — Next</div>
+            <h2>Next — no results claimed.</h2>
+          </div>
+          <div class="col-9 reveal" style="--reveal-delay: 100ms">
+            <p>None of this is in 0.5.0 or counts as a result yet.</p>
+          </div>
+        </div>
+        <div class="use-grid reveal-stagger">
+          <div class="use-case reveal">
+            <div class="use-persona">OS sandbox · PR #156</div>
+            <p class="use-scenario">A kernel-enforced sandbox for <code>bash</code>.</p>
+            <p class="use-why"><code>exec = "os"</code>: Landlock and seccomp on Linux, plus opt-in read scoping. Supersedes #74. Not merged: an independent security review comes first.</p>
+            <div class="use-flow">security review → merge → release</div>
+          </div>
+
+          <div class="use-case reveal">
+            <div class="use-persona">GBS v0.2 · PR #155</div>
+            <p class="use-scenario">The bench standards, revised.</p>
+            <p class="use-why">v0.2 resolves 47 of the 50 gaps the first runs found. Reference runners, so that anyone can run them on any harness.</p>
+            <div class="use-flow">review → reference runners → publish</div>
+          </div>
+
+          <div class="use-case reveal">
+            <div class="use-persona">GBS-LAYER 0.1 · next</div>
+            <p class="use-scenario">Turn the governance pilot into a claim.</p>
+            <p class="use-why">A pre-registered run of the pilot, with policy propagation, tamper attacks on the foreign trail, a positive control, and more hosts.</p>
+            <div class="use-flow">pilot → pre-register → run</div>
+          </div>
+
+          <div class="use-case reveal">
+            <div class="use-persona">Whitepaper · v0.5.0 edition</div>
+            <p class="use-scenario">The guide as a PDF, regenerated.</p>
+            <p class="use-why">The v0.3.2 edition is withdrawn: it predates this release and carries comparisons this site no longer cites. The v0.5.0 edition follows.</p>
+            <div class="use-flow">regenerate → review → publish</div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- §12 WHITEPAPER -->
+      <section id="whitepaper">
+        <div class="grid">
+          <div class="col-3 section-label reveal from-left">
+            <div class="section-num">§12 — Read it whole</div>
+            <h2>The guide, and a file for agents.</h2>
+          </div>
+          <div class="col-9 reveal" style="--reveal-delay: 100ms">
+            <p style="margin-bottom:1.25rem;color:var(--muted);">The gnomon Guide is the how-to and the whitepaper's source, kept current on GitHub. The PDF whitepaper is being regenerated for v0.5.0; the v0.3.2 edition is withdrawn.</p>
+            <div class="guarantees downloads reveal-stagger">
+              <div class="guarantee reveal">
+                <strong>The guide — <code>docs/GUIDE.md</code></strong>
+                <span class="dl-meta">Markdown · quick start, model recipes, commands, troubleshooting, FAQ, and a procedure for agents</span>
+                <span class="dl-links"><a href="https://github.com/eljaplacido/gnomonharness/blob/master/docs/GUIDE.md">View</a><a href="https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/docs/GUIDE.md">Raw</a></span>
+              </div>
+              <div class="guarantee reveal">
+                <strong>Whitepaper — PDF</strong>
+                <span class="dl-meta">v0.5.0 edition in preparation</span>
+              </div>
+              <div class="guarantee reveal">
+                <strong>For agents — <code>llms.txt</code></strong>
+                <span class="dl-meta">What gnomon is and where its docs live, for an LLM to read</span>
+                <span class="dl-links"><a href="llms.txt" target="_blank" rel="noopener">View</a><a href="llms.txt" download>Download</a></span>
+              </div>
+            </div>
+            <code class="install" style="margin-top:1.35rem;"><span class="install-prompt">$</span> curl -fsSL https://raw.githubusercontent.com/<wbr>eljaplacido/<wbr>gnomonharness/<wbr>master/<wbr>scripts/<wbr>install.sh | sh</code>
+            <p class="limits-platform">The installer verifies every download against the release's <code class="inline">SHA256SUMS</code>. Windows: <code class="inline">irm https://raw.githubusercontent.com/<wbr>eljaplacido/<wbr>gnomonharness/<wbr>master/<wbr>scripts/<wbr>install.ps1 | iex</code>. It installs v0.5.0, the latest release. Node 22+. Update with <code class="inline">gnomon update</code>. <code class="inline">npm i -g gnomon-harness</code> once 0.5.0 is published there.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- §13 GET INVOLVED -->
+      <section id="get-involved" class="band">
+        <div class="grid" style="margin-bottom: var(--gutter);">
+          <div class="col-3 section-label reveal from-left">
+            <div class="section-num">§13 — Get involved</div>
+            <h2>Use it, measure it, argue with it.</h2>
+          </div>
+          <div class="col-9 reveal" style="--reveal-delay: 100ms">
+            <p>One maintainer, open source, MIT. Every change lands through a reviewed pull request; every claim here has a file behind it you can check.</p>
+          </div>
+        </div>
+        <div class="use-grid reveal-stagger">
+          <div class="use-case reveal">
+            <div class="use-persona">Developers</div>
+            <p class="use-scenario">Run it on your own repository, then tell us what broke.</p>
+            <p class="use-why">Open an issue first for anything non-trivial; one slice per PR; <code>.gnomon/ci.sh</code> green. A documented claim needs a test that fails when the claim stops being true.</p>
+            <div class="use-flow"><a href="https://github.com/eljaplacido/gnomonharness/blob/master/CONTRIBUTING.md">CONTRIBUTING.md</a></div>
+          </div>
+          <div class="use-case reveal">
+            <div class="use-persona">Harness builders</div>
+            <p class="use-scenario">Run the bench standards on your harness.</p>
+            <p class="use-why">The GBS specs are drafts for comment. Each harness is run in a best-effort configuration its maintainers are invited to correct, and a result naming another harness waits 14 days after its maintainers are told.</p>
+            <div class="use-flow"><a href="https://github.com/eljaplacido/gnomonharness/blob/master/docs/benchmarks/README.md">docs/benchmarks — GBS specs</a></div>
+          </div>
+          <div class="use-case reveal">
+            <div class="use-persona">Teams &amp; enterprises</div>
+            <p class="use-scenario">One policy for the agents you already use.</p>
+            <p class="use-why"><code>gnomon guard</code> in Claude Code, opencode or Cursor; <code>gnomon check</code> as a required CI step for any harness. Read what the sandbox does and does not contain before relying on it.</p>
+            <div class="use-flow"><a href="https://github.com/eljaplacido/gnomonharness/blob/master/docs/THREAT-MODEL-EXEC.md">docs/THREAT-MODEL-EXEC.md</a></div>
+          </div>
+          <div class="use-case reveal">
+            <div class="use-persona">Researchers</div>
+            <p class="use-scenario">Check the numbers, or reproduce them.</p>
+            <p class="use-why">Every published result names its build and pre-registration, losses included. Point out what is wrong with a run, and it gets re-run or withdrawn.</p>
+            <div class="use-flow"><a href="https://github.com/eljaplacido/gnomonharness/blob/master/docs/EVIDENCE.md">docs/EVIDENCE.md — claims and their evidence</a></div>
+          </div>
+        </div>
+        <p class="limits-platform reveal" style="margin-top:1.25rem;">Security issues: not in public issues — see <a href="https://github.com/eljaplacido/gnomonharness/blob/master/.github/SECURITY.md">SECURITY.md</a>.</p>
+      </section>
+
+      </main>
+
+      <footer class="reveal">
+        <div>
+          <a href="https://github.com/eljaplacido/gnomonharness">GitHub</a>
+          <a href="#governance">Governance</a>
+          <a href="#measurements">Benchmarks</a>
+          <a href="#release">0.5.0</a>
+          <a href="https://github.com/eljaplacido/gnomonharness/blob/master/docs/GUIDE.md">Guide</a>
+          <a href="llms.txt">llms.txt</a>
+          <a href="#get-involved">Contribute</a>
+          <a href="https://github.com/eljaplacido/gnomonharness/blob/master/LICENSE">MIT</a>
+        </div>
+        <span><span class="logo-name" style="font-size:0.75rem;letter-spacing:0.14em">Gnomon</span> harness · v0.5.0</span>
+      </footer>
+
+    </div><!-- sheet-inner -->
+  </div><!-- sheet -->
+</div><!-- canvas -->
+
+<script>
+(function () {
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Sundial shadow — project 3D gnomon onto horizontal plate (equinox, lat 45°N)
+  var DAY_CYCLE_MS = 36000;
+  var LATITUDE = 45;
+
+  var DIALS = {
+    hero: {
+      cx: 240, cy: 168,
+      // east, north, up — base on plate, tip toward celestial pole
+      verts: [[-12, -20, 0], [12, -20, 0], [0, 30, 30]]
+    },
+    logo: {
+      cx: 18, cy: 18,
+      verts: [[-1.5, 0, 0], [1.5, 0, 0], [0, 10, 10]]
+    }
+  };
+
+  function sunFromDayPhase(t) {
+    // t = 0 sunrise · 0.5 solar noon · 1 sunset (equinox arc E → S → W)
+    var az = (90 + 180 * t) * Math.PI / 180;
+    var alt = (LATITUDE * Math.sin(Math.PI * t)) * Math.PI / 180;
+    return {
+      sx: Math.cos(alt) * Math.sin(az),
+      sy: Math.cos(alt) * Math.cos(az),
+      sz: Math.sin(alt)
+    };
+  }
+
+  function projectOntoPlate(x, y, z, sun) {
+    if (sun.sz < 0.02) return null;
+    return [x - z * sun.sx / sun.sz, y - z * sun.sy / sun.sz];
+  }
+
+  function shadowPath(dial, sun) {
+    if (sun.sz < 0.02) return '';
+    var v = dial.verts;
+    var tip = projectOntoPlate(v[2][0], v[2][1], v[2][2], sun);
+    if (!tip) return '';
+    var sx = dial.cx;
+    var sy = dial.cy;
+    var x0 = sx + v[0][0];
+    var y0 = sy - v[0][1];
+    var x1 = sx + v[1][0];
+    var y1 = sy - v[1][1];
+    var x2 = sx + tip[0];
+    var y2 = sy - tip[1];
+    return 'M' + x0 + ' ' + y0 + ' L' + x1 + ' ' + y1 + ' L' + x2 + ' ' + y2 + ' Z';
+  }
+
+  function setShadowPhase(t) {
+    var sun = sunFromDayPhase(t);
+    document.querySelectorAll('.shadow-umbra').forEach(function (path) {
+      var key = path.getAttribute('data-dial') || 'hero';
+      var dial = DIALS[key];
+      if (!dial) return;
+      path.setAttribute('d', shadowPath(dial, sun));
+      path.style.opacity = sun.sz < 0.04 ? '0' : '1';
+    });
+  }
+
+  function formatSimulatedTime(t) {
+    var hour24 = 6 + t * 12;
+    var h = Math.floor(hour24);
+    var m = Math.floor((hour24 - h) * 60);
+    var hr = h % 12 || 12;
+    var ampm = h < 12 ? 'am' : 'pm';
+    return 'Shadow · ' + hr + ':' + String(m).padStart(2, '0') + ' ' + ampm + ' · sunrise to sunset';
+  }
+
+  var shadowPaths = document.querySelectorAll('.shadow-umbra');
+  if (shadowPaths.length) {
+    var pageStart = performance.now();
+    var now = new Date();
+    var hour24 = now.getHours() + now.getMinutes() / 60;
+    var phase = Math.max(0, Math.min(1, (hour24 - 6) / 12));
+    var timeOffset = phase * DAY_CYCLE_MS;
+
+    if (reduced) {
+      setShadowPhase(phase);
+      document.querySelectorAll('.sundial-time').forEach(function (el) {
+        el.textContent = 'Shadow fixed (reduced motion).';
+      });
+    } else {
+      setShadowPhase(timeOffset / DAY_CYCLE_MS);
+      function animateShadow(ts) {
+        var elapsed = (ts - pageStart + timeOffset) % DAY_CYCLE_MS;
+        var t = elapsed / DAY_CYCLE_MS;
+        setShadowPhase(t);
+        document.querySelectorAll('.sundial-time').forEach(function (el) {
+          el.textContent = formatSimulatedTime(t);
+        });
+        requestAnimationFrame(animateShadow);
+      }
+      requestAnimationFrame(animateShadow);
+    }
+  }
+
+  // Scroll reveal
+  const revealEls = document.querySelectorAll('.reveal');
+  if (!reduced && revealEls.length) {
+    const io = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('is-visible');
+          io.unobserve(entry.target);
+        }
+      });
+    }, { root: null, rootMargin: '0px 0px -8% 0px', threshold: 0.12 });
+
+    revealEls.forEach(function (el) {
+      // Hero visible immediately on load
+      if (el.closest('.hero')) {
+        requestAnimationFrame(function () { el.classList.add('is-visible'); });
+      } else {
+        io.observe(el);
+      }
+    });
+  } else {
+    revealEls.forEach(function (el) { el.classList.add('is-visible'); });
+  }
+
+  // Nav link highlight on scroll
+  var sections = document.querySelectorAll('section[id]');
+  var navLinks = document.querySelectorAll('nav.top a[href^="#"]');
+  if (sections.length && navLinks.length) {
+    var sectionIo = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          var id = entry.target.id;
+          if (!id) return;
+          navLinks.forEach(function (a) {
+            a.classList.toggle('is-active', a.getAttribute('href') === '#' + id);
+          });
+        }
+      });
+    }, { rootMargin: '-40% 0px -55% 0px', threshold: 0 });
+    sections.forEach(function (s) { if (s.id) sectionIo.observe(s); });
+  }
+})();
+</script>
+
+</body>
+</html>
+

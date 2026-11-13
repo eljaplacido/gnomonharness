@@ -8,6 +8,10 @@ numbers can be checked and re-derived rather than taken on trust.
 task set saturates, the sample sizes are small, and the benchmark's author also
 wrote one of the harnesses under test.
 
+**Benchmark your own harness** the way gnomon benchmarks itself:
+[`kit/`](kit/README.md) (method, pre-registration template, a stdlib analyzer,
+a wire-metering relay, the GBS specs).
+
 **Two different benchmarks live under `benchmarks/`.** `harness.py` here is the
 *internal* 5-task efficiency/quality suite behind `docs/BENCHMARKS.md`. The
 *external* Terminal-Bench harness-vs-harness campaign (gnomon vs goose vs

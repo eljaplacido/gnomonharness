@@ -66,7 +66,7 @@ every `TaskRecord`.
 | `step_wall` | `max_steps_total` was reached |
 | `cancelled` | the operator stopped it |
 | `truncated` | the backend cut the reply off at its output limit, and the bounded re-asks did not finish it: a cut text reply stands as the answer (a `result`); cut tool calls in a row end on the `refusal` floor with `stop_detail.repeats` |
-| `apparatus` | the run never reached the model — the surface itself could not be used |
+| `apparatus` | the run never reached the model — the surface itself could not be used; or, in `gnomon task`, gnomon itself threw after the run started (the loop, not a tool: a tool's failure is a result the model reads), and the run ended on the record as it stood: `final`, code `10`, the steps and clock up to then, `output` a note saying what threw, never "could not start" (§28) |
 | `malformed` | replies in a row offered no usable tool call, past `[turn] max_consecutive_malformed` repair turns |
 | `endpoint_error` | the turn's last model request failed and the turn ended on it: no key (10), no reply in time (11), the provider unreachable or erroring past the transport grace (12), or the context could not be fitted (13); the code says which, and the bucket is `apparatus_failure` |
 | `tamper` | a tool call, or something between calls, changed gnomon's own records and gnomon did not make the change; the turn stops with a refusal (3) and a `record_tamper` record |
@@ -78,6 +78,10 @@ every `TaskRecord`.
 a turn's own loop. They are here because a consumer reads them on the same
 records: `gnomon task --json`, the `turn` audit record, and
 `<session>.record.json`.
+
+After an escalation (section 11), `stop_reason` is how the escalated model
+ended the turn; what moved the turn is `escalation.trigger`, never a
+`stop_reason` value.
 
 `apparatus` exists because every failure of that kind previously borrowed
 `answered`, which recorded a run that never started as a turn that concluded.
@@ -211,12 +215,32 @@ so both format drift and non-determinism fail the build.
   "approval": ["never", "on_write", "always"],
   "role_profile": ["local_first", "frontier_plan", "all_remote"],
   "governance_level": ["observe", "advise", "prevent", "enforce"],
-  "governance_family": ["write", "bash", "network", "secrets", "rules", "ci"]
+  "governance_family": ["write", "bash", "network", "secrets", "rules", "ci"],
+  "audit_kind": ["session_start", "session_resume", "turn", "chain_stage", "tool_call", "approval",
+                 "verify", "bootstrap", "context_mask", "degradation", "check", "trust", "guard",
+                 "skill_accept", "skill_reject", "skill_trial", "record_tamper",
+                 "record_tamper_resolved", "record_notice", "mcp_tools", "stall_signal",
+                 "completion_gate", "todo_gate", "job", "deliverable_first", "first_token_stall",
+                 "checkpoint", "finish_gate", "model_call", "escalation", "session_end"],
+  "guard_decision": ["allow", "deny", "ask"],
+  "guard_rule": ["tools", "malformed", "bash_deny", "bash_allow", "sudo", "sandbox", "surface",
+                 "record", "git_hooks", "host_hooks", "write_allow", "outside_root", "secret_path",
+                 "ci_path", "network", "url", "repo_code", "approval", "ungoverned", "error"],
+  "guard_tool": ["bash", "write", "edit", "read", "webfetch", "grep", "glob", "execute"]
 }
 ```
 
 `governance_level` and `governance_family` are §36's: the levels, weakest
 first, and the families every policy rule is assigned to.
+
+`audit_kind` is every `kind` an audit trail record may carry (`AUDIT_KINDS`,
+audit.ts; the trail format is §44), and `guard_decision`, `guard_rule` and
+`guard_tool` are §10's tables (issue #113, Rule 6: what a record or a document
+can say is published, not only exported). `gnomon-core`'s guard test holds
+`AUDIT_KINDS`, `GUARD_DECISIONS`, `GUARD_RULES` and `GUARD_TOOLS` to the golden;
+the build fails when a kind is added to the `AuditKind` type and not to
+`AUDIT_KINDS`. The skill enumerations #113 also names (candidate signals, trial
+verdicts and statuses) stay in their own fixtures (§12, §13) for now.
 
 **`role_profile` is implemented.** This paragraph said it was "declared and not
 implemented" and stayed there after `495fa40` made it route: `applyProfile`
@@ -604,6 +628,37 @@ parse trusts nothing.
 **Exit codes.** A clamped run exits by its bucket like any other. Quitting at the
 interactive prompt exits **3** (`refused_by_gate`) with nothing run.
 
+**Keys before (or without) a session.** The rule that clamps a key — an endpoint's,
+a role's `fallback`'s or a role's `escalate`'s `api_key_env` goes to a host that
+is not loopback and not in `KEY_HOSTS` only on a surface the operator trusts
+(`keyHostIsDefault`, exported from gnomon-core) — holds for every request that carries a key, not only for a
+session's. These run before `launch`'s trust prompt, or in commands that never
+open a session, and each one uses the surface **as the trust step would run it**
+(settled headless and silently, with `--trust` / `GNOMON_TRUST` / the store as
+usual), never the surface as declared:
+
+| Where | On an untrusted surface, for an endpoint at an unknown host |
+|---|---|
+| `launch`'s readiness check (before the session) | no request; prints `Not checked: $VAR goes to <host> … only once this surface is trusted`, and the session's trust prompt follows |
+| `gnomon doctor` (and the dashboard's `doctor.scan`) | no request; a `readiness` finding with that text and fix `gnomon trust …` |
+| `gnomon endpoint list` | listed as declared; the model cross-check runs without the key, and the line above is printed |
+| `gnomon endpoint test` | that endpoint is `NOT TESTED`, and the command exits **3** (`refused_by_gate`) |
+| `gnomon setup`'s one-token check of an endpoint taken from the surface | not offered; the line above is said instead |
+| `gnomon setup`'s model listing of an endpoint taken from the surface (one named like a preset, e.g. `[endpoints.openrouter]`, included) | the listing runs without the key, and the line above is said |
+
+A trusted surface (or one that grants nothing beyond the scaffold) runs as
+declared in all of them, and a known provider or a loopback endpoint always gets
+its key. As defence in depth, the readiness check itself (`checkReadiness`)
+sends no `Authorization` header to a host that fails `keyHostIsDefault` unless
+its caller says the surface is trusted. `endpoint add` and `setup` send a key to
+the URL the person typed or the preset they chose, which is their own choice;
+a surface endpoint whose name is a preset's is not that preset — its host
+decides.
+Before v0.5.0, `launch`'s readiness check, `gnomon doctor` and `gnomon endpoint
+list|test` ran on the surface as declared, so a cloned repository naming its own
+host and, say, `ANTHROPIC_API_KEY` was sent that key on an interactive
+`gnomon launch`, a `gnomon doctor` or an `endpoint list`.
+
 **Fixture**: `conformance/trust_record.json`. `packages/gnomon-core/src/trust.test.ts`
 asserts the code's `TRUST_DECISIONS` and `TRUST_BY` equal the fixture; the end-to-end
 tests there and in `packages/gnomon-cli/src/trust.test.ts` read the `trust` field
@@ -663,7 +718,9 @@ client against a fake model.
 ## 10. `gnomon guard` — schema `gnomon.guard/1`
 
 The decision on one tool call another harness is about to make (README,
-[Governing other harnesses](../README.md#governing-other-harnesses)). A hook
+[Governing other harnesses](../README.md#governing-other-harnesses);
+[GOVERNING-OTHER-HARNESSES.md](GOVERNING-OTHER-HARNESSES.md) for the support
+matrix, levels, liveness and known bypasses). A hook
 gates the call on it: deny is refused with `reason`, ask goes to a person,
 allow changes nothing. One JSON object per call on stdout.
 
@@ -698,7 +755,7 @@ decision gnomon could not make is never an allow.
 | `url` | a scheme other than http(s), or a private, loopback or link-local address |
 | `repo_code` | `[approval] repo_code = true`, and the call runs repository-defined code: package.json scripts or lifecycle scripts (`npm`/`pnpm`/`yarn`/`bun` run, test, start, install, ci, …; `npx`), a Makefile, justfile, Rakefile, Gradle or Maven build, tox/nox, pre-commit hooks, `cargo` build/test/run (build.rs), `go generate`, `poetry`/`pdm`/`hatch`/`pipenv` install or run, `pip install -e`/a local path/`-r`, `python setup.py` (decision `ask`, never `deny`) |
 | `approval` | the gate would ask (decision `ask`) |
-| `ungoverned` | no `.gnomon/` above the working directory, or a tool gnomon has no pre-execution rule for (decision `allow`) |
+| `ungoverned` | no `.gnomon/` above the working directory, or a host tool gnomon has no pre-execution rule for: an MCP tool or an unknown one (`allow` with no `[governance]`; under one, verdict `ask`, levelled — see "Other host tools" below), a subagent, or host bookkeeping (`allow`) |
 | `error` | no decision could be made (exit 10) |
 
 `rule` is `null` on an allow that nothing stopped. Tools decided (`tool`):
@@ -710,7 +767,25 @@ the sandbox), and, for a glob whose pattern names its own directory, that
 directory too — and `execute` (`{ "code" }`), JavaScript a harness runs itself
 (opencode V2's Code Mode). `execute` is decided as the equivalent bash call
 `node -e '<code>'`; for a role without `bash` it is `ask` with rule `tools`.
-Anything else is `allow` with rule `ungoverned`, never guessed at.
+Anything else is a host tool gnomon has no tool kind for, below.
+
+**Other host tools** (`GUARD_FOREIGN_TOOLS`, guard.ts; the Claude Code matcher
+selects them since v0.5.0, the opencode plugin sends every tool). The document's
+`tool` names what the call was decided as:
+
+| Host tool | Decided as (`tool`) | Decision |
+|---|---|---|
+| Claude Code `WebSearch`, opencode `websearch`/`codesearch` | `websearch` | as `webfetch` without the URL rules: `deny` with `network` under `[sandbox] network = false`, checked first and whatever the role holds; otherwise `ask` with rule `tools` when the role holds no `webfetch` (as `execute` without `bash`) and `approval` when the gate asks for webfetch; family `network` |
+| Claude Code `Agent`/`Task`, opencode `task` | `agent` | `allow`, rule `ungoverned`, never levelled: a subagent does nothing itself, and each call it makes reaches the same hook |
+| opencode `list` | `glob` | a glob of `*` in the listed directory: a read of where it lists |
+| opencode `multiedit` | `edit` | an edit of its file |
+| `TodoWrite`, `ExitPlanMode`, opencode `todowrite`/`todoread`/`question`/`invalid` | itself | `allow`, rule `ungoverned`, never levelled: no effect outside the conversation |
+| an MCP tool (`mcp__<server>__<tool>`), anything else | itself | rule `ungoverned`. No `[governance]`: `allow`, as before. Under one: verdict `ask`, `family` null, `level` the strictest the surface puts on `write`, `bash`, `network`, `secrets` or `ci` — so `allow` (recorded) under observe/advise and `ask` under prevent/enforce; under Claude Code's `bypassPermissions` that ask is a deny, like every other |
+
+Nothing about an MCP call's arguments is judged or recorded: the trail's
+`target` is empty for it. Fixture: `conformance/guard_cases.json`
+`host_tools`, put to the real binary and to `guardHarnessRequest` (gnomon's
+own loop has no such tools).
 
 **Governance levels (§36).** Under a declared `[governance]` (or a role's
 `[roles.<name>.governance]`), the document also carries `verdict` (what the
@@ -794,15 +869,46 @@ otherwise, exit 0; opencode's plugin reads the generic document, and passes
 `--session-base <sha>`, the HEAD it read when opencode loaded it, which the
 guard uses and records only for a session with no recorded base yet.
 
+**`gnomon guard install`** writes the **absolute** path of a gnomon that
+answers `gnomon guard --help` into every hook it writes (Claude Code's three
+commands, Cursor's two, the opencode plugin's `GNOMON_ARGV`): `--bin <path>`,
+else `$GNOMON_GUARD_BIN`, else the gnomon running the install (when it is not
+in an npx cache), else each `gnomon` on PATH. None answers: exit 10, nothing
+written. A bare `gnomon` resolves to whatever is on the host's PATH when the
+host starts; in the 2026-11-12 governance test that was an older gnomon with no
+`guard`, the hook could not run, and Claude Code ran every call (a hook that
+fails to start is a non-blocking error to it). Re-running install over an older
+install updates its entries in place (program and matcher), never adding a
+second copy; a command counts as gnomon's when its program part names gnomon.
+The path is the installing machine's. `--local` keeps the hook out of git:
+Claude Code's goes into `.claude/settings.local.json`; the opencode plugin and
+Cursor's `hooks.json` are written where they always are and listed in
+`.git/info/exclude` (a tracked file is warned of, not untracked). Without
+`--local`, `install` warns on stderr when a program path is under the home
+directory or a versioned directory (`/v22.22.2/`), which another clone will not
+have. The exit is the same either way.
+
 **`gnomon guard status`** (`--dir`, `--expect <hosts>`, `--json`, schema
 `gnomon.guard.status/1`) says, per host (`claude-code`, `opencode`,
 `cursor`), whether the hook `gnomon guard install` wrote is still there:
-`ok`, `missing`, `modified` (the guard hook is gone from the file, its matcher
-no longer covers the decided tools, or the file differs from HEAD or from
-what `install --write` recorded), `disabled` (`disableAllHooks` in the
-project, local or user Claude Code settings) or `not_installed`. A host is
-expected when its hook is committed at HEAD, `install --write` recorded it, or
-`--expect` names it. Exit 0 with no finding, 2 with one, 10 when not governed.
+`ok`, `outdated` (the hook an earlier release wrote, unchanged: a Claude Code
+PreToolUse matcher from `OLDER_CLAUDE_CODE_MATCHERS`, or an opencode plugin
+whose sha256 is a known earlier one; or a hook `install --write` updated whose
+update is not committed while HEAD holds gnomon's older one), `missing`,
+`modified` (the guard hook is gone from the file, its matcher no longer covers
+the selected tools and is not an earlier gnomon's, the absolute program it runs
+does not exist, or the file differs from HEAD or from what `install --write`
+recorded), `disabled` (`disableAllHooks` in the project, local or user Claude
+Code settings) or `not_installed`. Claude Code's file is
+`.claude/settings.local.json` when `install --local` recorded it, or when only
+it holds gnomon's hook, else `.claude/settings.json`. `outdated` is listed in
+`warnings`, not `findings`, and does not change the exit. A host is expected when a hook file with
+gnomon's guard in it is committed at HEAD, `install --write` recorded it, or
+`--expect` names it. It also says which host sessions reached the guard
+(§44): `sessions_seen`, `last_decision`, `sessions` and
+`unguarded_sessions`. Exit 0 with no finding, 2 with one, 10 when not
+governed; a session that never reached the guard is listed, not a finding
+(it may have made no selected call; `gnomon check` tells, §44).
 
 **Fixtures**: `conformance/guard_decision.json` (this contract) and
 `conformance/guard_cases.json` (calls and the decision each must reach).
@@ -1299,9 +1405,10 @@ chosen model server stopped answering (the pull or the speed check).
   written as `role_profile` `local_first`, `frontier_plan`, `all_remote` (all
   three already in §3).
 - `hybrid_control.value`: `off`, `observe`, `ask`, `auto`. It is recorded as a
-  preference with `active: false` and changes nothing until PR #102's
-  `[roles.X.escalate]` exists; `control` enters `gnomon enumerations` with
-  that step (design step 6). The default is `observe`.
+  preference with `active: false` and changes nothing: setup writes no
+  `[roles.<name>.escalate]` block (§42 is declared by hand); `control` enters
+  `gnomon enumerations` if setup ever writes one (design step 6). The default
+  is `observe`.
 - `steps[].id`: `probe`, `recommend`, `choose`, `pull`, `speed`, `cloud`,
   `mode`, `write`.
 - runtime ids: `ollama`, `lmstudio`, `llamacpp`, `vllm`; option `fit`:
@@ -2189,6 +2296,7 @@ The killed `turn` audit record carries it too, beside `tokens_in`.
 | `final` | the turn's own | The turn ended. Rewritten no more; in a session the next turn starts a new partial record in the same file. |
 | `final` | `killed` | SIGINT, SIGTERM or SIGHUP arrived mid-turn. `stop_detail.signal` names it; `output` is a note, never the model's text. |
 | `final` | `deadline` | `gnomon task --deadline` stopped the turn itself (§31). Written as any final record is, with the turn's own code and bucket. |
+| `final` | `apparatus` | `gnomon task` only: gnomon itself threw after the run started. Code `10`, the steps, tokens and clock up to then; `output` is a note (`the run failed after it started (…)`), never the model's text. The `turn` audit record and `session_end` follow, as for a kill, and `--json` prints this record. Before it, the throw reached the CLI, which printed "could not start" with `tool_steps: 0` and `duration_ms: 0` and left this file `partial` (dc1, 2026-11-12). |
 
 A partial or killed record carries `code: 11` (`timed_out`) and `bucket:
 "apparatus_failure"`: the turn did not end, it was ended, so it is neither a
@@ -2226,7 +2334,7 @@ notice, not as tampering. The last write before a normal session end comes
 before the checkpoint.
 
 **Cost.** Each write is one `JSON.stringify`, one write and one rename, with no
-fsync: the file outlives the process, not a power cut. Measured on gx10
+fsync: the file outlives the process, not a power cut. Measured on an NVIDIA GB10
 (aarch64, ext4, benchmarks running): median 0.04–0.15 ms a write and p95 under
 0.35 ms for turns of 10 to 400 tool calls (the file then 1–21 KB), two writes a
 tool call.
@@ -2320,16 +2428,22 @@ interactive exchange, which has no reader for it.
 | key | value |
 |---|---|
 | `metered` | requests whose reply reported usage |
-| `prompt_tokens`, `cached_tokens`, `completion_tokens`, `reasoning_tokens` | summed as the provider reported them; absent when none did |
+| `prompt_tokens`, `cached_tokens`, `cache_write_tokens`, `completion_tokens`, `reasoning_tokens` | summed as the provider reported them; absent when none did |
 | `reasoning_chars` | characters of reasoning the replies carried |
 | `prompt_max` | the largest provider `prompt_tokens` |
 | `over_window` | requests whose provider `prompt_tokens` exceeded their window |
 | `ratio` | provider `prompt_tokens` over `est`, summed over the metered requests, to 3 places |
-| `first`, `calls` | as above. Per request: `i`, `code` (0, or the exit-contract code it failed with), `ms`, `first_byte_ms` (streamed), the four token counts, `reasoning_chars`, `finish` |
+| `first`, `calls` | as above. Per request: `i`, `code` (0, or the exit-contract code it failed with), `ms`, `first_byte_ms` (streamed), the five token counts, `reasoning_chars`, `finish` |
 
-Cached tokens are read from `prompt_tokens_details.cached_tokens` (OpenAI) or
-`prompt_cache_hit_tokens` (DeepSeek); reasoning tokens from
-`completion_tokens_details.reasoning_tokens`.
+Cached tokens are read from `prompt_tokens_details.cached_tokens` (OpenAI,
+LiteLLM), `prompt_cache_hit_tokens` (DeepSeek) or `cache_read_input_tokens`
+(Anthropic, as a gateway passes it through): the largest of those present,
+never their sum, since a gateway may carry two spellings of one number.
+`cache_write_tokens` is `cache_creation_input_tokens` (or LiteLLM's
+`prompt_tokens_details.cache_creation_tokens`) and is never counted as cached.
+Reasoning tokens from `completion_tokens_details.reasoning_tokens`. Where a
+reply carries Anthropic's `input_tokens` and no `prompt_tokens`, the prompt is
+`input_tokens + cache_read_input_tokens + cache_creation_input_tokens` (§43).
 
 **The trail: `model_call`.** When `[audit]` is on, one record per request,
 written as the request ends, joining both halves: `i`, `role`, `model`,
@@ -2519,25 +2633,23 @@ deadline, capped runs leaving only a partial record (TB1, 29 of 29), no tool
 timing (TB4), a read-only `/app` failing as "No .gnomon/ surface found" (TB7),
 and a 60 s provider grace outlasted by 503s.
 
-**The default that changes (v0.4.4), and the one that does not.**
+**The default that changes (v0.4.4, first released in v0.5.0), and the one that does not.**
 
 | key | before | now | to restore |
 |---|---|---|---|
-| `[endpoints.<name>] replay_reasoning` | off unless declared (or `api.deepseek.com`) | undeclared on a **hosted** endpoint: on from the request after it first answers a tool call with reasoning content (`reasoning_content` or `reasoning`), for the session. Undeclared on a **local lane** (`isLocalLaneUrl`): off, as before. (since v0.4.6 judged by `replayLocal`, §39, the same host set) | `replay_reasoning = false` |
+| `[endpoints.<name>] replay_reasoning` | off unless declared (or `api.deepseek.com`) | undeclared on a **hosted** endpoint: on from the request after it first answers a tool call with reasoning content (`reasoning_content` or `reasoning`), for the session. Undeclared on a **local lane** (`isLocalLaneUrl`): off, as before. (since v0.5.0 judged by `replayLocal`, §39, the same host set) | `replay_reasoning = false` |
 | `[turn] nudge_after_idle` | `12` | `12`, unchanged; a declared `0` is now off (it was floored to 1) | — |
 
 Replay is H3's verdict (pre-registered; hosted DeepSeek V4.1 Flash, 30-minute
 caps): replay alone against the 0.4.2 defaults raised the hidden-test fraction
 by +0.160 [95% bootstrap +0.042, +0.293] and cut capped runs from 19 to 14, so
 both arms of its decision rule were met. H3 measured hosted endpoints only,
-so local lanes are untested and off unless declared
-([summary-h3.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt)).
+so local lanes are untested and off unless declared.
 The nudge stays because LG1 (pre-registered, local RTX lane) measured the
 build that switched it off against 0.4.2: 18 vs 18 solved at 1.43× the local
 tokens [1.04, 2.15], past its 1.20 guard, verdict "regresses"; the old build
 sent 547 nudged requests and the new 0, and replay never fired there because
-the lane returns no reasoning field
-([summary-lg1.txt](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/lg1-2026-11/summary-lg1.txt)).
+the lane returns no reasoning field.
 H3's nudge-off recipe arm added +0.017 [−0.095, +0.138] on top of replay.
 
 An endpoint that never sends reasoning is never sent any, so its requests are
@@ -2871,12 +2983,10 @@ that every record carries only the fixture's keys.
 
 ## 34. Soft-timeout shell — bash `soft_timeout`, the `job` tool, audit kind `job`, `v: 1`
 
-**Why.** The long-task research notes (reverse-engineering 01 and 02,
-2026-11-05) found that the peers which do well on long tasks never cut a long
-command short: Codex returns a session handle after a 10 s yield and lets the
-model poll up to 300 s at a time, opencode backgrounds the command and wakes
-the session, and OpenHands returns after 30 s without output while the process
-keeps running. gnomon kills at the tool timeout (120 s by default) and refuses
+**Why.** The long-task research notes (01 and 02, 2026-11-05) found that a
+common design for long commands is not to cut them short: return a session
+handle after a short yield and let the model poll, or background the command
+and wake the session when it ends. gnomon kills at the tool timeout (120 s by default) and refuses
 an identical re-run. This key lets that difference be measured as a surface
 change.
 
@@ -3023,7 +3133,7 @@ hashes §32 pinned, held again in `deliverable_first.test.ts`). The same with
   item's leading path. `named \`x.csv\`` beside a directory the same sentence
   asks for is joined to it. Fenced code and HTML comments are not read;
   directories are never named. Each path once, in order.
-- Since v0.4.6 (research note 13, finding 3): a verb whose object names
+- Since v0.5.0 (research note 13, finding 3): a verb whose object names
   `dependencies`, `dependency` or `packages` before its first path is a
   dependency manifest ("Write any Python dependencies … to
   `/app/requirements.txt`"), not an output, and names nothing; a modal whose
@@ -3032,10 +3142,10 @@ hashes §32 pinned, held again in `deliverable_first.test.ts`). The same with
   span right after `running`/`run` names the file its `--output`, `--out` or
   `-o` flag gives. A named path that exists when the run starts is not
   checked; the `named` event lists it under `present`.
-- On the 29 P2G41 task instructions, against the labels as revised for v0.4.6
+- On the 29 P2G41 task instructions, against the labels as revised for v0.5.0
   (dependency manifests out; `flight_plan.json` and the risk scorer's three
   outputs in), the extractor names 34 paths, all 34 labelled (precision 1.0,
-  recall 1.0). Before v0.4.6 it named 33, 30 of them right, and 11 of the 29
+  recall 1.0). Before v0.5.0 it named 33, 30 of them right, and 11 of the 29
   tasks were wrong or empty; the 8 still empty name no output file. Left out on
   purpose: `/app/src` (a directory), and outputs a program is said to write
   without a command the task names (`release-manifest.json`, `audit.log`, the
@@ -3057,7 +3167,7 @@ hashes §32 pinned, held again in `deliverable_first.test.ts`). The same with
 - Audit kind `deliverable_first`, `event`:
   - `named`, once, after `session_start`: `named` (the paths checked,
     possibly `[]`), `present` (named paths that already existed, not
-    checked; since v0.4.6), `at` (the fractions);
+    checked; since v0.5.0), `at` (the fractions);
   - `check`, at each fraction when something was named: `at`, `step`, `used`
     (the budget fraction used), `named`, `missing`, `noted` (whether the note
     named them).
@@ -3139,7 +3249,8 @@ tools.ts; tools and governance tests pin the table against the rule list):
 | `secrets` | `secret_path` (§37); `sandbox` on read, grep and glob (a read or search outside the root) |
 | `rules` | `surface`, `record`, `git_hooks`, `host_hooks` |
 | `ci` | `ci_path` (§37) |
-| *(structural, never levelled)* | `tools`, `malformed`; and in the guard `ungoverned`, `error` |
+| *(structural, never levelled)* | `tools`, `malformed`; and in the guard `error`, and `ungoverned` on a subagent or host bookkeeping |
+| *(no family; levelled at the strictest of `write`, `bash`, `network`, `secrets`, `ci`)* | `ungoverned` on an MCP or unknown host tool (§10, "Other host tools") |
 
 An `approval` ask takes the family of the calling tool: `bash` (and `execute`)
 → `bash`, `write`/`edit` → `write`, `webfetch` → `network`; a `read` ask is
@@ -3355,7 +3466,7 @@ tiers of it: `isLoopbackEndpoint` (`loopback`) for trust and key grants,
 billed check and the `delivered` flag; `replayLocal` (`loopback`, `private`,
 or a URL that does not parse) for the replay default, the same host set
 `isLocalLaneUrl` held.
-Until v0.4.6 three predicates with three host sets decided these
+Until v0.5.0 three predicates with three host sets decided these
 (`isLocalEndpoint`, `isLocalLaneUrl`, `isLoopbackEndpoint`; audit 2026-11-06
 #11); merging widened `isLocalEndpoint` by 127/8 beyond 127.0.0.1,
 `*.localhost`, 0/8, link-local, IPv6 private ranges, `host.docker.internal`
@@ -3423,13 +3534,12 @@ never to the plan one. `session_start.deadline` carries `note` (`continue`, `non
 states "You have 28800 seconds" while the run's cap is 1,800 s (research note
 14): without a deadline the model plans for 8 h, and with the countdown it
 answers early at the first note; SW1's T arm measures it. `none` exists because DP1's decision-point
-replays (`benchmarks/results/dp1-2026-11/SUMMARY.txt` on `bench/peers-2026-11`)
+replays (`dp1-2026-11`, archived outside this repository)
 put the early-stop cue in the countdown itself ("about N of 29m remain"), not
 in the "plan the rest" ending: swapping the ending to `continue` barely
 changed it. Why: on FG1 the half-time `plan` note was followed by
 an answer 30–250 s later with 9–13 minutes unused in 12 cells of the three
-never-solved tasks, while the three opencode solves of those tasks landed at
-1597–1800 s (research note 12 §1); on CF1 the deliverable note carried the
+never-solved tasks (research note 12 §1); on CF1 the deliverable note carried the
 same sentence (research note 13, finding 2). Unmeasured as a change: SW1's P
 arm measures it.
 
@@ -3450,16 +3560,14 @@ inferred from a TTY, the environment or the command that started gnomon
 - makes `nudge_after_idle` 0 unless it is declared.
 
 `peer` drops the same two sentences and makes `nudge_after_idle` 0 the same
-way, and adds nothing: opencode's and mini-swe-agent's prompts carry no stop
-or verify-economy text and no unattended block (research note 16). Sampling
+way, and adds nothing: a prompt with no stop or verify-economy text and no
+unattended block (research note 16). Sampling
 for such a run is already declarable: `[endpoints.<name>] sampling =
 "provider"` sends no temperature and no top_p (§32).
 
 Why: the daily-dev sentences were validated on short tasks (lean-2026-11, 37
-vs 34/48) and stay there; on long tasks every winning harness has no stop cue
-and mini-swe-agent's only quality line is "Test edge cases" (0 of its 14
-contested losses were early answers vs OpenCode's 11 of 51, research note
-07); note 12 F3 traces vf2 and risk-scorer near-misses to measurements unlike
+vs 34/48) and stay there; on long tasks gnomon's early answers were a
+recurring way to lose (research note 07); note 12 F3 traces vf2 and risk-scorer near-misses to measurements unlike
 the verifier's. H2 (a stronger verify rule, 2 vs 2 of 12) is the
 counter-evidence: this is a hypothesis for SW1's U arm, hence opt-in.
 
@@ -3483,8 +3591,7 @@ CI job) they stand a second sandbox between the model and the one it has.
 Research note 15 (2026-11-08, 365 gnomon cells, post hoc): cells where gnomon
 refused or killed something solved 1 of 39 where 6.2 were expected
 (within-task permutation, p = 0.001); the file tools' refusal of `/tmp` alone
-0 of 21 vs 4.4. opencode and mini-swe-agent hand the model the container as
-it is. Unmeasured as a change: SW1's CN and PF arms measure it.
+0 of 21 vs 4.4. Unmeasured as a change: SW1's CN and PF arms measure it.
 
 **The key.** `.gnomon/policy.toml` `[sandbox] profile = "default" |
 "container"`. Declared only, never inferred from `/.dockerenv`, cgroups, an
@@ -3519,3 +3626,349 @@ body, tool schema and command environment is master's.
 
 **Fixture**: `conformance/sandbox_profile.json`;
 `packages/gnomon-core/src/sandbox_profile.test.ts` asserts the code equals it.
+
+## 41. Checkpoint, then grind — `[turn] continue_after_answer`, `continue_min_remaining`, `checkpoint_check`, `continue_message`, `continue_max_rounds`, `continue_until_s`, audit kind `checkpoint`, `counters.checkpoint`, `v: 1`
+
+**Why.** Under a real budget the model often answers with a third or more of
+it unused (FG1, CF1: answers 9-13 minutes early; research note 12 §1). An
+anytime harness keeps the first complete answer as a best-so-far and spends
+the rest improving it, guarded so the extra time can only help: if the
+improved tree scores worse on a visible check, the best-so-far is restored.
+
+| key (config.toml `[turn]`) | values | absent |
+|---|---|---|
+| `continue_after_answer` | `true`, `false` | `false`: nothing here runs |
+| `continue_min_remaining` | a fraction in (0, 1) | `1/3` |
+| `checkpoint_check` | a shell command | the most recent test command the model ran with exit 0 in this turn |
+| `continue_message` | a non-empty string; `{minutes}` is replaced by the minutes left (at least 1) | the continuation text below |
+| `continue_max_rounds` | an integer 1 to 20 | `1`: one continuation, as before |
+| `continue_until_s` | a positive number of seconds | the first checkpoint and later rounds need `continue_min_remaining` of the budget; with it, more than this many seconds left |
+
+**Validation.** A non-boolean `continue_after_answer`, a
+`continue_min_remaining` outside (0, 1), an empty or non-string
+`checkpoint_check` and an empty or non-string `continue_message` are fatal
+surface findings; any of the last three declared without
+`continue_after_answer = true` is a warning (it does nothing). All four are
+in `BLOCK_KEYS` and in `.gnomon/config.toml`, so they move the
+surface hash.
+
+**What must not change.** With the key absent or `false`, and with it `true`
+but no `--deadline` (interactive sessions never have one), every request body
+is the one the same run sends with nothing declared, and no `checkpoint`
+event or counter is written (`checkpoint_grind.test.ts`).
+
+**`continue_after_answer = true`, under `gnomon task --deadline` only, at depth 0.**
+
+- When the model answers, after every end-of-turn stage (the declared
+  `[verify]` check, the todo gate, the completion gate, the finish gate) has
+  accepted the answer, and at least `continue_min_remaining` of the budget is
+  left before the self-stop, the turn does not end. Once per run.
+- **Snapshot.** The tree under the working root is copied, content-addressed,
+  into a new private directory under the OS temp directory (`gnomon-ckpt-*`),
+  never into the root: the graded tree gains no file. Excluded, and never
+  touched by a restore: `.git`, `.gnomon`, `.gnomon-audit`,
+  `.gnomon-sessions`, `.gnomon-loops`, `.gnomon-jobs`, `.gnomon-out`.
+  Symlinks are kept as links; unreadable paths are recorded and left alone.
+  A temp directory inside the root, or a tree of more than 100 000 files or
+  2 GiB, takes no checkpoint (`checkpoint_skipped`) and the answer is
+  accepted as before. The store is removed when the run is judged.
+- **The check** is fixed at that moment: `checkpoint_check` (`configured`),
+  else the most recent bash command of this turn that exited 0 and matches
+  the stall detectors' test pattern (`session`), else none (`none`). It is
+  run once on the checkpoint, through the bash tool (sandbox, governance;
+  ungated unless approval is `always`, as `[verify]` is), never as a job.
+  Its score is the exit status and the passing-test count the output reports
+  (pytest, jest/vitest, cargo, unittest, `go test -v`).
+- **The continuation**: ONE user message marked `[gnomon] `: `Your result is
+  saved as a checkpoint. About N minutes remain. Run the task's checks or
+  tests, find what still fails or is untested against the task's
+  requirements, and improve it. If you make it worse, it will be restored.`
+  `continue_message` replaces this text (the `[gnomon] ` prefix stays; `{minutes}`
+  becomes the minutes left); under `deadline_note = "none"` every sentence of it
+  that holds `{minutes}` is dropped. Under `deadline_note = "none"` the minutes sentence is left out. After it
+  no countdown note (§31, §39) is sent; a deliverable-first note (§35) can
+  still name a missing output, alone.
+- **Rounds** (`continue_max_rounds` > 1; at 1 nothing below happens and the record is unchanged). While fewer than `continue_max_rounds`
+  continuations have been sent and more than `continue_until_s` seconds remain (with `continue_until_s` absent: at least
+  `continue_min_remaining` of the budget; with it declared the first checkpoint needs more than that many seconds too), each accepted
+  answer is scored by the same check and compared with the best checkpoint so far. Not worse: the tree becomes the new best checkpoint
+  (the old store is dropped); worse, or the check could not run on it: the best stays; no usable check at all: every round takes a
+  new checkpoint and the end keeps the final tree, unverified. The continuation is sent again. Audit `checkpoint` event
+  `checkpoint_round`: `round` (continuations sent so far), `decision` (`new_best`, `kept_best`, `unverified_new`), `why` (a skipped
+  snapshot keeps the best), `content_hash` (of the best), `left_ms`, `check_source`, `best_score`, `round_score`.
+  `counters.checkpoint.rounds` counts the continuations; the end events carry `rounds`. The end decision below compares the best
+  checkpoint with the final tree.
+- **The end** — the run's next accepted answer, the deadline's self-stop, or
+  a step-wall/stall stop: running jobs are stopped, then the check runs on the
+  final tree, bounded by the deadline less a quarter of the margin (at most
+  5 s). Worse — the check fails where it passed on the checkpoint, or fewer
+  tests pass — restores the checkpoint (files created since removed, changed
+  ones rewritten, new empty directories removed) and the trail says whether
+  the restored tree's hash is the checkpoint's. Equal or better keeps the
+  final. No check, a check that could not run on the checkpoint (126, 127, a
+  timeout), or no time left to run it keeps the final, unverified. An Esc
+  cancel keeps the tree as it is.
+- Once per run: under a declared `[chain]` only the first stage that answers
+  in time takes it. Headless only in practice: interactive sessions have no
+  `--deadline`.
+
+**What the record says.**
+
+- `counters.checkpoint`: `{v: 1, outcome, check_source?, left_s?}`, `outcome`
+  one of `not_reached`, `skipped`, `continued`, `restored`, `kept`,
+  `kept_unverified`.
+- Audit kind `checkpoint`, `event`:
+  - `checkpoint`: `content_hash` (sha256 over the sorted entries), `files`,
+    `bytes`, `left_ms`, `share_left`, `check_source`, `command` (redacted),
+    `checkpoint_score`;
+  - `checkpoint_skipped`: `why`, `left_ms`;
+  - `checkpoint_restored`, `checkpoint_kept`, `checkpoint_kept_unverified`:
+    `how` (`answer`, `deadline`, `stop`), `checkpoint_hash`, `check_source`,
+    `command`, `checkpoint_score`, `final_score`, `why`; a restore adds
+    `rewritten`, `removed`, `verified`.
+
+**A benchmark arm** declares, on top of its base surface:
+
+```toml
+[turn]
+continue_after_answer = true
+```
+
+and runs `gnomon task --deadline <cap less the copy-out time>`.
+
+**Fixture**: `conformance/checkpoint_grind.json`;
+`packages/gnomon-core/src/checkpoint_grind.test.ts` asserts the code equals it.
+
+---
+
+## 42. Escalation — local first, cloud rescue
+
+What `[roles.<name>.escalate]` records when it moves a turn to its declared
+model (README, "Local first, cloud rescue"). A role without the block produces
+none of the fields below, and its records are byte-for-byte what they were.
+
+**Triggers** — `on` is a list of these; anything else is a fatal surface problem.
+
+| trigger | fires when | what the escalated model is given |
+|---|---|---|
+| `stall` | the stall check would have ended the turn (`stop_reason` `stall`) | a handover |
+| `step_wall` | `max_steps_total` would have ended the turn | a handover |
+| `budget_50` | after a step, when half of `max_steps_total` is used, or half of a declared time budget (`TurnDeps.deadline`, which #93's `--deadline` sets) has passed | a handover |
+| `verify_failed` | the declared `[verify]` check still fails after its last round | a handover, with the check's output |
+| `apparatus` | the role's endpoint failed in a way retries and `fallback` did not fix (bucket `apparatus_failure`) | the conversation as it stands |
+| `stuck` | after a step, when `stuck_failures` (default 4) tool calls in a row failed (a tool error or a non-zero shell exit), or `stuck_steps` (default 12) in a row changed no file | per `carry` |
+| `deadline_share` | after a step, when `deadline_share` (default 0.5) of the `--deadline` budget has passed; never without a deadline | per `carry` |
+
+**What is carried** — `carry = "conversation"` (the default since v2): the
+conversation as it stands, with a takeover note appended on the steering
+channel (a user message marked `[gnomon]`): why the model changed, the files
+changed so far, the last commands it ran that were not read-only (at most 5,
+with their exit status), the steps and seconds left, the checkpoint's state when
+`[turn] continue_after_answer` is on, and a failing check's output. The files
+come from git; where git cannot say (no repository, as in a benchmark
+container), from the paths the turn's `write`/`edit` calls wrote merged with a
+stat scan of the tree against one taken at turn start (only with an `escalate`
+block and no git answer; null past 20,000 files), the heading saying so, and
+"unknown" when neither is available. Both notes list at most 40 paths and clip
+each listed path or command to 200 characters; the note is cut at 8,000
+characters in all. Recorded as
+`carried: "context"`, `handover_chars` = the note's length. `carry =
+"handover"`: the bounded handover (≤ 8,000 characters) in place of the
+transcript, `carried: "handover"` (PR #102's rule; the rows above that say "a
+handover"). `apparatus` always carries the conversation, with no note. The
+files on disk are shared either way; the checkpoint (§41) belongs to the turn
+and carries over unchanged.
+
+At most one escalation per turn, and at most `max_handoffs` (default 1) per run
+or session. The escalated model is never itself escalated. Off by default: a
+role without the block takes no new code path.
+
+**Audit record** — kind `escalation`, written once at the move. Keys: `role`,
+`depth`, `trigger`, `at_step`, `from` and `to` (`{ model, endpoint }`),
+`carried` (`handover` | `context`), `handover_chars`, `elapsed_ms` (from the
+start of the run's `--deadline` clock, or of the turn), `max_steps_total_after`
+(only when the move raised the wall), `detail` (`stuck` only: `failures` |
+`no_progress`), `tokens_before` (`{ input, output }`, the backend's count so
+far, when it reported one) and `handover` (the text, under `[audit] record =
+"full"` only). The record's `ts` is the time of the move. The tokens after
+the move are the turn record's `escalation.usage_after`. The `turn` record carries the same
+`escalation` object as the turn result.
+
+**Task record** — `gnomon task --json` carries `escalation`: `trigger`,
+`at_step`, `from`, `to`, `carried`, `handover_chars`, `max_steps_total_after`?,
+`detail`?, and `final_model` (the model the turn ended on). Each model's backend
+usage is under `volatile.escalation_usage` (`before`, `after`, and
+`elapsed_ms`), beside the other token counts, because it is not reproducible.
+
+**Surface hash** — the block lives in `roles.toml` or a profile, so declaring,
+changing or removing it moves the surface hash like any other key. Both are absent when nothing moved.
+
+**Trust** — the block is a route like `fallback` (§8). An `api_key_env` in it
+that would go to a host that is not loopback and not in `KEY_HOSTS` is the
+grant `key:<role>.escalate:<VAR>@<host>`, and a clamped surface drops that key,
+so the escalated request is sent without an `Authorization` header. The host
+judged is the one the request goes to: the block's `url`, else its `endpoint`'s
+(an inline `api_key_env` beside `endpoint = "..."` included); `fallback` is
+judged the same way (`key:<role>.fallback:<VAR>@<host>`). The escalated route
+also takes its endpoint's `prompt_cache` (§43), as a role routed there would.
+
+**Fixture**: `conformance/escalation_record.json`.
+`packages/gnomon-core/src/escalation.test.ts` asserts the code's
+`ESCALATE_TRIGGERS`, the trigger table above and the fixture are one set, and
+checks the keys of a real audit record and task record against it. It also
+runs each trigger against scripted endpoints, the once-per-turn rule, and that
+a role without the block never calls its escalation endpoint.
+
+## 43. Anthropic prompt caching — `[endpoints.<name>] prompt_cache`, `counters.prompt_cache_refused`, `v: 1`
+
+**Why.** Anthropic caches a prompt prefix only up to a `cache_control`
+breakpoint the request names. gnomon reaches Claude through OpenAI-shaped
+chat/completions, usually through LiteLLM, and named none: cloud-only Claude
+Haiku cells read `cache_read` 0 on every request, one sending 10.4M uncached
+prompt tokens. Unmeasured as a change.
+
+**Who gets markers** (`prompt_cache.ts` `promptCacheOn`), in this order:
+
+| condition | markers |
+|---|---|
+| `prompt_cache = false` declared | none |
+| Ollama `/api/chat` (`kind = "ollama"`) | none, whatever is declared |
+| refused earlier in the process by this endpoint+model (below) | none |
+| `prompt_cache = true` declared | yes |
+| host `api.anthropic.com` | yes |
+| host `api.openai.com` or `api.deepseek.com` | none |
+| model id matches `(^\|[/:])claude[-_.]` or `(^\|[/:.])anthropic[/.]` (`claude-*`, `anthropic/*`, `us.anthropic.*`, with a `bedrock/`, `vertex_ai/`, `openrouter/` prefix) | yes |
+| anything else | none |
+
+**Where** (`withCacheBreakpoints`), each `{"type": "ephemeral"}`, placed while
+the request holds fewer than four (`MAX_CACHE_BREAKPOINTS`; markers already
+present are counted), in this order:
+
+1. the last content part of the last non-system message that has one (the
+   rolling marker; a late system message is skipped, since a gateway may move
+   it into the system block);
+2. the last content part of the last of the leading system messages;
+3. the last tool definition, as a top-level `cache_control` on the tool object.
+
+A string `content` that gets a marker becomes `[{"type": "text", "text": …,
+"cache_control": …}]`; every other message, and every tool but the last, is
+sent as before. An empty string, an empty array or an empty last text part
+takes no marker.
+
+**Refusal.** A 400 whose body names `cache_control`, to a request that carried
+markers, is returned by `callEndpointOnce` as code 10 with
+`promptCacheRejected`, so the retry wrapper does not resend it. `callEndpoint`
+remembers the endpoint+model for the process (`refusePromptCache`), resends the
+call once with `promptCache: false`, tells the observer about both requests,
+and returns the resend with `promptCacheRefused: true`. The loop counts it in
+`counters.prompt_cache_refused` (on the turn record, so in the trail) and says
+one line on stderr.
+
+**What the record says.** The turn record's `wire` carries `prompt_cache: true`
+while the target gets markers; absent otherwise. `model_calls` (§29) carries
+`cache_write_tokens` beside `cached_tokens`.
+
+**What must not change.** For any target the table above gives "none", every
+request body is master's, byte for byte.
+
+**Tests**: `packages/gnomon-core/src/prompt_cache.test.ts`.
+
+## 44. The audit feed — guard records, liveness `gnomon.guard.live/1`, the scorecard `gnomon.scorecard/1`, `v: 1`
+
+What gnomon leaves behind when it governs another harness, published so a
+reviewer, a CI job or a log pipeline can consume it without reading gnomon's
+code (docs/GOVERNING-OTHER-HARNESSES.md says how to wire it). Three parts: the
+guard's audit trail, one liveness record per host session, and the scorecard
+that reads both back. JSON Schema: `conformance/audit_feed_schema.json`
+(draft-07, one self-contained definition per record).
+
+**The guard trail.** Written when the base surface's `[audit] enabled = true`,
+and always under a declared `[governance]` (§36: at observe the record is the
+decision's whole effect). One file per host session in the `[audit] dir`
+(default `.gnomon-audit/`): `guard-<session>.jsonl`, or
+`guard-<YYYY-MM-DD>.jsonl` for calls that name no session. Every guard process
+appends, under a lock, `session_start` (first call) or `session_resume`, the
+`guard` record and `session_end`, so the file is a sealed chain after every
+call.
+
+Every record carries the envelope `seq` (0-based, per file), `ts` (ISO 8601),
+`kind` (an `audit_kind`, §3), `prev` (the previous record's `hash`, null on
+the first) and `hash`: sha256, hex, over the record without `hash`,
+serialised as canonical JSON (keys sorted, no whitespace; `canonicalJson`,
+audit.ts). `gnomon audit verify <trail>` and the scorecard check it.
+
+| Record | Keys |
+|---|---|
+| `session_start` | `surface_hash`, `harness` (gnomon's build, §3b), `cwd`, `mode: "guard"`, `role`, `agent`?, `via`? |
+| `session_resume` | `resumed` (the trail id), `surface_hash` |
+| `guard` | `tool` (what the call was decided as, a `guard_tool` or the host tool's own name, §10), `target` (path, URL, command, query or description; through `[audit] redact`; empty for an MCP call), `decision`, `rule` (a `guard_rule` or null), `pattern`?, `role`, `agent`?, `via`? (`claude-code`, `opencode`, `cursor`, `generic`), `host_tool`? (the host's name for the tool, when it is not `tool`), `host_mode`? (Claude Code `permission_mode`), `base`, `surface_hash`, `exit` (0/2/3/10); under `[governance]` also `verdict`, `family`, `level`, `call_id`?, `delivered: false`? (§36) |
+| `session_end` | none of its own (an attested or anchored trail adds what §11/§21 say) |
+
+**Liveness** (`gnomon.guard.live/1`). A hook that does not run decides
+nothing and records nothing, so a trail cannot show its own absence. The
+guard therefore writes, the first time it decides anything for a host session
+(any decision, an ungoverned tool and a call it could not decide included), a
+record in gnomon's per-repository state, outside the work tree and refused to
+every tool call (`host_hooks`, §10):
+`<data dir>/repos/<id>/guard/live/<session>.json` (`day-<YYYY-MM-DD>.json`
+without a session id). Keys: `schema`, `kind: "session_start"`, `session`,
+`via`, `agent`, `started`. Every later decision sets its mtime: the session's
+latest decision. Written whether or not `[audit]` is on. A write that fails
+(a read-only state dir) costs the signal, never the decision.
+
+Read back by:
+
+- `gnomon guard status` (§10): `sessions_seen`, `last_decision`, `sessions`
+  (each record with `id` and `last_decision`, latest first, at most 50) and
+  `unguarded_sessions`: Claude Code sessions whose SessionStart hook
+  (`gnomon check --hook session-start`) ran since the hook was installed and
+  that never reached the guard.
+- `gnomon check` (§6), when a guard hook is installed or committed, or
+  `--require-guard` is given: for the session `--session` names, or a Claude
+  Code `--transcript`'s, or else every unguarded session (each one's
+  transcript looked up under `$CLAUDE_CONFIG_DIR`/`~/.claude` `projects/`), a
+  transcript with calls the hook's matcher selects and no liveness record is
+  a gap. A gap is a `warnings` entry starting `liveness:`; with
+  `--require-guard` it makes the exit 2, and so does a session whose
+  transcript cannot be found. The verdict's schema is unchanged.
+- The Stop hook (`gnomon check --hook stop`): a gap in the stopping session is
+  printed to the operator (exit 1, which Claude Code shows and does not block
+  on).
+
+**`gnomon check --scorecard [--session <id>] [--transcript <file>]
+[--require-guard] [--json] [--dir <path>]`** — schema `gnomon.scorecard/1`.
+One document summarising a foreign run, read-only. Markdown without `--json`,
+for a person or a PR comment. It reads the records where the agent ran
+(liveness in this machine's gnomon state, trails in the audit directory); a
+fresh clone or CI checkout has neither, and with no `--transcript` or
+`--require-guard` its card passes with a warning. `--require-guard` makes the
+absence of evidence a finding: no hook installed or committed, a hook that has
+decided nothing (or nothing for `--session`) with no transcript given, and
+sessions with no decision whose transcript cannot be found.
+
+| Key | Meaning |
+|---|---|
+| `decisions` | from the guard trails: `total`, `by_decision`, `by_verdict` (the rules' verdict under `[governance]`, else the decision), `by_family` (family → verdict → count; the record's family, else its rule's, `ungoverned`, `structural` or `none`), `by_rule`, `by_via`, `recorded_not_applied` (verdicts an observe/advise level did not apply), `advise_undelivered` |
+| `coverage` | `tools` (per host tool: `kind` decided as, `calls`, `governed` = a rule other than `ungoverned` decided it), `calls`, `governed_calls`, `ratio`; `transcript` with `--transcript`: the host's own tool calls by name, how many the matcher selects, whether the guard saw the session, `gap` |
+| `liveness` | `hosts` (`guard status`'s), `sessions_seen`, `last_decision`, `sessions`, `unguarded_sessions` |
+| `audit` | `dir`, `trails` (each guard trail and the ten latest check trails: `records`, `ok` = the hash chain holds, `sealed`, `problem`?), `chain_ok` |
+| `checks` | `recent`: the ten latest recorded `gnomon check` verdicts (`ts`, `base`, `head`, `role`, `exit`, `failed` check ids) |
+| `findings` | what fails the card: a hook missing, modified or switched off; a hash chain that does not hold; a session whose transcript shows selected calls the guard never decided; the latest recorded check failed |
+| `warnings` | what a reader should know and does not fail it: an `outdated` hook, calls to tools no rule governs, unsealed trails, sessions with no decision and no transcript to tell, a hook that has decided nothing (these two are findings under `--require-guard`), a guard with no trail (`[audit]` off) |
+| `exit` | 0 no finding, 2 a finding, 10 not governed |
+
+Also `schema`, `governed`, `project`, `session`, `generated`.
+
+**What the feed is not.** A call the host ran without asking the hook (the
+hook removed, Claude Code's `disableAllHooks`, a tool the matcher does not
+select) leaves no guard record; liveness and `guard status` find a missing or
+silent hook, and only a host transcript shows which calls went unseen. The
+hash chain proves a trail consistent with itself, not that nobody re-chained
+it: `[audit.attest]` (§11) signs heads, `[audit.anchor]` (§21) copies them to a
+witness.
+
+**Fixture**: `conformance/audit_feed_schema.json`;
+`packages/gnomon-cli/src/scorecard.test.ts` validates every record a real
+`gnomon guard` wrote, a liveness record and a real scorecard against it (with
+a checker that refuses any schema keyword it does not implement), and
+`packages/gnomon-core/src/guard.test.ts` the liveness behaviour.

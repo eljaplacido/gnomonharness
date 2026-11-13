@@ -22,9 +22,10 @@
  *    itself. When the shell `exec`s the command (`exec env -i gnomon …`, or
  *    bash's own exec of a lone command) there is no shell left between the
  *    command and the harness, and the harness's own environment never held
- *    the marker. Its command line does name gnomon, and a child cannot change
- *    its parent's. A person's `gnomon skill accept` has no gnomon above it.
- *    The one gnomon ancestor allowed is a launcher of this same command.
+ *    the marker. Its command line does name gnomon (a launcher path, or the
+ *    process title "gnomon task"), and a child cannot change its parent's. A
+ *    person's `gnomon skill accept` has no gnomon above it. The one gnomon
+ *    ancestor allowed is a launcher of this same command.
  *
  * And, separately, a person: decisions need stdin and stdout on a terminal
  * (the bash tool gives its shell pipes, and `detached` gives it no
@@ -59,6 +60,16 @@ const MAX_DEPTH = 64;
 
 /** A file that names gnomon's CLI entry: the npm bin, the checkout launcher, or the module either runs. */
 const GNOMON_ENTRY = /(^|[\\/])(gnomon(\.m?js|\.exe)?|gnomon-cli[\\/](dist|src)[\\/]index\.[jt]s)$/;
+/**
+ * The process title gnomon gives its long-running commands (gnomon-cli's
+ * proc_title.ts: "gnomon task", "gnomon tui", …). libuv writes it over the
+ * whole argv area, so /proc/<pid>/cmdline is that one string, space and all,
+ * and no GNOMON_ENTRY matches it. Every `gnomon task` reads this way since the
+ * title exists to keep a model's `pkill -f` off the harness; missing it let
+ * `exec env -i … script -qec "gnomon skill accept …"` through, check 3 being
+ * the only one left to refuse that.
+ */
+const GNOMON_TITLE = /^gnomon(\s|$)/;
 /** An interpreter that runs a script given after its own flags. */
 const INTERPRETER = /(^|[\\/])(node|nodejs|bun|deno|sh|bash|dash|zsh|ksh)\d*(\.exe)?$/;
 /** Interpreter flags that take the next argument as their value. */
@@ -71,6 +82,8 @@ const FLAG_WITH_VALUE = new Set(["--import", "--require", "-r", "--loader", "--e
  */
 export function isGnomonAncestor(argv: string[]): boolean {
   if (argv.length === 0) return false;
+  // A titled gnomon: read the title's words as its arguments ("gnomon", "task").
+  if (argv.length === 1 && GNOMON_TITLE.test(argv[0]!)) argv = argv[0]!.split(/\s+/).filter(Boolean);
   let i = -1;
   if (GNOMON_ENTRY.test(argv[0]!)) i = 0;
   else if (INTERPRETER.test(argv[0]!)) {

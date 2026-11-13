@@ -90,6 +90,7 @@ import {
   settleTrustHeadless,
   evaluateTrust,
   clampToDefaults,
+  keyHostIsDefault,
   grantTrust,
   revokeTrust,
   forgetToolPins,
@@ -113,12 +114,15 @@ import {
   Enumerations,
 } from "gnomon-natives";
 import { readFileSync, writeFileSync, writeSync, existsSync, readdirSync, mkdirSync} from "node:fs";
+import { setProcessTitle } from "./proc_title.js";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { initSurface } from "./init.js";
 import {
+  detectModels,
+  type ModelChoice,
   looksLikeChatModel,
   suggestChatModel,
   looksLikeTrialTier,
@@ -129,6 +133,10 @@ import {
 } from "./detect.js";
 import {
   checkReadiness,
+  preSessionSurface,
+  launchReadiness,
+  withheldWhy,
+  hostName,
   ENDPOINT_PRESETS,
   SETUP_CHOICES,
   parseSetupPick,
@@ -139,7 +147,7 @@ import {
 import { pendingMigrations, applyMigrations, MIGRATIONS } from "./migrate.js";
 import { cmdUpdate, cmdUninstall, maybeNotifyUpdate } from "./update.js";
 import { probeMachine, formatProbe, probeAtInit } from "./probe.js";
-import type { Suggestion } from "./catalog.js";
+import type { Suggestion, StarterModels } from "./catalog.js";
 import type { HybridControl } from "./setup_wizard.js";
 // Cold paths, loaded by the command that needs them: `gnomon-tui`, `check`,
 // `setup` (wizard, catalog, host effects) and `doctor`. A bundle or a
@@ -234,6 +242,11 @@ export function parseArgs(args: string[]): CliArgs {
       // Bare as well. Accepts a role leaving the container it ran in here,
       // for this run, which --trust alone does not (trust.ts).
       result.flags["trust-exec-downgrade"] = "true";
+    } else if (arg === "--task-file") {
+      // Always takes the next argument: `-` (stdin) is its value here, where
+      // the generic branch below would read it as another option.
+      i++;
+      result.flags["task-file"] = args[i] ?? "";
     } else if (arg === "-p") {
       // Already handled above
     } else if (arg.startsWith("-")) {
@@ -790,6 +803,15 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
   // GNOMON_MODEL_URL and friends. See the note in main().
   const supplied = applyCredentials(undefined, declaredKeyVars(config));
 
+  // `list` and `test` reach every endpoint with its key, and no session has
+  // settled trust first. They use what the trust step would run: a cloned
+  // repository's endpoint at its own host with api_key_env =
+  // "ANTHROPIC_API_KEY" is listed as declared but asked nothing with the key
+  // (docs/CONTRACTS.md §8). `add` writes the URL the user typed or chose.
+  const { config: reach, trusted } = preSessionSurface(config, trustOptions(args));
+  const keyHeld = (ep: { url: string; api_key_env?: string }): boolean =>
+    Boolean(ep.api_key_env) && !trusted && !keyHostIsDefault(ep.url);
+
   if (sub === "list") {
     // Cross-check every role's model id against what its endpoint advertises.
     // This is the diagnostic command, and the failure it exists to catch is
@@ -797,8 +819,12 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     // invisible here and shows up later as a provider 400 naming the model,
     // which reads as "unavailable" rather than "misspelled". `.catch(null)` so
     // an offline box still gets the listing, unchecked rather than wrong.
-    const modelChecks = await checkRoleModels(config).catch(() => null);
-    printEndpoints(describeEndpoints(config), resolveUi(config), null, modelChecks, config.profile);
+    const modelChecks = await checkRoleModels(reach).catch(() => null);
+    const rows = describeEndpoints(config);
+    printEndpoints(rows, resolveUi(config), null, modelChecks, config.profile);
+    for (const r of rows.filter((r) => keyHeld(r.endpoint))) {
+      console.log(`  ${r.name}: ${withheldWhy({ env: r.endpoint.api_key_env!, host: hostName(r.endpoint.url) })}.`);
+    }
     if (supplied.length > 0) {
       // Say where a key came from. "set" alone cannot distinguish a stored key
       // from an exported one, and only one of those follows you to another
@@ -819,17 +845,26 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     }
     const probes = new Map<string, { ok: boolean; status?: number; detail?: string }>();
     const untested: string[] = [];
+    const withheld: string[] = [];
     for (const row of rows) {
       const model = args.flags.model ?? row.probeModel;
       if (!model) {
         untested.push(row.name);
         continue;
       }
+      if (keyHeld(row.endpoint)) {
+        withheld.push(row.name);
+        continue;
+      }
       row.probeModel = model;
       probes.set(row.name, await probeEndpointAuth(row.endpoint, model));
     }
-    const modelChecks = await checkRoleModels(config).catch(() => null);
+    const modelChecks = await checkRoleModels(reach).catch(() => null);
     printEndpoints(rows, resolveUi(config), probes, modelChecks, config.profile);
+    for (const n of withheld) {
+      const ep = rows.find((r) => r.name === n)!.endpoint;
+      console.log(`  ${n}: NOT TESTED — ${withheldWhy({ env: ep.api_key_env!, host: hostName(ep.url) })}.`);
+    }
     // An endpoint with no role routed to it has no model to ask for, and was
     // skipped without a word — `gnomon endpoint test go` printed the listing
     // and exited 0, which reads as a pass. Say it, and do not exit 0 when the
@@ -840,6 +875,8 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     }
     const bad = [...probes.values()].filter((p) => !p.ok);
     if (bad.length > 0) process.exit(1);
+    // Held back by trust: refused_by_gate (docs/CONTRACTS.md §1), not a pass.
+    if (withheld.length > 0) process.exit(3);
     if (name && untested.length > 0) process.exit(10);
     return;
   }
@@ -912,8 +949,8 @@ async function endpointAdd(
     console.log(`\n  "${name}" is already declared, and points somewhere else:`);
     console.log(`    ${existing.url}`);
     const roles = describeEndpoints(config).find((r) => r.name === name);
-    if (roles && (roles.primary.length > 0 || roles.fallback.length > 0)) {
-      console.log(`    used by: ${[...roles.primary, ...roles.fallback].join(", ")}`);
+    if (roles && (roles.primary.length > 0 || roles.fallback.length > 0 || roles.escalation.length > 0)) {
+      console.log(`    used by: ${[...roles.primary, ...roles.fallback, ...roles.escalation].join(", ")}`);
     }
     const go = interactive
       ? await ask(`  Overwrite it? [y/N] `, "n")
@@ -1650,14 +1687,36 @@ async function cmdAudit(args: CliArgs): Promise<void> {
 }
 
 async function cmdTask(args: CliArgs): Promise<void> {
-  const text = [args.subcommand, ...args.positional].filter(Boolean).join(" ").trim();
+  let text = [args.subcommand, ...args.positional].filter(Boolean).join(" ").trim();
   // Every way out of this command exits 0, 2 or 10, the bucket, as
   // docs/CONTRACTS.md §1 says it does. A missing task and a missing surface
   // both used to exit 1, which is `failed` in the `result` bucket: a caller
   // switching on the bucket read a task that never started as one that ran.
   // Neither started, so both are launch failures (10).
+  //
+  // `--task-file <path>` (`-` for stdin) reads the text instead, so a wrapper
+  // need not put it on a command line at all. gnomon renames its own
+  // (proc_title.ts), but a wrapper's `sh -c 'gnomon task "..."'` carried the
+  // task text too, and a model's `pkill -f <a word from the task>` matched it.
+  const taskFile = args.flags["task-file"];
+  if (taskFile !== undefined) {
+    if (text) {
+      console.error("gnomon task: give the task as text or with --task-file, not both");
+      process.exit(10);
+    }
+    if (taskFile === "") {
+      console.error("gnomon task: --task-file needs a path, or - for stdin");
+      process.exit(10);
+    }
+    try {
+      text = readFileSync(taskFile === "-" ? 0 : taskFile, "utf-8").trim();
+    } catch (err) {
+      console.error(`gnomon task: --task-file ${taskFile}: ${err instanceof Error ? err.message : String(err)}`);
+      process.exit(10);
+    }
+  }
   if (!text) {
-    console.error('Usage: gnomon task "<what to do>" [--role <name>] [--yes] [--json] [--deadline <seconds|ISO time>]');
+    console.error('Usage: gnomon task "<what to do>" | --task-file <path|-> [--role <name>] [--yes] [--json] [--deadline <seconds|ISO time>]');
     process.exit(10);
   }
 
@@ -1716,8 +1775,15 @@ async function cmdTask(args: CliArgs): Promise<void> {
     // No .gnomon/ above the cwd, a --dir without one, a --role the surface
     // does not define: the throw used to reach main's catch and exit 1. It
     // gets the same record shape as a fatal surface, so --json still parses.
+    // But only a throw from before the run started could not start. One
+    // after it (runTask set interrupt.fail when its live record opened) ends
+    // that run on its own record -- code 10, stop_reason "apparatus", its
+    // steps and clock, the trail sealed -- printed below like any other. dc1
+    // (2026-11-12) lost a 58-call run to this catch as "could not start",
+    // tool_steps 0, duration 0. (A throw inside the turn no longer leaves
+    // runTask at all: the turn ends on it.)
     const why = err instanceof Error ? err.message : String(err);
-    record = unstartedTaskRecord(text, args.role, `gnomon task could not start: ${why}`);
+    record = (await interrupt.fail?.(err)) ?? unstartedTaskRecord(text, args.role, `gnomon task could not start: ${why}`);
   }
   releaseSignals();
 
@@ -1984,9 +2050,36 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
   // surface is exactly what it was. Read-only commands and 127.0.0.1 GETs, each
   // with a deadline (probe.ts). Not for --from or --no-verify (probeAtInit).
   const probing = probeAtInit(args) ? probeMachine().catch(() => null) : null;
+  // Init's own detection, beside the probe. When nothing answered, the tag
+  // `gnomon setup` would recommend for this machine is written instead of
+  // generic placeholders nothing will ever serve and `gnomon doctor` flags.
+  // When the catalog has nothing this machine runs, or the probe failed, the
+  // placeholders stay. Not for --from or --no-verify (no probe): those
+  // scaffolds are byte for byte what they were.
+  let chosen: ModelChoice | undefined;
+  let starter: StarterModels | undefined;
+  if (probing) {
+    const [detected, probe] = await Promise.all([detectModels(), probing]);
+    chosen = detected;
+    if (detected.fallback && probe) {
+      try {
+        const { loadCatalog, defaultCatalogPath, starterModels } = await import("./catalog.js");
+        starter = starterModels(probe, loadCatalog(defaultCatalogPath()));
+      } catch {
+        starter = undefined; // a catalog that will not load keeps the placeholders
+      }
+      if (starter) chosen = { ...detected, large: starter.large, small: starter.small, note: starter.note };
+    }
+  }
   let result;
   try {
-    result = await initSurface({ dir: args.dir, force: args.force, from: args.from, noVerify: args.noVerify });
+    result = await initSurface({
+      dir: args.dir,
+      force: args.force,
+      from: args.from,
+      noVerify: args.noVerify,
+      ...(chosen ? { models: chosen } : {}),
+    });
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
     process.exit(1);
@@ -2018,15 +2111,26 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
   const models = result.models;
   if (models) {
     console.log("");
-    if (models.fallback) {
+    if (models.fallback && starter) {
+      // The catalog's pick, not installed: say so, and the one command that
+      // installs it. Launch offers that setup itself right after this.
+      const size = starter.downloadGb !== undefined ? ` (~${starter.downloadGb} GB download)` : "";
+      console.log(`Models: ${models.fallback}, so the catalog's pick for this machine was written:`);
+      console.log(`  ${models.large}${size}, for every role. It is not installed yet.`);
+      if (!opts.launching) {
+        console.log(`  Install it:   gnomon setup   (asks first; or: gnomon setup --pull ${models.large})`);
+        console.log("  By hand:      gnomon endpoint add   (a model you already have, local or cloud)");
+      }
+    } else if (models.fallback) {
       // Placeholders, and say what replaces them. "Very likely wrong -- edit
-      // them" named the problem and no way out of it; the way out is one
-      // command that lists what an endpoint serves and proves a tag works.
+      // them" named the problem and no way out of it; the way out is setup,
+      // which recommends a model this machine runs, or `endpoint add`, which
+      // lists what an endpoint serves and proves a tag works.
       console.log(`Models: ${models.fallback}, so placeholder tags were written`);
       console.log(`  (${models.large}, ${models.small}).`);
       if (!opts.launching) {
-        console.log("  Replace them with a model you have:  gnomon endpoint add --preset ollama");
-        console.log("  (or --preset openrouter | opencode-go | opencode-zen, or no flag to choose)");
+        console.log("  Set one up:   gnomon setup   (scans this machine, recommends, asks before writing)");
+        console.log("  By hand:      gnomon endpoint add --preset ollama | openrouter | opencode-go | opencode-zen");
       }
     } else {
       console.log(`Models: detected ${models.detected.length} on this machine.`);
@@ -2063,13 +2167,16 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
   if (opts.launching) return;
   console.log("");
   console.log("Next:");
-  console.log(`  1. Check ${where.label} — the model tags must be ones you`);
-  console.log("     actually have. `/models` lists them.");
+  console.log("  1. `gnomon setup` — scan this machine, pick a model it can run (or a cloud");
+  console.log("     model), and write it here on your yes. `gnomon dashboard` does the same");
+  console.log("     in the browser. By hand instead: `gnomon endpoint add`.");
+  console.log(`     The tags live in ${where.label}.`);
   if (where.profile) {
     console.log(`     (role_profile = "${where.profile}" is merged over roles.toml,`);
     console.log("      so that file is what these roles are routed by.)");
   }
-  console.log("  2. Run `gnomon launch` in this directory.");
+  console.log("  2. `gnomon doctor` — check that every role's model answers.");
+  console.log("  3. `gnomon launch` in this directory.");
   console.log("");
   console.log("Approval is on_write: reads are free, writes show a diff first.");
 }
@@ -2105,7 +2212,8 @@ async function cmdLaunch(args: CliArgs): Promise<void> {
     await offerModelSetup(args, target, { showProbe: !fresh });
   } else if (fresh) {
     console.log("");
-    console.log("If those model tags are not ones you have, `gnomon endpoint add` sets one up.");
+    console.log("If no model answers yet: `gnomon setup` recommends one for this machine and sets it up");
+    console.log("(or `gnomon endpoint add` for one you have). `gnomon doctor` checks every role.");
   }
   console.log("");
 
@@ -2125,15 +2233,25 @@ async function offerModelSetup(args: CliArgs, target: string, opts: { showProbe?
   const role = args.subcommand || "implement";
   let probeShown = !opts.showProbe;
   for (;;) {
-    let config;
+    let declared;
     try {
-      config = loadConfig(target, args.flags["profile"]);
+      declared = loadConfig(target, args.flags["profile"]);
     } catch {
       return; // cmdPrompt reports a surface that does not load, in full.
     }
-    applyCredentials(undefined, declaredKeyVars(config));
-    const readiness = await checkReadiness(config, role);
+    // On what the trust step would run, never the surface as declared: this is
+    // before cmdPrompt's settleTrust, and a cloned repository's endpoint may
+    // name its own host and the user's key variable (setup.ts launchReadiness).
+    const readiness = await launchReadiness(declared, role, trustOptions(args), (c) => {
+      applyCredentials(undefined, declaredKeyVars(c));
+    });
     if (readiness.ready) return;
+    if (readiness.keyWithheld) {
+      // Said, not probed for: trust is asked when the session starts, next.
+      console.log("");
+      console.log(`  Not checked: ${readiness.why}.`);
+      return;
+    }
 
     // What the machine has, before asking what to set up: a model server
     // already running on another port is the answer to the question below.
@@ -2160,7 +2278,8 @@ async function offerModelSetup(args: CliArgs, target: string, opts: { showProbe?
     if (pick === "skip") {
       console.log(
         "  Skipped. The session starts, but nothing will answer until a model does:\n" +
-          "    gnomon endpoint add --preset ollama | openrouter | opencode-go | opencode-zen"
+          "    gnomon setup            # recommends one for this machine, asks before downloading\n" +
+          "    gnomon endpoint add     # a model you already have, local or cloud"
       );
       return;
     }
@@ -2172,7 +2291,8 @@ async function offerModelSetup(args: CliArgs, target: string, opts: { showProbe?
       await cmdSetup({ ...args, dir: target, json: false, yes: false }, { fromLaunch: true });
       continue;
     }
-    await endpointAdd(args, config, { preset: pick, quick: true });
+    // The surface as declared: endpointAdd edits it, so it reads what is written.
+    await endpointAdd(args, declared, { preset: pick, quick: true });
     // Written or not, look again: a write is proved by the next check, and a
     // failure goes back to the choice instead of into a dead session.
   }
@@ -2265,6 +2385,15 @@ async function cmdSetup(args: CliArgs, opts: { fromLaunch?: boolean } = {}): Pro
       catalog,
       now: () => new Date(),
       ...systemSetupEffects(),
+      // Read when the wizard is about to check an endpoint the surface chose.
+      // A surface that does not load trusts nothing.
+      surfaceTrusted: () => {
+        try {
+          return preSessionSurface(loadConfig(projectRoot(args), args.flags["profile"]), trustOptions(args)).trusted;
+        } catch {
+          return false;
+        }
+      },
       commands: CLI_COMMANDS.map((c) => c.name),
     }
   );
@@ -2292,10 +2421,11 @@ async function cmdDoctor(args: CliArgs): Promise<number> {
         host: systemHost(),
         catalog,
         now: () => new Date(),
-        readiness: (config, role) => checkReadiness(config, role),
+        readiness: (config, role, opts) => checkReadiness(config, role, undefined, opts),
         applyKeys: (config) => {
           applyCredentials(undefined, declaredKeyVars(config));
         },
+        trust: trustOptions(args),
       }
     );
     if (args.json) console.log(JSON.stringify(report, null, 2));
@@ -2575,8 +2705,9 @@ function showHelp(): void {
 Commands:
   launch [--dir <path>] [--from <path>]
     Start working here. Creates .gnomon/ if it is missing, then opens the
-    interactive loop. This is the one command to remember. When no model
-    answers, it offers the guided setup first.
+    interactive loop. This is the one command to remember. On a terminal,
+    when no model answers, it offers the guided setup (gnomon setup) first;
+    off one it says which command sets one up.
 
   setup [--json] [--yes] [--pull TAG] [--model TAG] [--speed-check]
         [--mode local|hybrid|cloud] [--cloud-endpoint URL|preset|name]
@@ -2584,8 +2715,9 @@ Commands:
         [--expect-proposal DIGEST]
     Scan this machine, plug in a local model it can run, then connect a
     cloud model. Recommends from a dated catalog and says why, pulls only on
-    a yes, offers a short speed check, suggests local only, hybrid or cloud
-    first, and writes .gnomon/ only after you accept the diff. Off a
+    a yes, offers a short speed check, suggests local only or cloud first
+    (hybrid, an opt-in cost mode, is --mode hybrid), and writes .gnomon/
+    only after you accept the diff. Off a
     terminal: --yes approves the write and nothing else; a download needs
     --pull TAG; nothing is spent. --expect-proposal writes only the change
     whose proposal.digest an earlier --json run printed. Exit 0 written,
@@ -2615,7 +2747,8 @@ Commands:
     Show surface hash, manifest, or paths for .gnomon/ tree
 
   enumerations
-    Show the enumerations contract (edit_format, sandbox, approval, role_profile, governance_level, governance_family)
+    Show the enumerations contract (edit_format, sandbox, approval, role_profile, governance_level,
+    governance_family, audit_kind, guard_decision, guard_rule, guard_tool)
 
   session [--dir <path>] <command> [command ...]
     Run commands as a session, recording outcomes. Each command runs with
@@ -2680,8 +2813,13 @@ Commands:
 
   task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--dir <path>]
        [--deadline <seconds|ISO time>]
+  task --task-file <path|-> [...the same options]
     Run one task without a terminal and print the result. --json emits a
     record whose only run-to-run differences are under "volatile".
+    --task-file reads the task text from a file, or from stdin with "-",
+    so a wrapper need not put it on a command line, where a model's
+    \`pkill -f <a word from the task>\` would match the wrapper's shell.
+    gnomon's own command line reads "gnomon task" while it runs.
     --deadline (or GNOMON_DEADLINE) gives the run a wall clock: it is told
     the time left, bash timeouts are clamped to it, and before it the turn
     stops itself with stop_reason "deadline", its final record and a
@@ -2728,6 +2866,14 @@ Commands:
     or mini-swe-agent.
     --install-hook claude-code prints the SessionStart + Stop hooks that
     run this on every Claude Code session (it edits nothing).
+    --require-guard fails (exit 2) a session that made calls the guard hook
+    selects and that gnomon guard never decided (--session, or the
+    transcript's own session; else every Claude Code session since install).
+  check --scorecard [--session <id>] [--transcript <file>] [--json]
+    Summarise a foreign harness's run: guard decisions by family and verdict,
+    tools seen vs governed, hook and session liveness, the audit trails'
+    hash chains, and the recorded check results. Markdown, or
+    gnomon.scorecard/1 JSON. Exit 0 clean, 2 a finding, 10 not governed.
 
   guard --tool <bash|write|edit|read|webfetch|grep|glob|execute> --input <json> [--role <r> | --agent <a>]
   guard --from claude-code|opencode|cursor|generic  (the call on stdin)
@@ -2738,12 +2884,14 @@ Commands:
     Exit: 0 allow, 2 deny, 3 ask, 10 no decision (answered as ask). With
     --from claude-code|cursor it answers in that harness's hook format.
     Recorded in the audit trail when [audit] is on.
-  guard install claude-code|opencode|cursor [--write]
+  guard install claude-code|opencode|cursor [--write] [--bin <path>]
     Print the hook (Claude Code PreToolUse, an opencode 2.2 plugin, Cursor
-    hooks.json), or with --write add it to this project's own config.
+    hooks.json), or with --write add it to this project's own config. The
+    hook names an absolute gnomon that answers guard; none: exit 10.
   guard status [--expect claude-code,opencode,cursor] [--json] [--dir <path>]
     Per host: the hook ok, missing, modified (differs from HEAD or from what
-    install --write recorded), disabled (disableAllHooks) or not installed.
+    install --write recorded), disabled (disableAllHooks) or not installed;
+    and the host sessions the guard has decided for (liveness).
     Exit 0 no finding, 2 a finding, 10 no .gnomon/ governs the directory.
 
   dashboard [--port <n>] [--no-open] [--dir <path>]
@@ -2836,6 +2984,10 @@ Environment:
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  // First, before anything slow: a long-running command's /proc cmdline is
+  // "gnomon task", not the task text a model's `pkill -f` could match
+  // (proc_title.ts).
+  setProcessTitle(process.argv.slice(2));
   const args = parseArgs(process.argv.slice(2));
 
   // [audit.anchor] delivers sealed heads after the checkpoint at session end.

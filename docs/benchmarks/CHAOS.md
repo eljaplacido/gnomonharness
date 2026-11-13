@@ -227,8 +227,8 @@ five minutes can still be run, slowly.
 3. **No composite score.** Report announced, named and recovered separately,
    with denominators.
 4. **Run peers in their best-effort configuration,** and document it. A guard
-   comparison in this project once read 0/5 for a peer because of a
-   configuration-ordering mistake; re-measured, it was 24/25.
+   comparison in this project once produced a false finding from a
+   configuration-ordering mistake, and had to be withdrawn (2026-11-07).
 5. **Pre-register a new fault before running it on anyone else's harness:**
    its id, what the endpoint does, its schedules and its naming pattern. A
    fault designed after seeing a harness's output measures that output.

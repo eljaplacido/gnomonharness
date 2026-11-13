@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the INJ-2026-11 agent image from a gnomon tree fetched by SHA (never by branch).
 # usage: INJ_SHA=<full sha> build.sh <dir holding a checkout of INJ_SHA with node_modules installed>
-# Copied from bench/injection-2026-11 (inj-2026-11/apparatus/build.sh); the only
+# Copied from the private benchmark repository (inj-2026-11/apparatus/build.sh); the only
 # change is that the SHA and the tag are parameters (default: v0.4.0, be4fc0d8,
 # the tonight's baseline), so the same apparatus builds the fix under test.
 set -euo pipefail

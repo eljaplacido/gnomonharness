@@ -19,6 +19,8 @@ import {
   LiveRecord,
   onKillSignal,
   killedNote,
+  failedNote,
+  FAILED_CODE,
   KILL_SIGNALS,
   RECORD_STATES,
   UNFINISHED_CODE,
@@ -200,6 +202,41 @@ describe("the live record file", () => {
     live.open({ turn: 2, surface_hash: "", harness: "", role: "r", model: "m", input: "", skills: [] });
     expect(readJson(live.path!)).toMatchObject({ stop_reason: "killed", turn: 1 });
     expect(live.killed?.stop_reason).toBe("killed");
+  });
+
+  it("fail writes the turn as it stands, final, as apparatus (10) with what threw, and nothing rewrites it", () => {
+    const dir = tmp("gnomon-live-");
+    const live = opened(dir, full);
+    expect(live.soFar()).toBeNull();
+    live.attach(() => ({
+      role: "implement",
+      model: "m1",
+      toolSteps: 58,
+      toolLog: ["edit /app/.gitignore — failed"],
+      usage: { input: 900, output: 40, requests: 49 },
+      counters: { writes: 1, worktree_moves: 0, nudges: 0, final_step_was_write: false, per_tool: {} },
+    }));
+    expect(live.soFar()).toMatchObject({ toolSteps: 58 });
+    const f = live.fail("boom")!;
+    expect(f.fresh).toBe(true);
+    expect(f.record).toMatchObject({
+      record_state: "final",
+      stop_reason: "apparatus",
+      code: FAILED_CODE,
+      bucket: "apparatus_failure",
+      tool_steps: 58,
+      output: failedNote("boom"),
+      volatile: { tokens_in: 900, tokens_out: 40, requests: 49 },
+    });
+    expect(f.record.output).not.toMatch(/could not start/);
+    expect(readJson(live.path!)).toMatchObject({ record_state: "final", stop_reason: "apparatus", tool_steps: 58 });
+    // Terminal, as a kill is: neither the turn nor a late signal rewrites it.
+    live.step();
+    live.close({ ...f.record, stop_reason: "answered" });
+    expect(live.kill("SIGTERM")).toMatchObject({ fresh: false, record: { stop_reason: "apparatus" } });
+    expect(live.fail("again")).toMatchObject({ fresh: false, record: { output: failedNote("boom") } });
+    expect(readJson(live.path!)).toMatchObject({ stop_reason: "apparatus" });
+    expect(live.soFar()).toBeNull();
   });
 
   it("without [audit] no file is written, and a signal still gets a record", () => {
@@ -430,6 +467,40 @@ describe("runTask keeps the record as it runs", () => {
     expect(readJson(trail.replace(/\.jsonl$/, ".record.json")).stop_reason).toBe("killed");
   });
 
+  // A throw that leaves runTask after the run started (outside the turn,
+  // which ends itself on one) is ended by the caller through interrupt.fail,
+  // as a signal is through interrupt.kill: `gnomon task` prints this record,
+  // never "could not start". Exercised mid-turn here, the way kill is.
+  it("interrupt.fail: the record says apparatus with the steps so far, the trail is sealed, and the run adds nothing after", async () => {
+    const { server, second, url } = await serve(true);
+    const root = surface(url);
+    const interrupt: TaskInterrupt = {};
+    const running = runTask(loadConfig(root), "read x.txt", { role: "smol", yes: true, interrupt });
+    for (let i = 0; i < 400 && !second.reached; i++) await new Promise((r) => setTimeout(r, 25));
+    expect(second.reached).toBe(true);
+
+    const failed = (await interrupt.fail!(new Error("the trail went away")))!;
+    expect(failed).toMatchObject({
+      code: 10,
+      bucket: "apparatus_failure",
+      stop_reason: "apparatus",
+      tool_steps: 1,
+      input: "read x.txt",
+      output: failedNote("the trail went away"),
+    });
+    expect(failed).not.toHaveProperty("record_state");
+    const trail = join(root, ".gnomon-audit", files(root).find((f) => f.endsWith(".jsonl"))!);
+    const recs = kinds(trail);
+    expect(recs.slice(-2).map((r) => r.kind)).toEqual(["turn", "session_end"]);
+    expect(recs.at(-2)).toMatchObject({ stop_reason: "apparatus", code: 10, tool_steps: 1 });
+    expect(verifyTrail(trail)).toMatchObject({ ok: true, sealed: true });
+
+    server.closeAllConnections();
+    expect(await running).toMatchObject({ stop_reason: "apparatus" });
+    expect(kinds(trail)).toHaveLength(recs.length);
+    expect(readJson(trail.replace(/\.jsonl$/, ".record.json"))).toMatchObject({ record_state: "final", stop_reason: "apparatus" });
+  });
+
   it("the next session counts a killed session's record as part of its trail: a notice, not tampering", async () => {
     // Session A ends normally and leaves the checkpoint the others compare with.
     const a = await serve(false);
@@ -464,5 +535,58 @@ describe("runTask keeps the record as it runs", () => {
       .filter((r) => r.kind === "record_notice")
       .flatMap((r) => (r.added as Array<{ path: string }>).map((x) => x.path));
     expect(noticed).toContain(`.gnomon-audit/${killedSession.session}.record.json`);
+  });
+
+  // dc1 (2026-11-12): the [verify] must-fail-first re-run threw after 58 tool
+  // calls; the throw reached `gnomon task`'s catch, which printed "could not
+  // start" with tool_steps 0 and duration 0, and this file stayed partial.
+  // Here the loop throws after its first tool call (the progress line on a
+  // stderr that has gone away), outside any tool: the run ends on its own
+  // record, apparatus (10), with the steps, tokens and clock up to then.
+  it("a throw after the run started ends it on its own record: apparatus, the steps so far, never 'could not start'", async () => {
+    const { url } = await serve(false);
+    const root = surface(url);
+    const stderr = {
+      write(text: string) {
+        if (/1 tool call\(s\) so far/.test(text)) throw new Error("stderr went away");
+        return true;
+      },
+    };
+    const rec = await runTask(loadConfig(root), "read x.txt", { role: "smol", yes: true, verbose: true, stderr });
+    expect(rec).toMatchObject({
+      code: 10,
+      bucket: "apparatus_failure",
+      stop_reason: "apparatus",
+      tool_steps: 1,
+      role: "smol",
+      model: "m1",
+      input: "read x.txt",
+    });
+    expect(rec.tool_log).toHaveLength(1);
+    expect(rec.output).toMatch(/failed after it started \(stderr went away\)/);
+    expect(rec.output).not.toMatch(/could not start/);
+    expect(rec.volatile).toMatchObject({ tokens_in: 50, tokens_out: 5 });
+    expect(typeof rec.volatile.duration_ms).toBe("number");
+    expect(rec).not.toHaveProperty("record_state");
+
+    const recordFile = files(root).find((f) => f.endsWith(".record.json"))!;
+    expect(readJson(join(root, ".gnomon-audit", recordFile))).toMatchObject({
+      record_state: "final",
+      stop_reason: "apparatus",
+      code: 10,
+      tool_steps: 1,
+    });
+    const trail = join(root, ".gnomon-audit", files(root).find((f) => f.endsWith(".jsonl"))!);
+    const recs = kinds(trail);
+    expect(recs.slice(-2).map((r) => r.kind)).toEqual(["turn", "session_end"]);
+    expect(recs.at(-2)).toMatchObject({ stop_reason: "apparatus", code: 10, tool_steps: 1 });
+    expect(verifyTrail(trail)).toMatchObject({ ok: true, sealed: true });
+  });
+
+  it("a throw before the run started still reaches the caller (it could not start)", async () => {
+    const { url } = await serve(false);
+    const root = surface(url);
+    await expect(runTask(loadConfig(root), "read x.txt", { role: "nope" })).rejects.toThrow();
+    expect(existsSync(join(root, ".gnomon-audit")) ? files(root).filter((f) => f.endsWith(".record.json")) : []).toEqual([]);
   });
 });

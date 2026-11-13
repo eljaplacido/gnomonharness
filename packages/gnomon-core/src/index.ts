@@ -19,6 +19,9 @@
 export * from "./config.js";
 export * from "./git_safe.js";
 export * from "./root_fs.js";
+// Whether a relative path leaves its base: `..` as a component, not a name
+// that starts with two dots (`.gitignore`'s temp file, `..data`).
+export * from "./rel_path.js";
 // The endpoint's context window, read from its listing for
 // `max_context_tokens = "auto"` (CONTRACTS.md §24).
 export * from "./context_window.js";
@@ -39,6 +42,8 @@ export * from "./finish_gate.js";
 // Deliverable-first time notes (`[turn] deliverable_first`, under --deadline):
 // the task's named outputs that do not exist yet, in the time note.
 export * from "./deliverable_first.js";
+// Checkpoint, then grind (`[turn] continue_after_answer`, under --deadline):
+export * from "./checkpoint_grind.js";
 // The sweep knobs: reasoning effort, sampling passthrough, the environment
 // snapshot, the todo gate, the edit variant and the package-index allowlist,
 // each opt-in (docs/CONTRACTS.md §32).

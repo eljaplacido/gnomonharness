@@ -22,13 +22,39 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { GUARD_DECISIONS, GUARD_RULES, GUARD_SCHEMA, GUARD_TOOLS, guardExit, type GuardVerdict } from "gnomon-core/guard";
-import { claudeCodeHooks, cmdGuard, cursorHooks, opencodePlugin, CLAUDE_CODE_MATCHER, type GuardStatus } from "./guard.js";
+import {
+  claudeCodeHooks,
+  cmdGuard,
+  cursorHooks,
+  gnomonTail,
+  opencodePlugin,
+  resolveGnomonBin,
+  shellCommand,
+  CLAUDE_CODE_MATCHER,
+  CLAUDE_CODE_MATCHED_TOOLS,
+  type GuardStatus,
+} from "./guard.js";
 
 const LIVE = process.env.GNOMON_LIVE_ADAPTERS === "1";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(here, "../../..");
 const LAUNCHER = join(ROOT, "gnomon");
+// `guard install` writes the absolute path of a gnomon that answers `guard
+// --help` (resolveGnomonBin): in these tests, this checkout's launcher.
+// The program a hook runs. On Windows the repo's launcher (a node script with a
+// shebang) cannot be started directly, so the hooks get a .cmd wrapper, as npm's
+// gnomon.cmd shim is for an installed gnomon.
+const GUARD_BIN =
+  process.platform === "win32"
+    ? (() => {
+        const f = join(mkdtempSync(join(tmpdir(), "gnomon-bin-")), "gnomon.cmd");
+        writeFileSync(f, `@"${process.execPath}" "${LAUNCHER}" %*\r\n`);
+        return f;
+      })()
+    : LAUNCHER;
+process.env.GNOMON_GUARD_BIN = GUARD_BIN;
+const BIN = [GUARD_BIN];
 const fixture = JSON.parse(readFileSync(join(ROOT, "conformance/guard_decision.json"), "utf-8"));
 const CASES = JSON.parse(readFileSync(join(ROOT, "conformance/guard_cases.json"), "utf-8"));
 
@@ -171,6 +197,38 @@ describe("gnomon guard — governance levels, put to the real binary (guard_case
   }
 });
 
+describe("gnomon guard — host tools gnomon has no tool kind for, put to the real binary (guard_cases.json host_tools)", () => {
+  const decisionOf = (stdout: string) => (stdout.trim() ? JSON.parse(stdout).hookSpecificOutput.permissionDecision : "allow");
+  const ask = (c: any, session: string) =>
+    guardBin(
+      ["--from", "claude-code", "--role", c.role],
+      JSON.stringify({ session_id: session, cwd: repo, permission_mode: "default", hook_event_name: "PreToolUse", tool_name: c.tool_name, tool_input: c.tool_input })
+    );
+  it("with no [governance], under each gate", () => {
+    for (const gate of ["never", "on_write"] as const) {
+      governedRepo(gate);
+      for (const c of CASES.host_tools.cases) {
+        const r = ask(c, `ht-${gate}`);
+        expect({ name: c.name, code: r.code, decision: decisionOf(r.stdout) }).toEqual({ name: c.name, code: 0, decision: c.expect[gate][0] });
+      }
+      rmSync(repo, { recursive: true, force: true });
+    }
+  }, 120_000);
+  it("under [governance] at each level", () => {
+    for (const level of CASES.levels.levels as string[]) {
+      governedRepo("on_write");
+      writeFileSync(join(repo, ".gnomon", "policy.toml"), CASES.levels.policy.replace("{{level}}", level));
+      git("add", "-A");
+      git("commit", "-q", "-m", `governance ${level}`);
+      for (const c of CASES.host_tools.cases) {
+        const r = ask(c, `ht-${level}`);
+        expect({ name: c.name, level, decision: decisionOf(r.stdout) }).toEqual({ name: c.name, level, decision: c.levels.expect[level] });
+      }
+      rmSync(repo, { recursive: true, force: true });
+    }
+  }, 180_000);
+});
+
 // ---------------------------------------------------------------------------
 // Claude Code
 // ---------------------------------------------------------------------------
@@ -180,7 +238,7 @@ describe("gnomon guard — governance levels, put to the real binary (guard_case
 // and a PreToolUse hook answers { hookSpecificOutput: { hookEventName:
 // "PreToolUse", permissionDecision: allow|deny|ask|defer, permissionDecisionReason? } }.
 const CLAUDE_EVENTS = ["PreToolUse", "PostToolUse", "Notification", "UserPromptSubmit", "SessionStart", "SessionEnd", "Stop", "SubagentStop", "PreCompact"];
-const CLAUDE_TOOLS = ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "WebFetch", "Glob", "Grep", "Task", "TodoWrite", "WebSearch"];
+const CLAUDE_TOOLS = ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "WebFetch", "Glob", "Grep", "Task", "TodoWrite", "WebSearch", "Agent", "ExitPlanMode", "mcp__github__create_issue"];
 
 describe("gnomon guard — Claude Code", () => {
   it("the emitted settings fragment is valid Claude Code hooks config", () => {
@@ -197,9 +255,13 @@ describe("gnomon guard — Claude Code", () => {
         }
       }
     }
-    // The matcher selects exactly the tools gnomon decides, not Task, TodoWrite, ...
+    // The matcher selects the tools gnomon decides or records -- web search,
+    // subagents and every MCP tool included -- and not TodoWrite and the like.
     const m = new RegExp(`^(?:${CLAUDE_CODE_MATCHER})$`);
-    expect(CLAUDE_TOOLS.filter((t) => m.test(t))).toEqual(["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "WebFetch", "Glob", "Grep"]);
+    expect(CLAUDE_TOOLS.filter((t) => m.test(t))).toEqual([
+      "Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "WebFetch", "Glob", "Grep", "Task", "WebSearch", "Agent", "mcp__github__create_issue",
+    ]);
+    expect(CLAUDE_CODE_MATCHED_TOOLS.every((t) => m.test(t))).toBe(true);
   });
 
   it("it extends the check hooks rather than duplicating them: one SessionStart, one Stop", async () => {
@@ -297,7 +359,7 @@ describe("gnomon guard status — a missing, changed or switched-off hook is a f
 
     git("checkout", "--", ".");
     // A CRLF checkout (Windows, core.autocrlf) of the same hook is not a change.
-    writeFileSync(join(r, ".opencode/plugins/gnomon-guard.js"), opencodePlugin().replace(/\n/g, "\r\n"));
+    writeFileSync(join(r, ".opencode/plugins/gnomon-guard.js"), opencodePlugin(BIN).replace(/\n/g, "\r\n"));
     expect((await status(r)).st.hosts.map((h) => h.state)).toEqual(["ok", "ok", "ok"]);
     writeFileSync(join(r, ".claude/settings.local.json"), JSON.stringify({ disableAllHooks: true }));
     s = await status(r);
@@ -326,7 +388,7 @@ describe("gnomon guard status — a missing, changed or switched-off hook is a f
     const r = governedRepo("never");
     expect(await cmdGuard(["install", "opencode", "--write", "--dir", r])).toBe(0);
     expect(stateOf((await status(r)).st, "opencode")).toBe("ok");
-    writeFileSync(join(r, ".opencode/plugins/gnomon-guard.js"), opencodePlugin().replace("throw new Error(why);", "return;"));
+    writeFileSync(join(r, ".opencode/plugins/gnomon-guard.js"), opencodePlugin(BIN).replace("throw new Error(why);", "return;"));
     expect(stateOf((await status(r)).st, "opencode")).toBe("modified");
     rmSync(join(r, ".opencode/plugins/gnomon-guard.js"));
     expect(stateOf((await status(r)).st, "opencode")).toBe("missing");
@@ -392,7 +454,8 @@ describe("gnomon guard — Cursor", () => {
 // opencode V2
 // ---------------------------------------------------------------------------
 
-const OPENCODE = process.env.GNOMON_OPENCODE_BIN ?? "/home/eljaplacido/gnomon-wt/peers/benchmarks/results/ux1-2026-11/tools/bin/opencode";
+// The live opencode tests run only when GNOMON_OPENCODE_BIN names an opencode binary.
+const OPENCODE = process.env.GNOMON_OPENCODE_BIN ?? "";
 
 describe("gnomon guard — opencode V2 plugin", () => {
   let dir: string;
@@ -461,7 +524,7 @@ describe("gnomon guard — opencode V2 plugin", () => {
       const seen = readFileSync(log, "utf-8").trim().split("\n").map((l) => /--session-base (\S+)/.exec(l)?.[1]);
       expect(seen).toEqual([start, start, start, later]);
     } finally {
-      delete process.env.GNOMON_GUARD_BIN;
+      process.env.GNOMON_GUARD_BIN = GUARD_BIN;
       rmSync(r, { recursive: true, force: true });
     }
   });
@@ -470,7 +533,7 @@ describe("gnomon guard — opencode V2 plugin", () => {
     const proj = join(dir, "proj");
     mkdirSync(proj);
     expect(await cmdGuard(["install", "opencode", "--write", "--dir", proj])).toBe(0);
-    expect(readFileSync(join(proj, ".opencode/plugins/gnomon-guard.js"), "utf-8")).toBe(opencodePlugin());
+    expect(readFileSync(join(proj, ".opencode/plugins/gnomon-guard.js"), "utf-8")).toBe(opencodePlugin(BIN));
     writeFileSync(join(proj, ".opencode/plugins/gnomon-guard.js"), "export default {}\n");
     expect(await cmdGuard(["install", "opencode", "--write", "--dir", proj])).toBe(10);
   });
@@ -532,7 +595,7 @@ describe("gnomon guard — opencode V2 plugin", () => {
         XDG_CACHE_HOME: join(home, ".cache"),
         XDG_STATE_HOME: join(home, ".local/state"),
         OPENCODE_DISABLE_AUTOUPDATE: "1",
-        GNOMON_GUARD_BIN: LAUNCHER,
+        GNOMON_GUARD_BIN: GUARD_BIN,
       },
     });
     let out = "";

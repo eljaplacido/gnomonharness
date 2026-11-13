@@ -1,0 +1,27 @@
+analyze_paired.py: seed 20261112, 10000 bootstrap resamples, alpha 0.05, non-inferiority margin 0.10
+input example.csv sha256 268cc80f498cd156: 192 rows, 180 effective, 12 replaced by re-runs
+
+Arms (valid effective cells; task-averaged rates)
+  baseline: cells 60, valid 60, invalid not re-run 0, replaced 4; tasks 20; solve rate 0.283; hidden share 0.612; $ valid 2.6050 (all incl. invalid/replaced 2.7733); $/cell 0.0434; $/solve 0.1532
+  baseline-again: cells 60, valid 60, invalid not re-run 0, replaced 4; tasks 20; solve rate 0.350; hidden share 0.650; $ valid 2.4830 (all incl. invalid/replaced 2.6915); $/cell 0.0414; $/solve 0.1182
+  candidate: cells 60, valid 60, invalid not re-run 0, replaced 4; tasks 20; solve rate 0.600; hidden share 0.770; $ valid 1.7730 (all incl. invalid/replaced 1.8957); $/cell 0.0295; $/solve 0.0492
+
+Contrast baseline-again - baseline  [A/A: noise floor]
+  full solves: +0.067 over 20 tasks (0.350 vs 0.283); bootstrap 95% [-0.067, +0.217]; sign-flip 95% [-0.095, +0.222] p = 0.5155; exact McNemar over 60 paired cells: baseline-again-only 10, baseline-only 6, p = 0.4545
+    -> non-inferior (never 'equal')
+  hidden-test share: +0.038 over 20 tasks; bootstrap 95% [-0.074, +0.150]; sign-flip 95% [-0.085, +0.161] p = 0.5112
+    -> non-inferior (never 'equal')
+  $/cell (lower is better): -0.0020 over 20 tasks; bootstrap 95% [-0.0060, +0.0017]; sign-flip 95% [-0.0062, +0.0022] p = 0.3283
+    -> not shown (never 'equal')
+  $/solve ratio baseline-again/baseline: 0.772 (0.1182 vs 0.1532); bootstrap 95% [0.508, 1.277]
+    -> not shown
+
+Contrast candidate - baseline
+  full solves: +0.317 over 20 tasks (0.600 vs 0.283); bootstrap 95% [+0.150, +0.483]; sign-flip 95% [+0.139, +0.500] p = 0.0028; exact McNemar over 60 paired cells: candidate-only 26, baseline-only 7, p = 0.0013
+    -> better
+  hidden-test share: +0.158 over 20 tasks; bootstrap 95% [+0.032, +0.281]; sign-flip 95% [+0.023, +0.293] p = 0.0231
+    -> better
+  $/cell (lower is better): -0.0139 over 20 tasks; bootstrap 95% [-0.0173, -0.0108]; sign-flip 95% [-0.0174, -0.0103] p < 0.0001
+    -> better
+  $/solve ratio candidate/baseline: 0.321 (0.0492 vs 0.1532); bootstrap 95% [0.194, 0.481]
+    -> better

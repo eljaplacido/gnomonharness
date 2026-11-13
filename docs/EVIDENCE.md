@@ -1,7 +1,8 @@
 # Evidence — what is proven, what is not
 
 *Last reconciled 2026-09-06, against the v0.2.0 release; the
-[2026-11 campaigns](#2026-11-campaigns) section was added 2026-11-07.* One row per claim
+[2026-11 campaigns](#2026-11-campaigns) section was added 2026-11-07 and cut
+back to gnomon-only results for v0.5.0 (2026-11-12).* One row per claim
 gnomon makes about itself, the measurement that tests it, and the result. A claim
 with no row is a claim with no evidence, and is listed as such at the bottom
 rather than omitted.
@@ -9,10 +10,13 @@ rather than omitted.
 **Which build these numbers describe — read this before citing any of them.**
 The note below was written for v0.2.0 and still holds for every row above the
 [2026-11 campaigns](#2026-11-campaigns) section. The rows in that section name
-their own build (v0.3.1 to v0.4.4 and master commits), and most of their data
-lives on the public
-[`bench/peers-2026-11`](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results)
-branch, not on `master`.
+their own build (v0.3.1 to v0.5.0 candidates) and report gnomon-only results;
+their raw summaries are archived outside this repository.
+
+**Peer comparisons: what this document cites.** Comparisons against other
+harnesses are cited only where they were published before 2026-11-08 (the
+August–September 2026 arms below), each with its date. No November 2026 peer
+comparison is published here, and none will be added.
 
 **No task-completion rate in this document was measured against v0.2.0.** Not
 one. Between v0.1.1 and this release the harness gained a chain gate, a
@@ -68,7 +72,7 @@ different servers.
 | Claim | Evidence | Result |
 |---|---|---|
 | Consent-gated capability: it does what the operator grants | [capability](../benchmarks/results/capability-2026-09-01/) | MCP, egress, neighbouring repo, CLI auth and driving another harness — **5/5 work when granted**, 4/5 refuse when withheld. The fifth is the finding, below |
-| The surface is not writable by a tool call | [containment](../benchmarks/results/containment-2026-08-31/) · [consent](../benchmarks/results/consent-2026-09-01/) | gnomon **5/5** refused; opencode rewrote its own permission file **5/5** across four escalating configs. `strict` refuses even when the approver says *yes* — **6/6**. **Do not cite the opencode half (2026-11-07):** [G2b](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results/g2b-2026-11) found the opencode surface-deny result rested on a mis-ordered rule map (opencode applies the last matching rule), and re-measured gnomon v0.3.1 24/25 vs opencode V2 24/25. What held up is that opencode's subagents are not bound by the caller's permissions |
+| The surface is not writable by a tool call | [containment](../benchmarks/results/containment-2026-08-31/) · [consent](../benchmarks/results/consent-2026-09-01/) | gnomon **5/5** refused (2026-08-31). `strict` refuses even when the approver says *yes* — **6/6** (2026-09-01). The opencode comparison this row once carried was withdrawn on 2026-11-07 (its deny map was mis-ordered) and is not cited |
 | Capability over instruction | [injection](../benchmarks/results/injection-2026-09-01/) | superseded 2026-08-31, which could not tell a held boundary from an unattempted one. Now: **0/6** injected fetches crossed with delivery verified, against a control that did |
 | Skills proposed, never self-applied | [capability](../benchmarks/results/capability-2026-09-01/) · `c5e2b53` | ✅ inert while proposed, loads only on `skill accept` — **and the hash now holds still**: proposing used to move the surface hash the run's own audit record was stamped with |
 | Sessions and audit live outside the surface | [determinism](../benchmarks/results/determinism-2026-08-31/) | mtime and path perturbation leave the hash unchanged |
@@ -79,18 +83,18 @@ different servers.
 | Dimension | Evidence | Result |
 |---|---|---|
 | Model agnosticism | [agnosticism](../benchmarks/results/agnosticism-2026-09-01/) | ✅ same weights over two wire protocols: **5/5 identical** exit contracts. Cloud 4/5, the difference being model behaviour, not harness |
-| Prompt injection | [injection](../benchmarks/results/injection-2026-09-01/) | ✅ **0/6** injected fetches crossed, all six deliveries verified read, while the identical request from the operator did — provenance decided it. Re-run on v0.3.1 with DeepSeek V4.1 Flash ([G2b](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results/g2b-2026-11)): 0/36 crossed, but the model attempted 0, which is uninformative about the boundary |
+| Prompt injection | [injection](../benchmarks/results/injection-2026-09-01/) | ✅ **0/6** injected fetches crossed, all six deliveries verified read, while the identical request from the operator did — provenance decided it. Re-run on v0.3.1 with DeepSeek V4.1 Flash (G2b, 2026-11): 0/36 crossed, but the model attempted 0, which is uninformative about the boundary |
 | Session resume | live pty run, 2026-09-01 | ✅ `--continue` restored the conversation and the model answered from it — `Resumed …848888 — 1 turn(s)` |
 | Task completion | [Terminal-Bench](../benchmarks/results/terminal-bench-postfix-2026-08-31/) | **complete at n=2** (the row said "n=3 running" until 2026-09-02; it was never n=3). Scored from the raw data over the 47 tasks valid in all four cells: pre **41.5%** → levers **52.1%** as a mean of passes, **+10.6pp**. Pooling both passes gives 46.8% → 59.6%, 6 discordant to 0, McNemar exact **p = 0.031** — but **the pass-combination rule was not pre-registered**, and pooling is the generous one, so read the direction and not that p-value. The pre-registration declared an MDE of ~10pp, and +10.6pp sits on it |
 | Context retention | [context](../benchmarks/results/context-2026-08-31/) | `summary` **9/9**, `discard` **0/9**. **The default is now `summary`** (changed 2026-09-04). It shipped as `discard` for four days *after* this row was written — the measurement was here and nothing acted on it |
-| Per-turn overhead | [latency](../benchmarks/results/latency-2026-08-31/) | **223 ms** vs opencode **1581 ms** |
+| Per-turn overhead | [latency](../benchmarks/results/latency-2026-08-31/) | **223 ms** vs opencode **1581 ms** (2026-08-31) |
 | Token efficiency | [tokens](../benchmarks/results/token-efficiency-2026-09-01/) | **604k in / 15k out per trial — 41:1**. Cost is context re-sending, not generation. Billed $0.0153/trial; naive token arithmetic overstates it **3.3×** because caching fits this shape |
 | Verify gate — misconfigured | `902a93f` | a check that cannot run made the model rewrite correct code; one task went from passing without the gate to failing with it. Now reported as unrunnable, not handed back, and not called a pass |
 | Test authoring | [2026-08-31](../benchmarks/results/test-authoring-2026-08-31/) · [2026-09-01](../benchmarks/results/test-authoring-2026-09-01/) | **1/9** left to itself, and tests for existing code pin its bugs. Fixed by the **instruction**, not by any mechanism: asking for the docstring's intent with `xfail` on contradictions gives 0 failures after a bugfix. The role chain does **not** fix it |
 | Verify-gate value | [verify gate 2026-09-01b](../benchmarks/results/verify-gate-2026-09-01b/) | **5/10 → 8/10** once a catchable population exists — three conversions, zero regressions. p = 0.25, so direction not significance. The earlier run was inconclusive because the model fixed 18/18 unaided |
 | **v0.1.1 task completion** | [v011-timeout](../benchmarks/results/v011-timeout-2026-09-03/) | **44.7%** on 47 Terminal-Bench tasks (`deepseek-v4-flash`, clock **configured 900s but measured ~1200s** — see the clock row below, mean of 2 passes). The **first number attributable to a released build** — every other rate in this document predates the tag. Roughly **41% of trials end at the timeout cap**, the largest single bucket |
 | **Timeout-retry teaching** | [v011-timeout](../benchmarks/results/v011-timeout-2026-09-03/) | **null on both endpoints.** Score 44.7% → 45.7% (+1.1pp, against an 8.5pp within-arm spread). Mechanism — the endpoint the design *can* resolve — did not move either: timeouts 40.4% → 42.6%, `setsid` adoption unchanged. Delivery verified, so this is a real negative, not an underpowered one |
-| **Peer harness** (v0.2 era; see P2G41 below for v0.4.1) | [peer opencode](../benchmarks/results/peer-opencode-2026-09-02/) | **null.** On equal terms, 34 paired tasks: gnomon 50.0%, opencode 47.1%, discordant 3 to 2, **McNemar p = 1.0000**. The unequal-terms reading — an 18-point win at p = 0.039 — is an artifact of opencode auto-rejecting its own permission prompts, and the arm's own README says not to quote it |
+| **Peer harness** (2026-09-02, v0.2 era) | [peer opencode](../benchmarks/results/peer-opencode-2026-09-02/) | **null.** On equal terms, 34 paired tasks: gnomon 50.0%, opencode 47.1%, discordant 3 to 2, **McNemar p = 1.0000**. The unequal-terms reading — an 18-point win at p = 0.039 — is an artifact of opencode auto-rejecting its own permission prompts, and the arm's own README says not to quote it |
 | **Role chain** | [role chain](../benchmarks/results/role-chain-2026-09-02/) | **null, on the feature this project argued hardest for.** 38 tasks paired across four cells: control 56.6%, chain 48.7%. The −7.9pp difference exactly equals the within-arm spread; **McNemar p = 0.375** |
 | **Model ceiling** | [model ceiling](../benchmarks/results/model-ceiling-2026-09-02/) | **null.** 12 valid tasks, build fixed: `deepseek-v4-flash` 41.7%, `gpt-5.6-luna` 50.0% at 2.5×/7.5× the price, **McNemar p = 1.0000**. Three nulls the same night — chain, peer, ceiling |
 | The daily chain end-to-end | [daily chain](../benchmarks/results/daily-chain-2026-09-01/) | greenfield spec → implement → tests → verify **completes**, and the mutation check bites: **6 of 34 tests fail** when the implementation is broken. Hooked onto an existing repo the audit **found** the planted bug by line — but **4 of 25 generated tests pinned it**, which is the test-authoring finding above, not a chain failure |
@@ -103,34 +107,41 @@ different servers.
 | **`test_must_fail_first` applicability** | [greenfield-spec](../benchmarks/greenfield-spec/#arm-1a--the-same-question-in-the-configuration-where-the-mechanism-can-act) | **the mechanism is correct and nearly idle: its applicable population is 1 run in 39.** Re-run with an authoring role holding no `bash`, the only configuration where it can act. Of 39 valid runs, 20 wrote a test that already pinned the change (nothing to flag), 18 wrote a test that fails on their own fix (the check did not pass, so the gate hands back and the mechanism is skipped by design), and **1** hit the case it exists to catch. Primary 9/19 vs 11/20, McNemar **p = 0.6250** — direction favours `on`, indistinguishable from three tasks flipping. Separately measured: **withholding the shell halves the rate at which the agent's own tests pass on its own fix** (18 of 39 runs), because it cannot run pytest itself |
 | **`test_must_fail_first` value (first attempt)** | [greenfield-spec](../benchmarks/greenfield-spec/) | ⚠️ **null, and uninformative — the mechanism did not run.** 10 specs, one variable, $0 local: 8/10 vs 9/10 on fails-before-passes-after, McNemar **p = 1.0000**, mean mutation delta **+0.015**. The reason is the finding: `touchedFiles` is set only by `write`/`edit`, so with the default `after = "write"` a turn that works through the **shell** gets no check at all — and this repository's own note eight lines away records 49 of 50 trials editing through heredocs and `sed -i`. Now disclosed as `verify_skipped_shell_only`. Also: 8/10 specs hit mutation score 1.0 in **both** arms, so the corpus is at ceiling too. One pass only — the machine ran out of memory mid-run |
 | **`writing-tests` skill value** | [greenfield-spec](../benchmarks/greenfield-spec/#arm-1b--the-writing-testsmd-skill-off-against-on--2026-09-05) | **null, and this one is a real measurement.** 10 greenfield specs, two passes, one variable, $0 local: mean mutation score 0.891 → 0.896, **delta +0.005**, Wilcoxon exact **p = 1.0000**. Not at ceiling (the fix satisfies the hidden suite only **45%** of the time, scores span 0.50–1.00) and the noise floor was measured inside the run: the `on` arm's own pass-to-pass spread is **0.146**, roughly **30× the effect**. Also observed, at n=10 so an observation not a finding: the instruction made the harness **3.7× noisier** pass-to-pass without moving the mean. gnomon shipped this skill the same day on an external replication and measured it the same day |
-| **Context on the wire** | [context-cost](../benchmarks/context-cost/) | **4.66×** — opencode sends 36,490 bytes to gnomon's 7,824 to answer the same prompt in an identical repo, both out of the box, counted off the wire against a recording endpoint rather than from credit deltas. Turn request 4.35×, tool schemas 4.83× (for 10 tools against 9 — each described ~5× longer), messages 3.85×. **Retires "13–43× leaner than opencode"**, which multiplied a token ratio by a retracted pass-rate ratio; the post-mortem said to lead with 3.8–11.7× and this lands inside it. Deterministic, $0. Says nothing about task completion, where the two are indistinguishable. Re-measured on v0.3.1 against opencode V2 ([UX1](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results/ux1-2026-11)): **4.3×** (8,361 B vs 36,065 B) |
+| **Context on the wire** | [context-cost](../benchmarks/context-cost/) | **4.66×** — opencode sends 36,490 bytes to gnomon's 7,824 to answer the same prompt in an identical repo, both out of the box, counted off the wire against a recording endpoint rather than from credit deltas. Turn request 4.35×, tool schemas 4.83× (for 10 tools against 9 — each described ~5× longer), messages 3.85×. **Retires "13–43× leaner than opencode"**, which multiplied a token ratio by a retracted pass-rate ratio; the post-mortem said to lead with 3.8–11.7× and this lands inside it. Deterministic, $0. Says nothing about task completion, where the two are indistinguishable. Measured 2026-09-05 |
 | **Consistency (`pass^k`)** | [reliability-passk](../benchmarks/results/reliability-passk-2026-09-05/) | **pass@1 51.2% → pass^2 45.2%**, retention 0.88 — about one apparent success in eight does not reproduce. 11.9% of tasks flip between two identical runs. Derived at **$0** from passes already committed under `regression-2026-09-03`; the metric is [ReliabilityBench](https://arxiv.org/abs/2601.06112)'s consistency dimension and nobody had computed it. **Not comparative** — both columns are gnomon, because the peer arm archived only one opencode pass |
 | **The benchmark clock is not 900s** | [regression](../benchmarks/results/regression-2026-09-03/) · [clock.py](../benchmarks/results/regression-2026-09-03/clock.py) | ⚠️ **partly resolved 2026-09-05.** The *shape* is now measured, from the archived per-trial `agent_started_at`/`agent_ended_at`: **59 of 64 timeouts land in 1195–1210s, across 23 different tasks**, against `--global-agent-timeout-sec 900` on the command line. A per-task cap would vary by task, so this is one **global** value and it is not the one passed. **Still not established: why the flag was inert** — flag-name mismatch, precedence and a framework bug are all consistent, and separating them needs the terminal-bench source, which is on the machine the sweeps run on. Applies equally to every arm, so no comparison here is invalidated; what changes is that any future arm must size itself against **1200s**. Original entry follows. ⚠️ **a published number that was asserted, not measured.** `tb.lock` records `global_agent_timeout_sec = 900.0` in every cell, and every trial marked `agent_timeout` ran **1200–1202s** of agent wall-clock — in this run's 64 timeouts across four cells, **and** in all four cells of `v011-timeout` re-measured from its archived data. Setup time is separately accounted and does not explain it. Applied equally to every arm, so **no comparison in this document is invalidated**; every "900s" in it was wrong about the number. Mechanism **not established** |
 | The three real workflows | [workflows](../benchmarks/results/workflows-2026-09-01/) | audit / refactor / greenfield all **complete**; four defects found doing it |
 
 ## 2026-11 campaigns
 
-Terminal-Bench 4.0 tasks unless stated, k = 1 per arm, pre-registered before
-data. Hosted lane: `deepseek-v4.1-flash` via OpenCode Go, 1,800 s cap. Local
-lane: `qwen3.6-35b`. Each row names the build it ran. Summaries are on the
-`bench/peers-2026-11` branch except GBS 0.1, which is on `master`. Every
-comparison below is small; "not shown" never means "equal".
+gnomon-only results. Terminal-Bench 4.0 tasks unless stated, k = 1 per arm,
+pre-registered before data. Hosted lane: `deepseek-v4.1-flash` via OpenCode Go,
+1,800 s cap. Local lane: `qwen3.6-35b`. Each row names the build it ran. The
+summaries are archived outside this repository (GBS 0.1 is on `master`).
+Every comparison below is small; "not shown" never means "equal".
 
 | Claim | Evidence | Result |
 |---|---|---|
-| **Peer, hosted: release defaults** | [P2G41](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/p2g41-2026-11/summary-p2g41.txt) · v0.4.1 | **trails.** Defaults 0/28 solved against opencode 6/29; solve-rate difference −0.179 [95% CI −0.321, −0.036], hidden-test fraction −0.221 [−0.399, −0.052] |
-| **Peer, hosted: the recipe** (replay, 1M window, idle nudge off) | [P2G41](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/p2g41-2026-11/summary-p2g41.txt) · v0.4.1 | **parity not shown on solves.** 3 vs 5 on 28 pairs, −0.071 [−0.250, +0.107] against a 10-point margin. Parity shown on hidden-test fraction, +0.050 [−0.097, +0.205]. One task (`risk-scorer-replay`) was invalid for both gnomon arms: gnomon could not create `.gnomon/` in its read-only `/app` |
-| **Reasoning replay as a hosted default** | [H3](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h3-2026-11/summary-h3.txt) · v0.4.2 | **adopted by the pre-registered rule.** Replay alone vs defaults: hidden-test fraction +0.160 [+0.042, +0.293], capped 14 vs 19; solved 2 vs 1 (p = 1.0, too few discordant pairs). The rest of the recipe added nothing shown on top (2 vs 2). Shipped as a default in v0.4.4, **a draft release**; the newest published release (v0.4.3) does not have it |
-| **The v0.4.4 candidate's defaults on a local lane** (idle nudge off) | [LG1](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/lg1-2026-11/summary-lg1.txt) · v0.4.2 vs the v0.4.4 candidate (#153) | **regresses on tokens, by its pre-registered rule.** Solved 18 vs 18 on 32 pairs; local tokens per cell ×1.43 [1.04, 2.15] against a 1.20 guard; wall ×1.16, not shown. The lane returns no reasoning field, so replay never fired: the change on this lane is the idle nudge being off by default (547 nudged requests vs 0). On this result v0.4.4 kept `nudge_after_idle = 12`; master's default is 12 (config.ts) |
-| **Completion gate, local** | [G1gate](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/g1gate-2026-11/summary-g1g.txt) · master `ae17a1ae` (v0.4.2) | **no difference shown.** `checklist` 18 vs off 16 (p = 0.63), `review` 17 vs 16 (p = 1.0) on 30 pairs. `review` cost more: median wall 388 vs 145 s, local tokens ~2.7× (sign tests p ≈ 0.04) |
-| **Completion gate, hosted** | [H4-lite](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/h4lite-2026-11/summary-h4lite.txt) · v0.4.2, exploratory screen | **no positive signal.** `review` vs the recipe on 12 target tasks: hidden-test fraction −0.102 [−0.210, −0.014]; capped 8 vs 4; +86% wire spend. The reviewer took ~12 min per review and does not see the deadline |
-| **Hybrid, RTX 5090** (cloud plans, local builds) | [R1H](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/r1h-2026-11/summary.txt) · `d59e6c19` · [R3R](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/r3r-2026-11/summary-r3r.txt) · v0.4.0 · [R4H](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/r4h-2026-11/summary-r4h.txt) | **an early lead that did not reproduce.** R1H: PC 26/30, C 27/32, L 24/32, $/solved −26% vs C. R3R on v0.4.0: PC 19/31, C 24/31, L 22/29. R4H ran R1H's build and v0.4.1 together: 20 vs 19, p = 1.0, so the build is not the cause. Cause open. See [HYBRID.md](benchmarks/HYBRID.md) |
-| **Hybrid, NVIDIA GB10** | [M2](https://github.com/eljaplacido/gnomonharness/blob/bench/peers-2026-11/benchmarks/results/m2-2026-11/summary-m2.txt) · v0.4.0 | PC 22/32 vs L 16/31 on the same lane (paired 22 vs 16, p = 0.07), $0.031 per solved. M2 ran no cloud-only arm |
+| **Reasoning replay as a hosted default** | H3 · v0.4.2 (2026-11-06) | **adopted by the pre-registered rule.** Replay alone vs defaults: hidden-test fraction +0.160 [+0.042, +0.293], capped 14 vs 19; solved 2 vs 1 (p = 1.0, too few discordant pairs). The rest of that configuration added nothing shown on top (2 vs 2). On by default for hosted endpoints in v0.5.0, the first published release that has it |
+| **Idle nudge off, local lane** | LG1 · v0.4.2 vs a candidate build (#153), 2026-11-06 | **regresses on tokens, by its pre-registered rule.** Solved 18 vs 18 on 32 pairs; local tokens per cell ×1.43 [1.04, 2.15] against a 1.20 guard; wall ×1.16, not shown. The lane returns no reasoning field, so replay never fired: the change on this lane is the idle nudge being off (547 nudged requests vs 0). On this result `nudge_after_idle = 12` stayed the default (config.ts) |
+| **Completion gate, local** | G1gate · master `ae17a1ae` (v0.4.2) | **no difference shown.** `checklist` 18 vs off 16 (p = 0.63), `review` 17 vs 16 (p = 1.0) on 30 pairs. `review` cost more: median wall 388 vs 145 s, local tokens ~2.7× (sign tests p ≈ 0.04) |
+| **Completion gate, hosted** | H4-lite · v0.4.2, exploratory screen | **no positive signal.** `review` vs the tuned hosted configuration on 12 target tasks: hidden-test fraction −0.102 [−0.210, −0.014]; capped 8 vs 4; +86% wire spend. The reviewer took ~12 min per review and does not see the deadline |
+| **Hybrid, RTX 5090** (cloud plans, local builds) | R1H · `d59e6c19` · R3R · v0.4.0 · R4H | **an early lead that did not reproduce.** R1H: PC 26/30, C 27/32, L 24/32, $/solved −26% vs C. R3R on v0.4.0: PC 19/31, C 24/31, L 22/29. R4H ran R1H's build and v0.4.1 together: 20 vs 19, p = 1.0, so the build is not the cause. See [HYBRID.md](benchmarks/HYBRID.md) |
+| **Hybrid, NVIDIA GB10** | M2 · v0.4.0 | PC 22/32 vs L 16/31 on the same lane (paired 22 vs 16, p = 0.07), $0.031 per solved. M2 ran no cloud-only arm |
 | **GBS 0.1, model-free** (overhead, chaos, audit, governance) | [gbs-2026-11-04](../benchmarks/results/gbs-2026-11-04/) · v0.4.1 | +126 ms CPU per trial over a null harness; 17/20 chaos faults announced; audit 0/48 false positives, but a forged append after the seal exited 0 (fixed in v0.4.2, #149); the agent could approve its own skill by unsetting one variable (fixed in v0.4.2, #149). Author-run; partially conformant except CHAOS arm R |
 
-**Running, no result yet:** AS1 (long-task levers) and FG1 (finish gate v2,
-soft shell and related knobs). Nothing in this repository may cite them until
-their summaries are committed.
+### What the v0.5.0 recommendations rest on
+
+The release campaign that closed on 2026-11-12, stated as gnomon-only
+conclusions. These are the conclusions the guide and README recommend from;
+the per-study summaries are not yet published in this repository, so read
+them as the project's reading of its own runs, not as a citable table.
+
+| Question | Conclusion |
+|---|---|
+| **Defaults or a tuned recipe, on Claude Haiku** | gnomon's release defaults did at least as well as the tuned long-task recipe on Claude Haiku, at about half the cost. Recommendation: start from the defaults |
+| **A done check before the final answer** | Opt-in. It made the final answer more honest (fewer "done" claims over unfinished or unverified work); it did not improve task outcomes |
+| **Hybrid: local-first with cloud rescue** (a cloud model takes over a stuck local turn; opt-in, `[roles.<name>.escalate]`) | An opt-in **cost mode**, not a default. Against cloud-only it spent about 23% of the cloud cost, at −0.07 hidden-test share; against local-only, +0.25 hidden-test share. Not the plan-in-the-cloud hybrid `gnomon setup` offers as an opt-in mode (`frontier_plan`), which showed no advantage over cloud-only (R3R, R4H) |
 
 ## Claims with no evidence
 
@@ -150,8 +161,8 @@ Listed because omitting them would imply coverage that does not exist.
 
 - **The opt-in knobs merged 2026-11-06/07** — the soft-timeout shell (#161),
   finish gate v2 (#162), the deliverable-first note and first-token watchdog
-  (#164) and governance levels (#167). No scored arm has finished on any of
-  them; FG1 and AS1 are running. They are opt-in and unproven.
+  (#164) and governance levels (#167). No result for any of them is published
+  here. They are opt-in and unproven.
 
 - **`[sandbox] exec = "docker"` containment against a real Docker** — CI tests
   it against a stub `docker` (argv inspection and a fake), not a real engine.

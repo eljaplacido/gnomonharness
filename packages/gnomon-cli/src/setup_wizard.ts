@@ -10,7 +10,7 @@
  *   4. a short speed check, only on a yes (`--speed-check` off a terminal);
  *   5. optionally a cloud model, its key read hidden and stored outside the
  *      repository, exactly as `gnomon key set` does;
- *   6. suggest a mode: local only, hybrid or cloud first;
+ *   6. suggest a mode: local only or cloud first (hybrid is opted into);
  *   7. show the change to `.gnomon/` as a diff, and write it only when a
  *      person accepts it (or `--yes` does, for a script).
  *
@@ -25,7 +25,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { recomputeManifest } from "gnomon-core";
+import { recomputeManifest, keyHostIsDefault } from "gnomon-core";
 import { probeMachine, formatProbe, RUNTIME_PORTS, type MachineProbe, type ProbeHost, type RuntimeId } from "./probe.js";
 import {
   recommend,
@@ -51,7 +51,7 @@ import {
   type EndpointBlock,
   type SurfaceTexts,
 } from "./setup_surface.js";
-import { ENDPOINT_PRESETS } from "./setup.js";
+import { ENDPOINT_PRESETS, hostName, withheldWhy } from "./setup.js";
 import { initSurface, scaffoldTexts } from "./init.js";
 import { FALLBACK_LARGE, FALLBACK_SMALL } from "./detect.js";
 
@@ -59,7 +59,7 @@ import { FALLBACK_LARGE, FALLBACK_SMALL } from "./detect.js";
 // Published values (docs/CONTRACTS.md §16)
 // ---------------------------------------------------------------------------
 
-/** Hybrid control, per escalation block, once PR #102's `escalate` exists. */
+/** Hybrid control: a recorded preference. Setup writes no `[roles.<name>.escalate]` block (CONTRACTS §42). */
 export const HYBRID_CONTROLS = ["off", "observe", "ask", "auto"] as const;
 export type HybridControl = (typeof HYBRID_CONTROLS)[number];
 
@@ -79,8 +79,8 @@ export const MODE_ALIASES: Record<string, Suggestion> = {
 };
 
 const ESCALATE_NOTE =
-  "recorded as your preference; it takes effect only when escalation ([roles.X.escalate], PR #102) is merged, " +
-  "and `gnomon setup` will then propose it in the surface";
+  "recorded as your preference only; setup writes no escalation block. Local-first cloud rescue is declared " +
+  "by hand with [roles.<name>.escalate] (CONTRACTS §42)";
 
 // ---------------------------------------------------------------------------
 // Seams
@@ -127,6 +127,13 @@ export interface SetupDeps {
   checkCloud(endpoint: EndpointBlock, model: string): Promise<{ ok: boolean; status?: number; detail?: string }>;
   /** A cloud endpoint's model listing: a GET, spends nothing. */
   listCloudModels(endpoint: EndpointBlock): Promise<string[]>;
+  /**
+   * The trust step would run this project's surface as declared (trusted, or
+   * granting nothing beyond the scaffold). Absent means no: an endpoint taken
+   * from the surface whose host is not a known provider is then not checked
+   * with its key (docs/CONTRACTS.md §8).
+   */
+  surfaceTrusted?(): boolean;
   /** Commands this build dispatches, for the closing "Next" lines. */
   commands: readonly string[];
 }
@@ -286,6 +293,11 @@ interface CloudChoice {
   /** Declared already in config.toml: nothing to add there. */
   declared: boolean;
   preset?: string;
+  /**
+   * The URL and key variable are the surface's, not a preset's or what the
+   * person typed: a cloned repository may have chosen them.
+   */
+  fromSurface?: boolean;
 }
 
 /**
@@ -297,7 +309,7 @@ export function resolveCloudEndpoint(value: string, configText: string | undefin
   const parsed = configTextEndpoints(configText)[value];
   if (parsed) {
     if (isLoopback(parsed.url)) return { error: `"${value}" is a local endpoint (${parsed.url}), not a cloud one` };
-    return { name: value, block: parsed, declared: true };
+    return { name: value, block: parsed, declared: true, fromSurface: true };
   }
   const preset = ENDPOINT_PRESETS[value] ?? Object.entries(ENDPOINT_PRESETS).find(([, p]) => p.url === value)?.[1];
   const presetKey = Object.entries(ENDPOINT_PRESETS).find(([, p]) => p === preset)?.[0];
@@ -348,7 +360,8 @@ function isLoopback(url: string): boolean {
 
 /**
  * A cloud model the surface already routes a role to, with its key held:
- * "a cloud endpoint is configured", which is when hybrid is suggested.
+ * "a cloud endpoint is configured", which is when setup names hybrid as the
+ * opt-in cost mode beside its suggestion.
  */
 function configuredCloud(texts: SurfaceTexts, deps: SetupDeps): { choice: CloudChoice; model: string } | undefined {
   const blocks = configTextEndpoints(texts["config.toml"]);
@@ -362,7 +375,7 @@ function configuredCloud(texts: SurfaceTexts, deps: SetupDeps): { choice: CloudC
       const block = endpoint ? blocks[endpoint] : undefined;
       if (!model || !endpoint || !block || isLoopback(block.url)) continue;
       if (block.api_key_env && !deps.keys.held(block.api_key_env)) continue;
-      return { choice: { name: endpoint, block, declared: true }, model };
+      return { choice: { name: endpoint, block, declared: true, fromSurface: true }, model };
     }
   }
   return undefined;
@@ -532,8 +545,9 @@ export async function runSetup(opts: SetupOptions, deps: SetupDeps): Promise<Set
     if (ollama?.state !== "serving") {
       report.pull.status = "no_runtime";
       say(`  Ollama is not running on this machine, so ${chosen.tag} cannot be pulled now.`);
-      say("    Install it from https://ollama.com/download (or open the Ollama app), then:");
-      say(`    ${command}`);
+      say("    Start it (or open the Ollama app; get it from https://ollama.com/download), then pull:");
+      say("    ollama serve");
+      say(`    gnomon setup --pull ${chosen.tag}`);
       if (chosen.entry?.llamacpp) say(`  With llama.cpp instead (it manages its own files): ${chosen.entry.llamacpp}`);
       say("  LM Studio and vLLM also manage their own models: load it there. Then run `gnomon setup` again.");
       step("pull", "no_runtime");
@@ -697,7 +711,13 @@ export async function runSetup(opts: SetupOptions, deps: SetupDeps): Promise<Set
     }
     let checked: "ok" | "failed" | "skipped" = "skipped";
     let detail: string | undefined;
-    if (held && io.interactive) {
+    // An endpoint the surface chose, at a host that is not a known provider,
+    // gets its key only once the surface is trusted -- the rule the session's
+    // trust step applies (clampToDefaults). The y/N below names an endpoint,
+    // not a host, so a yes there is not a yes to sending a key somewhere new.
+    if (held && io.interactive && keyHeldBack(cloud.choice, deps)) {
+      say(`  Not checked: ${withheldWhy({ env: keyEnv!, host: hostName(cloud.choice.block.url) })}.`);
+    } else if (held && io.interactive) {
       const go = await io.ask(`  Check it now with one token through ${cloud.choice.name} (a fraction of a cent)? [y/N] `, "n");
       if (yes(go)) {
         const r = await deps.checkCloud(cloud.choice.block, cloud.model);
@@ -724,13 +744,19 @@ export async function runSetup(opts: SetupOptions, deps: SetupDeps): Promise<Set
   if (!chosen && !cloud) {
     step("mode", "no_model");
     const cloudHint = `--cloud-endpoint opencode-go --cloud-model ${catalog.cloud.find((c) => c.preset === "opencode-go")?.model ?? "NAME"}`;
+    // Said once: when the download step already printed how to start Ollama
+    // and pull (no_runtime), only the cloud alternative is new here.
+    const ollamaUp = probe.runtimes.some((r) => r.id === "ollama" && r.state === "serving");
+    const local =
+      rec.top && !rec.top.installed && report.pull?.status !== "no_runtime"
+        ? `  Local: gnomon setup --pull ${rec.top.tag}   (${rec.top.status}` +
+          (ollamaUp ? ")\n" : "; start Ollama first: ollama serve)\n")
+        : "";
     return done(
       SETUP_EXIT.needsConsent,
       "No model to set up: no local model is installed" + (report.pull ? " and none was downloaded" : "") + ", and no cloud model was given.\n" +
-        (rec.top && !rec.top.installed
-          ? `  This machine can run ${rec.top.tag} (${rec.top.status}): gnomon setup --pull ${rec.top.tag}   (Ollama must be running)\n`
-          : "") +
-        `  Or connect a cloud model: gnomon setup ${cloudHint}\n` +
+        local +
+        `  ${local ? "Cloud" : "Or a cloud model"}: gnomon setup ${cloudHint}\n` +
         "Nothing was written."
     );
   }
@@ -930,13 +956,33 @@ function safeHash(gnomonDir: string): string | undefined {
   }
 }
 
+/**
+ * An endpoint the surface chose, at a host that is not a known provider, on a
+ * surface not yet trusted: its key stays here. The host decides, never the
+ * endpoint's name -- a surface's `[endpoints.openrouter]` is not OpenRouter
+ * unless its URL is. The rule the session's trust step applies
+ * (clampToDefaults), for every request setup makes before that step.
+ */
+function keyHeldBack(choice: CloudChoice, deps: SetupDeps): boolean {
+  return Boolean(choice.block.api_key_env) && choice.fromSurface === true && !keyHostIsDefault(choice.block.url) && !deps.surfaceTrusted?.();
+}
+
 /** Pick a model on a cloud endpoint: the catalog's default for the preset, or one from its listing. */
 async function pickCloudModel(choice: CloudChoice, deps: SetupDeps): Promise<{ choice: CloudChoice; model: string } | undefined> {
   const { io } = deps;
-  const known = deps.catalog.cloud.find((c) => c.preset === choice.preset);
+  // Only a preset's own choice carries the catalog's default; a surface
+  // endpoint that reuses a preset's name has no preset (resolveCloudEndpoint).
+  const known = choice.preset ? deps.catalog.cloud.find((c) => c.preset === choice.preset) : undefined;
   let suggested = known?.model;
   if (!suggested) {
-    const listed = await deps.listCloudModels(choice.block).catch(() => [] as string[]);
+    // Listing is a GET, but it carries the key: held back, it is asked without one.
+    let block = choice.block;
+    if (keyHeldBack(choice, deps)) {
+      const { api_key_env: env, ...keyless } = choice.block;
+      block = keyless;
+      io.say(`  ${choice.name} in this surface is at ${hostName(choice.block.url)}; listing its models without a key: ${withheldWhy({ env: env!, host: hostName(choice.block.url) })}.`);
+    }
+    const listed = await deps.listCloudModels(block).catch(() => [] as string[]);
     suggested = listed[0];
     if (listed.length > 0) io.say(`  It lists ${listed.length} models${listed.length > 12 ? `, e.g. ${listed.slice(0, 12).join(", ")}` : `: ${listed.join(", ")}`}.`);
   }

@@ -42,6 +42,7 @@ import {
   backgroundRecipe,
   createSpillSink,
   OVERFLOW_DIR,
+  selfKillNote,
 } from "./tools.js";
 import { loadConfig, declaredTools, isToolEnabled } from "./config.js";
 import { mapBucket } from "./session.js";
@@ -3385,8 +3386,7 @@ describe("the agent-session marker", () => {
 
 // ---------------------------------------------------------------------------
 // INJ-2026-11: the bypasses the conclusive injection suite found, each as its
-// exact repro (benchmarks/results/inj-2026-11/RESULT.md §6–§7, branch
-// bench/injection-2026-11) plus the respellings an attacker tries next.
+// exact repro (the INJ-2026-11 result, §6–§7) plus the respellings an attacker tries next.
 // Decided in a throwaway git repository shaped like the suite's fixture.
 // ---------------------------------------------------------------------------
 
@@ -3701,4 +3701,27 @@ esac
     expect(out.content).toContain("Cancelled");
     expect(states()).toEqual(["gone"]);
   }, 20_000);
+});
+
+// Three benchmark cells (2026-11): the model stopped its own background
+// program with `pkill -f anon.py`, which also matches the `sh -c` running the
+// command, and read "killed by SIGTERM" with no reason. The note says why.
+describe("selfKillNote — a shell its own pkill -f ended", () => {
+  it("names the cause and the bracket trick, only for a signal death of a command with such a pattern", () => {
+    const note = selfKillNote("pkill -f anon.py; sleep 1", null, "SIGTERM");
+    expect(note).toMatch(/ended by SIGTERM/);
+    expect(note).toContain("pkill -f '[a]non.py'");
+    expect(selfKillNote("pkill -9 -f 'server.js'", 137)).toContain("pkill -f '[s]erver.js'");
+    expect(selfKillNote("for p in /proc/[0-9]*; do grep -q anon /proc/$p/cmdline && kill $p; done", null, "SIGTERM")).toMatch(/bracket one character/i);
+    expect(selfKillNote("pkill -f anon.py", 0)).toBe("");
+    expect(selfKillNote("pkill anon", null, "SIGTERM")).toBe("");
+    expect(selfKillNote("npm test", null, "SIGTERM")).toBe("");
+  });
+
+  it.skipIf(process.platform === "win32")("is on the bash result when the shell dies by SIGTERM", async () => {
+    // The shell signals itself first, so the pkill after it never runs.
+    const out = await executeTool("bash", { command: "kill -TERM $$; pkill -f never_reached_marker" }, ctx(), offered);
+    expect(out.summary).toBe("bash — killed by SIGTERM");
+    expect(out.content).toContain("pkill -f '[n]ever_reached_marker'");
+  });
 });

@@ -13,13 +13,116 @@
  * picker itself lives in index.ts, beside the `endpoint add` flow it reuses.
  */
 
-import { routeRole, isLoopbackUrl, causeCode, type GnomonConfig } from "gnomon-core";
+import {
+  routeRole,
+  isLoopbackUrl,
+  causeCode,
+  keyHostIsDefault,
+  settleTrustHeadless,
+  type GnomonConfig,
+  type TrustOptions,
+} from "gnomon-core";
 
 /** Whether a launch can expect its first message to be answered. */
 export interface Readiness {
   ready: boolean;
   /** Why not, in a phrase that completes "No model answers yet: …". */
   why?: string;
+  /**
+   * The role's key was not sent: its host is not a known provider and the
+   * surface is not trusted. Nothing was asked of the endpoint, so this is not
+   * "the endpoint is down"; trust decides first.
+   */
+  keyWithheld?: { env: string; host: string };
+}
+
+export interface ReadinessOptions {
+  /**
+   * The trust step lets this surface run as declared: it is trusted, or it
+   * grants nothing beyond the scaffold. Only then does a key go to a host that
+   * is not loopback and not a known provider (trust.ts keyHostIsDefault).
+   * Absent means untrusted: the safe side.
+   */
+  trusted?: boolean;
+}
+
+/** `https://api.example.com/v1/chat/completions` → `api.example.com`. */
+export function hostName(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * The key a role's endpoint declares in `declared` that the trust step took
+ * off in `run` (clampToDefaults drops `api_key_env` for a host that is not a
+ * known provider). Callers say so instead of asking the endpoint without it,
+ * which would answer 401 and read as "the key is wrong".
+ */
+export function keyWithheldByTrust(
+  declared: GnomonConfig,
+  run: GnomonConfig,
+  role: string
+): { env: string; host: string } | undefined {
+  try {
+    const before = routeRole(declared, role).target;
+    const after = routeRole(run, role).target;
+    if (before.apiKeyEnv && !after.apiKeyEnv) return { env: before.apiKeyEnv, host: hostName(before.url) };
+  } catch {
+    // An unroutable role is checkReadiness's to report.
+  }
+  return undefined;
+}
+
+/**
+ * The surface a check that runs before (or without) a session may use: what
+ * the trust step would run, settled headless and silently -- the session
+ * that follows asks or says so itself. `trusted` is whether that is the
+ * surface as declared (trusted, or granting nothing beyond the scaffold).
+ *
+ * Launch's readiness check, `gnomon doctor` and `gnomon endpoint list|test`
+ * all reach an endpoint with a key, and all of them ran on the declared
+ * surface: a cloned repository could name its own host and the user's key
+ * variable and be sent the key before anyone was asked.
+ */
+export function preSessionSurface(
+  declared: GnomonConfig,
+  trust: TrustOptions = {}
+): { config: GnomonConfig; trusted: boolean } {
+  const settled = settleTrustHeadless(declared, { ...trust, warn: () => {} });
+  return { config: settled.config, trusted: settled.evaluation.status !== "untrusted" };
+}
+
+/** Completes "No model answers yet: …" for a key held back until trust. */
+export function withheldWhy(w: { env: string; host: string }): string {
+  return `$${w.env} goes to ${w.host}, which is not a known provider, only once this surface is trusted (gnomon trust grant)`;
+}
+
+/**
+ * Launch's question before the session opens -- does `role` reach a model? --
+ * asked of what the trust step would run, never of the surface as declared.
+ * Launch asks it before cmdPrompt's settleTrust, so this is where a cloned
+ * repository's endpoint would otherwise be sent the user's key.
+ *
+ * A key the trust step holds back comes back as `keyWithheld` without a
+ * request: trust is asked when the session starts, right after this.
+ * `applyKeys` loads the credential store for the names the SETTLED surface
+ * declares.
+ */
+export async function launchReadiness(
+  declared: GnomonConfig,
+  role: string,
+  trust: TrustOptions = {},
+  applyKeys?: (config: GnomonConfig) => void,
+  timeoutMs = 3000
+): Promise<Readiness> {
+  const { config, trusted } = preSessionSurface(declared, trust);
+  const withheld = keyWithheldByTrust(declared, config, role);
+  if (withheld) return { ready: false, why: withheldWhy(withheld), keyWithheld: withheld };
+  applyKeys?.(config);
+  return checkReadiness(config, role, timeoutMs, { trusted });
 }
 
 /** `http://127.0.0.1:11434/api/chat` → `127.0.0.1:11434`. */
@@ -51,7 +154,8 @@ export function hostPort(url: string): string {
 export async function checkReadiness(
   config: GnomonConfig,
   role: string,
-  timeoutMs = 3000
+  timeoutMs = 3000,
+  opts: ReadinessOptions = {}
 ): Promise<Readiness> {
   let target;
   try {
@@ -64,6 +168,15 @@ export async function checkReadiness(
   const key = target.apiKeyEnv ? process.env[target.apiKeyEnv] : undefined;
   if (target.apiKeyEnv && !key) {
     return { ready: false, why: `${where} needs $${target.apiKeyEnv}, and it is not set` };
+  }
+  // Defence in depth. Callers pass the config the trust step settled, which
+  // has already dropped a key bound for an unknown host; this holds for one
+  // that passes the surface as declared too. A cloned repository whose
+  // endpoint names api_key_env = "ANTHROPIC_API_KEY" at its own host must not
+  // receive that key from a check that runs before anyone was asked.
+  if (key && !opts.trusted && !keyHostIsDefault(target.url)) {
+    const w = { env: target.apiKeyEnv!, host: hostName(target.url) };
+    return { ready: false, why: withheldWhy(w), keyWithheld: w };
   }
 
   const ollama = (target.kind ?? "ollama") === "ollama";

@@ -95,5 +95,5 @@ scratch trail unless `--keep`).
 | `blackbox.mjs` | Arm B: the §6 procedure plus the §4 scorer, with a gnomon adapter. This is the peer runner |
 | `analyse.py` → `analysis.json` | Determinism, seed stability, B vs R |
 | `result.json` | Every REPORTING §2 field |
-| `GAPS.md` · `PEER.md` | Spec gaps CHAOS-1…10 · what opencode/goose/codex/Claude Code need |
+| `GAPS.md` | Spec gaps CHAOS-1…10 |
 | `raw/` | Cards, stderr, arm-B card and serve log |

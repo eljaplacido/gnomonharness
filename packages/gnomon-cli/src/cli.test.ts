@@ -266,6 +266,52 @@ describe("first-contact output", () => {
     return { code: r.status ?? -1, out: (r.stdout ?? "") + (r.stderr ?? "") };
   };
 
+  it("init points to `gnomon setup` first, then doctor and launch; endpoint add is the manual way", () => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-init-next-"));
+    try {
+      const { code, out } = run(["init", "--dir", root]);
+      expect(code, out).toBe(0);
+      const next = out.slice(out.indexOf("Next:"));
+      const at = (s: string) => next.indexOf(s);
+      expect(at("`gnomon setup`")).toBeGreaterThan(0);
+      expect(at("`gnomon endpoint add`")).toBeGreaterThan(at("`gnomon setup`"));
+      expect(at("`gnomon doctor`")).toBeGreaterThan(at("`gnomon setup`"));
+      expect(at("`gnomon launch`")).toBeGreaterThan(at("`gnomon doctor`"));
+      const roles = readFileSync(join(root, ".gnomon", "roles.toml"), "utf-8");
+      if (out.includes("the catalog's pick for this machine was written")) {
+        // Nothing answered and the catalog has a model for this machine: its
+        // tag, not the generic placeholder nothing serves.
+        expect(roles).not.toContain("qwen2.5:14b-instruct");
+        expect(roles).toContain("catalog's recommendation for this machine");
+        expect(out).toMatch(/gnomon setup --pull \S+/);
+      } else if (out.includes("placeholder tags were written")) {
+        const models = out.slice(out.indexOf("Models:"), out.indexOf("Next:"));
+        expect(models.indexOf("gnomon setup")).toBeGreaterThan(0);
+        expect(models.indexOf("gnomon endpoint add")).toBeGreaterThan(models.indexOf("gnomon setup"));
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("launch off a terminal, in a fresh project, names `gnomon setup` (there is nobody to hand the wizard to)", () => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-launch-fresh-"));
+    try {
+      // stdin is not a terminal and ends at once: the session opens and closes.
+      const r = spawnSync(process.execPath, ["--import", "tsx", CLI, "launch", "--dir", root], {
+        encoding: "utf-8",
+        timeout: 60_000,
+        input: "",
+        env: { ...process.env, GNOMON_NO_UPDATE_CHECK: "1" },
+      });
+      const out = (r.stdout ?? "") + (r.stderr ?? "");
+      expect(out).toContain("No .gnomon/ in");
+      expect(out).toMatch(/If no model answers yet: `gnomon setup`/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([["--version"], ["-v"], ["version"]])("%s prints one line, not the help", (flag) => {
     const { code, out } = run([flag]);
     expect(code).toBe(0);

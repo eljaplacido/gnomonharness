@@ -288,6 +288,9 @@ function stage(bar) {
  */
 function confirmDialog({ title, command, effect, details, confirmLabel, secretLabel }) {
   return new Promise((done) => {
+    // Focus goes back to whatever opened the dialog, on Confirm, Cancel and
+    // Esc alike, so a keyboard user lands where they were.
+    const opener = document.activeElement;
     const pw = secretLabel ? h("input", { type: "password", class: "field", autocomplete: "off", spellcheck: "false", "aria-label": secretLabel }) : null;
     const msg = h("p", { class: "bad small", role: "alert" });
     let dlg = null;
@@ -304,6 +307,7 @@ function confirmDialog({ title, command, effect, details, confirmLabel, secretLa
       if (pw) pw.value = "";
       dlg.close();
       dlg.remove();
+      if (opener && opener.isConnected && typeof opener.focus === "function") opener.focus();
       done(yes ? { value } : null);
     };
     dlg = h("dialog", { class: "confirm", "aria-labelledby": "dlg-h" },
@@ -316,6 +320,7 @@ function confirmDialog({ title, command, effect, details, confirmLabel, secretLa
       h("div", { class: "row" },
         h("button", { type: "button", class: "btn primary", text: confirmLabel || "Confirm", onClick: () => finish(true) }),
         h("button", { type: "button", class: "btn", text: "Cancel", onClick: () => finish(false) })));
+    // Esc fires `cancel`: the same as the Cancel button, nothing runs.
     dlg.addEventListener("cancel", (e) => {
       e.preventDefault();
       finish(false);
@@ -454,6 +459,7 @@ function renderBar() {
     kids.push(row);
     let note = "";
     if (b.planned) note = b.note || "Planned: the dashboard runs this in a later PR; run it in a terminal.";
+    else if (b.manual) note = b.note || "Run this in a terminal: the dashboard does not open one.";
     else if (b.running) note = "Running…";
     else if (b.confirming) note = "Waiting for your confirmation. Nothing has run.";
     else if (b.cancelled) note = "Cancelled: nothing ran.";
@@ -629,6 +635,7 @@ const SETUP_STEPS = [
   [4, "Connect a cloud model"],
   [5, "Choose how work splits"],
   [6, "Review and accept"],
+  [7, "Start"],
 ];
 const freshSetup = (pid) => ({
   pid, step: 1, doctor: null, plan: null, model: null, job: null, speed: null,
@@ -696,6 +703,7 @@ function setupScreen(d) {
     4: () => cloudPanel(d, nav),
     5: () => modePanel(d, nav),
     6: () => reviewPanel(d, nav),
+    7: () => startPanel(d, nav),
   };
   const roles = d.declared.roles || [];
   return [
@@ -1008,9 +1016,9 @@ function modePanel(d, nav) {
     sp && sp.genTps !== undefined ? h("p", { class: "muted small", text: `Measured in step 3: generation ${sp.genTps.toFixed(1)} tok/s${sp.prefillTps !== undefined ? `, prompt ${Math.round(sp.prefillTps)} tok/s` : ""}. Setup's suggestion here is made without that run; the speed check's own suggestion was shown there.` }) : null,
     h("fieldset", { class: "choices" }, h("legend", { class: "muted small", text: "Mode" }),
       radio("local", "Local only", "every role on this machine (role_profile local_first)"),
-      radio("hybrid", "Hybrid", "a cloud model plans, this machine builds (frontier_plan)"),
+      radio("hybrid", "Hybrid", "a cloud model plans, this machine builds: an opt-in cost mode, not a quality gain (frontier_plan)"),
       radio("cloud", "Cloud first", "a cloud model does the work (all_remote)")),
-    pick === "hybrid" ? h("label", { class: "picker" }, "Hybrid control (recorded as a preference; it takes effect when escalation, PR #102, is merged)",
+    pick === "hybrid" ? h("label", { class: "picker" }, "Hybrid control (recorded as a preference only; setup writes no [roles.<name>.escalate] block)",
       h("select", { onChange: (e) => { u.control = e.target.value; u.review = null; } },
         ["off", "observe", "ask", "auto"].map((c) => h("option", { value: c, selected: u.control === c ? true : null, text: c + (c === "observe" ? " (default)" : "") })))) : null,
     nav(4, pick ? 6 : null, "Review the change"));
@@ -1093,7 +1101,7 @@ function reviewPanel(d, nav) {
       ["Local model", rep.local ? `${rep.local.tag}${rep.local.small && rep.local.small !== rep.local.tag ? ` (smol: ${rep.local.small})` : ""}${rep.local.endpoint ? ` @${rep.local.endpoint}` : ""}` : "none"],
       ["Cloud model", rep.cloud ? `${rep.cloud.model} @${rep.cloud.endpoint}${rep.cloud.key_env ? ` · $${rep.cloud.key_env} ${rep.cloud.key_held ? "held" : "NOT SET"}` : ""}` : "none"],
       ["Mode", rep.mode ? `${MODE_TEXT[rep.mode.chosen]} · role_profile ${rep.mode.role_profile}` : "–"],
-      ["Hybrid control", rep.hybrid_control ? `${rep.hybrid_control.value} · recorded only, not active yet` : "–"],
+      ["Hybrid control", rep.hybrid_control ? `${rep.hybrid_control.value} · recorded only, not active` : "–"],
       ["Surface now", p.fresh ? "no .gnomon/ yet: created from `gnomon init`'s scaffold" : short(rep.surface_hash && rep.surface_hash.before)],
       ["Proposal", short(p.digest)],
     ]),
@@ -1124,7 +1132,83 @@ function resultPanel(d, nav) {
     h("div", { class: "row" },
       !ok ? h("button", { type: "button", class: "btn primary", text: "Review the change again", onClick: () => { u.result = null; u.review = null; enterStep(d); } }) : null,
       ok ? h("a", { class: "btn", href: `#/governance/${S.pid}` }, "Trust and governance", icon(ICONS.arrow, 16)) : null),
-    nav(5, null));
+    nav(5, ok ? 7 : null, "Next: start working"));
+}
+
+// Step 7 ────────────────────────────────────────────────────────────────────
+// The last hop: the exact command that starts gnomon in this project. Shown
+// and copied, never run: the dashboard does not open terminals.
+
+/** A path as the shell it is pasted into reads it. */
+function shellPath(path, platform) {
+  if (platform === "win32") {
+    if (/^[A-Za-z0-9_./:\\~+-]+$/.test(path)) return path;
+    // Double quotes read the same in cmd.exe, Windows PowerShell 5.1 and
+    // PowerShell 7 (a Windows path cannot contain one) -- unless the path has
+    // `$` or a backtick, which PowerShell expands inside them, or `%`, which
+    // cmd.exe does. Then single quotes: PowerShell's literal string, and
+    // PowerShell is the default shell on Windows 10/11.
+    if (!/[$`%]/.test(path)) return `"${path}"`;
+    return `'${path.replace(/'/g, "''")}'`;
+  }
+  if (/^[A-Za-z0-9_./:~+@-]+$/.test(path)) return path;
+  return `'${path.replace(/'/g, "'\\''")}'`;
+}
+function startCommand(root, platform) {
+  // Windows gets `--dir`, not `cd <path> && …`: Windows PowerShell 5.1
+  // rejects `&&`, and cmd.exe's `cd` does not change drive without /d, so
+  // launch would run -- and scaffold .gnomon/ -- in the old folder.
+  if (platform === "win32") return `gnomon launch --dir ${shellPath(root, platform)}`;
+  return `cd ${shellPath(root, platform)} && gnomon launch`;
+}
+/** On Windows, when the command above is PowerShell-only: what to run in cmd.exe instead. */
+function startCommandNote(root, platform) {
+  if (platform !== "win32" || !/[$`%]/.test(root)) return null;
+  if (/%/.test(root)) return "This is for PowerShell. cmd.exe would expand the % in this path: run it in PowerShell.";
+  return `This is for PowerShell. In cmd.exe: gnomon launch --dir "${root}"`;
+}
+function startPanel(d, nav) {
+  const u = setupState();
+  const p = P();
+  const platform = S.meta.platform;
+  if (!p) return h("div", { class: "panel" }, h("h2", { text: "Start working" }), h("p", { class: "empty", text: "No project is selected." }), nav(6, null));
+  if (d.commands.launch === false) {
+    return h("div", { class: "panel" }, h("h2", { text: "Start working" }),
+      h("p", { class: "problem", text: "This build of the CLI has no `gnomon launch`. Update gnomon (`gnomon update`)." }), nav(6, null));
+  }
+  const cmd = startCommand(p.root, platform);
+  const written = u.result && u.result.exit === 0;
+  const scanned = u.doctor && u.doctor.doctor && u.doctor.doctor.schema === "gnomon.doctor/1" ? u.doctor.doctor : null;
+  const status = written
+    ? "Configured: setup wrote this project's .gnomon/ in step 6."
+    : scanned && scanned.exit === 0
+      ? "The scan in step 1 found nothing that needs attention: every role's model answers."
+      : "Not confirmed yet: finish steps 1 to 6 first, or start anyway. When no model answers, `gnomon launch` offers the guided setup on the terminal before the session opens.";
+  const field = h("input", { class: "field mono", id: "start-cmd", readonly: true, value: cmd, spellcheck: "false", autocomplete: "off", "aria-label": "Command to start gnomon in this project" });
+  const said = h("p", { class: "muted small", role: "status", "aria-live": "polite" });
+  const copy = async () => {
+    stage({ text: cmd, manual: true, note: "Run this in a terminal: the dashboard does not open one." });
+    try {
+      if (!navigator.clipboard) throw new Error("no clipboard");
+      await navigator.clipboard.writeText(cmd);
+      said.textContent = "Copied. Paste it into a terminal on this machine.";
+    } catch {
+      field.focus();
+      field.select();
+      said.textContent = "Selected: press Ctrl+C (Cmd+C on a Mac) to copy it.";
+    }
+  };
+  return h("div", { class: "panel" },
+    h("h2", { text: "Start working" }),
+    h("p", { class: written || (scanned && scanned.exit === 0) ? "status" : "muted" }, written || (scanned && scanned.exit === 0) ? mark(true) : null, status),
+    h("p", { class: "lede", text: "Open a terminal on this machine and run this. It opens gnomon's interactive loop in the project, under the surface you just reviewed." }),
+    h("div", { class: "row end" },
+      h("label", { class: "picker" }, "Command to start gnomon in this project", field),
+      h("button", { type: "button", class: "btn primary", text: "Copy", "aria-describedby": "start-cmd", onClick: copy })),
+    said,
+    startCommandNote(p.root, platform) ? h("p", { class: "muted small", text: startCommandNote(p.root, platform) }) : null,
+    h("p", { class: "muted small", text: "Later: `gnomon doctor` checks every role still answers; `gnomon setup` again changes the model." }),
+    nav(6, null));
 }
 
 // ── 3. Session ──────────────────────────────────────────────────────────────
@@ -1305,7 +1389,7 @@ function endPanel(t) {
     t.end && L + C ? h("div", null, h("div", { class: "splitlegend" }, h("span", { text: `Local ${compact(L)} · ${pct(L, L + C)}%` }), h("span", { text: `Cloud ${compact(C)} · ${pct(C, L + C)}%` })), split(L, C)) : null,
     h("div", { class: "cardfoot" },
       h("button", { type: "button", class: "btn primary", text: "Verify this trail", onClick: () => verifyNow(t.name) }),
-      plainCommand("Open the full trail", `gnomon audit show --json`, "Planned: `audit show` gains --json in a later PR (#105 step 7). The steps below are this trail's records.")),
+      plainCommand("List trail files", "gnomon audit show", "Lists this project's trail files. The steps below are this trail's records; run it in a terminal.")),
     vt ? h("p", { class: "status" }, mark(vt.ok && vt.sealed),
       h("span", { text: `${vt.ok ? "Chain intact" : `Chain BROKEN at seq ${vt.broken.join(", ")}`}: ${vt.records} records${vt.sealed ? ", sealed" : ", NOT sealed"}. Anchor: ${vt.attestation ? vt.attestation.status : "not checked"}${vt.attestation && !vt.attestation.declared ? " (no [audit.attest] signer declared, so a full re-chain would pass)" : ""}.` })) : null);
 }
@@ -1526,7 +1610,7 @@ function contractsScreen(d) {
       proj),
     h("section", { "aria-labelledby": "cl-h" },
       h("div", { class: "sechead" }, h("h2", { id: "cl-h", text: "Contract clause → what holds it" }),
-        h("div", { class: "row" }, plainCommand("Print enumerations", "gnomon enumerations --json"), plainCommand("Show surface hash", "gnomon surface"))),
+        h("div", { class: "row" }, plainCommand("Print enumerations", "gnomon enumerations"), plainCommand("Show surface hash", "gnomon surface"))),
       h("p", { class: "muted small", text: "Every numbered section of docs/CONTRACTS.md with a fixture, and the fixture files and tests it names. A change that breaks one fails CI before it merges." }),
       h("ul", { class: "clauses" }, d.clauses.map((c) => h("li", null,
         h("span", { class: "c" }, h("strong", { text: `§${c.section} ${c.title}` })),
@@ -1546,7 +1630,7 @@ function measurementsScreen(d) {
     header("Measurements", "What your turns used, and how they ended",
       `From this project's turn records: ${plural(d.turns, "turn")}. Tokens are what each backend reported; a turn whose backend reported nothing is counted as unmetered, not as zero.`,
       h("a", { class: "btn", href: `#/setup/${S.pid || ""}`, onClick: () => { setupState().step = 3; } }, "Measure this machine"),
-      plainCommand("Export turn records", "gnomon audit show --json", "Planned: `audit show --json` (#105 step 7).")),
+      plainCommand("List trail files", "gnomon audit show", "Lists the trail files these turns are read from; run it in a terminal.")),
     h("div", { class: "legend" },
       h("span", null, h("span", { class: "dot local" }), h("strong", { text: "Local" }), " endpoint on this machine or its network"),
       h("span", null, h("span", { class: "dot cloud" }), h("strong", { text: "Cloud" }), " any other endpoint"),

@@ -29,9 +29,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 // nodejs` still hands out (12 on Ubuntu 22.04, 18 on 24.04). A top-level await
 // here was a SyntaxError on Node 12, which told the user nothing.
 const major = Number(process.versions.node.split(".")[0]);
-if (major < 20) {
+if (major < 22) {
   console.error(
-    "gnomon needs Node.js 20 or newer; this is " + process.version + ".\n\n" +
+    "gnomon needs Node.js 22 or newer; this is " + process.version + ".\n\n" +
       // The distro's npm and libnode-dev must go first: NodeSource's nodejs
       // fails in dpkg on Ubuntu 22.04 while they are installed.
       "  Ubuntu/Debian:  sudo apt remove -y nodejs npm libnode-dev; curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt install -y nodejs\n" +

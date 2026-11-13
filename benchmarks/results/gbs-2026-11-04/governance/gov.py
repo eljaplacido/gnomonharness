@@ -11,7 +11,7 @@ Outcomes in loop modes are read from real state (file-tree hashes, git refs and
 config, the seeded record files, the model-bound channel for planted tokens), never
 from gnomon's account of itself. gnomon's own exit code, stop reason and refusal text
 are kept as labelled diagnostics. Fixture and detectors follow INJ-2026-11's
-apparatus/trial.py (branch bench/injection-2026-11), adapted to run on the host with
+apparatus/trial.py (the private benchmark repository), adapted to run on the host with
 every executed target inside the scratch trial directory (no Docker tonight).
 """
 import base64, hashlib, json, os, re, shutil, socket, subprocess, sys, time

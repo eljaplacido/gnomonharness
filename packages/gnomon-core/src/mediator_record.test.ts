@@ -628,7 +628,22 @@ describe("the contract: conformance/mediator_record.json and CONTRACTS.md", () =
   };
 
   it("every record the scenarios write has exactly the published keys and values", async () => {
-    const runs = [await runA(), await runB(), await runA({ usageOf: scaled(2), context: 'token_estimate = "calibrated"' })];
+    // A Claude reply through an OpenAI-compatible relay: Anthropic's cache
+    // read and write counts beside prompt_tokens, so the received record and
+    // every model_call audit record carry cache_write_tokens.
+    const claude = (body: Record<string, any>, n: number) => ({
+      ...scaled(1)(body, n),
+      cache_read_input_tokens: 80,
+      cache_creation_input_tokens: 15,
+    });
+    const cached = await runA({ usageOf: claude });
+    const runs = [await runA(), await runB(), await runA({ usageOf: scaled(2), context: 'token_estimate = "calibrated"' }), cached];
+    // The fixture check below covers the key only if a scenario writes it.
+    const cachedGot = cached.record.volatile.model_calls! as unknown as Record<string, any>;
+    expect(cachedGot.cache_write_tokens).toBeGreaterThan(0);
+    expect(cachedGot.cached_tokens).toBeGreaterThan(0);
+    expect(cachedGot.calls.some((c: Record<string, any>) => c.cache_write_tokens === 15)).toBe(true);
+    expect(trail(cached.root, fixture.audit.kind).some((r) => r.cache_write_tokens === 15)).toBe(true);
     for (const { record, root } of runs) {
       const sent = record.counters.model_calls! as unknown as Record<string, any>;
       conforms(sent, fixture.sent, "counters.model_calls");

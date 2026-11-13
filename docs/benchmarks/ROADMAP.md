@@ -23,9 +23,9 @@ measure of success is outside use, not gnomon's rank on them.
 Layout: `benchmarks/standards/<spec>/` holds the apparatus, and
 `benchmarks/standards/results/<spec-id>/…` holds submissions (see
 [README.md](README.md#how-to-submit-results)). Each implementation reuses
-apparatus gnomon already published, most of it on the
-[`bench/peers-2026-11`](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results)
-branch.
+apparatus gnomon already built for its own studies; that apparatus is
+archived outside this repository and will be published with the reference
+runners.
 
 | Order | Spec | Reuses | New work | Exit criterion |
 |---|---|---|---|---|
@@ -41,8 +41,8 @@ x86 slots shorten that.
 
 ## R2. Adapters for peer harnesses
 
-- **Peers.** UX1 already drives goose, opencode V2, Qwen Code and
-  mini-swe-agent. The next adapters are pi (the obench incumbent for leanness
+- **Peers.** gnomon's own apparatus has drivers for goose, opencode V2, Qwen
+  Code and mini-swe-agent. The next adapters are pi (the obench incumbent for leanness
   ([obench](https://pypi.org/project/obench/))), Claude Code, Codex CLI and
   OpenHands.
 - **What each adapter provides.**
@@ -56,8 +56,8 @@ x86 slots shorten that.
   adapter's README names its author and invites the harness's maintainers to
   review or take it over. A disputed adapter blocks comparative claims about
   that harness until the dispute is resolved. gnomon's own record shows why:
-  opencode's last-rule-wins ordering once produced a false 0/5
-  ([G2b](https://github.com/eljaplacido/gnomonharness/tree/bench/peers-2026-11/benchmarks/results/g2b-2026-11)).
+  a harness's last-rule-wins rule ordering once produced a false finding
+  that had to be withdrawn (2026-11-07).
 - **Outward too.** A gnomon adapter for obench (its single
   `run(instruction, workdir, model, timeout_s)` contract), and a Harbor agent
   for Terminal-Bench 4.0 runs that follow Harbor's ≥5-trial rules

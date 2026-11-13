@@ -21,7 +21,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { loadConfig, listRoles, routeRole, recomputeManifest, isLoopbackUrl, type GnomonConfig } from "gnomon-core";
+import { loadConfig, listRoles, routeRole, recomputeManifest, isLoopbackUrl, type GnomonConfig, type TrustOptions } from "gnomon-core";
 import { probeMachine, formatProbe, type MachineProbe, type ProbeHost, type RuntimeId } from "./probe.js";
 import {
   recommend,
@@ -33,7 +33,7 @@ import {
   type MachineMemory,
 } from "./catalog.js";
 import { readProvenance, type Provenance } from "./setup_surface.js";
-import { hostPort, type Readiness } from "./setup.js";
+import { hostPort, preSessionSurface, keyWithheldByTrust, withheldWhy, type Readiness, type ReadinessOptions } from "./setup.js";
 import { machineJson, runtimesJson, SETUP_FACTS_FILE, type SetupFacts } from "./setup_wizard.js";
 
 /** `gnomon doctor` exits (docs/CONTRACTS.md §15). */
@@ -56,10 +56,16 @@ export interface DoctorDeps {
   host: ProbeHost;
   catalog: Catalog;
   now(): Date;
-  /** Readiness of one role: a listing GET (setup.ts checkReadiness). */
-  readiness(config: GnomonConfig, role: string): Promise<Readiness>;
+  /**
+   * Readiness of one role: a listing GET (setup.ts checkReadiness). Doctor
+   * passes the surface the trust step would run, and whether that is the
+   * surface as declared (`trusted`).
+   */
+  readiness(config: GnomonConfig, role: string, opts: ReadinessOptions): Promise<Readiness>;
   /** Make the surface's declared keys visible to the readiness check (the credential store). */
   applyKeys?(config: GnomonConfig): void;
+  /** --trust and GNOMON_TRUST, as the session would read them. */
+  trust?: TrustOptions;
 }
 
 export interface RouteRow {
@@ -117,6 +123,9 @@ function readinessFix(row: RouteRow): string | undefined {
   const why = row.why ?? "";
   if (/needs \$(\w+)/.test(why) || /rejected the key/.test(why)) return `gnomon key set ${row.endpoint ?? "<endpoint>"}`;
   const rt = runtimeAt(row.where.startsWith("http") ? row.where : `http://${row.where}`);
+  if (/once this surface is trusted/.test(why)) {
+    return "gnomon trust — read what .gnomon/ grants; then gnomon trust grant, if you accept it";
+  }
   if (/nothing is listening/.test(why)) {
     return rt === "ollama" || !rt ? "start Ollama: ollama serve (or open the Ollama app)" : `start the model server on ${row.where}`;
   }
@@ -176,9 +185,9 @@ export async function runDoctor(opts: { dir: string }, deps: DoctorDeps): Promis
       fix: "gnomon setup — scans this machine and proposes a surface (or: gnomon launch)",
     });
   } else {
-    let config: GnomonConfig | undefined;
+    let declared: GnomonConfig | undefined;
     try {
-      config = loadConfig(root);
+      declared = loadConfig(root);
     } catch (err) {
       add({
         kind: "surface",
@@ -189,7 +198,13 @@ export async function runDoctor(opts: { dir: string }, deps: DoctorDeps): Promis
     }
     const rolesPath = join(gnomonDir, "roles.toml");
     provenance = readProvenance(existsSync(rolesPath) ? readFileSync(rolesPath, "utf-8") : undefined);
-    if (config) {
+    if (declared) {
+      // Doctor reaches every role's endpoint with its key, and it never runs a
+      // session, so nothing else would settle trust first: it checks what the
+      // trust step would run. A cloned repository's endpoint at its own host
+      // with api_key_env = "ANTHROPIC_API_KEY" is shown as waiting on trust,
+      // and is never sent the key (docs/CONTRACTS.md §8).
+      const { config, trusted } = preSessionSurface(declared, deps.trust);
       deps.applyKeys?.(config);
       const groups = new Map<string, RouteRow>();
       for (const role of listRoles(config)) {
@@ -217,7 +232,14 @@ export async function runDoctor(opts: { dir: string }, deps: DoctorDeps): Promis
       const routes = [...groups.values()];
       await Promise.all(
         routes.map(async (row) => {
-          const r = await deps.readiness(config!, row.roles[0]!).catch((e: unknown) => ({ ready: false, why: String(e) }));
+          const withheld = keyWithheldByTrust(declared, config, row.roles[0]!);
+          if (withheld) {
+            row.why = withheldWhy(withheld);
+            return;
+          }
+          const r = await deps
+            .readiness(config, row.roles[0]!, { trusted })
+            .catch((e: unknown) => ({ ready: false, why: String(e) }));
           row.ready = r.ready;
           if (r.why) row.why = r.why;
         })

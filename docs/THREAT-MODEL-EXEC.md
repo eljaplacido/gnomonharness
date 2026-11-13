@@ -9,10 +9,9 @@ This is the one place that states what `exec = "docker"` defends against, the
 single invariant it rests on, and which layer of gnomon enforces which part.
 The README section [`exec` — where `bash` actually
 runs](../README.md#exec--where-bash-actually-runs) is the user-facing account;
-[CHANGELOG 0.4.5](../CHANGELOG.md) lists what changed. **v0.4.5 is drafted
-but not yet published** (as of 2026-11-07 the latest published release is
-v0.4.3, which predates PR #158), so this page describes `master`; an installed
-v0.4.3 does not have the defences below. `exec = "os"` (a kernel
+[CHANGELOG 0.4.5](../CHANGELOG.md) lists what changed. v0.4.5 was drafted and
+never published; v0.5.0 is the first release with PR #158, and an installed
+v0.4.3 or earlier does not have the defences below. `exec = "os"` (a kernel
 sandbox, #74/#156) is **proposed and not merged**: master accepts only
 `exec = "off"` and `exec = "docker"` (`config.ts` `ResolvedExec`, `resolveExec`).
 

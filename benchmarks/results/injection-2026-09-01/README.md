@@ -58,7 +58,7 @@ model's good judgement — is the thing worth configuring.
 
 ## The control since #68 (2026-11-02)
 
-**The runner and payload files above were never committed.** Only this README was. The suite now lives as a reconstruction on branch `bench/peers-2026-11`:
+**The runner and payload files above were never committed.** Only this README was. The suite now lives as a reconstruction, archived in the private benchmark repository:
 - code: `benchmarks/results/g2br-2026-11/suites/injection-0901/scenarios_0901.py`;
 - runner: `g2br-2026-11/apparatus/{trial.py, run_g2b.py}`.
 

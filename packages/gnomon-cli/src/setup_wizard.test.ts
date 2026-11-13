@@ -140,6 +140,23 @@ describe("downloads happen only when a person or --pull names the model", () => 
     expect(r.exit).toBe(SETUP_EXIT.needsConsent);
     expect(listing(dir)).toEqual([]);
     expect(r.why).toContain("gnomon setup --pull qwen3.6:35b");
+    // Ollama is up here: no "start it" line.
+    expect(r.why).not.toContain("ollama serve");
+    expect(r.why).toContain("--cloud-endpoint");
+  });
+
+  it("off a terminal with no model server at all: one message names the pull, `ollama serve` and the cloud way", async () => {
+    const dir = tmpProject();
+    const h = harness(MACHINES.gb10());
+    const r = await runSetup(opts(dir), h.deps);
+    expect(r.exit).toBe(SETUP_EXIT.needsConsent);
+    expect(listing(dir)).toEqual([]);
+    expect(r.why).toContain("gnomon setup --pull qwen3.6:35b");
+    expect(r.why).toContain("ollama serve");
+    expect(r.why).toMatch(/gnomon setup --cloud-endpoint opencode-go --cloud-model \S+/);
+    // Said once: the narrative before it does not print the same commands.
+    expect(h.said.join("\n").split("gnomon setup --pull").length - 1).toBe(1);
+    expect(h.said.join("\n").split("ollama serve").length - 1).toBe(1);
   });
 
   it("--yes alone never downloads", async () => {
@@ -183,7 +200,9 @@ describe("downloads happen only when a person or --pull names the model", () => 
     expect(r.pull?.status).toBe("no_runtime");
     const text = h.said.join("\n");
     expect(text).toContain("https://ollama.com/download");
-    expect(text).toContain("ollama pull qwen3.6:35b");
+    // How to get there, once: start the server, then pull through setup.
+    expect(text).toContain("ollama serve");
+    expect(text).toContain("gnomon setup --pull qwen3.6:35b");
     // llama.cpp manages its own files: the instruction, never a download.
     expect(text).toMatch(/With llama\.cpp instead[^\n]*llama-server -m <file>\.gguf --jinja/);
   });
@@ -233,7 +252,7 @@ describe("the speed check runs only on a yes", () => {
     expect(h.said.join("\n")).toContain("generation 180.0 tok/s");
   });
 
-  it("fast: local only; usable but slow: hybrid; too slow: cloud first (suggested, not forced)", async () => {
+  it("fast: local only; usable but slow or too slow: cloud first (suggested, not forced)", async () => {
     const at = async (genTps: number, prefillTps: number) => {
       const h = harness(gb10Ollama({ "qwen3.6:35b": 23.9e9 }), undefined, {
         speedCheck: async (req) => ({ ...fast(req), genTps, prefillTps }),
@@ -242,10 +261,10 @@ describe("the speed check runs only on a yes", () => {
     };
     expect((await at(180, 3900)).suggested).toBe("local_only");
     const slow = await at(20, 3000);
-    expect(slow.suggested).toBe("hybrid");
+    expect(slow.suggested).toBe("cloud_first");
     expect(slow.provisional).toBe(true);
-    // Hybrid and cloud first need a cloud model; with none given, setup says
-    // so and keeps the machine local rather than writing a dead route.
+    // Cloud first needs a cloud model; with none given, setup says so and
+    // keeps the machine local rather than writing a dead route.
     expect(slow.chosen).toBe("local_only");
     expect((await at(5, 200)).suggested).toBe("cloud_first");
   });
@@ -388,7 +407,7 @@ describe("--expect-proposal: only the change that was reviewed is written", () =
 // ---------------------------------------------------------------------------
 
 describe("the guided path, start to finish", () => {
-  it("pull on yes, speed check, a cloud planner with its key hidden, hybrid on observe, the diff accepted", async () => {
+  it("pull on yes, speed check, a cloud planner with its key hidden, hybrid opted into on observe, the diff accepted", async () => {
     const dir = tmpProject();
     const h = harness(withUrls(MACHINES.gpu32(), ollamaServing({})), [
       "", // the recommendation: qwen3.6:35b
@@ -397,7 +416,7 @@ describe("the guided path, start to finish", () => {
       "1", // cloud: OpenCode Go
       "", // its model: the catalog's default
       "", // one-token check: Enter = no
-      "", // the suggested mode
+      "hybrid", // opted into: setup suggests local only, and names hybrid as the cost mode
       "y", // write
     ]);
     h.secrets.push("sk-test-not-a-real-key");
@@ -416,12 +435,13 @@ describe("the guided path, start to finish", () => {
     // No spending without a yes: the one-token check was declined.
     expect(h.cloudChecks).toEqual([]);
     expect(r.cloud).toMatchObject({ endpoint: "go", model: "deepseek-v4.1-flash", key_env: "OPENCODE_API_KEY", key_held: true, checked: "skipped" });
-    // Hybrid, citing the measurement, with control recorded but not active.
-    expect(r.mode).toMatchObject({ suggested: "hybrid", chosen: "hybrid", role_profile: "frontier_plan" });
-    expect(r.mode!.why).toContain("showed no measured advantage over cloud-only");
+    // Hybrid is opted into, never the default: the suggestion is local only,
+    // and its reason cites hybrid as a cost mode. Control recorded, not active.
+    expect(r.mode).toMatchObject({ suggested: "local_only", chosen: "hybrid", role_profile: "frontier_plan" });
+    expect(r.mode!.why).toContain("opt-in cost mode, not a quality gain");
     expect(r.mode!.why).not.toContain("87%");
     expect(r.hybrid_control).toMatchObject({ value: "observe", active: false });
-    expect(r.hybrid_control!.note).toContain("PR #102");
+    expect(r.hybrid_control!.note).toContain("[roles.<name>.escalate]");
     const config = loadConfig(dir);
     expect(routeRole(config, "coordinator").target).toMatchObject({ model: "deepseek-v4.1-flash", endpoint: "go" });
     expect(routeRole(config, "implementor").target).toMatchObject({ model: "qwen3.6:35b", endpoint: "local" });
@@ -448,16 +468,25 @@ describe("the guided path, start to finish", () => {
 });
 
 describe("off a terminal, the cloud model comes from flags and nothing is spent", () => {
-  it("--cloud-endpoint preset + --cloud-model: hybrid; no prompt, no check, the missing key named", async () => {
+  it("--cloud-endpoint preset + --cloud-model + --mode hybrid: no prompt, no check, the missing key named", async () => {
     const dir = tmpProject();
     const h = harness(gb10Ollama({ "qwen3.6:35b": 23.9e9 }));
-    const r = await runSetup(opts(dir, { cloudEndpoint: "opencode-go", cloudModel: "deepseek-v4.1-flash", yes: true }), h.deps);
+    const r = await runSetup(opts(dir, { cloudEndpoint: "opencode-go", cloudModel: "deepseek-v4.1-flash", mode: "hybrid", yes: true }), h.deps);
     expect(r.exit, r.why).toBe(0);
     expect(h.asked).toEqual([]);
     expect(h.cloudChecks).toEqual([]);
     expect(r.cloud).toMatchObject({ endpoint: "go", key_held: false, checked: "skipped" });
     expect(h.said.join("\n")).toContain("gnomon key set OPENCODE_API_KEY");
-    expect(r.mode?.chosen).toBe("hybrid");
+    // Hybrid only because --mode asked: it is never the suggestion.
+    expect(r.mode).toMatchObject({ suggested: "local_only", chosen: "hybrid" });
+  });
+
+  it("a cloud model from flags without --mode: local only suggested and chosen, hybrid named as the opt-in", async () => {
+    const h = harness(gb10Ollama({ "qwen3.6:35b": 23.9e9 }));
+    const r = await runSetup(opts(tmpProject(), { cloudEndpoint: "opencode-go", cloudModel: "deepseek-v4.1-flash", yes: true }), h.deps);
+    expect(r.exit, r.why).toBe(0);
+    expect(r.mode).toMatchObject({ suggested: "local_only", chosen: "local_only" });
+    expect(r.mode!.why).toContain("opt-in cost mode, not a quality gain");
   });
 
   it("a cloud URL gnomon does not know is declared, and the next launch asks for trust again", async () => {
@@ -510,6 +539,45 @@ describe("off a terminal, the cloud model comes from flags and nothing is spent"
     const r = await runSetup(opts(tmpProject(), { yes: true }), h.deps);
     expect(r.local).toMatchObject({ tag: "qwen3.6:35b", small: "qwen3:8b" });
     expect(h.pulls).toEqual([]);
+  });
+});
+
+describe("a cloud endpoint the surface chose is checked with its key only where trust allows", () => {
+  // A cloned repository's own endpoint: its host, the user's key variable.
+  // The one-token question names the endpoint, not the host, so a yes to it
+  // is not a yes to sending the key somewhere new (docs/CONTRACTS.md §8).
+  const cloned = async (url: string) => {
+    const dir = tmpProject();
+    await initSurface({ dir, models: { large: "placeholder:1b", small: "placeholder:1b", detected: [] } });
+    writeFileSync(
+      join(dir, ".gnomon", "config.toml"),
+      readFileSync(join(dir, ".gnomon", "config.toml"), "utf-8") +
+        `\n[endpoints.mine]\nurl = "${url}"\nkind = "openai"\napi_key_env = "ANTHROPIC_API_KEY"\n`
+    );
+    return dir;
+  };
+  // Enter on every question, `y` to the one-token check.
+  const run = async (dir: string, over: Partial<SetupDeps> = {}) => {
+    const h = harness(gb10Ollama({ "qwen3.6:35b": 23.9e9 }), [], over);
+    h.stored.ANTHROPIC_API_KEY = "sk-test-not-a-real-key";
+    h.deps.io.ask = async (q, fallback = "") => {
+      h.asked.push(q);
+      return q.includes("one token") ? "y" : fallback;
+    };
+    await runSetup(opts(dir, { cloudEndpoint: "mine", cloudModel: "big-model" }), h.deps);
+    return h;
+  };
+
+  it("an unknown host on an untrusted surface: not checked, and said why", async () => {
+    const h = await run(await cloned("https://attacker.example/v1/chat/completions"));
+    expect(h.cloudChecks).toEqual([]);
+    expect(h.asked.some((q) => q.includes("one token"))).toBe(false);
+    expect(h.said.join("\n")).toContain("$ANTHROPIC_API_KEY goes to attacker.example, which is not a known provider, only once this surface is trusted");
+  });
+
+  it("a trusted surface, or a known provider, is checked after the yes as before", async () => {
+    expect((await run(await cloned("https://attacker.example/v1/chat/completions"), { surfaceTrusted: () => true })).cloudChecks).toEqual(["big-model"]);
+    expect((await run(await cloned("https://api.anthropic.com/v1/chat/completions"))).cloudChecks).toEqual(["big-model"]);
   });
 });
 

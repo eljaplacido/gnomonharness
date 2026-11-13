@@ -38,9 +38,11 @@ cite these numbers as a harness ranking.**
 > anything here.
 >
 > **Not updated for the 2026-11 campaigns.** This document covers August and
-> September 2026. The Terminal-Bench 4.0, hybrid and GBS results of November
-> 2026 are in [EVIDENCE.md](EVIDENCE.md#2026-11-campaigns) and
-> [benchmarks/FINDINGS-2026-11-04.md](benchmarks/FINDINGS-2026-11-04.md).
+> September 2026; every peer figure in it is from those months. The gnomon-only
+> Terminal-Bench 4.0, hybrid and GBS results of November 2026 are in
+> [EVIDENCE.md](EVIDENCE.md#2026-11-campaigns) and
+> [benchmarks/FINDINGS-2026-11-04.md](benchmarks/FINDINGS-2026-11-04.md); no
+> November 2026 peer comparison is published.
 
 This document records a first pass at measuring gnomon against comparable
 open-source coding harnesses, run on one machine over one day. It is published
@@ -266,7 +268,7 @@ own 11.9–14.9% self-flip.
 | Fault disclosure | **8/8 faults disclosed**, after 3 defects | [`fault-disclosure`](../benchmarks/fault-disclosure/) |
 | Degradation, recorded | **17/17 announced AND recorded**, after 3 more (12/12 when first published; 17 since 2026-11-03/04: `shadow_unreachable`, `audit_anchor_queued`, `context_window_unresolved`) | [`degradation-contract`](../benchmarks/degradation-contract/) |
 | Silent success | **0/11 falsely successful**, 0 void | [`silent-success`](../benchmarks/silent-success/) |
-| Context on the wire | **4.66×** vs opencode, bytes counted at the endpoint | [`context-cost`](../benchmarks/context-cost/) |
+| Context on the wire | **4.66×** vs opencode (2026-09-05), bytes counted at the endpoint | [`context-cost`](../benchmarks/context-cost/) |
 
 ### The workflow arms (5 September 2026)
 

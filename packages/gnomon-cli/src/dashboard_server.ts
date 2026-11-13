@@ -128,7 +128,7 @@ const SECURITY_HEADERS: Record<string, string> = {
 };
 
 /** The commands the Setup screen asks this CLI's --help about. */
-const SETUP_COMMANDS = ["doctor", "setup", "key", "endpoint", "trust", "check"] as const;
+const SETUP_COMMANDS = ["doctor", "setup", "key", "endpoint", "trust", "check", "launch"] as const;
 
 /** Actions a project without a `.gnomon/` may run: setup is how it gets one. */
 const WITHOUT_SURFACE = new Set(["doctor.scan", "setup.plan", "setup.pull", "setup.speed_check", "setup.apply", "key.set"]);
@@ -459,6 +459,8 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
       projects.forEach(refresh);
       return json(res, 200, {
         harness: harnessBuild(),
+        // Which shell the Start step writes its launch command for (`cd <path> && gnomon launch`, or `gnomon launch --dir <path>` on Windows).
+        platform: process.platform,
         read_only: false,
         projects: projects.map((p) => ({ id: p.id, name: p.name, root: p.root, source: p.source, hasSurface: p.hasSurface })),
         actions: DASHBOARD_ACTIONS,

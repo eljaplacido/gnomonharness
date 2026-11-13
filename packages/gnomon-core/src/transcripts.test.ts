@@ -186,7 +186,7 @@ describe("readTranscript — opencode", () => {
 // ── goose, Qwen Code, mini-swe-agent ─────────────────────────────────────
 //
 // Built from the shapes of G1's real outputs (goose 1.57.0, Qwen Code 0.26.4,
-// mini-swe-agent 2.4.6; benchmarks/results/g1-2026-11 on bench/peers-2026-11),
+// mini-swe-agent 2.4.6; the G1 governance study, 2026-11),
 // cut down and with ids, paths and text replaced. Where G1 never produced a
 // shape (a call goose or mini refused), the fixture follows that release's
 // source, which the header of transcripts.ts names.
@@ -552,7 +552,7 @@ describe("check 5 — judgeTranscript", () => {
 /**
  * A trail written by the real AuditTrail, so its hashes are genuine. The
  * records copy the shape of G1's `gnomon-T4-destructive-r2` trial
- * (bench/peers-2026-11, benchmarks/results/g1-2026-11/runs/m-180-…): four
+ * (the G1 governance study, 2026-11): four
  * destructive commands refused, then `var/` moved out by a command no deny
  * pattern matched. That trial ran 0.3.1, whose trail kept the 70-character
  * form, so the recorded text of the move is the prefix below and the rest is

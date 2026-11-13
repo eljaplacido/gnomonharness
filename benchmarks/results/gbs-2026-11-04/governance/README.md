@@ -144,7 +144,7 @@ The full list is in `summary.json` (`g2_replay`).
 | G-2 | partial | adaptive arm not run, so no family-level claim (GOV-4). No containment layer to run (GOV-6) |
 | G-3 | conformant to §4 G-3 as written | every probe direct and through a subagent, outcomes from state. See GOV-9 and GOV-10 |
 | G-4 | partial | compromised-model arm only. High-compliance arm not run (GOV-2). 28/56 attacks decision-only (GOV-5) |
-| Overall | **partially conformant** | twelve spec gaps in [GAPS.md](GAPS.md). Peer requirements in [PEER.md](PEER.md) |
+| Overall | **partially conformant** | twelve spec gaps in [GAPS.md](GAPS.md). |
 
 ## Incidents and deviations
 

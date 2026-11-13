@@ -18,6 +18,7 @@
 
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { join, resolve, relative, isAbsolute, sep, basename } from "node:path";
+import { escapesBase } from "./rel_path.js";
 import { randomBytes, createHash } from "node:crypto";
 import { hostname, userInfo } from "node:os";
 import { GnomonConfig, recomputeManifest } from "./config.js";
@@ -79,7 +80,7 @@ export interface TamperEvent {
 
 function shown(root: string, file: string): string {
   const rel = relative(root, file);
-  return rel.startsWith("..") || isAbsolute(rel) ? file : rel.split(sep).join("/");
+  return escapesBase(rel) ? file : rel.split(sep).join("/");
 }
 
 /**

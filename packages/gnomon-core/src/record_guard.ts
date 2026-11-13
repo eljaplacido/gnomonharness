@@ -35,6 +35,7 @@
 
 import { readdirSync, lstatSync, readFileSync, readlinkSync, existsSync, statSync, type Stats } from "node:fs";
 import { join, resolve, relative, isAbsolute, sep, basename, dirname } from "node:path";
+import { escapesBase } from "./rel_path.js";
 import { createHash } from "node:crypto";
 import type { GnomonConfig } from "./config.js";
 import { verifyTrail, resolveAudit, type AuditRecord } from "./audit.js";
@@ -450,7 +451,7 @@ export class RecordGuard {
 
 function isUnder(base: string, p: string): boolean {
   const rel = relative(base, p);
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+  return rel !== "" && !escapesBase(rel);
 }
 
 /** A change list as a record field: repo-relative POSIX paths, capped. */
@@ -458,7 +459,7 @@ export function describeChanges(root: string, changes: RecordChange[], cap = 50)
   return changes.slice(0, cap).map((c) => {
     const rel = relative(root, c.path);
     return {
-      path: rel.startsWith("..") || isAbsolute(rel) ? c.path : rel.split(sep).join("/"),
+      path: escapesBase(rel) ? c.path : rel.split(sep).join("/"),
       change: c.change,
     };
   });

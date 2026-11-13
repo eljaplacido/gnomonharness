@@ -225,7 +225,18 @@ export async function mustFailFirst(
   const warnings: string[] = [];
   try {
     for (const [abs, pre] of sources) {
-      put(abs, pre, current.get(abs)?.mode);
+      try {
+        put(abs, pre, current.get(abs)?.mode);
+      } catch (e) {
+        // A pre-image that cannot be put back refuses the check, as one that
+        // cannot be read does above; the ones already put back are restored
+        // by the finally below. It used to throw out of the turn: in dc1
+        // (2026-11-12) putting `.gitignore` back hit writeFileIn's refusal of
+        // its own temp file (rel_path.ts), and `gnomon task` lost a 58-call
+        // run as "could not start".
+        const why = e instanceof Error ? e.message : String(e);
+        return { ran: false, pinsNothing: false, tests, restored: [], reason: `not re-run: ${rel(abs)} could not be put back: ${why}`, warnings };
+      }
       placed.set(abs, identityOf(abs));
     }
     const again = await run(verify.command);

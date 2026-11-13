@@ -1,6 +1,5 @@
 /**
- * Two record-only fixes found by the P2G41 acid test (2026-11-05,
- * benchmarks/results/p2g41-2026-11/analysis on bench/peers-2026-11), where
+ * Two record-only fixes found by the P2G41 acid test (2026-11-05), where
  * every gnomon cell was rebuilt from gnomon's own records and checked against
  * an independent wire capture and the verifier.
  *

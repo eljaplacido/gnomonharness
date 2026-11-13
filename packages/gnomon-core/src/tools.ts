@@ -31,6 +31,7 @@ import {
   readlinkSync
 } from "node:fs";
 import { resolve, relative, isAbsolute, dirname, basename, join, sep, win32 as win32Path } from "node:path";
+import { escapesBase } from "./rel_path.js";
 import { createHash } from "node:crypto";
 import { lookup as dnsLookupCb } from "node:dns";
 import { homedir, tmpdir } from "node:os";
@@ -579,7 +580,7 @@ export function resolveInRoot(
   for (const candidate of [root, ...extraRoots]) {
     const realRoot = realpathOrSelf(resolve(candidate));
     const rel = relative(realRoot, realAbs);
-    if (!rel.startsWith("..") && !isAbsolute(rel)) return abs;
+    if (!escapesBase(rel)) return abs;
   }
   return null;
 }
@@ -1754,6 +1755,32 @@ export function pipelineStatusNote(command: string): string {
   );
 }
 
+/**
+ * A note for a shell its own command killed.
+ *
+ * `pkill -f <pattern>` (and `kill $(pgrep -f ...)`, or a /proc/<pid>/cmdline
+ * grep) matches every process whose command line holds the pattern -- which
+ * includes the `sh -c` running it. A model stopping its own background
+ * program that way ended its own call, read "killed by SIGTERM" with no
+ * reason given, and in three benchmark cells (2026-11) matched gnomon too
+ * (proc_title.ts). Only when the shell died by a signal (or the 128+signal a
+ * container reports) and the command has such a pattern: the bracket trick
+ * keeps a pattern from matching its own text.
+ */
+export function selfKillNote(command: string, exit: number | null, signal?: NodeJS.Signals | null): string {
+  const bySignal = (exit === null && (signal === "SIGTERM" || signal === "SIGKILL")) || exit === 143 || exit === 137;
+  if (!bySignal) return "";
+  const m = /\bp(?:kill|grep)\b[^\n;&|]*?\s-[A-Za-z]*f[A-Za-z]*\s+(['"]?)([^\s'";&|)]+)\1/.exec(command);
+  if (!m && !/\/proc\/\S*\/cmdline/.test(command)) return "";
+  const p = m?.[2] ?? "";
+  const example = /^[A-Za-z0-9_]/.test(p) ? `[${p[0]}]${p.slice(1)}` : "[a]pp.py";
+  return (
+    `\n\n(note: this shell was ended by ${signal ?? `exit ${exit}`}, most likely by its own command: a ` +
+    `\`pkill -f\` or \`pgrep -f\` pattern also matches the shell running it, whose command line ` +
+    `contains the pattern. Bracket one character so it cannot match itself: \`pkill -f '${example}'\`.)`
+  );
+}
+
 /** What to tell an operator on a Windows box with no POSIX shell. */
 export const NO_POSIX_SHELL =
   "Refused: no POSIX shell found, so `bash` cannot run.\n\n" +
@@ -2802,7 +2829,7 @@ function bashWriteRefusal(command: string, ctx: ToolContext, deferred: Precheck[
     }
     if (!j.writeAllow) continue;
     const rel = relative(root, j.abs);
-    if (rel.startsWith("..") || isAbsolute(rel)) continue;
+    if (escapesBase(rel)) continue;
     if (allowed.length === 0) continue;
     const scope = writeAllowed(ctx, j.abs);
     if (scope.ok) continue;
@@ -2884,7 +2911,7 @@ function outsideRootRefusal(ctx: ToolContext, path: string, abs: string, how: st
       : realpathOfNearest(abs);
   const under = (dir: string) => {
     const rel = relative(dir, real);
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    return !escapesBase(rel);
   };
   const realRoot = realpathOrSelf(resolve(ctx.root));
   for (const r of [ctx.root, ...(ctx.extraRoots ?? [])]) if (under(realpathOrSelf(resolve(r)))) return null;
@@ -2892,7 +2919,7 @@ function outsideRootRefusal(ctx: ToolContext, path: string, abs: string, how: st
   const holder = dirname(realRoot);
   const inside = (dir: string, p: string) => {
     const rel = relative(dir, p);
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    return !escapesBase(rel);
   };
   // A recursive removal reaches everything below where it starts; through a
   // glob (`rm -rf /tmp/*`), everything below the glob's directory.
@@ -2935,7 +2962,7 @@ function outsideWriteAllowed(ctx: ToolContext, realRoot: string, real: string): 
       glob = p;
     } else if (p === "~" || p.startsWith("~/")) {
       const rel = relative(realpathOrSelf(homedir()), real);
-      if (rel.startsWith("..") || isAbsolute(rel)) continue;
+      if (escapesBase(rel)) continue;
       subject = slash(rel);
       glob = p.slice(2) || "**";
     } else if (p.startsWith("/") || isAbsolute(p)) {
@@ -2984,7 +3011,7 @@ function surfaceCommitRefusal(command: string, ctx: ToolContext): Precheck | nul
   const root = resolve(ctx.root);
   const surface = surfaceDir(ctx);
   const spec = relative(root, surface).split(sep).join("/");
-  if (spec.startsWith("..") || isAbsolute(spec)) return null;
+  if (escapesBase(spec)) return null;
   const r = safeGit(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--", spec || "."], {
     cwd: root,
     timeout: 5000,
@@ -3038,7 +3065,7 @@ function surfaceCommitRefusal(command: string, ctx: ToolContext): Precheck | nul
 /** Whether `dir` is `p` or above it. */
 function isAncestor(dir: string, p: string): boolean {
   const rel = relative(recordPathKey(resolve(dir)), recordPathKey(resolve(p)));
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+  return !escapesBase(rel);
 }
 
 /** The surface directory a context guards. */
@@ -3210,7 +3237,7 @@ const GIT_CONTROL = new Map<string, string[]>();
 export function inGitControl(ctx: ToolContext, abs: string): boolean {
   const under = (base: string, p: string): boolean => {
     const rel = relative(recordPathKey(base), recordPathKey(p));
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    return !escapesBase(rel);
   };
   return gitControlPaths(ctx.root).some((g) => under(realpathOrSelf(g), realpathOfNearest(abs)) || under(g, resolve(abs)));
 }
@@ -3344,7 +3371,7 @@ const HOST_HOOK_REL =
 export function inHostHooks(ctx: ToolContext, abs: string): boolean {
   const under = (base: string, p: string): boolean => {
     const rel = relative(recordPathKey(base), recordPathKey(p));
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    return !escapesBase(rel);
   };
   const real = realpathOfNearest(abs);
   const lexical = resolve(abs);
@@ -3468,7 +3495,7 @@ function patternMatches(pattern: string, at: string, root: string, home: string)
   const slash = (p: string) => p.split(sep).join("/");
   const inside = (base: string): string | null => {
     const rel = relative(base, at);
-    return rel.startsWith("..") || isAbsolute(rel) ? null : slash(rel);
+    return escapesBase(rel) ? null : slash(rel);
   };
   let subject: string | null;
   let glob: string;
@@ -3671,7 +3698,7 @@ function archiveMembers(abs: string, kind: "tar" | "unzip", roots: string[] = []
         rr = resolve(r);
       }
       const rel = relative(rr, real);
-      return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+      return rel !== "" && !escapesBase(rel);
     });
     if (!inside) return [];
   }
@@ -4127,6 +4154,7 @@ function exitOutcome(o: {
         ? clampEnds(capped.text, capped.ctx, `bash-exit`)
         : clamp(capped.text, capped.ctx, `bash-exit`)) +
       pipelineStatusNote(command) +
+      selfKillNote(command, exit, signal) +
       (drift ? `\n\n${drift.notice}` : ""),
     // `exit` is null when the child died on a signal, and "exit null" then
     // failed the verify gate's /exit (-?\d+)/ and fell through to its
@@ -4989,7 +5017,7 @@ function stampSkips(rel: string, isDir: boolean): boolean {
 /**
  * Below this many files the walk is the cheaper stamp, and the stamp walks.
  *
- * A git stamp costs a process (two, the first time): on gx10 ~3.5ms a status
+ * A git stamp costs a process (two, the first time): on an NVIDIA GB10 ~3.5ms a status
  * at 0 files, against the walk's 0.2ms, and the walk catches up at about 700
  * files. On the Windows runner a git process costs ~35ms -- this repository's
  * own 482-file tree took ~45ms more a stamp through git than walked, and a
@@ -5022,6 +5050,44 @@ function walkStampOf(base: string, max: number): string | null {
     h.update(`${rel}:${st.size}:${st.mtimeMs}\n`);
   }
   return h.digest("hex");
+}
+
+/**
+ * Every file under `base` as `path -> "size:mtime"`, by the stamp's own walk
+ * and exclusions. Null when the walk reached `max`, for the same reason the
+ * stamp is: a partial listing would read as "these are all the files".
+ *
+ * For where git cannot say what changed (no repository, as in a benchmark
+ * container's /app): diffing two of these names the files a turn created,
+ * changed or removed, including those written through the shell. Stat only,
+ * never contents.
+ */
+export function statSnapshot(base: string, max: number = WALK_MAX_FILES): Map<string, string> | null {
+  try {
+    const files = walkFiles(base, base, max);
+    if (files.length >= max) return null;
+    const out = new Map<string, string>();
+    for (const rel of files) {
+      if (stampSkips(rel, false)) continue;
+      try {
+        const st = statSync(join(base, rel));
+        out.set(rel, `${st.size}:${st.mtimeMs}`);
+      } catch {
+        // vanished mid-walk: absent from this snapshot, which is what it is
+      }
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/** Paths created, changed or removed between two statSnapshots, sorted. */
+export function statChangedPaths(before: Map<string, string>, after: Map<string, string>): string[] {
+  const out: string[] = [];
+  for (const [p, v] of after) if (before.get(p) !== v) out.push(p);
+  for (const p of before.keys()) if (!after.has(p)) out.push(p);
+  return out.sort();
 }
 
 /** A status this slow is worth falling back from, not waiting on twice a command. */
@@ -5063,7 +5129,7 @@ function nearestDotGit(dir: string): string | null {
  * prefix and joining the rest to `base` never compares two spellings of a path.
  *
  * Asked once per root rather than twice per command: it costs as much as the
- * status call it serves, ~2ms each on gx10, and at 0 files that doubled the
+ * status call it serves, ~2ms each on an NVIDIA GB10, and at 0 files that doubled the
  * stamp. The cached answer is reused only while the nearest `.git` above the
  * root is the one it was given under, so a `git init` or an `rm -rf .git` asks
  * again. GIT_DIR or GIT_WORK_TREE in the environment puts the repository where
@@ -5146,7 +5212,7 @@ function gitRootOf(base: string): GitRoot | null {
  * would run it, once a session, is the cost of not paying that twice a
  * command for the rest of it.
  *
- * Cost, measured on gx10 under load (refreshed index; walk in brackets): one
+ * Cost, measured on an NVIDIA GB10 under load (refreshed index; walk in brackets): one
  * status 3.5ms at 0 files [0.2], 8.7ms at 5k [39], 25ms at 20k [162] and 53ms
  * at 50k [131, and 12 of 20 edits missed] -- git's parallel lstat of the index
  * and a readdir of every directory, in C. Small trees never get here
@@ -5306,7 +5372,7 @@ export function recordPathKey(p: string, platform: NodeJS.Platform = process.pla
 export function inRecordDir(ctx: ToolContext, abs: string): boolean {
   const under = (base: string, p: string): boolean => {
     const rel = relative(recordPathKey(base), recordPathKey(p));
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    return !escapesBase(rel);
   };
   // Lexical OR realpath, for the reason inSurface gives: a symlink can alias
   // the directory from either side.
@@ -5456,7 +5522,7 @@ export function inSurface(ctx: ToolContext, abs: string): boolean {
   // on a case-sensitive APFS volume, the direction this guard errs in.
   const under = (base: string, p: string): boolean => {
     const rel = relative(recordPathKey(base), recordPathKey(p));
-    return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+    return !escapesBase(rel);
   };
   // `abs` arrives already `resolve()`d by resolveInRoot, so `..` is collapsed
   // and the lexical arm cannot be walked out of and back in.

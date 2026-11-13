@@ -77,7 +77,7 @@ function fakeHost(opts: {
 
 describe("probeHardware: NVIDIA", () => {
   it("GB10 / DGX Spark: memory [N/A] is unified memory shared with RAM, not a GPU with none", async () => {
-    // Verbatim from this repository's gx10 machine, 2026-11-02.
+    // Verbatim from an NVIDIA GB10 machine, 2026-11-02.
     const host = fakeHost({
       platform: "linux",
       arch: "arm64",

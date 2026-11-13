@@ -39,6 +39,11 @@ verification](#provenance-sbom-and-verification).
 Pressing Publish is also what puts the release on npm:
 `.github/workflows/publish-npm.yml` runs on `release: published` and publishes
 that release's own four tarballs. See [Publishing to npm](#publishing-to-npm).
+Treat npm trusted publishing (or `NPM_TOKEN`) as a gate before pressing
+Publish, and after the publish-npm run confirm that
+`npm view gnomon-harness version` prints the new version. Until it does, the
+release text says the package reaches npm "once the npm workflow completes",
+not that it is there.
 
 ## Why a script rather than an instruction
 
@@ -202,12 +207,13 @@ registry for each of the four packages before anything is downloaded:
 | missing for any | not set | stops, naming the four packages and the exact fields to enter |
 
 Measured: v0.3.3 and v0.4.0 both stopped at the old "Require NPM_TOKEN" step,
-because no secret was set, so the registry is still at 0.3.2. As of 2026-11-07
-that is unchanged: GitHub's Latest is v0.4.3, v0.4.4 and v0.4.5 are drafts
-nobody has published, and trusted publishing (below) is still waiting on the
-maintainer's npmjs.com sign-in. Until it is done, the installer reaches every
-release after 0.3.2 through the release's own tarballs, and a bare
-`npm i -g gnomon-harness` installs 0.3.2.
+because no secret was set, so the registry stayed at 0.3.2 through v0.4.3
+(v0.4.4 and v0.4.5 were drafted and never published). **v0.5.0 is meant to be
+the first release on npm since 0.3.2**, through trusted publishing (below),
+which needs the maintainer's one-time npmjs.com setup before the v0.5.0
+release is published. If that setup is not done, the publish run stops, the
+installer still reaches v0.5.0 through the release's own tarballs, and a bare
+`npm i -g gnomon-harness` keeps installing 0.3.2 until the run is repeated.
 
 **One-time setup on npmjs.com (the maintainer).** All four packages exist
 since 0.3.2, which is the precondition. Signed in to npmjs.com as a maintainer

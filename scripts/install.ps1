@@ -2,10 +2,23 @@
 #
 #   irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.ps1 | iex
 #
-# Re-running it is how you update; `gnomon update` runs it for you.
+# and to go straight on to choosing a model, in the project you are in:
+#
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.ps1))) -Setup
+#
+# (or `$env:GNOMON_SETUP = '1'` before the `irm | iex` line). Re-running it is
+# how you update; `gnomon update` runs it for you, never with -Setup.
+#
+# Options, read before anything is checked or fetched:
+#   -Setup   after installing, run `gnomon setup` in the current directory,
+#            interactively. It asks before every download and write, exactly
+#            as typed by hand: -Setup never answers yes for you (no --yes).
+#   -Help    print the usage and install nothing.
+# They are read from $args rather than a param() block, so the plain
+# `irm | iex` form, which cannot pass any, behaves exactly as before.
 #
 # The same steps as scripts/install.sh, and the two must stay in step:
-#   1. Checks for Node >= 20 and npm; never installs Node, prints how instead.
+#   1. Checks for Node >= 22 and npm; never installs Node, prints how instead.
 #   2. Resolves the release: the latest, or $env:GNOMON_VERSION = "0.2.3".
 #   3. Installs the npm package -- from the registry when that version is
 #      published there, otherwise from the release's own tarballs.
@@ -17,7 +30,7 @@
 #   anything is installed.
 #
 # Environment: GNOMON_VERSION, GNOMON_NPM_PREFIX, GNOMON_NO_NATIVE=1,
-# GITHUB_TOKEN -- as in install.sh.
+# GITHUB_TOKEN, GNOMON_SETUP=1 -- as in install.sh.
 #
 # Everything is inside functions and errors are thrown, never `exit`: under
 # `irm | iex` this runs in the reader's own session, and `exit` would close
@@ -30,7 +43,7 @@
 # closing curly quote -- and PowerShell accepts curly quotes as string
 # delimiters, so one dash in a message can end a string early.
 
-function Install-Gnomon {
+function Install-Gnomon([bool]$RunSetup) {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'   # PS 5.1's progress bar slows Invoke-WebRequest ~10x
     # PS 5.1 on older Windows defaults to TLS 1.0, which GitHub refuses.
@@ -48,7 +61,7 @@ function Install-Gnomon {
     $nodeVersion = First-Line (Invoke-Native node @('--version'))
     $major = 0
     [void][int]::TryParse(($nodeVersion -replace '^v', '').Split('.')[0], [ref]$major)
-    if ($major -lt 20) { Show-NodeHelp "This machine has $nodeVersion." }
+    if ($major -lt 22) { Show-NodeHelp "This machine has $nodeVersion." }
     if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { Show-NodeHelp 'Node is here but `npm` is not.' }
     Write-Host "  node $nodeVersion, npm $(First-Line (Invoke-Native (Get-Npm) @('--version')))"
 
@@ -182,15 +195,45 @@ function Install-Gnomon {
             Write-Host "  $prefix is not on your PATH. Add it for your user, then open a new terminal:"
             Write-Host "    [Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';$prefix', 'User')"
         }
+        if ($RunSetup) { Invoke-Setup $gnomon }
         Write-Host ''
         Write-Host 'Next:'
-        Write-Host '  cd your-project; gnomon launch'
+        if (-not $RunSetup) {
+            Write-Host '  cd your-project; gnomon setup       # scan this machine, pick a model, write .gnomon/'
+        }
+        Write-Host '  gnomon dashboard                    # the same steps in the browser, then the command to start'
+        Write-Host '  cd your-project; gnomon launch      # start working (offers setup first if no model answers)'
         Write-Host ''
         Write-Host 'Update later with `gnomon update` (or re-run this installer);'
         Write-Host '`gnomon uninstall` prints how to remove it.'
         Write-Host 'gnomon runs commands through Git for Windows'' bash: install it if you have not (winget install Git.Git).'
     } finally {
         Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
+    }
+}
+
+# `gnomon setup`, interactively, in the directory the installer was run from.
+# Never with --yes: setup asks before every download and write, and nothing
+# here may answer for the person. Off a console (a CI job) it does not run.
+function Invoke-Setup([string]$gnomon) {
+    Write-Step "gnomon setup (in $((Get-Location).Path))"
+    if ((Get-Location).Path.TrimEnd('\') -ieq $HOME.TrimEnd('\')) {
+        Write-Host '  This is your home folder: setup would propose a .gnomon\ here.'
+        Write-Host '  Decline it and run `gnomon setup` inside a project instead, if that is not what you want.'
+    }
+    if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) {
+        Write-Host '  No console to ask on, so setup did not run (it never answers for you).'
+        Write-Host '  Run it yourself:  cd your-project; gnomon setup'
+        return
+    }
+    # Directly, not through Invoke-Native: setup reads the console.
+    $ErrorActionPreference = 'Continue'
+    & $gnomon setup
+    $rc = $LASTEXITCODE
+    if ($rc -eq 4) {
+        Write-Host '  Setup wrote nothing (it needs your yes, or a model). Run `gnomon setup` again any time.'
+    } elseif ($rc -ne 0) {
+        Write-Host "  gnomon setup exited $rc. Run ``gnomon setup`` again, or ``gnomon doctor`` to see why."
     }
 }
 
@@ -201,13 +244,13 @@ function Write-Step([string]$text) {
 
 function Show-NodeHelp([string]$why) {
     Write-Host ''
-    Write-Host "gnomon needs Node.js 20 or newer. $why"
+    Write-Host "gnomon needs Node.js 22 or newer. $why"
     Write-Host 'Install it with ONE of these, then open a new terminal and re-run this installer:'
     Write-Host ''
     Write-Host '  winget install OpenJS.NodeJS.LTS'
     Write-Host '  # or download the LTS installer: https://nodejs.org/en/download'
     Write-Host ''
-    throw 'Node.js >= 20 is required'
+    throw 'Node.js >= 22 is required'
 }
 
 function Invoke-GitHubApi([string]$repo, [string]$path) {
@@ -270,4 +313,24 @@ function Invoke-Npm([string[]]$npmArgs) {
     }
 }
 
-Install-Gnomon
+# Options: -Setup and -Help, from $args (see the top of this file). Under
+# `irm | iex` there are none, and GNOMON_SETUP=1 is the way to ask.
+$gnomonRunSetup = ($env:GNOMON_SETUP -eq '1')
+$gnomonHelp = $false
+foreach ($gnomonArg in @($args)) {
+    switch -regex ("$gnomonArg") {
+        '^-{1,2}setup$' { $gnomonRunSetup = $true }
+        '^(-{1,2}help|-h|-\?|/\?)$' { $gnomonHelp = $true }
+        default { throw "gnomon install: unknown argument: $gnomonArg (use -Setup or -Help)" }
+    }
+}
+if ($gnomonHelp) {
+    Write-Host 'Usage: install.ps1 [-Setup] [-Help]'
+    Write-Host ''
+    Write-Host '  -Setup   after installing, run `gnomon setup` here, interactively (it asks'
+    Write-Host '           before every download and write; nothing is answered for you)'
+    Write-Host ''
+    Write-Host '  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.ps1))) -Setup'
+} else {
+    Install-Gnomon $gnomonRunSetup
+}

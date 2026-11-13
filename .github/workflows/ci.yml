@@ -78,6 +78,16 @@ jobs:
       - name: Build (type-check)
         run: pnpm run build
 
+      # THE FIRST-RUN JOURNEY, as a new user meets it on this OS: `gnomon
+      # doctor --json` (exit 0 or 1, a gnomon.doctor/1 document), `gnomon
+      # setup --json` (stops at the proposal: exit 4, writes nothing) and
+      # `gnomon dashboard --no-open` on a free port (prints the sign-in link,
+      # serves the page, is stopped). In an empty directory, with no model:
+      # nothing is downloaded or spent. Node, so one file runs on every OS.
+      - name: First-run smoke (doctor, setup, dashboard)
+        timeout-minutes: 5
+        run: node scripts/first_run_smoke.mjs
+
       - name: Run tests
         # `pnpm -r run test`, not an enumerated filter list.
         #
@@ -178,6 +188,16 @@ jobs:
       - name: Build (type-check)
         run: pnpm run build
 
+      # THE FIRST-RUN JOURNEY, as a new user meets it on this OS: `gnomon
+      # doctor --json` (exit 0 or 1, a gnomon.doctor/1 document), `gnomon
+      # setup --json` (stops at the proposal: exit 4, writes nothing) and
+      # `gnomon dashboard --no-open` on a free port (prints the sign-in link,
+      # serves the page, is stopped). In an empty directory, with no model:
+      # nothing is downloaded or spent. Node, so one file runs on every OS.
+      - name: First-run smoke (doctor, setup, dashboard)
+        timeout-minutes: 5
+        run: node scripts/first_run_smoke.mjs
+
       - name: Run tests
         # `pnpm -r run test`, not an enumerated filter list.
         #
@@ -196,8 +216,17 @@ jobs:
         run: pnpm -r run test
 
   ts-tests:
-    name: TypeScript tests (core / natives / cli / tui)
+    # Node 22 is the floor every package.json `engines` declares and the one
+    # scripts/install.sh enforces; Node 24 is the current LTS, what a new user
+    # installs today and what publish-npm.yml runs. Both are tested here. The
+    # Node 22 leg keeps this job's original name, so a required status check
+    # that names it keeps matching; the Node 24 leg gets its own.
+    name: TypeScript tests (core / natives / cli / tui)${{ matrix.node != 22 && format(' on Node {0}', matrix.node) || '' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -220,7 +249,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 22
+          node-version: ${{ matrix.node }}
           cache: pnpm
 
       - name: Install deps

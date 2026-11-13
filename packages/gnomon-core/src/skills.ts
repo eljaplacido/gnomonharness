@@ -31,6 +31,7 @@ import {
   realpathSync,
 } from "node:fs";
 import { join, resolve, relative, isAbsolute, sep } from "node:path";
+import { escapesBase } from "./rel_path.js";
 import { createHash, randomBytes } from "node:crypto";
 import { hostname, userInfo } from "node:os";
 import { GnomonConfig, parseToml, recomputeManifest, manifestHash } from "./config.js";
@@ -647,7 +648,7 @@ export function verifierOutsideSurface(config: GnomonConfig): string | null {
     const abs = isAbsolute(p) ? resolve(p) : resolve(root, p);
     const inside = (base: string) => {
       const rel = relative(base, abs);
-      return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+      return rel !== "" && !escapesBase(rel);
     };
     return inside(gnomon) && !unhashed.some(inside);
   };
@@ -721,7 +722,7 @@ export function checkEvidence(
   const file = isAbsolute(want.report) ? want.report : join(root, want.report);
   const shown = (p: string) => {
     const rel = relative(root, p);
-    return rel.startsWith("..") || isAbsolute(rel) ? p : rel.split(sep).join("/");
+    return escapesBase(rel) ? p : rel.split(sep).join("/");
   };
   const refuse = (why: string): never => {
     throw new SkillRefusal(`Not accepted: ${why}`);
@@ -846,7 +847,7 @@ function findTrialRecord(
       continue;
     }
     const rel = relative(root, file);
-    const trail = rel.startsWith("..") || isAbsolute(rel) ? file : rel.split(sep).join("/");
+    const trail = escapesBase(rel) ? file : rel.split(sep).join("/");
     return { trial_record: { trail, seq: r.seq, hash: r.hash }, attested: signer };
   }
   return { refused: why };

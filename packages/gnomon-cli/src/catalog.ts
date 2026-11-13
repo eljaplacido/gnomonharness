@@ -613,6 +613,45 @@ function capital(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
+/** The tags `gnomon init` writes when no model server answered, and why. */
+export interface StarterModels {
+  large: string;
+  small: string;
+  /** The provenance comment for roles.toml, `# `-led lines. */
+  note: string;
+  catalogLabel: string;
+  downloadGb?: number;
+}
+
+/**
+ * What `gnomon init` writes when nothing answered at detection time: the tag
+ * `gnomon setup` would recommend for this machine, rather than a generic
+ * placeholder that `gnomon doctor` then flags and nothing will ever serve.
+ *
+ * Only an Ollama pull the machine can run (the scaffold's `local` endpoint is
+ * Ollama on 127.0.0.1:11434), and the same tag for smol: setup never
+ * downloads a second model, so one `gnomon setup --pull <tag>` makes every
+ * role answer. Undefined when the catalog has nothing this machine runs, or
+ * when its pick is already installed somewhere (then detection, or setup,
+ * knows better than a starter tag); the caller keeps the placeholders.
+ */
+export function starterModels(probe: MachineProbe, catalog: Catalog, opts: { now?: Date } = {}): StarterModels | undefined {
+  const rec = recommend(probe, catalog, opts);
+  const top = rec.top;
+  if (!top || top.installed || top.runtime !== "ollama" || !top.entry) return undefined;
+  return {
+    large: top.tag,
+    small: top.tag,
+    catalogLabel: catalog.label,
+    downloadGb: top.downloadGb,
+    note:
+      `# No model server answered at 'gnomon init' time, so these are the model\n` +
+      `# catalog's recommendation for this machine (catalog ${catalog.label}), not yet\n` +
+      `# installed. \`gnomon setup\` downloads it on your yes (or points the roles\n` +
+      `# at a model you have); \`gnomon doctor\` says whether every role answers.`,
+  };
+}
+
 /** The recommendation as the lines setup and doctor print. */
 export function formatRecommendation(rec: Recommendation, opts: { max?: number } = {}): string[] {
   const lines: string[] = [];
@@ -665,9 +704,14 @@ export interface ModeSuggestion {
  * Suggest a mode. It suggests; the person decides, and `--mode` overrides.
  *
  *  - no local model, generation below the floor, or a tiny model: cloud first;
- *  - a cloud model is configured: hybrid, citing the measured result;
- *  - slow, a small or medium model, or on the CPU: hybrid (needs a cloud model);
+ *  - slow, a small or medium model, or on the CPU: cloud first (needs a cloud
+ *    model; with none, setup keeps the machine local and says so);
  *  - otherwise: local only.
+ *
+ * Hybrid is never the suggestion. gnomon's 2026-11 runs found it a cost mode,
+ * not a quality gain, so it is opted into: when a cloud model is configured,
+ * the reason names it, citing the measured result, and choosing it is one
+ * word (`hybrid`, or `--mode hybrid`).
  */
 export function suggestMode(
   input: { local?: ModelOption; memory: MachineMemory; speed?: SpeedResult; hasCloud: boolean },
@@ -680,6 +724,8 @@ export function suggestMode(
   const cite = input.memory.kind === "unified" && catalog.hybrid.evidenceUnified
     ? `${catalog.hybrid.evidence} ${catalog.hybrid.evidenceUnified}`
     : catalog.hybrid.evidence;
+  // The opt-in, named only when there is a cloud model to opt in with.
+  const optIn = input.hasCloud ? ` ${cite}` : "";
   if (!input.local) {
     return { mode: "cloud_first", why: "No local model was chosen, so a cloud model does the work.", provisional: false, needsCloud: true };
   }
@@ -694,32 +740,30 @@ export function suggestMode(
   if (tier === "tiny") {
     return { mode: "cloud_first", why: `${input.local.tag} is a small helper, not a coder: a cloud model should do the work.`, provisional: false, needsCloud: true };
   }
-  if (input.hasCloud) {
-    return { mode: "hybrid", why: `A cloud model plans, ${input.local.tag} builds. ${cite}`, provisional: false, needsCloud: true };
-  }
   const slow =
     (gen !== undefined && gen < s.localOnlyMinGenTps) || (prefill !== undefined && prefill < s.localOnlyMinPrefillTps);
   if (slow) {
     return {
-      mode: "hybrid",
-      why: `${input.local.tag} is usable but slow (below the provisional ${s.localOnlyMinGenTps} tok/s generation / ${s.localOnlyMinPrefillTps} tok/s prompt): let a cloud model plan. ${cite}`,
+      mode: "cloud_first",
+      why: `${input.local.tag} is usable but slow (below the provisional ${s.localOnlyMinGenTps} tok/s generation / ${s.localOnlyMinPrefillTps} tok/s prompt): a cloud model should do the work.${optIn}`,
       provisional: s.provisional,
       needsCloud: true,
     };
   }
   if (tier === "small" || tier === "medium" || input.memory.kind === "cpu") {
     return {
-      mode: "hybrid",
-      why: `${input.local.tag} can build, and a cloud model planning makes it stronger. ${cite}`,
+      mode: "cloud_first",
+      why: `${input.local.tag} can build, but ${input.memory.kind === "cpu" ? "on the CPU it is slow" : "it is a small or medium model"}: a cloud model should do the work.${optIn}`,
       provisional: false,
       needsCloud: true,
     };
   }
+  const also = input.hasCloud ? ` The cloud model you added stays declared in config.toml; cloud first would let it do the work.${optIn}` : "";
   return {
     mode: "local_only",
-    why: gen !== undefined
+    why: (gen !== undefined
       ? `${input.local.tag} is fast enough to run every role here (${gen.toFixed(0)} tok/s generation; provisional threshold ${s.localOnlyMinGenTps}).`
-      : `${input.local.tag} can run every role here. A speed check would confirm it.`,
+      : `${input.local.tag} can run every role here. A speed check would confirm it.`) + also,
     provisional: gen !== undefined && s.provisional,
     needsCloud: false,
   };

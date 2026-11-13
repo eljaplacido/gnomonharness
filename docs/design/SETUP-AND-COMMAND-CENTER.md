@@ -107,7 +107,7 @@ command with a timeout, with no shell, and with `windowsHide`.
 | Platform | Source | Notes |
 |---|---|---|
 | Linux, Windows | `nvidia-smi --query-gpu=name,memory.total --format=csv,noheader` | One line per GPU. |
-| NVIDIA unified memory (DGX Spark / GB10, Grace) | the same command | GB10 prints `NVIDIA GB10, [N/A]`. A GPU whose memory is `N/A` is reported as **unified memory shared with system RAM**, not as 0 GB. Verified on the gx10. |
+| NVIDIA unified memory (DGX Spark / GB10, Grace) | the same command | GB10 prints `NVIDIA GB10, [N/A]`. A GPU whose memory is `N/A` is reported as **unified memory shared with system RAM**, not as 0 GB. Verified on an NVIDIA GB10 machine. |
 | macOS on Apple Silicon | `sysctl -n hw.memsize`, `sysctl -n machdep.cpu.brand_string` | Unified. The chip name is the GPU name. |
 | Linux, AMD | `rocm-smi --showproductname --showmeminfo vram --json`, then `/sys/class/drm/card*/device/mem_info_vram_total` | The sysfs file covers machines with the amdgpu driver but no ROCm (common with llama.cpp on Vulkan). |
 | Windows without `nvidia-smi` | `Win32_VideoController` through PowerShell | `AdapterRAM` is a 32-bit field that caps at 4 GB, so a value at the cap is reported as **unknown**, not as 4 GB. |
@@ -123,7 +123,7 @@ command with a timeout, with no shell, and with `windowsHide`.
 
 **Where it shows.** In `gnomon init` output, and in `gnomon launch`'s
 "No model answers" picker. It writes nothing to the surface. The real output
-on the gx10, with every model server stopped for a benchmark:
+on an NVIDIA GB10 machine, with every model server stopped for a benchmark:
 
 ```
 This machine: Linux arm64, 20 CPU cores, 121.6 GiB RAM
@@ -423,7 +423,7 @@ the chosen runtime stopped answering.
 | Endpoints, keys | `gnomon endpoint add|test|list`, `gnomon key` | Keys stay outside the repository. |
 | JSON output | `task --json`, `check --json`, `enumerations --json`, guard | **Not** `audit show`, `sessions`, `skill list`, `endpoint list` or `trust list`: those print text only. |
 
-Measured costs to stay inside, all on the gx10:
+Measured costs to stay inside, all on an NVIDIA GB10 machine:
 - A headless turn against a fake model: **157 to 182 ms** wall, by build
   (`docs/AUDIT-2026-11-01.md`, item 23).
 - A whole `gnomon guard` process: **50 to 60 ms** p50. A bare `node -e 0`
@@ -439,7 +439,7 @@ Measured costs to stay inside, all on the gx10:
 |---|---|---|
 | Install | nothing new | per-OS bundle, signing and notarisation, an updater |
 | Runtime deps | none (`node:http`) | Rust crates; WebView2 on Windows 10; WebKitGTK versions on Linux |
-| Headless boxes | works over `ssh -L` or Tailscale. The gx10 itself is one. | needs a display |
+| Headless boxes | works over `ssh -L` or Tailscale. The GB10 test machine itself is one. | needs a display |
 | Native extras | browser notifications work on `127.0.0.1`; no tray | tray, OS notifications, deep links |
 | Release cost | none | a second pipeline, during a freeze |
 
@@ -542,7 +542,7 @@ Today only skills have a propose-then-accept flow. The UI (screen 6), setup
 - **Lazy.** `gnomon ui` is imported only by its own dispatch case. Every
   other command loads nothing new, and the existing latency harness
   (`docs/audit-2026-11-01/latency.py`, n = 30) must show no regression.
-- **Budgets,** measured on the gx10 and on the Windows CI runner:
+- **Budgets,** measured on an NVIDIA GB10 machine and on the Windows CI runner:
 
 | Budget | Target |
 |---|---|
@@ -767,11 +767,11 @@ CI job on `windows-latest`.
 - **SW1, time to the first answered turn** on a fresh machine per OS (Linux
   x86, macOS arm64, Windows 11), before and after the wizard. Measured: steps,
   wall time, and whether the first message was answered.
-- **SW2, recommendation quality.** On the gx10 (GB10), the hub (RTX 5090) and
+- **SW2, recommendation quality.** On an NVIDIA GB10 machine, an RTX 5090 desktop and
   a 16 GB laptop: does the recommended model pass the UX1 smoke turn and a
   small task set, against today's rule (the largest installed model under 70B)?
 - **SW3, probe cost** on each OS. Budget: p50 ≤ 300 ms, worst case ≤ 2 s,
-  zero network beyond loopback. First reading: 37 ms on the gx10 with nothing
+  zero network beyond loopback. First reading: 37 ms on the GB10 machine with nothing
   listening. A machine with a GPU driver that is slow to answer is the case
   to measure.
 - **H-ask, trigger value:** from observe-mode records, how well each trigger
