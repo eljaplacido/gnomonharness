@@ -26,7 +26,7 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { loadConfig, grantTrust } from "gnomon-core";
 import { checkReadiness, launchReadiness } from "./setup.js";
 import { runDoctor, type DoctorDeps } from "./doctor.js";
@@ -281,7 +281,7 @@ function preload(): { module: string; log: string } {
 function runCli(args: string[], env: Record<string, string> = {}): Promise<{ code: number; out: string; seen: Seen[] }> {
   const { module, log } = preload();
   return new Promise((resolvePromise) => {
-    const child = spawn(process.execPath, ["--import", "tsx", "--import", module, CLI, ...args], {
+    const child = spawn(process.execPath, ["--import", "tsx", "--import", pathToFileURL(module).href, CLI, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, ANTHROPIC_API_KEY: SECRET, ...env },
     });

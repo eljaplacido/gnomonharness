@@ -42,8 +42,19 @@ const ROOT = join(here, "../../..");
 const LAUNCHER = join(ROOT, "gnomon");
 // `guard install` writes the absolute path of a gnomon that answers `guard
 // --help` (resolveGnomonBin): in these tests, this checkout's launcher.
-process.env.GNOMON_GUARD_BIN = LAUNCHER;
-const BIN = [LAUNCHER];
+// The program a hook runs. On Windows the repo's launcher (a node script with a
+// shebang) cannot be started directly, so the hooks get a .cmd wrapper, as npm's
+// gnomon.cmd shim is for an installed gnomon.
+const GUARD_BIN =
+  process.platform === "win32"
+    ? (() => {
+        const f = join(mkdtempSync(join(tmpdir(), "gnomon-bin-")), "gnomon.cmd");
+        writeFileSync(f, `@"${process.execPath}" "${LAUNCHER}" %*\r\n`);
+        return f;
+      })()
+    : LAUNCHER;
+process.env.GNOMON_GUARD_BIN = GUARD_BIN;
+const BIN = [GUARD_BIN];
 const fixture = JSON.parse(readFileSync(join(ROOT, "conformance/guard_decision.json"), "utf-8"));
 const CASES = JSON.parse(readFileSync(join(ROOT, "conformance/guard_cases.json"), "utf-8"));
 
@@ -513,7 +524,7 @@ describe("gnomon guard — opencode V2 plugin", () => {
       const seen = readFileSync(log, "utf-8").trim().split("\n").map((l) => /--session-base (\S+)/.exec(l)?.[1]);
       expect(seen).toEqual([start, start, start, later]);
     } finally {
-      process.env.GNOMON_GUARD_BIN = LAUNCHER;
+      process.env.GNOMON_GUARD_BIN = GUARD_BIN;
       rmSync(r, { recursive: true, force: true });
     }
   });
@@ -584,7 +595,7 @@ describe("gnomon guard — opencode V2 plugin", () => {
         XDG_CACHE_HOME: join(home, ".cache"),
         XDG_STATE_HOME: join(home, ".local/state"),
         OPENCODE_DISABLE_AUTOUPDATE: "1",
-        GNOMON_GUARD_BIN: LAUNCHER,
+        GNOMON_GUARD_BIN: GUARD_BIN,
       },
     });
     let out = "";

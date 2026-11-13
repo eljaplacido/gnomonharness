@@ -19,7 +19,20 @@ import type { Scorecard } from "./scorecard.js";
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(here, "../../..");
 const LAUNCHER = join(ROOT, "gnomon");
-process.env.GNOMON_GUARD_BIN = LAUNCHER;
+// The program a hook runs. On Windows the repo's launcher (a node script with a
+// shebang) cannot be started directly, so the hooks get a .cmd wrapper, as npm's
+// gnomon.cmd shim is for an installed gnomon.
+const GUARD_BIN =
+  process.platform === "win32"
+    ? (() => {
+        const f = join(mkdtempSync(join(tmpdir(), "gnomon-bin-")), "gnomon.cmd");
+        writeFileSync(f, `@"${process.execPath}" "${LAUNCHER}" %*\r\n`);
+        return f;
+      })()
+    : LAUNCHER;
+/** GUARD_BIN as it appears inside a JSON file's string. */
+const GUARD_BIN_JSON = JSON.stringify(GUARD_BIN).slice(1, -1);
+process.env.GNOMON_GUARD_BIN = GUARD_BIN;
 const CASES = JSON.parse(readFileSync(join(ROOT, "conformance/guard_cases.json"), "utf-8"));
 const FEED = JSON.parse(readFileSync(join(ROOT, "conformance/audit_feed_schema.json"), "utf-8"));
 
@@ -111,7 +124,7 @@ describe("gnomon guard install writes an absolute gnomon path, or refuses", () =
   it("refuses, writing nothing, when no gnomon answers `gnomon guard`", async () => {
     const r = governedRepo();
     const res = resolveGnomonBin("/nonexistent/gnomon");
-    expect("error" in res && res.error).toMatch(/no gnomon that answers `gnomon guard`[\s\S]*\/nonexistent\/gnomon/);
+    expect("error" in res && res.error).toMatch(/no gnomon that answers `gnomon guard`[\s\S]*[\\/]nonexistent[\\/]gnomon/);
     expect(await cmdGuard(["install", "claude-code", "--write", "--dir", r, "--bin", "/nonexistent/gnomon"])).toBe(10);
     expect(existsSync(join(r, ".claude"))).toBe(false);
     // An older gnomon without `guard` is refused the same way (the 2026-11-12 "oldbin" arm).
@@ -160,8 +173,8 @@ describe("gnomon guard install writes an absolute gnomon path, or refuses", () =
     expect(s.hooks.PreToolUse).toHaveLength(1);
     expect(s.hooks.SessionStart).toHaveLength(1);
     expect(s.hooks.PreToolUse[0].matcher).toBe(CLAUDE_CODE_MATCHER);
-    expect(s.hooks.PreToolUse[0].hooks[0].command).toBe(shellCommand([LAUNCHER], "guard --from claude-code --agent claude-code"));
-    expect(s.hooks.Stop[0].hooks[0].command).toBe(shellCommand([LAUNCHER], "check --hook stop --agent claude-code"));
+    expect(s.hooks.PreToolUse[0].hooks[0].command).toBe(shellCommand([GUARD_BIN], "guard --from claude-code --agent claude-code"));
+    expect(s.hooks.Stop[0].hooks[0].command).toBe(shellCommand([GUARD_BIN], "check --hook stop --agent claude-code"));
     git("add", "-A");
     git("commit", "-qm", "hooks");
     st = await status(r);
@@ -169,7 +182,7 @@ describe("gnomon guard install writes an absolute gnomon path, or refuses", () =
 
     // A hook whose program is not there lets the host run every call unguarded: a finding.
     for (const host of ["opencode", "cursor"]) expect(await cmdGuard(["install", host, "--write", "--dir", r])).toBe(0);
-    const text = readFileSync(join(r, ".claude/settings.json"), "utf-8").split(LAUNCHER).join("/nonexistent/gnomon");
+    const text = readFileSync(join(r, ".claude/settings.json"), "utf-8").split(GUARD_BIN_JSON).join("/nonexistent/gnomon");
     writeFileSync(join(r, ".claude/settings.json"), text);
     git("add", "-A");
     git("commit", "-qm", "broken program");
