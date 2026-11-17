@@ -15,6 +15,29 @@ import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 
+/**
+ * A private copy of this repository's surface, in a git repository of its own,
+ * for tests whose turn runs real `bash` and then asks whether the worktree
+ * changed ("nothing changed", the idle nudge). Run against the checkout itself,
+ * any other test file writing into the checkout at the same moment made the
+ * turn see changes it did not make: 1-4 of these failed per full local run of
+ * the suite, on an unmodified master.
+ */
+const privateRoots: string[] = [];
+function privateSurfaceConfig(): any {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "gnomon-private-surface-")));
+  cpSync(resolvePath("../../.gnomon"), join(root, ".gnomon"), { recursive: true });
+  const git = (...a: string[]) => execFileSync("git", a, { cwd: root, stdio: "pipe" });
+  git("init", "-q");
+  git("add", "-A");
+  git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "surface");
+  privateRoots.push(root);
+  return loadConfig(root);
+}
+afterAll(() => {
+  for (const r of privateRoots.splice(0)) rmSync(r, { recursive: true, force: true });
+});
+
 // Fixture tree lives at repo root — go up 2 levels from packages/gnomon-core
 const fixtureRoot = "../../conformance/fixture_tree";
 
@@ -717,7 +740,7 @@ describe("model API errors", () => {
     calls: Array<{ command?: string; path?: string }>,
     outcome: (i: number) => { code?: number; worktree_changed?: boolean } = () => ({})
   ): Promise<string> => {
-    const config: any = loadConfig("../..");
+    const config: any = privateSurfaceConfig();
     const state: any = {
       config,
       exchanges: [],
@@ -959,7 +982,7 @@ describe("model API errors", () => {
     // A gate inversion (tool lines under cot=think, say) passes the whole rest
     // of the suite, so the emitted lines are asserted directly. One turn: the
     // model reasons in <think>, writes prose, calls bash once, then concludes.
-    const config: any = loadConfig("../..");
+    const config: any = privateSurfaceConfig();
     const runWith = async (cot: string): Promise<string> => {
       const state: any = {
         config,
@@ -1161,7 +1184,7 @@ describe("model API errors", () => {
     // commands and changed nothing, where fast harnesses gave up in a handful.
     // The stall check misses it because the calls are all different. After the
     // idle threshold a nudge must reach the model telling it to act or conclude.
-    const state: any = { config: loadConfig("../.."), exchanges: [], currentRole: "implement" };
+    const state: any = { config: privateSurfaceConfig(), exchanges: [], currentRole: "implement" };
     const bodies: any[] = [];
     let call = 0;
     await withFetch(
