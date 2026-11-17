@@ -900,7 +900,7 @@ fn an_abstract_unix_socket_is_refused() {
     .unwrap();
     l.set_nonblocking(true).unwrap();
     let client = format!(
-        "python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(3); s.connect(\"\\0{name}\"); print(\"CONNECTED\")'"
+        "python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.settimeout(3); s.connect(\"\\0{name}\"); print(\"CONN\" + \"ECTED\")'"
     );
     for network in [false, true] {
         let out = sandboxed(&s, network, &client);
@@ -1213,7 +1213,7 @@ fn e_scoped_reads_cannot_open_another_terminal() {
         let p = std::ffi::CStr::from_ptr(libc::ptsname(m)).to_string_lossy().into_owned();
         (m, p)
     };
-    let probe = format!("python3 -c 'import os; os.open(\"{slave}\", os.O_RDWR|os.O_NOCTTY|os.O_NONBLOCK); print(\"OPENED\")'");
+    let probe = format!("python3 -c 'import os; os.open(\"{slave}\", os.O_RDWR|os.O_NOCTTY|os.O_NONBLOCK); print(\"OPE\" + \"NED\")'");
     let out = scoped_in(&s, &home, true, &[], &probe);
     assert!(!text(&out).contains("OPENED"), "another terminal was opened under scoped reads: {}", text(&out));
     // Control: unsandboxed, it opens.
