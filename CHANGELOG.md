@@ -26,6 +26,18 @@
 
 ## [Unreleased]
 
+### Added — `gnomon compliance`, the evidence map
+
+Which controls of the EU AI Act, the GDPR, the OWASP Top 10 for LLM
+Applications (2025), ISO/IEC 42001, the NIST AI RMF, ISO/IEC 27001, SOC 2, the
+Cyber Resilience Act (gnomon itself as the product) and DORA a project has
+gnomon evidence for, from a dated catalog
+(`catalog/controls.toml`): evidence, partial, gap (with the setting that
+closes it), a gnomon property, or organisational. A mapping, never an
+assessment and not legal advice; it never prints "compliant". Read-only.
+Schema `gnomon.compliance/1` (CONTRACTS.md §46,
+`conformance/compliance_report.json`).
+
 ### Added — `gnomon security`, the posture report
 
 A read-only report of a project's security posture: trust, where each role's

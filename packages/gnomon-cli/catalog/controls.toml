@@ -1,0 +1,709 @@
+# gnomon compliance catalog: which controls of which frameworks gnomon has
+# evidence for, and where that evidence comes from. Read by `gnomon
+# compliance` (packages/gnomon-cli/src/compliance.ts).
+#
+# This is a MAPPING, not an assessment. gnomon never reports a project as
+# compliant: whether an obligation applies, and whether it is met, depends on
+# the organisation, its role (provider, deployer, controller, processor) and its
+# use case. The mapping is dated; review it with someone qualified before you
+# rely on it. It is not legal advice.
+#
+# Each [[controls]] entry:
+#   framework  a key of [frameworks]
+#   id         stable, per framework
+#   title      the requirement, in the framework's own terms
+#   scope      "gnomon"        gnomon's settings or records are the evidence
+#              "shared"        gnomon contributes evidence; the rest is the organisation's
+#              "organisation"  gnomon provides no evidence; listed so nobody assumes it does
+#   project    probe ids (compliance.ts PROBES): read from this project's surface and records
+#   harness    [[facts]] ids: properties of gnomon itself, with where they are shown
+#   note       what a reader should know
+
+as_of = "2026-11-17"
+stale_after_days = 180
+disclaimer = "A mapping of gnomon evidence to framework controls, not an assessment and not legal advice. Applicability and compliance are the organisation's to determine."
+
+[frameworks.eu-ai-act]
+name = "EU AI Act — Regulation (EU) 2024/1689"
+source = "https://eur-lex.europa.eu/eli/reg/2024/1689/oj"
+note = "Most obligations below attach to high-risk AI systems, which a coding agent usually is not. They are listed because they describe the evidence a careful deployment of any agent can keep."
+
+[frameworks.gdpr]
+name = "GDPR — Regulation (EU) 2016/679"
+source = "https://eur-lex.europa.eu/eli/reg/2016/679/oj"
+note = "Relevant where prompts, repository content or records contain personal data."
+
+[frameworks.owasp-llm]
+name = "OWASP Top 10 for LLM Applications (2025)"
+source = "https://genai.owasp.org/llm-top-10/"
+note = "Risks of applications built on language models; for an agent harness, mostly about what a manipulated model can make the agent do."
+
+[frameworks.iso-42001]
+name = "ISO/IEC 42001:2023 — AI management systems (Annex A controls)"
+source = "https://www.iso.org/standard/81230.html"
+note = "A management-system standard: certification is of the organisation's AIMS. gnomon supplies operational evidence for some Annex A controls."
+
+[frameworks.nist-ai-rmf]
+name = "NIST AI Risk Management Framework 1.0 (AI 100-1)"
+source = "https://doi.org/10.6028/NIST.AI.100-1"
+note = "Voluntary. Subcategories of GOVERN, MAP, MEASURE and MANAGE that gnomon's records and tests bear on."
+
+[frameworks.iso-27001]
+name = "ISO/IEC 27001:2022 — Information security (Annex A controls)"
+source = "https://www.iso.org/standard/27001"
+note = "Certification is of the organisation's ISMS; listed are Annex A controls the agent's own operation touches."
+
+[frameworks.soc2]
+name = "SOC 2 — AICPA Trust Services Criteria (2017, points of focus revised 2022)"
+source = "https://www.aicpa-cima.com/resources/download/2017-trust-services-criteria-with-revised-points-of-focus-2022"
+note = "A SOC 2 report is an auditor's opinion on the organisation's controls; gnomon evidence can support the common criteria listed."
+
+[frameworks.cra]
+name = "EU Cyber Resilience Act — Regulation (EU) 2024/2847"
+source = "https://eur-lex.europa.eu/eli/reg/2024/2847/oj"
+note = "Obligations of manufacturers of products with digital elements. Here the product is gnomon itself: these rows are its maintainer's evidence, not the project's."
+
+[frameworks.dora]
+name = "DORA — Digital Operational Resilience Act, Regulation (EU) 2022/2554"
+source = "https://eur-lex.europa.eu/eli/reg/2022/2554/oj"
+note = "Applies to EU financial entities. A model provider reached over the network is an ICT third-party service provider."
+
+# ── Facts: properties of gnomon, the same for every project ──────────────────
+
+[[facts]]
+id = "surface_hash"
+text = "Behaviour is fixed by the content-hashed .gnomon/ directory, recorded in every session and audit record"
+ref = "README.md#the-six-rules"
+
+[[facts]]
+id = "contracts_published"
+text = "Exit codes, record shapes and enumerations are published contracts with golden fixtures"
+ref = "docs/CONTRACTS.md"
+
+[[facts]]
+id = "explain"
+text = "/explain answers what a feature is and how this repository has it set, from the live surface"
+ref = "README.md#interactive-commands"
+
+[[facts]]
+id = "refuses_unasked"
+text = "A non-interactive run refuses a gated call rather than assuming consent"
+ref = ".github/SECURITY.md#scope"
+
+[[facts]]
+id = "fault_disclosure"
+text = "Endpoint and model faults are announced rather than ridden out silently: fault-disclosure 8/8; the chaos suite documents the three faults that only an endpoint probe can see"
+ref = "benchmarks/fault-disclosure/README.md"
+
+[[facts]]
+id = "silent_success"
+text = "No decision point reports success while the thing underneath failed: 0 of 11"
+ref = "benchmarks/silent-success/README.md"
+
+[[facts]]
+id = "finish_gate"
+text = "The finish gate checks a final answer for claims no tool call after the last change supports"
+ref = "docs/CONTRACTS.md"
+
+[[facts]]
+id = "zero_deps"
+text = "No third-party runtime dependency in any package"
+ref = ".github/SECURITY.md#scope"
+
+[[facts]]
+id = "provenance"
+text = "Releases are published with npm provenance and checksummed, attested archives"
+ref = "docs/RELEASING.md"
+
+[[facts]]
+id = "credentials_outside_surface"
+text = "The surface names a key's environment variable, never its value; keys live machine-local, mode 0600"
+ref = ".github/SECURITY.md#scope"
+
+[[facts]]
+id = "no_telemetry"
+text = "No telemetry and no background service; every network destination is declared and listed"
+ref = "docs/PRIVACY.md"
+
+[[facts]]
+id = "metadata_default"
+text = "The scaffolded audit trail records metadata, not prompt or response text"
+ref = "README.md#governance-and-audit"
+
+[[facts]]
+id = "tools_by_absence"
+text = "A role receives only the tool schemas it is given: separation by absence, not instruction"
+ref = ".github/SECURITY.md#scope"
+
+[[facts]]
+id = "guard_suite"
+text = "A model-free governance suite exercises the guard against forbidden calls, tamper attempts and bypass spellings"
+ref = "benchmarks/governance-model-free/README.md"
+
+[[facts]]
+id = "secure_defaults"
+text = "A scaffolded surface grants nothing beyond gnomon's defaults; a surface that grants more runs clamped to them until this machine's user trusts it"
+ref = "README.md#workspace-trust"
+
+[[facts]]
+id = "record_tamper"
+text = "Changes to gnomon's own records that gnomon did not make are detected and listed until a person resolves them"
+ref = "README.md#governance-and-audit"
+
+[[facts]]
+id = "check_foreign"
+text = "gnomon check and gnomon guard judge what other harnesses do by the same committed rules"
+ref = "README.md#governing-other-harnesses"
+
+[[facts]]
+id = "vuln_disclosure"
+text = "A published coordinated vulnerability disclosure policy with supported versions"
+ref = ".github/SECURITY.md#coordinated-vulnerability-disclosure"
+
+[[facts]]
+id = "sbom"
+text = "Every release ships an SPDX SBOM, SHA256SUMS and provenance attestations"
+ref = ".github/SECURITY.md#verifying-what-you-installed"
+
+[[facts]]
+id = "cra_statement"
+text = "The maintainer's Cyber Resilience Act position: disclosure, contact, advisories and SBOM"
+ref = ".github/SECURITY.md#eu-cyber-resilience-act"
+
+[[facts]]
+id = "benchmarks_published"
+text = "Pre-registered benchmarks with raw results in the repository and a kit to reproduce them"
+ref = "benchmarks/kit/README.md"
+
+[[facts]]
+id = "step_limits"
+text = "Turns are bounded: step walls, stall and idle checks, deadlines, retry budgets"
+ref = "README.md#long-turns"
+
+# ── EU AI Act ────────────────────────────────────────────────────────────────
+
+[[controls]]
+framework = "eu-ai-act"
+id = "art12"
+title = "Art. 12 — Record-keeping: automatic recording of events over the system's lifetime"
+scope = "gnomon"
+project = ["audit_on", "audit_intact", "audit_anchored"]
+harness = ["surface_hash"]
+
+[[controls]]
+framework = "eu-ai-act"
+id = "art13"
+title = "Art. 13 — Transparency and provision of information to deployers"
+scope = "shared"
+project = []
+harness = ["contracts_published", "explain"]
+
+[[controls]]
+framework = "eu-ai-act"
+id = "art14"
+title = "Art. 14 — Human oversight"
+scope = "shared"
+project = ["approval_gate", "trust_settled"]
+harness = ["refuses_unasked"]
+
+[[controls]]
+framework = "eu-ai-act"
+id = "art15"
+title = "Art. 15 — Accuracy, robustness and cybersecurity"
+scope = "shared"
+project = ["commands_contained", "verify_declared", "must_fail_first", "hooks_intact"]
+harness = ["fault_disclosure", "silent_success", "zero_deps"]
+
+[[controls]]
+framework = "eu-ai-act"
+id = "art26-6"
+title = "Art. 26(6) — Deployers keep the automatically generated logs, for at least six months"
+scope = "shared"
+project = ["audit_on", "audit_intact"]
+harness = []
+note = "gnomon keeps trails until they are deleted; the retention period is the organisation's to set and keep."
+
+[[controls]]
+framework = "eu-ai-act"
+id = "art4"
+title = "Art. 4 — AI literacy of staff and others operating AI systems"
+scope = "organisation"
+project = []
+harness = []
+
+[[controls]]
+framework = "eu-ai-act"
+id = "art50"
+title = "Art. 50 — Transparency obligations for certain AI systems (disclosure, marking of generated content)"
+scope = "organisation"
+project = []
+harness = []
+note = "Whether and how generated code is labelled is the organisation's decision."
+
+# ── GDPR ─────────────────────────────────────────────────────────────────────
+
+[[controls]]
+framework = "gdpr"
+id = "art5-1c"
+title = "Art. 5(1)(c) — Data minimisation"
+scope = "shared"
+project = ["audit_metadata_only"]
+harness = ["metadata_default", "no_telemetry"]
+
+[[controls]]
+framework = "gdpr"
+id = "art5-1e"
+title = "Art. 5(1)(e) — Storage limitation"
+scope = "organisation"
+project = []
+harness = []
+note = "gnomon does not yet expire records on a schedule; deleting trails after a retention period is the organisation's."
+
+[[controls]]
+framework = "gdpr"
+id = "art25"
+title = "Art. 25 — Data protection by design and by default"
+scope = "shared"
+project = ["audit_metadata_only"]
+harness = ["metadata_default", "no_telemetry", "credentials_outside_surface"]
+
+[[controls]]
+framework = "gdpr"
+id = "art28"
+title = "Art. 28 — Processors: model providers that receive prompts and repository content"
+scope = "shared"
+project = ["endpoints_local"]
+harness = []
+note = "A remote endpoint is a recipient of whatever the agent sends it; where that includes personal data, a processing agreement with its provider is the organisation's."
+
+[[controls]]
+framework = "gdpr"
+id = "art30"
+title = "Art. 30 — Records of processing activities"
+scope = "shared"
+project = ["audit_on"]
+harness = ["no_telemetry"]
+note = "The destinations a surface can send data to are listed in docs/PRIVACY.md; the register itself is the controller's."
+
+[[controls]]
+framework = "gdpr"
+id = "art32"
+title = "Art. 32 — Security of processing"
+scope = "shared"
+project = ["commands_contained", "secrets_protected", "audit_intact", "trust_settled"]
+harness = ["credentials_outside_surface"]
+
+[[controls]]
+framework = "gdpr"
+id = "art44"
+title = "Art. 44 — Transfers of personal data to third countries"
+scope = "shared"
+project = ["endpoints_local"]
+harness = []
+note = "Where a remote endpoint is hosted is not something gnomon can read from a URL; the transfer assessment is the organisation's."
+
+# ── OWASP Top 10 for LLM Applications (2025) ─────────────────────────────────
+
+[[controls]]
+framework = "owasp-llm"
+id = "LLM01"
+title = "LLM01 — Prompt injection"
+scope = "shared"
+project = ["commands_contained", "approval_gate", "hooks_intact"]
+harness = ["guard_suite", "tools_by_absence"]
+note = "gnomon limits what an injected instruction can make the agent do; it does not detect the injection."
+
+[[controls]]
+framework = "owasp-llm"
+id = "LLM02"
+title = "LLM02 — Sensitive information disclosure"
+scope = "shared"
+project = ["secrets_protected"]
+harness = ["credentials_outside_surface"]
+
+[[controls]]
+framework = "owasp-llm"
+id = "LLM03"
+title = "LLM03 — Supply chain"
+scope = "shared"
+project = []
+harness = ["zero_deps", "provenance"]
+note = "Covers gnomon itself, not the model or the project's own dependencies."
+
+[[controls]]
+framework = "owasp-llm"
+id = "LLM04"
+title = "LLM04 — Data and model poisoning"
+scope = "organisation"
+project = []
+harness = []
+note = "gnomon trains no model; the model's provenance is the organisation's choice."
+
+[[controls]]
+framework = "owasp-llm"
+id = "LLM05"
+title = "LLM05 — Improper output handling"
+scope = "shared"
+project = ["commands_contained", "verify_declared"]
+harness = ["tools_by_absence"]
+
+[[controls]]
+framework = "owasp-llm"
+id = "LLM06"
+title = "LLM06 — Excessive agency"
+scope = "gnomon"
+project = ["approval_gate", "judges_read_only", "commands_contained"]
+harness = ["tools_by_absence"]
+
+[[controls]]
+framework = "owasp-llm"
+id = "LLM07"
+title = "LLM07 — System prompt leakage"
+scope = "shared"
+project = []
+harness = ["credentials_outside_surface"]
+note = "gnomon's prompts carry no secret by construction; a project that writes one into its own prompt files exposes it."
+
+[[controls]]
+framework = "owasp-llm"
+id = "LLM08"
+title = "LLM08 — Vector and embedding weaknesses"
+scope = "organisation"
+project = []
+harness = []
+note = "gnomon keeps no vector store."
+
+[[controls]]
+framework = "owasp-llm"
+id = "LLM09"
+title = "LLM09 — Misinformation"
+scope = "shared"
+project = ["verify_declared", "must_fail_first"]
+harness = ["finish_gate", "silent_success"]
+
+[[controls]]
+framework = "owasp-llm"
+id = "LLM10"
+title = "LLM10 — Unbounded consumption"
+scope = "gnomon"
+project = []
+harness = ["step_limits"]
+
+# ── ISO/IEC 42001:2023 (Annex A) ─────────────────────────────────────────────
+
+[[controls]]
+framework = "iso-42001"
+id = "A.6.2.4"
+title = "A.6.2.4 — AI system verification and validation"
+scope = "shared"
+project = ["verify_declared", "must_fail_first"]
+harness = ["finish_gate", "benchmarks_published"]
+
+[[controls]]
+framework = "iso-42001"
+id = "A.6.2.6"
+title = "A.6.2.6 — AI system operation and monitoring"
+scope = "shared"
+project = ["audit_on", "hooks_intact"]
+harness = ["fault_disclosure"]
+
+[[controls]]
+framework = "iso-42001"
+id = "A.6.2.8"
+title = "A.6.2.8 — AI system recording of event logs"
+scope = "gnomon"
+project = ["audit_on", "audit_intact", "audit_anchored"]
+harness = ["record_tamper"]
+
+[[controls]]
+framework = "iso-42001"
+id = "A.9.2"
+title = "A.9.2 — Processes for responsible use of AI systems"
+scope = "shared"
+project = ["approval_gate", "trust_settled"]
+harness = ["secure_defaults"]
+
+[[controls]]
+framework = "iso-42001"
+id = "A.10.3"
+title = "A.10.3 — Suppliers"
+scope = "shared"
+project = ["endpoints_local"]
+harness = ["zero_deps", "provenance"]
+
+[[controls]]
+framework = "iso-42001"
+id = "A.5"
+title = "A.5 — Assessing impacts of AI systems"
+scope = "organisation"
+project = []
+harness = []
+
+# ── NIST AI RMF 1.0 ──────────────────────────────────────────────────────────
+
+[[controls]]
+framework = "nist-ai-rmf"
+id = "GOVERN-1.1"
+title = "GOVERN 1.1 — Legal and regulatory requirements involving AI are understood, managed and documented"
+scope = "organisation"
+project = []
+harness = []
+
+[[controls]]
+framework = "nist-ai-rmf"
+id = "GOVERN-6.1"
+title = "GOVERN 6.1 — Policies address AI risks of third-party entities"
+scope = "shared"
+project = ["endpoints_local"]
+harness = ["zero_deps"]
+
+[[controls]]
+framework = "nist-ai-rmf"
+id = "MEASURE-2.5"
+title = "MEASURE 2.5 — Validity and reliability are demonstrated"
+scope = "shared"
+project = ["verify_declared", "must_fail_first"]
+harness = ["benchmarks_published", "silent_success"]
+
+[[controls]]
+framework = "nist-ai-rmf"
+id = "MEASURE-2.7"
+title = "MEASURE 2.7 — Security and resilience are evaluated and documented"
+scope = "shared"
+project = ["commands_contained", "hooks_intact"]
+harness = ["guard_suite", "fault_disclosure"]
+
+[[controls]]
+framework = "nist-ai-rmf"
+id = "MEASURE-2.8"
+title = "MEASURE 2.8 — Risks associated with transparency and accountability are examined and documented"
+scope = "shared"
+project = ["audit_on", "audit_intact"]
+harness = ["surface_hash", "contracts_published"]
+
+[[controls]]
+framework = "nist-ai-rmf"
+id = "MANAGE-2.4"
+title = "MANAGE 2.4 — Mechanisms to supersede, disengage or deactivate AI systems"
+scope = "shared"
+project = ["approval_gate"]
+harness = ["step_limits", "refuses_unasked"]
+
+[[controls]]
+framework = "nist-ai-rmf"
+id = "MANAGE-4.1"
+title = "MANAGE 4.1 — Post-deployment monitoring is implemented"
+scope = "shared"
+project = ["audit_on", "hooks_intact"]
+harness = ["check_foreign"]
+
+# ── ISO/IEC 27001:2022 (Annex A) ─────────────────────────────────────────────
+
+[[controls]]
+framework = "iso-27001"
+id = "A.5.3"
+title = "A.5.3 — Segregation of duties"
+scope = "shared"
+project = ["judges_read_only", "approval_gate"]
+harness = ["tools_by_absence"]
+
+[[controls]]
+framework = "iso-27001"
+id = "A.5.23"
+title = "A.5.23 — Information security for use of cloud services"
+scope = "shared"
+project = ["endpoints_local"]
+harness = ["credentials_outside_surface"]
+
+[[controls]]
+framework = "iso-27001"
+id = "A.5.28"
+title = "A.5.28 — Collection of evidence"
+scope = "gnomon"
+project = ["audit_on", "audit_intact", "audit_anchored"]
+harness = ["record_tamper"]
+
+[[controls]]
+framework = "iso-27001"
+id = "A.8.2"
+title = "A.8.2 — Privileged access rights"
+scope = "shared"
+project = ["trust_settled", "commands_contained"]
+harness = ["secure_defaults"]
+
+[[controls]]
+framework = "iso-27001"
+id = "A.8.9"
+title = "A.8.9 — Configuration management"
+scope = "gnomon"
+project = ["trust_settled"]
+harness = ["surface_hash"]
+
+[[controls]]
+framework = "iso-27001"
+id = "A.8.12"
+title = "A.8.12 — Data leakage prevention"
+scope = "shared"
+project = ["secrets_protected", "endpoints_local"]
+harness = ["credentials_outside_surface"]
+
+[[controls]]
+framework = "iso-27001"
+id = "A.8.15"
+title = "A.8.15 — Logging"
+scope = "gnomon"
+project = ["audit_on", "audit_intact"]
+harness = ["record_tamper"]
+
+[[controls]]
+framework = "iso-27001"
+id = "A.8.29"
+title = "A.8.29 — Security testing in development and acceptance"
+scope = "shared"
+project = ["verify_declared", "must_fail_first"]
+harness = ["guard_suite"]
+
+[[controls]]
+framework = "iso-27001"
+id = "A.8.32"
+title = "A.8.32 — Change management"
+scope = "shared"
+project = ["verify_declared", "hooks_intact"]
+harness = ["check_foreign", "surface_hash"]
+
+# ── SOC 2 (Trust Services Criteria) ──────────────────────────────────────────
+
+[[controls]]
+framework = "soc2"
+id = "CC6.1"
+title = "CC6.1 — Logical access security over protected information assets"
+scope = "shared"
+project = ["secrets_protected", "trust_settled"]
+harness = ["credentials_outside_surface"]
+
+[[controls]]
+framework = "soc2"
+id = "CC6.8"
+title = "CC6.8 — Prevent or detect unauthorised or malicious software"
+scope = "shared"
+project = ["commands_contained", "hooks_intact"]
+harness = ["zero_deps"]
+
+[[controls]]
+framework = "soc2"
+id = "CC7.2"
+title = "CC7.2 — Monitoring of system components for anomalies"
+scope = "shared"
+project = ["audit_on", "audit_intact"]
+harness = ["record_tamper", "fault_disclosure"]
+
+[[controls]]
+framework = "soc2"
+id = "CC8.1"
+title = "CC8.1 — Changes are authorised, tested, approved and implemented"
+scope = "shared"
+project = ["approval_gate", "verify_declared", "must_fail_first"]
+harness = ["check_foreign"]
+
+[[controls]]
+framework = "soc2"
+id = "CC9.2"
+title = "CC9.2 — Risks from vendors and business partners are assessed and managed"
+scope = "shared"
+project = ["endpoints_local"]
+harness = ["provenance"]
+
+[[controls]]
+framework = "soc2"
+id = "CC1"
+title = "CC1 — Control environment (integrity, oversight, structure, competence, accountability)"
+scope = "organisation"
+project = []
+harness = []
+
+# ── EU Cyber Resilience Act (gnomon as the product) ──────────────────────────
+
+[[controls]]
+framework = "cra"
+id = "annexI-1-secure-default"
+title = "Annex I Part I — Made available with a secure by default configuration"
+scope = "gnomon"
+project = []
+harness = ["secure_defaults"]
+
+[[controls]]
+framework = "cra"
+id = "annexI-1-data-minimisation"
+title = "Annex I Part I — Process only data that is adequate, relevant and limited (data minimisation)"
+scope = "gnomon"
+project = []
+harness = ["metadata_default", "no_telemetry"]
+
+[[controls]]
+framework = "cra"
+id = "annexI-1-integrity"
+title = "Annex I Part I — Protect the integrity of data, programs and configuration against unauthorised manipulation"
+scope = "gnomon"
+project = []
+harness = ["surface_hash", "record_tamper", "provenance"]
+
+[[controls]]
+framework = "cra"
+id = "annexI-2-sbom"
+title = "Annex I Part II — Identify and document components, including a software bill of materials"
+scope = "gnomon"
+project = []
+harness = ["sbom", "zero_deps"]
+
+[[controls]]
+framework = "cra"
+id = "annexI-2-disclosure"
+title = "Annex I Part II — A policy on coordinated vulnerability disclosure"
+scope = "gnomon"
+project = []
+harness = ["vuln_disclosure", "cra_statement"]
+
+[[controls]]
+framework = "cra"
+id = "art14"
+title = "Art. 14 — Reporting actively exploited vulnerabilities and severe incidents"
+scope = "organisation"
+project = []
+harness = []
+note = "The manufacturer's (gnomon's maintainer's) process, not something a project's settings show."
+
+# ── DORA ─────────────────────────────────────────────────────────────────────
+
+[[controls]]
+framework = "dora"
+id = "art9"
+title = "Art. 9 — Protection and prevention"
+scope = "shared"
+project = ["commands_contained", "secrets_protected", "trust_settled"]
+harness = ["secure_defaults"]
+
+[[controls]]
+framework = "dora"
+id = "art17"
+title = "Art. 17 — ICT-related incident management process"
+scope = "shared"
+project = ["audit_on", "audit_intact", "audit_anchored"]
+harness = ["record_tamper"]
+note = "gnomon's records let an incident involving the agent be reconstructed; the incident process itself is the entity's."
+
+[[controls]]
+framework = "dora"
+id = "art28"
+title = "Art. 28 — General principles of ICT third-party risk management"
+scope = "shared"
+project = ["endpoints_local"]
+harness = ["zero_deps", "provenance"]
+note = "A remote model endpoint is an ICT third-party service; registering and contracting it is the entity's."
+
+[[controls]]
+framework = "dora"
+id = "art30"
+title = "Art. 30 — Key contractual provisions with ICT third-party service providers"
+scope = "organisation"
+project = []
+harness = []
