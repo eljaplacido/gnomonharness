@@ -853,7 +853,17 @@ repository's code and are not listed: the call names the code it runs.
 Keys: `schema`, `decision`, `rule`, `reason`, `tool`, `role`, `base` (the
 commit the rules were read from, full sha), `surface_hash` (the surface at
 `base`), `governed`, `elapsed_ms`; optionally `pattern`, `audit` (`trail`,
-`seq`, `hash`, when `[audit] enabled = true`), `error`.
+`seq`, `hash`, when `[audit] enabled = true`), `error`, `base_note`.
+
+**Which revision's rules.** `--base <rev>` when given. Otherwise the session's
+recorded base, or the `--session-base` hint, or HEAD -- and then, since
+v0.5.1, the default branch decides when the branch differs from it in
+`.gnomon/`: when that revision's `.gnomon/` is not the one at its merge-base
+with the default branch (origin's HEAD, else a local `main` or `master`), the
+rules are the merge-base's and `base_note` says so on every call. A branch
+cannot loosen the rules that govern the agent working on it; the change
+governs once it is merged. A branch that introduces `.gnomon/` keeps its own.
+`--base HEAD` decides by the branch's own rules.
 
 **Input.** `--tool <kind> --input <json>`, or on stdin `{"tool", "input",
 "cwd"?, "session_id"?}`. With `--from claude-code | opencode | cursor` stdin

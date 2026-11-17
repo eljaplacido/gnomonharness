@@ -572,7 +572,7 @@ describe("a cloud endpoint the surface chose is checked with its key only where 
     const h = await run(await cloned("https://attacker.example/v1/chat/completions"));
     expect(h.cloudChecks).toEqual([]);
     expect(h.asked.some((q) => q.includes("one token"))).toBe(false);
-    expect(h.said.join("\n")).toContain("$ANTHROPIC_API_KEY goes to attacker.example, which is not a known provider, only once this surface is trusted");
+    expect(h.said.join("\n")).toContain("attacker.example is a host not trusted for this surface (gnomon trust)");
   });
 
   it("a trusted surface, or a known provider, is checked after the yes as before", async () => {

@@ -26,6 +26,54 @@
 
 ## [Unreleased]
 
+### Security — a repository cannot grant itself authority (review of 2026-11-17)
+
+"Everything that describes the agent's behaviour lives in the repository;
+nothing in the repository can, by itself, grant authority over the operator's
+machine." Each item below closes a place where that was not yet true. None
+runs per tool call except the state-directory check (a path comparison); the
+rest act at trust time, at launch or at a session's first guard call.
+
+- **Destinations are grants, not only keys.** An endpoint, fallback or
+  escalation at a public host that is not a known provider is a trust grant
+  with or without `api_key_env` (`dest:<endpoint>@<host>`). Until trusted it is
+  not contacted at all: a role routed to it stops with a message naming the
+  host and `gnomon trust`; a fallback or escalation there is dropped; `doctor`,
+  `endpoint list|test` and setup leave it alone. Loopback, LAN, tailnet
+  (100.64/10), dot-less names and the known providers are unchanged, so local
+  and relay setups ask nothing new.
+- **A provider's key goes to that provider, over https.** `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `OPENCODE_API_KEY` and the other
+  well-known variables go only to their own provider's host; a key sent to any
+  host off this machine over plain `http://` is a grant. Other variable names
+  behave as before.
+- **`gnomon guard`: a branch cannot loosen the rules that govern it.** With no
+  `--base`, when the revision's `.gnomon/` differs from the one at its
+  merge-base with the default branch, calls are decided by the merge-base's
+  rules, and the verdict's new `base_note` says so on every call. The change
+  governs once merged. `--base HEAD` keeps the branch's own (CONTRACTS.md §10).
+- **A misspelling that loosens containment stops the run.** `exec` that is not
+  `off` or `docker` (in `[sandbox]` or on a role), and a non-boolean
+  `[approval] repo_code`, are fatal surface problems instead of warnings: they
+  used to fall back to running on the host / not asking.
+- **`--require-trust` / `GNOMON_REQUIRE_TRUST=1`** (`task`, `prompt`): an
+  untrusted surface that grants more than the defaults exits 3 with nothing run,
+  instead of running clamped. For CI. Mid-session reloads still clamp.
+- **gnomon's own state is refused to every tool call.** A shell or file write
+  that names the trust store, stored keys, exec floors or per-repository state
+  (`$XDG_DATA_HOME/gnomon/`), or a recursive removal above it, is refused as a
+  `record`, for every role and `/allow` level, with or without `[governance]`.
+- **`source = "read_only"` for a role under `exec = "docker"`.** The project is
+  mounted read-only, with a scratch `/tmp` (HOME, TMPDIR and caches there), so
+  an allowed `npm test` cannot change what a verifier judges. Opt-in; without
+  docker, or misspelt, it stops the run; pinned for the session once on.
+  Checked against a real container: the scratch is writable, the project is not.
+
+Not in this change: the kernel sandbox (`exec = "os"`, #156) — its branch is
+141 commits behind master with 29 conflicting hunks in tools.ts, prompt_loop.ts,
+record_guard.ts, sandbox_pin.ts and the Rust enumerations, and gets its own
+rebase and review.
+
 ## [0.5.0] — 2026-11-12
 
 The first published release since 0.4.3: 0.4.4 and 0.4.5 were drafted and

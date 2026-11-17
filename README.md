@@ -322,6 +322,21 @@ That second line matters more than it looks. **`bash` can write anything**, so
 harness caught exactly that: a verifier with no write tool created a file
 through `bash` on its first attempt.
 
+And `bash_allow` narrows the *entry point*, not what the test process does:
+an allowed `npm test` runs the project's own `pretest`, a `make test` the
+Makefile. To make the verifier unable to change what it judges, give it a
+read-only project under the container (since v0.5.1):
+
+```toml
+[roles.verifier]
+exec = "docker"
+source = "read_only"   # the project mounted read-only; HOME and TMPDIR on a scratch /tmp
+```
+
+`source = "read_only"` without `exec = "docker"`, or misspelt, stops the run:
+on the host nothing could enforce it. A session that started read-only stays
+read-only if the surface changes mid-session.
+
 **What gnomon does not enforce: the sequence.** There is no orchestrator that
 runs coordinator → implementor → verifier and gates on the verifier's exit
 code. The order is yours. What the harness gives you is the assurance that when
@@ -2073,7 +2088,8 @@ and "looser" is measured, not guessed:
 | an MCP server (a process started when a session opens) | none |
 | a `[verify]` command that is not the project's own check (`npm test`, `pnpm run verify`, `cargo test`, …), an `[audit.attest]` signer, and a `[context] bootstrap` — commands that run unasked | none |
 | an `[audit.anchor]` witness: a push to its remote, a request to its time-stamp authority, or its command, at session end | no anchor |
-| an endpoint or fallback sending a key variable to a host that is neither local nor a known provider | keys go only to known providers |
+| an endpoint or fallback sending a key variable to a host that is neither local nor a known provider, a provider's own key variable (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, …) to another provider, or any key over plain `http://` off this machine | keys go only to their own provider, over https |
+| an endpoint, fallback or escalation — with or without a key — at a public host that is not a known provider (since v0.5.1: prompts and repository content leaving for a host the repository chose) | this machine, your LAN or tailnet, or a known provider |
 | a `[shadow]` model on a non-local host | off |
 | a role holding a tool its scaffold namesake lacks; a wider `write_allow` or `task_allow` | the scaffold role |
 | a role whose shell permits a command its default refuses — `git push --force`, `git branch -D`, and for `verifier` `curl …`, `sh -c`, `python3 -c`, `rm -rf` | refused |
@@ -2100,6 +2116,10 @@ against the defaults before anything runs:
 `y` records trust and runs as declared. Enter runs this session **clamped**: the
 same surface with every grant taken back to the scaffold's value (anything it
 does more strictly is kept). `q` starts nothing and exits 3 (`refused_by_gate`).
+On a clamped surface an endpoint at an ungranted public host is closed, not
+contacted: a role routed to it stops with a message naming the host and
+`gnomon trust`, and a fallback or escalation there is dropped. `doctor`,
+`endpoint list|test` and setup do not contact it before trust either.
 
 **When the surface changes**, it is covered without asking if everything it
 grants was granted by *one* surface you already trusted in this project — so a
@@ -2112,7 +2132,9 @@ it. It is never blocked and never silent, and exit codes follow the contract.
 `--trust`, or `GNOMON_TRUST=<surface hash or a 12+ character prefix>`, runs it as
 declared for that invocation only — the variable names one surface, so a
 changed surface is clamped again. A surface reloaded mid-session goes through
-the same gate.
+the same gate. `--require-trust` (or `GNOMON_REQUIRE_TRUST=1`) stops such a
+run instead of clamping it — exit 3, nothing ran — for CI, where a clamped run
+would pass for a run of the surface as declared.
 
 ```bash
 gnomon trust            # this project's grants, and every trusted surface on this machine
@@ -2126,10 +2148,12 @@ and a `trust` field on the `task --json` record. A clamped run's records carry
 the surface's hash *and* say the grants did not apply.
 [docs/CONTRACTS.md §8](docs/CONTRACTS.md) pins the vocabulary.
 
-**Limits, published.** The store is a file your user can write, so an agent
-holding unrestricted `bash` with approval granted can write it too — no worse
-than what that `bash` can already do, but it is not a boundary against your own
-account. `[verify]` running the project's own `npm test` is not a grant, and a
+**Limits, published.** The store is a file your user can write. Since v0.5.1
+gnomon refuses every tool call that names it — the trust store, stored keys and
+exec floors (`$XDG_DATA_HOME/gnomon/`) are refused like the audit records, for
+every role and `/allow` level — but a script that writes it without naming it
+on the command line is not seen, so on the host it is not a boundary against
+your own account; `exec = "docker"` is. `[verify]` running the project's own `npm test` is not a grant, and a
 hostile repository's test script is still hostile code; the scaffold does the
 same. `.gnomon/loops/` and `gnomon check` are not gated: a loop runs only after
 `gnomon loop install`, which prints the command, and `check` runs the base
@@ -3163,7 +3187,8 @@ a stdlib analyzer, a wire-metering relay, the GBS specs).
   and lists the scripts it would run whenever it asks, and `[approval]
   repo_code = true` asks before every one of them, whatever the gate says. It
   does not read the scripts; only `exec = "docker"` bounds what they do (to the
-  mounted repository, with no network).
+  mounted repository, with no network — and with a role's `source =
+  "read_only"`, not even that).
 - **Windows needs a POSIX shell, and gnomon will tell you if it cannot find one.**
   Supported and tested as of 2026-09-05: `windows-latest` runs the full
   TypeScript suite in CI — the same four packages Linux runs, minus 3 skips

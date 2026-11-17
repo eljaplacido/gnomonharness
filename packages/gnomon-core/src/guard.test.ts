@@ -414,6 +414,45 @@ describe("gnomon guard — the rules are committed ones", () => {
     expect((await guardToolCall({ cwd: repo, call: forcePush, role: "implement" })).decision).toBe("allow");
   });
 
+  // 2026-11-17 review: a PR must not loosen the rules that govern the agent
+  // working on that PR. A branch that changes .gnomon/ is decided by the
+  // default branch's rules at the point it left it, until it is merged.
+  it("a branch that loosens .gnomon/ is decided by the default branch's rules, and says so", async () => {
+    const start = surface("never");
+    const main = sh(["rev-parse", "--abbrev-ref", "HEAD"]);
+    sh(["checkout", "-q", "-b", "pr-loosen"]);
+    put(".gnomon/roles.toml", `[roles.implement]\nmodel = "m"\ntools = ["bash"]\n`);
+    commit("loosen on the PR branch");
+
+    const v = await guardToolCall({ cwd: repo, call: forcePush, role: "implement" });
+    expect(v).toMatchObject({ decision: "deny", base: start });
+    expect(v.base_note).toContain(`changes .gnomon/ from ${main}`);
+    // Every call of a session says so, not only the first.
+    await guardToolCall({ cwd: repo, call: forcePush, role: "implement", session: "pr-1" });
+    const again = await guardToolCall({ cwd: repo, call: forcePush, role: "implement", session: "pr-1" });
+    expect(again).toMatchObject({ decision: "deny", base: start });
+    expect(again.base_note).toContain("until the change is merged");
+    // Explicitly the branch's own rules: --base HEAD.
+    expect((await guardToolCall({ cwd: repo, call: forcePush, role: "implement", base: "HEAD" })).decision).toBe("allow");
+
+    // Merged into the default branch, the policy governs as committed.
+    sh(["checkout", "-q", main]);
+    sh(["merge", "-q", "--ff-only", "pr-loosen"]);
+    const merged = await guardToolCall({ cwd: repo, call: forcePush, role: "implement" });
+    expect(merged.decision).toBe("allow");
+    expect(merged.base_note).toBeUndefined();
+  });
+
+  it("a branch that does not touch .gnomon/ is decided by its own HEAD, with no note", async () => {
+    surface("never");
+    sh(["checkout", "-q", "-b", "feature"]);
+    put("README.md", "x\n");
+    const head = commit("unrelated");
+    const v = await guardToolCall({ cwd: repo, call: forcePush, role: "implement" });
+    expect(v).toMatchObject({ decision: "deny", base: head });
+    expect(v.base_note).toBeUndefined();
+  });
+
   it("a directory with no .gnomon/ is not governed: allow, said so", async () => {
     put("README.md", "x\n");
     commit("plain");

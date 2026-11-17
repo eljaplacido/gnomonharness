@@ -88,9 +88,11 @@ import {
   AuditTrail,
   settleTrust,
   settleTrustHeadless,
+  TrustRequiredError,
   evaluateTrust,
   clampToDefaults,
   keyHostIsDefault,
+  destinationIsDefault,
   grantTrust,
   revokeTrust,
   forgetToolPins,
@@ -242,6 +244,10 @@ export function parseArgs(args: string[]): CliArgs {
       // Bare as well. Accepts a role leaving the container it ran in here,
       // for this run, which --trust alone does not (trust.ts).
       result.flags["trust-exec-downgrade"] = "true";
+    } else if (arg === "--require-trust") {
+      // Bare: an untrusted surface that grants more than the defaults stops
+      // the run (exit 3) instead of running clamped. For CI.
+      result.flags["require-trust"] = "true";
     } else if (arg === "--task-file") {
       // Always takes the next argument: `-` (stdin) is its value here, where
       // the generic branch below would read it as another option.
@@ -810,7 +816,13 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
   // (docs/CONTRACTS.md §8). `add` writes the URL the user typed or chose.
   const { config: reach, trusted } = preSessionSurface(config, trustOptions(args));
   const keyHeld = (ep: { url: string; api_key_env?: string }): boolean =>
-    Boolean(ep.api_key_env) && !trusted && !keyHostIsDefault(ep.url);
+    Boolean(ep.api_key_env) && !trusted && !keyHostIsDefault(ep.url, ep.api_key_env);
+  // Keyless too: a surface's endpoint at a public host that is not a known
+  // provider is not contacted before the trust step has accepted it -- a
+  // probe would already send that host the model id and a prompt.
+  const destHeld = (ep: { url: string }): boolean => !trusted && !destinationIsDefault(ep.url);
+  const destWhy = (ep: { url: string }): string =>
+    `${hostName(ep.url)} is a host this machine has not trusted for this surface; run \`gnomon trust\` to review it`;
 
   if (sub === "list") {
     // Cross-check every role's model id against what its endpoint advertises.
@@ -824,6 +836,9 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     printEndpoints(rows, resolveUi(config), null, modelChecks, config.profile);
     for (const r of rows.filter((r) => keyHeld(r.endpoint))) {
       console.log(`  ${r.name}: ${withheldWhy({ env: r.endpoint.api_key_env!, host: hostName(r.endpoint.url) })}.`);
+    }
+    for (const r of rows.filter((r) => !keyHeld(r.endpoint) && destHeld(r.endpoint))) {
+      console.log(`  ${r.name}: not contacted — ${destWhy(r.endpoint)}.`);
     }
     if (supplied.length > 0) {
       // Say where a key came from. "set" alone cannot distinguish a stored key
@@ -852,7 +867,7 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
         untested.push(row.name);
         continue;
       }
-      if (keyHeld(row.endpoint)) {
+      if (keyHeld(row.endpoint) || destHeld(row.endpoint)) {
         withheld.push(row.name);
         continue;
       }
@@ -863,7 +878,7 @@ async function cmdEndpoint(args: CliArgs): Promise<void> {
     printEndpoints(rows, resolveUi(config), probes, modelChecks, config.profile);
     for (const n of withheld) {
       const ep = rows.find((r) => r.name === n)!.endpoint;
-      console.log(`  ${n}: NOT TESTED — ${withheldWhy({ env: ep.api_key_env!, host: hostName(ep.url) })}.`);
+      console.log(`  ${n}: NOT TESTED — ${keyHeld(ep) ? withheldWhy({ env: ep.api_key_env!, host: hostName(ep.url) }) : destWhy(ep)}.`);
     }
     // An endpoint with no role routed to it has no model to ask for, and was
     // skipped without a word — `gnomon endpoint test go` printed the listing
@@ -1782,6 +1797,7 @@ async function cmdTask(args: CliArgs): Promise<void> {
     // (2026-11-12) lost a 58-call run to this catch as "could not start",
     // tool_steps 0, duration 0. (A throw inside the turn no longer leaves
     // runTask at all: the turn ends on it.)
+    if (err instanceof TrustRequiredError) exitTrustRequired(err, Boolean(args.json));
     const why = err instanceof Error ? err.message : String(err);
     record = (await interrupt.fail?.(err)) ?? unstartedTaskRecord(text, args.role, `gnomon task could not start: ${why}`);
   }
@@ -2461,7 +2477,7 @@ async function cmdAcp(args: CliArgs): Promise<void> {
     profile: args.flags["profile"],
     role: args.role,
     // An editor cannot answer the trust prompt: settle it as `task` does.
-    reconfigure: (fresh: GnomonConfig) => settleTrustHeadless(fresh, trustOptions(args)).config,
+    reconfigure: (fresh: GnomonConfig) => settleTrustHeadless(fresh, reloadTrustOptions(args)).config,
   });
   process.exit(0);
 }
@@ -2476,6 +2492,9 @@ async function cmdPrompt(args: CliArgs): Promise<void> {
     ...trustOptions(args),
     interactive,
     ask: (q) => ask(q, ""),
+  }).catch((err: unknown) => {
+    if (err instanceof TrustRequiredError) exitTrustRequired(err, Boolean(args.json));
+    throw err;
   });
   if (settled.quit) {
     // A refusal by the trust gate: 3, refused_by_gate (docs/CONTRACTS.md §1).
@@ -2490,13 +2509,35 @@ async function cmdPrompt(args: CliArgs): Promise<void> {
     trust: settled.outcome,
     // A surface reloaded mid-session goes through the same gate, headless:
     // trusted or covered runs as written, anything looser is clamped and said.
-    reconfigure: (fresh: GnomonConfig) => settleTrustHeadless(fresh, trustOptions(args)).config,
+    reconfigure: (fresh: GnomonConfig) => settleTrustHeadless(fresh, reloadTrustOptions(args)).config,
   });
 }
 
 /** What the invocation says about trust: --trust, and GNOMON_TRUST=<surface hash>. */
 function trustOptions(args: CliArgs): Omit<SettleOptions, "interactive"> {
-  return { flag: Boolean(args.trust), env: process.env.GNOMON_TRUST, execDowngrade: args.flags["trust-exec-downgrade"] === "true" };
+  return {
+    flag: Boolean(args.trust),
+    env: process.env.GNOMON_TRUST,
+    execDowngrade: args.flags["trust-exec-downgrade"] === "true",
+    require: args.flags["require-trust"] === "true" || /^(1|true|yes)$/i.test(process.env.GNOMON_REQUIRE_TRUST ?? ""),
+  };
+}
+
+/**
+ * Mid-session reloads keep clamping a loosening rather than stopping the
+ * session: --require-trust is a gate on starting, and a session already
+ * running on a trusted surface stays on it (credential_pin, sandbox_pin).
+ */
+function reloadTrustOptions(args: CliArgs): Omit<SettleOptions, "interactive"> {
+  return { ...trustOptions(args), require: false };
+}
+
+/** --require-trust refused the start: refused_by_gate, 3 (docs/CONTRACTS.md §1). */
+function exitTrustRequired(err: TrustRequiredError, json: boolean): never {
+  if (json) console.log(JSON.stringify({ error: "trust_required", message: err.message, surface_hash: err.evaluation.surface_hash }, null, 2));
+  console.error(`gnomon: ${err.message}`);
+  console.error("  Not started. Nothing ran.");
+  process.exit(3);
 }
 
 /**
@@ -2830,7 +2871,9 @@ Commands:
     trusted runs CLAMPED to the defaults, with one line on stderr; --trust
     (or GNOMON_TRUST=<surface hash>) runs it as declared -- except a role
     leaving the container (or image) it ran in here, which stays where it
-    ran unless --trust-exec-downgrade is given too.
+    ran unless --trust-exec-downgrade is given too. --require-trust (or
+    GNOMON_REQUIRE_TRUST=1) stops such a run instead of clamping it: exit 3,
+    nothing ran -- for CI, where a clamped run would pass for the real one.
 
   trust [list|grant|revoke] [--dir <path>]
     Whether this machine's user trusts what this project's .gnomon/ grants

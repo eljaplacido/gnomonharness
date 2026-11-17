@@ -52,6 +52,7 @@ import {
   isToolEnabled,
   recomputeManifest,
   isLoopbackEndpoint,
+  endpointLocality,
   resolveShadow,
   resolveBootstrap,
   resolveExec,
@@ -203,6 +204,26 @@ export const KEY_HOSTS = [
 ];
 
 /**
+ * A provider's own key variable goes to that provider. A surface that keeps
+ * `api_key_env = "ANTHROPIC_API_KEY"` and points the endpoint at another known
+ * host is sending one provider's key to another: a grant, not a preset. A
+ * variable not named here (CLOUD_API_KEY, MY_KEY) may go to any KEY_HOSTS host,
+ * as before.
+ */
+export const KEY_VAR_HOSTS: Readonly<Record<string, readonly string[]>> = {
+  ANTHROPIC_API_KEY: ["api.anthropic.com"],
+  OPENAI_API_KEY: ["api.openai.com"],
+  OPENROUTER_API_KEY: ["openrouter.ai"],
+  OPENCODE_API_KEY: ["opencode.ai"],
+  MISTRAL_API_KEY: ["api.mistral.ai"],
+  GROQ_API_KEY: ["api.groq.com"],
+  TOGETHER_API_KEY: ["api.together.xyz", "api.together.ai"],
+  GEMINI_API_KEY: ["generativelanguage.googleapis.com"],
+  GOOGLE_API_KEY: ["generativelanguage.googleapis.com"],
+  GITHUB_TOKEN: ["api.githubcopilot.com"],
+};
+
+/**
  * `[verify]` commands that run the project's own declared check -- the shapes
  * `detectVerifyCommand` writes. Any of these is what `gnomon init` would have
  * written in some project, so it is not a grant; anything else is a command
@@ -327,8 +348,26 @@ function hostOf(url: string): string {
  * endpoint before (or without) a session, and each applies this same rule --
  * a key goes to a host that fails it only when the surface is trusted.
  */
-export function keyHostIsDefault(url: string): boolean {
+export function keyHostIsDefault(url: string, keyVar?: string): boolean {
   if (isLoopbackEndpoint(url)) return true;
+  // A key that leaves this machine goes over TLS or not at all.
+  if (!/^https:\/\//i.test(url.trim())) return false;
+  const host = hostOf(url);
+  if (!KEY_HOSTS.includes(host)) return false;
+  const own = keyVar ? KEY_VAR_HOSTS[keyVar.trim()] : undefined;
+  return !own || own.includes(host);
+}
+
+/**
+ * Whether sending prompts and repository content to this URL is something the
+ * scaffold could have set up, with or without a key: this machine, the LAN or
+ * tailnet (endpointLocality `loopback` / `private`, where people run their own
+ * model servers), or a known provider. Any other public host is a destination
+ * the repository chose, and a repository must not choose, unasked, where its
+ * own code is sent (2026-11-17 review: "destination approval").
+ */
+export function destinationIsDefault(url: string): boolean {
+  if (endpointLocality(url) !== "remote") return true;
   return KEY_HOSTS.includes(hostOf(url));
 }
 
@@ -457,17 +496,23 @@ export function surfaceGrants(config: GnomonConfig): Grant[] {
   for (const [name, ep] of Object.entries(config.config.endpoints ?? {})) {
     const v = str((ep as { api_key_env?: unknown }).api_key_env);
     const url = str((ep as { url?: unknown }).url);
-    if (v && url && !keyHostIsDefault(url)) {
+    if (v && url && !keyHostIsDefault(url, v)) {
       add({ key: `key:${name}:${v}@${hostOf(url)}`, subject: `endpoint ${name}`, grants: `sends $${v} to ${hostOf(url) || url}`, default: "keys go only to known providers" });
+    } else if (url && !destinationIsDefault(url)) {
+      add({ key: `dest:${name}@${hostOf(url)}`, subject: `endpoint ${name}`, grants: `sends prompts and repository content to ${hostOf(url) || url}`, default: "this machine, your network or a known provider" });
     }
   }
   for (const [role, def] of Object.entries(config.roles ?? {})) {
     for (const side of KEYED_SIDES) {
       const block = def?.[side] as { api_key_env?: unknown; url?: unknown; endpoint?: unknown } | undefined;
       const v = str(block?.api_key_env);
-      const url = v ? effectiveSideUrl(config, block) : null;
-      if (v && url && !keyHostIsDefault(url)) {
+      // Keyless, only a side's own url is judged here: one that names an
+      // endpoint shares that endpoint's grant above.
+      const url = v ? effectiveSideUrl(config, block) : str(block?.url) || null;
+      if (v && url && !keyHostIsDefault(url, v)) {
         add({ key: `key:${role}.${side}:${v}@${hostOf(url)}`, subject: `role ${role}`, grants: `${side} sends $${v} to ${hostOf(url) || url}`, default: "keys go only to known providers" });
+      } else if (!v && url && !destinationIsDefault(url)) {
+        add({ key: `dest:${role}.${side}@${hostOf(url)}`, subject: `role ${role}`, grants: `${side} sends prompts and repository content to ${hostOf(url) || url}`, default: "this machine, your network or a known provider" });
       }
     }
   }
@@ -561,8 +606,30 @@ export function clampToDefaults(config: GnomonConfig, floor?: ExecFloor): Gnomon
   if (context && "bootstrap" in context) delete context.bootstrap;
   if (context && "env_snapshot" in context) delete context.env_snapshot;
 
+  // Sides first: they are judged by the URL they would really be sent to,
+  // which for a side naming an endpoint is that endpoint's, before it is
+  // closed below. A side whose destination is not granted is dropped -- the
+  // role runs without that fallback or escalation -- rather than failing it.
+  for (const def of Object.values(c.roles ?? {}) as Array<RoleDef | undefined>) {
+    if (!def) continue;
+    for (const side of KEYED_SIDES) {
+      const block = def[side] as Record<string, any> | undefined;
+      if (!block) continue;
+      const url = effectiveSideUrl(c, block);
+      if (url && !destinationIsDefault(url)) delete (def as Record<string, unknown>)[side];
+    }
+  }
   for (const ep of Object.values(c.config.endpoints ?? {}) as Array<Record<string, any>>) {
-    if (str(ep.api_key_env) && str(ep.url) && !keyHostIsDefault(str(ep.url))) delete ep.api_key_env;
+    const url = str(ep.url);
+    if (url && !destinationIsDefault(url)) {
+      // Closed, not rewritten: nothing is sent there, and a role routed to it
+      // stops with a message that names the host (config.ts resolveEndpoint).
+      ep.untrusted_host = hostOf(url) || url;
+      ep.url = "";
+      delete ep.api_key_env;
+      continue;
+    }
+    if (str(ep.api_key_env) && url && !keyHostIsDefault(url, str(ep.api_key_env))) delete ep.api_key_env;
   }
   const shadow = resolveShadow(c);
   if (shadow.enabled && !isLoopbackEndpoint(shadow.url)) {
@@ -575,7 +642,7 @@ export function clampToDefaults(config: GnomonConfig, floor?: ExecFloor): Gnomon
       const block = def[side] as Record<string, any> | undefined;
       if (!block || !str(block.api_key_env)) continue;
       const url = effectiveSideUrl(c, block);
-      if (url && !keyHostIsDefault(url)) delete block.api_key_env;
+      if (url && !keyHostIsDefault(url, str(block.api_key_env))) delete block.api_key_env;
     }
 
     const base = SCAFFOLD_ROLES[role] ?? ENVELOPE;
@@ -1187,7 +1254,27 @@ export interface TrustOptions {
    * the floor; only `gnomon trust grant` does.
    */
   execDowngrade?: boolean;
+  /**
+   * `--require-trust` / GNOMON_REQUIRE_TRUST=1: an untrusted surface that
+   * grants more than the defaults stops the run (TrustRequiredError) instead
+   * of running clamped. For CI, where a quietly clamped run would pass for a
+   * run of the surface as declared.
+   */
+  require?: boolean;
   path?: string;
+}
+
+/** Thrown by settleTrustHeadless under `require` when the surface is not trusted. */
+export class TrustRequiredError extends Error {
+  constructor(readonly evaluation: TrustEvaluation) {
+    super(
+      `this surface grants more than the defaults and is not trusted on this machine, and trust is required ` +
+        `(--require-trust / GNOMON_REQUIRE_TRUST). Not trusted: ` +
+        `${evaluation.uncovered.map((g) => `${g.subject}: ${g.grants}`).join("; ")}. ` +
+        `Run \`gnomon trust\` to review it, or pass GNOMON_TRUST=${evaluation.surface_hash.slice(0, 16)} for this exact surface.`
+    );
+    this.name = "TrustRequiredError";
+  }
 }
 
 /** A GNOMON_TRUST value names a surface when it is its full hash or a prefix of at least 12. */
@@ -1375,6 +1462,7 @@ export function settleTrustHeadless(
     }
     return { config, evaluation, outcome: outcomeOf(evaluation, "trusted", evaluation.via ?? "store") };
   }
+  if (opts.require) throw new TrustRequiredError(evaluation);
   (opts.warn ?? ((l: string) => process.stderr.write(`${l}\n`)))(clampNotice(evaluation));
   return {
     config: clampToDefaults(config, evaluation.execFloor),

@@ -200,6 +200,12 @@ export interface GuardVerdict {
   base: string | null;
   /** Hash of the surface at `base`: the rules this call was decided by. */
   surface_hash: string | null;
+  /**
+   * Present only when the rules were not read from the revision the session
+   * is on: its branch changes the surface, and the rules are the default
+   * branch's at the point the branch left it (trustedBase).
+   */
+  base_note?: string;
   /** false when there is no surface to decide by (rule "ungoverned"). */
   governed: boolean;
   /** The bash_allow / bash_deny pattern, when one decided. */
@@ -401,7 +407,9 @@ function git(cwd: string, args: string[], input?: string): Buffer {
  */
 function sessionBase(where: Located, session: string): string | null {
   const recorded = checkSessionFile(where.gitDir, session);
-  for (const f of [recorded, join(repoStateDir(where.gitDir), "guard", "sessions", `${session}.json`)]) {
+  // This guard's own record first: it is the base the first call settled
+  // (trustedBase applied), so later calls need no git beyond rulesAt's.
+  for (const f of [join(repoStateDir(where.gitDir), "guard", "sessions", `${session}.json`), recorded]) {
     try {
       const head = (JSON.parse(readFileSync(f, "utf-8")) as { head?: unknown }).head;
       if (typeof head === "string" && /^[0-9a-f]{40,64}$/.test(head)) return head;
@@ -412,13 +420,131 @@ function sessionBase(where: Located, session: string): string | null {
   return null;
 }
 
-function recordSessionBase(where: Located, session: string, head: string): void {
+/** git in `cwd`, trimmed stdout, or null on any failure. Never throws. */
+function gitTry(cwd: string, args: string[]): string | null {
+  const r = safeGitBuffer(args, { cwd });
+  return r.error || r.status !== 0 ? null : r.stdout.toString("utf-8").trim() || null;
+}
+
+/**
+ * The branch the repository's reviewed policy lives on: origin's HEAD, else a
+ * local `main` or `master`. Null when there is none to compare against.
+ */
+function defaultBranch(toplevel: string): string | null {
+  const remote = gitTry(toplevel, ["symbolic-ref", "-q", "--short", "refs/remotes/origin/HEAD"]);
+  if (remote) return remote;
+  for (const b of ["main", "master"]) {
+    if (gitTry(toplevel, ["rev-parse", "--verify", "-q", `refs/heads/${b}^{commit}`])) return b;
+  }
+  return null;
+}
+
+/**
+ * Which revision's rules govern a session that named none (2026-11-17
+ * review: "a PR changes approval or sandbox defaults ... the patch weakens the
+ * conditions under which the patch is processed").
+ *
+ * `rev` (a session's start, or HEAD) when its `.gnomon/` is the default
+ * branch's at the point the branch left it -- the common case, and every
+ * commit on the default branch itself. When the branch changes `.gnomon/`,
+ * the rules are that branch point's: a change to the policy governs once it
+ * is merged where it is reviewed, not on the branch that proposes it. A
+ * branch that introduces `.gnomon/` has no earlier policy and keeps its own.
+ * `--base <rev>` (req.base) chooses explicitly and skips this.
+ */
+function trustedBase(where: Located, rev: string): { rev: string; note?: string } {
+  const head = gitTry(where.toplevel, ["rev-parse", "--verify", "-q", `${rev}^{commit}`]);
+  if (!head) return { rev };
+  const def = defaultBranch(where.toplevel);
+  if (!def) return { rev: head };
+  const fork = gitTry(where.toplevel, ["merge-base", head, def]);
+  if (!fork || fork === head) return { rev: head };
+  const mine = gitTry(where.toplevel, ["rev-parse", "-q", "--verify", `${head}:${where.surfaceRel}`]);
+  const theirs = gitTry(where.toplevel, ["rev-parse", "-q", "--verify", `${fork}:${where.surfaceRel}`]);
+  if (!theirs || mine === theirs) return { rev: head };
+  return {
+    rev: fork,
+    note:
+      `this branch changes ${where.surfaceRel}/ from ${def}; calls are decided by ${def}'s rules at ` +
+      `${fork.slice(0, 12)} until the change is merged there (--base HEAD decides by the branch's own)`,
+  };
+}
+
+function sessionBaseNote(where: Located, session: string): string | undefined {
+  try {
+    const f = join(repoStateDir(where.gitDir), "guard", "sessions", `${session}.json`);
+    const note = (JSON.parse(readFileSync(f, "utf-8")) as { note?: unknown }).note;
+    return typeof note === "string" ? note : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The default branch and its tip from git's files: `refs/remotes/origin/HEAD`
+ * (a symbolic ref git writes as a loose file), else a local main or master.
+ * `tip` is "none" when there is none -- which git would say too. Null when the
+ * files cannot say (an unreadable git dir): trustedBase asks git.
+ */
+function defaultTipFromFiles(where: Located): { tip: string } | null {
+  try {
+    const common = commonDir(where);
+    const originHead = join(common, "refs", "remotes", "origin", "HEAD");
+    if (existsSync(originHead)) {
+      const ref = /^ref: (refs\/[^\s]+)$/.exec(readFileSync(originHead, "utf-8").trim())?.[1];
+      const tip = ref ? refCommit(where, ref) : null;
+      return tip ? { tip } : null;
+    }
+    for (const b of ["main", "master"]) {
+      const tip = refCommit(where, `refs/heads/${b}`);
+      if (tip) return { tip };
+    }
+    return { tip: "none" };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * trustedBase, remembered per (commit, default branch tip) in the repository's
+ * guard state: both are read from git's files, so a call whose answer is
+ * known starts no git process (the guard's per-call budget). Either moving --
+ * a new commit, the default branch advancing or the branch being merged --
+ * is a new key.
+ */
+function trustedBaseCached(where: Located, rev: string): { rev: string; note?: string } {
+  const commit = /^[0-9a-f]{40}$/.test(rev) ? rev : rev === "HEAD" ? headCommit(where) : null;
+  const def = commit ? defaultTipFromFiles(where) : null;
+  const memo = commit && def ? join(repoStateDir(where.gitDir), "guard", "bases", `${commit}-${def.tip}.json`) : null;
+  if (memo) {
+    try {
+      const m = JSON.parse(readFileSync(memo, "utf-8")) as { rev?: unknown; note?: unknown };
+      if (typeof m.rev === "string" && /^[0-9a-f]{40,64}$/.test(m.rev)) {
+        return { rev: m.rev, ...(typeof m.note === "string" ? { note: m.note } : {}) };
+      }
+    } catch {
+      // not remembered yet
+    }
+  }
+  const out = trustedBase(where, rev);
+  if (memo && /^[0-9a-f]{40,64}$/.test(out.rev)) {
+    try {
+      mkdirSync(dirname(memo), { recursive: true });
+      writeFileSync(memo, JSON.stringify(out));
+    } catch {
+      // a read-only git dir: every call asks git, which is only slower
+    }
+  }
+  return out;
+}
+
+function recordSessionBase(where: Located, session: string, head: string, note?: string): void {
   const f = join(repoStateDir(where.gitDir), "guard", "sessions", `${session}.json`);
   if (existsSync(f)) return;
   try {
     mkdirSync(dirname(f), { recursive: true });
     // wx: two first calls racing must not both write; the loser keeps the winner's.
-    writeFileSync(f, JSON.stringify({ head, started: new Date().toISOString() }), { flag: "wx" });
+    writeFileSync(f, JSON.stringify({ head, started: new Date().toISOString(), ...(note ? { note } : {}) }), { flag: "wx" });
   } catch {
     // Either the other call won, or the git dir is read-only: the next call
     // reads HEAD again, which is what a missing record means anyway.
@@ -499,9 +625,21 @@ function headCommit(where: Located): string | null {
     if (/^[0-9a-f]{40}$/.test(head)) return head;
     const ref = /^ref: (refs\/[^\s]+)$/.exec(head)?.[1];
     if (!ref) return null;
-    let common = where.gitDir;
-    const commondir = join(where.gitDir, "commondir");
-    if (existsSync(commondir)) common = resolve(where.gitDir, readFileSync(commondir, "utf-8").trim());
+    return refCommit(where, ref);
+  } catch {
+    return null;
+  }
+}
+
+function commonDir(where: Located): string {
+  const commondir = join(where.gitDir, "commondir");
+  return existsSync(commondir) ? resolve(where.gitDir, readFileSync(commondir, "utf-8").trim()) : where.gitDir;
+}
+
+/** A ref's commit from the git dir's files (loose, then packed), or null when it takes git to say. */
+function refCommit(where: Located, ref: string): string | null {
+  try {
+    const common = commonDir(where);
     for (const dir of [where.gitDir, common]) {
       const loose = join(dir, ref);
       if (existsSync(loose)) {
@@ -627,11 +765,22 @@ export async function guardToolCall(req: GuardRequest): Promise<GuardVerdict> {
     // session reached the guard (CONTRACTS.md §44).
     recordLiveness(where, req, session);
     const hinted = typeof req.sessionBase === "string" && /^[0-9a-f]{40,64}$/.test(req.sessionBase) ? req.sessionBase : null;
-    const rev = req.base ?? (session ? sessionBase(where, session) : null) ?? hinted ?? "HEAD";
+    const recorded = !req.base && session ? sessionBase(where, session) : null;
+    let rev = req.base ?? recorded ?? hinted ?? "HEAD";
+    if (!req.base && !recorded) {
+      const trusted = trustedBaseCached(where, rev);
+      rev = trusted.rev;
+      if (trusted.note) v.base_note = trusted.note;
+    } else if (recorded && !req.base) {
+      // A session whose first call fell back to its branch point says so on
+      // every call, not only the first.
+      const note = sessionBaseNote(where, session!);
+      if (note) v.base_note = note;
+    }
     const rules = rulesAt(where, rev);
     v.base = rules.base;
     v.surface_hash = rules.surfaceHash;
-    if (session && !req.base) recordSessionBase(where, session, rules.base);
+    if (session && !req.base) recordSessionBase(where, session, rules.base, v.base_note);
 
     const resolved = resolveCheckRole(rules.config, { role: req.role, agent: req.agent });
     if ("error" in resolved) throw new GuardCannotDecide(resolved.error);

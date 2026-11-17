@@ -98,6 +98,7 @@ import {
   resolveSandboxProfile,
 } from "./sandbox_profile.js";
 import type { ChildProcess } from "node:child_process";
+import { gnomonDataDir } from "./credentials.js";
 
 /**
  * The roots host reads and writes of model-named files must stay under (sixth
@@ -1981,7 +1982,7 @@ export function shq(value: string): string {
 
 export function sandboxCommand(
   command: string,
-  ctx: { root: string; exec?: { mode: "off" | "docker"; image: string; network: boolean }; agentSession?: string },
+  ctx: { root: string; exec?: { mode: "off" | "docker"; image: string; network: boolean; read_only_source?: boolean }; agentSession?: string },
   name: string,
   /** A job's stdin reaches the container (`-i`): soft_timeout = "handle" only. */
   opts: { interactive?: boolean } = {}
@@ -2022,6 +2023,8 @@ export function sandboxCommand(
   }
   const uid = typeof process.getuid === "function" ? process.getuid() : 0;
   const gid = typeof process.getgid === "function" ? process.getgid() : 0;
+  // The role's `source = "read_only"` (config.ts RoleDef.source).
+  const ro = ex.read_only_source ? ":ro" : "";
   return [
     "docker run --rm",
     opts.interactive ? "-i" : "",
@@ -2042,10 +2045,21 @@ export function sandboxCommand(
     // appeared. The command was fixed on 2026-09-07 and this half was left,
     // which is the more common shape of a quoting bug -- one call site noticed,
     // its neighbours not.
-    `-v ${shq(ctx.root)}:${shq(ctx.root)}`,
+    `-v ${shq(ctx.root)}:${shq(ctx.root)}${ro}`,
     // `.git` a mount point of its own, so it cannot be renamed away from
     // the read-only mounts inside it (root_fs.ts containedMountPoints).
-    ...containedMountPoints(ctx.root).map((p) => `-v ${shq(p)}:${shq(p)}`),
+    ...containedMountPoints(ctx.root).map((p) => `-v ${shq(p)}:${shq(p)}${ro}`),
+    // A read-only project gets somewhere to write: a scratch /tmp that goes
+    // with the container, and HOME, TMPDIR and the caches pointed at it.
+    ...(ro
+      ? [
+          "--tmpfs /tmp:rw,exec,nosuid,size=1g",
+          "-e HOME=/tmp",
+          "-e TMPDIR=/tmp",
+          "-e XDG_CACHE_HOME=/tmp/.cache",
+          "-e PYTHONDONTWRITEBYTECODE=1",
+        ]
+      : []),
     ...readonly.map((p) => `-v ${shq(p)}:${shq(p)}:ro`),
     `-w ${shq(ctx.root)}`,
     // Which project the container can write, for any gnomon process to ask
@@ -2616,12 +2630,17 @@ function bashWriteRefusal(command: string, ctx: ToolContext, deferred: Precheck[
     if (cwd === null) return null;
     return resolve(dirAbs(cwd), literal);
   };
-  const recordHit = (path: string, how: string): Precheck => ({
+  const recordHit = (path: string, how: string, abs?: string): Precheck => ({
     ...recordRefusal("bash", path),
     content:
-      `Refused: this command writes "${path}" (${how}), inside gnomon's own records ` +
-      `(${recordDirs(ctx).map((d) => relative(root, d).split(sep).join("/") || d).join(", ")}).\n\n` +
-      RECORD_WHY,
+      abs !== undefined && inGnomonState(abs)
+        ? `Refused: this command writes "${path}" (${how}), inside gnomon's own state on this machine ` +
+          `(${gnomonDataDir().split(sep).join("/")}: the trust store, stored keys, exec floors). ` +
+          `What this machine trusts is the person's to decide, with \`gnomon trust\` and ` +
+          `\`gnomon key\`; no role changes it, whatever the approval gate says.`
+        : `Refused: this command writes "${path}" (${how}), inside gnomon's own records ` +
+          `(${recordDirs(ctx).map((d) => relative(root, d).split(sep).join("/") || d).join(", ")}).\n\n` +
+          RECORD_WHY,
   });
   const surfaceHit = (path: string, how: string): Precheck => ({
     rule: "surface",
@@ -2773,7 +2792,7 @@ function bashWriteRefusal(command: string, ctx: ToolContext, deferred: Precheck[
     // outside the root. A second name for a record -- a hard link made
     // earlier -- is the record.
     const guarded = protectedPath(ctx, j.abs);
-    if (guarded?.rule === "record") return recordHit(j.path, j.how);
+    if (guarded?.rule === "record") return recordHit(j.path, j.how, j.abs);
     // A removal of a directory ABOVE the records (or the surface) removes
     // them too: `rm -rf ../repo`, `find . -name '*.jsonl' -delete`.
     if (j.t.clean) {
@@ -2792,6 +2811,13 @@ function bashWriteRefusal(command: string, ctx: ToolContext, deferred: Precheck[
           return p.kind === "record"
             ? recordHit(j.path, `${j.how}, which removes everything below it`)
             : surfaceHit(j.path, `${j.how}, which removes everything below it`);
+        }
+      }
+      // `rm -rf ~/.local/share`: gnomon's state goes with what holds it.
+      {
+        const state = gnomonDataDir();
+        if (existsSync(state) && isAncestor(j.abs, state) && removalMatches(state, j.abs, j.path, j.t.names)) {
+          return recordHit(j.path, `${j.how}, which removes everything below it`, state);
         }
       }
       // `rm -rf .claude`, `mv .opencode x`: the hook configuration goes with
@@ -3368,6 +3394,21 @@ const HOST_HOOK_REL =
   /(^|\/)(\.claude\/(settings(\.local)?\.json|hooks)|\.opencode\/(plugins?|opencode\.jsonc?)|opencode\.jsonc?|\.cursor\/hooks\.json|\.config\/opencode\/(plugins?|opencode\.jsonc?|config\.json))(\/|$)/;
 
 /** Whether a resolved path is (or is below) a host harness's hook configuration. */
+/**
+ * gnomon's own state on this machine (credentials.ts gnomonDataDir): the trust
+ * store, the key store, the exec floors, per-repository guard state. Outside
+ * every repository, and the place a repository's agent must least be able to
+ * write: one line in trust.json and the next session trusts whatever the
+ * surface says (2026-11-17 review; README "an agent with unrestricted bash
+ * can write the trust store"). Refused as a record, for every role, with or
+ * without [governance], write_allow or extra_roots.
+ */
+export function inGnomonState(abs: string): boolean {
+  const dir = gnomonDataDir();
+  const under = (base: string, p: string): boolean => !escapesBase(relative(recordPathKey(base), recordPathKey(p)));
+  return under(realpathOrSelf(dir), realpathOfNearest(abs)) || under(dir, resolve(abs));
+}
+
 export function inHostHooks(ctx: ToolContext, abs: string): boolean {
   const under = (base: string, p: string): boolean => {
     const rel = relative(recordPathKey(base), recordPathKey(p));
@@ -3444,6 +3485,9 @@ export function protectedPath(
   if (want("surface") && inSurface(ctx, abs)) return { rule: "surface", family: "rules" };
   if (want("git_hooks") && inGitControl(ctx, abs)) return { rule: "git_hooks", family: "rules" };
   if (want("host_hooks") && inHostHooks(ctx, abs)) return { rule: "host_hooks", family: "rules" };
+  // After host_hooks, which already names the per-repository guard state
+  // under it: the rest of gnomon's state on this machine is a record.
+  if (want("record") && inGnomonState(abs)) return { rule: "record", family: "rules" };
   const lists = ctx.protectedPaths;
   if (!lists) return null;
   if (want("ci_path") && pathListed(lists.ci, ctx.root, abs)) return { rule: "ci_path", family: "ci" };

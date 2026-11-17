@@ -119,13 +119,13 @@ function runtimeAt(url: string): RuntimeId | undefined {
   return ({ "11434": "ollama", "1234": "lmstudio", "8080": "llamacpp", "8000": "vllm" } as Record<string, RuntimeId>)[port];
 }
 
+const TRUST_FIX = "gnomon trust — read what .gnomon/ grants; then gnomon trust grant, if you accept it";
+
 function readinessFix(row: RouteRow): string | undefined {
   const why = row.why ?? "";
   if (/needs \$(\w+)/.test(why) || /rejected the key/.test(why)) return `gnomon key set ${row.endpoint ?? "<endpoint>"}`;
   const rt = runtimeAt(row.where.startsWith("http") ? row.where : `http://${row.where}`);
-  if (/once this surface is trusted/.test(why)) {
-    return "gnomon trust — read what .gnomon/ grants; then gnomon trust grant, if you accept it";
-  }
+  if (/once this surface is trusted|not trusted for this surface/.test(why)) return TRUST_FIX;
   if (/nothing is listening/.test(why)) {
     return rt === "ollama" || !rt ? "start Ollama: ollama serve (or open the Ollama app)" : `start the model server on ${row.where}`;
   }
@@ -207,11 +207,16 @@ export async function runDoctor(opts: { dir: string }, deps: DoctorDeps): Promis
       const { config, trusted } = preSessionSurface(declared, deps.trust);
       deps.applyKeys?.(config);
       const groups = new Map<string, RouteRow>();
+      // Roles whose endpoint the trust step closed (an ungranted public host):
+      // not reached, and said so, rather than left out of the report.
+      const closed = new Map<string, string[]>();
       for (const role of listRoles(config)) {
         let target;
         try {
           target = routeRole(config, role).target;
-        } catch {
+        } catch (err) {
+          const msg = err instanceof Error ? err.message.split("\n")[0]! : String(err);
+          if (/not trusted for this surface/.test(msg)) closed.set(msg, [...(closed.get(msg) ?? []), role]);
           continue;
         }
         const key = `${target.endpoint ?? ""}\u0000${target.model}`;
@@ -244,6 +249,14 @@ export async function runDoctor(opts: { dir: string }, deps: DoctorDeps): Promis
           if (r.why) row.why = r.why;
         })
       );
+      for (const [msg, roles] of closed) {
+        add({
+          kind: "readiness",
+          severity: "problem",
+          message: `${roles.join(", ")}: ${msg}`,
+          fix: TRUST_FIX,
+        });
+      }
       for (const row of routes.filter((r) => !r.ready)) {
         add({
           kind: "readiness",
