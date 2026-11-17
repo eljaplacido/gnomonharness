@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3480 TypeScript tests (2858 core, 597 cli, 18
-> natives, 7 tui) and 120 Rust tests — **3600 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3488 TypeScript tests (2858 core, 605 cli, 18
+> natives, 7 tui) and 120 Rust tests — **3608 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2463,6 +2463,38 @@ pre-commit hook or a CI step. The contract is [CONTRACTS.md
 §45](docs/CONTRACTS.md); vulnerability reports go to
 [SECURITY.md](.github/SECURITY.md).
 
+### Compliance evidence — `gnomon compliance`
+
+Auditors ask for evidence gnomon already keeps: a tamper-evident log, human
+oversight, contained execution, data that stays where it was told to.
+`gnomon compliance` maps that evidence to the controls of three frameworks —
+the **EU AI Act**, the **GDPR** and the **OWASP Top 10 for LLM Applications
+(2025)** — from a dated catalog shipped with gnomon
+(`packages/gnomon-cli/catalog/controls.toml`).
+
+```bash
+gnomon compliance                         # all three
+gnomon compliance --framework gdpr --json # gnomon.compliance/1
+```
+
+Each control comes out as one of:
+
+| Status | Meaning |
+|---|---|
+| evidence | every setting of this project it depends on holds |
+| partial / gap | some / none do; each one that does not names the setting that would |
+| gnomon property | the evidence is gnomon's own, the same for every project, with where it is shown |
+| organisational | gnomon has no evidence for it (AI literacy, storage limitation, model poisoning); listed so nobody assumes it does |
+
+**It is a mapping, not an assessment.** Whether an obligation applies, and
+whether it is met, depends on the organisation, its role and its use case;
+most of the AI Act's articles listed attach to high-risk systems, which a
+coding agent usually is not. gnomon never prints "compliant", and the catalog
+is not legal advice: review it with someone qualified before you rely on it.
+Exit 0 when every control gnomon can evidence has its evidence, 2 when one is
+partial or a gap, 10 when it could not run. The contract is [CONTRACTS.md
+§46](docs/CONTRACTS.md).
+
 ---
 
 ## Context and Memory
@@ -3189,6 +3221,7 @@ Contract: [CONTRACTS §17](docs/CONTRACTS.md).
 | `gnomon setup [--json] [--yes] [--pull <tag>] [--model <tag>] [--speed-check] [--mode local\|hybrid\|cloud] [--cloud-endpoint <url\|preset\|name> --cloud-model <name>] [--cloud-key-env <VAR>] [--catalog <file>] [--expect-proposal <digest>]` | Scan this machine, recommend a local model it can run from a dated catalog, pull it only on a yes, speed-check it, connect an optional cloud model, suggest local only, hybrid or cloud first, and write `.gnomon/` only after you accept the diff. `--yes` approves the write, never a download (`--pull` names one) or spending; `--expect-proposal` writes only the change a `--json` run printed as `proposal.digest`. Exit 0 written, 3 the surface or the change moved, 4 needs consent or a model, 12 the model server stopped answering. See [Get started in 3 steps](#get-started-in-3-steps). |
 | `gnomon doctor [--json] [--catalog <file>]` | Read-only: this machine, whether every role's model answers, and what changed since setup. Says what would fix each problem; never changes anything. Exit 0 nothing to do, 1 something needs attention, 10 could not run. |
 | `gnomon security [--json]` | Read-only: this project's security posture in one place — trust, where each role's commands run and what contains them, other harnesses' guard hooks, the audit trail. Risks (exit 2) are what is wrong now; advice names a setting that would contain more. See [Security posture](#security-posture--gnomon-security). |
+| `gnomon compliance [--framework <id,...>] [--json]` | Read-only: which controls of the EU AI Act, GDPR and the OWASP Top 10 for LLM Applications this project has gnomon evidence for, from a dated catalog — evidence, partial, gap (with the setting that closes it), a gnomon property, or the organisation's. A mapping, never an assessment. See [Compliance evidence](#compliance-evidence--gnomon-compliance). |
 | `gnomon init [--from <path>] [--force] [--no-verify]` | Write a surface. `--from` copies an existing one. `--no-verify` writes the scaffold without `[verify]` and with audit off, for benchmark comparability. |
 | `gnomon migrate [--check]` | Bring an existing `.gnomon/` up to the current shipped defaults. `--check` reports without writing and exits 1 if anything is pending. |
 | `gnomon prompt [--continue \| --resume <id>] [--trust]` | Interactive loop. An untrusted surface that grants more than the defaults is shown and asked about first. |

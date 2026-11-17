@@ -4030,3 +4030,39 @@ commands run under `exec = "os"`, not that Landlock held on this kernel
 **Fixture**: `conformance/security_posture.json`;
 `packages/gnomon-cli/src/security.test.ts` checks the ids, exits and trail
 limit equal it and validates real reports against its key lists.
+
+## 46. Compliance evidence — `gnomon compliance`, `gnomon.compliance/1`, the control catalog, `v: 1`
+
+A read-only map from gnomon evidence to the controls of named frameworks. It
+is never an assessment: no field says a project is compliant.
+
+**The catalog** (`packages/gnomon-cli/catalog/controls.toml`, dated
+`as_of`, stale after `stale_after_days`): `[frameworks.<id>]` (`name`,
+`source`, `note`?), `[[facts]]` (`id`, `text`, `ref` -- a repository file,
+optionally `#heading`), `[[controls]]` (`framework`, `id`, `title`, `scope`,
+`project` probe ids, `harness` fact ids, `note`?). A control naming an unknown
+probe, fact or framework, or an `organisation` control listing evidence, is
+refused at load (exit 10).
+
+| Key | Meaning |
+|---|---|
+| `schema` | `"gnomon.compliance/1"` |
+| `project`, `surface_hash` | the project root and its surface hash |
+| `catalog` | `as_of`, `stale` |
+| `disclaimer` | the catalog's, printed with every report |
+| `frameworks` | per framework asked for: `id`, `name`, `source`, `note`?, `counts` (status → n) |
+| `controls` | `framework`, `id`, `title`, `scope` (`gnomon`, `shared`, `organisation`), `status`, `probes` (`id`, `holds`, `meaning`, `fix`? when it does not hold), `facts` (`id`, `text`, `ref`), `note`? |
+| `exit` | 0 no control partial or a gap, 2 one is, 10 could not run |
+
+Statuses: `evidence` (every probe holds), `partial`, `gap` (none holds),
+`harness` (no project probe; the facts are the evidence), `organisational`.
+Probes read the same state as `gnomon security` (§45) plus `[verify]`,
+`[audit] record` and each role's endpoint locality; a probe that cannot read
+its input does not hold. Frameworks: `eu-ai-act`, `gdpr`, `owasp-llm`. Adding a
+probe, status or framework is a minor change with a fixture update; a
+catalog entry is data and moves with releases.
+
+**Fixture**: `conformance/compliance_report.json`;
+`packages/gnomon-cli/src/compliance.test.ts` checks the lists equal the code's,
+that every fact's `ref` names an existing file and heading, and validates real
+reports against the key lists.

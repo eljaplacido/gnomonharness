@@ -2469,6 +2469,27 @@ async function cmdSecurity(args: CliArgs): Promise<number> {
   }
 }
 
+/** `gnomon compliance`: the read-only evidence map (compliance.ts). */
+async function cmdCompliance(args: CliArgs): Promise<number> {
+  const { buildComplianceReport, formatCompliance, loadControls, defaultControlsPath, COMPLIANCE_EXIT, COMPLIANCE_SCHEMA } = await import("./compliance.js");
+  const dir = projectRoot(args);
+  if (args.flags.catalog === "true") return commandError(args, COMPLIANCE_SCHEMA, "--catalog needs a file.", COMPLIANCE_EXIT.couldNotRun);
+  if (!existsSync(join(dir, ".gnomon"))) {
+    return commandError(args, COMPLIANCE_SCHEMA, `No .gnomon/ in ${dir}: nothing governs this directory (gnomon init).`, COMPLIANCE_EXIT.couldNotRun);
+  }
+  try {
+    const catalog = loadControls(args.flags.catalog ?? defaultControlsPath());
+    const fw = args.flags.framework;
+    const frameworks = fw && fw !== "true" ? fw.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+    const report = buildComplianceReport(dir, catalog, { frameworks, trust: trustOptions(args) });
+    if (args.json) console.log(JSON.stringify(report, null, 2));
+    else for (const l of formatCompliance(report)) console.log(l);
+    return report.exit;
+  } catch (err) {
+    return commandError(args, COMPLIANCE_SCHEMA, `compliance could not run: ${err instanceof Error ? err.message : String(err)}`, COMPLIANCE_EXIT.couldNotRun);
+  }
+}
+
 /**
  * `gnomon acp`: serve the Agent Client Protocol on stdio, for an editor.
  *
@@ -2741,6 +2762,7 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "dashboard", aliases: ["ui"] },
   { name: "chaos" },
   { name: "security" },
+  { name: "compliance" },
 ];
 
 function showHelp(): void {
@@ -2973,6 +2995,15 @@ Commands:
     wrong now (a broken chain, a tamper event, a hook switched off, a fatal
     surface problem); advice names a setting that would contain more. Runs
     no model and changes nothing. Exit 0 no risk, 2 a risk, 10 could not run.
+
+  compliance [--framework <id,...>] [--json] [--catalog <file>] [--dir <path>]
+    Which controls of which frameworks this project has gnomon evidence for:
+    eu-ai-act, gdpr, owasp-llm, from a dated catalog. Each control is
+    evidence (every setting holds), partial, gap (each names the setting
+    that would close it), a gnomon property, or organisational (gnomon has
+    no evidence for it). A mapping, never an assessment: it never says
+    compliant, and it is not legal advice. Read-only. Exit 0 no gap,
+    2 a gap or partial, 10 could not run.
 
   chaos [--json] [--seed <n>] [--faults <id,...>] [--schedules <s,...>] [--out <file>]
     The fault-injection suite. A scripted model behind a loopback endpoint
@@ -3208,6 +3239,11 @@ async function main(): Promise<void> {
     }
     case "security": {
       const code = await cmdSecurity(args);
+      if (code !== 0) process.exit(code);
+      break;
+    }
+    case "compliance": {
+      const code = await cmdCompliance(args);
       if (code !== 0) process.exit(code);
       break;
     }
