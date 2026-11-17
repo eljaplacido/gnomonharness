@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3520 TypeScript tests (2884 core, 611 cli, 18
-> natives, 7 tui) and 120 Rust tests — **3640 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3525 TypeScript tests (2884 core, 616 cli, 18
+> natives, 7 tui) and 120 Rust tests — **3645 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2549,6 +2549,31 @@ route is admitted or no rule is declared, 2 when the rule refuses or closed
 one, 10 when it could not run. The contract is
 [CONTRACTS.md §48](docs/CONTRACTS.md).
 
+### Process metrics — `gnomon audit metrics`
+
+An outcome benchmark says whether a task passed. The trail says how the agent
+got there. `gnomon audit metrics` counts it from gnomon's own session trails,
+with no model and nothing judged:
+- turns and stop reasons;
+- model calls, tokens and time, per model;
+- tool calls by tool and outcome, with refusal and apparatus-failure rates;
+- approvals, verify runs, completion and finish gates;
+- escalations, degradations, stall signals and tamper events;
+- for each session that wrote code, **whether a check passed after the last
+  write**, one failed, or none ran.
+
+```bash
+gnomon audit metrics                 # the newest 50 session trails
+gnomon audit metrics --last 10 --json
+gnomon audit metrics --session task-2026-11-17T21-27-00-000Z-123
+```
+
+Only a trail whose hash chain verifies is counted. A trail edited afterwards
+is listed, left out of the totals, and sets exit 2. The trails of `guard`,
+`check`, `skill trial` and `eval` are gnomon's own commands, not sessions, so
+they are skipped. Exit 0 every trail read verified, 2 one did not, 10 could
+not run. The contract is [CONTRACTS.md §49](docs/CONTRACTS.md).
+
 ### Evaluation on your own tasks — `gnomon eval`
 
 A public benchmark says how a model does on someone else's tasks. `gnomon
@@ -3319,7 +3344,7 @@ Contract: [CONTRACTS §17](docs/CONTRACTS.md).
 | `gnomon skill trial <id> [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]` | Measure a proposal against its absence on `.gnomon/trials/<name>.toml`. Exit 0 meets the declared thresholds, 2 does not, 10 no answer. Never accepts. |
 | `gnomon key [set\|list\|unset] <endpoint\|VAR>` | Store an API key for an endpoint that declares one. |
 | `gnomon endpoint [add\|test\|list]` | Declare an endpoint end to end — provider, key, model, roles — and prove it runs one token before writing anything. Presets: `opencode-go`, `opencode-zen`, `openrouter`, `ollama`. |
-| `gnomon audit [show\|verify\|anchor\|tamper\|resolve <trail>:<seq> --reason <text>]` | Audit trails. `anchor` delivers queued heads to the `[audit.anchor]` witness now. `tamper` lists `record_tamper` events and exits 3 while any is unresolved; `resolve` is a person's recorded acknowledgement of one. |
+| `gnomon audit [show\|verify\|anchor\|tamper\|metrics\|resolve <trail>:<seq> --reason <text>]` | Audit trails. `metrics` counts how the agent worked from the verified session trails (see [Process metrics](#process-metrics--gnomon-audit-metrics)). `anchor` delivers queued heads to the `[audit.anchor]` witness now. `tamper` lists `record_tamper` events and exits 3 while any is unresolved; `resolve` is a person's recorded acknowledgement of one. |
 | `gnomon check --base <rev> [--head <rev>] [--role <r> \| --agent <name>] [--transcript <file> --format <fmt>] [--json]` | Judge a change another harness made by this surface's rules as of `<rev>`. Exit 0 held, 2 failed, 10 no verdict. See [Governing other harnesses](#governing-other-harnesses). |
 | `gnomon guard [--from claude-code\|opencode\|cursor] [--tool <kind> --input <json>] [--role <r> \| --agent <name>]` | Decide one tool call another harness is about to make, by the committed rules: allow (0), deny (2), ask (3), no decision (10). `gnomon guard install claude-code\|opencode\|cursor [--write [--local]]` installs the hook (`--local` keeps it, which names this machine's gnomon by absolute path, out of git); `gnomon guard status` reports one missing, changed or switched off (0 none, 2 a finding), or `outdated` (an older gnomon's hook, a warning). See [Before the call](#before-the-call-gnomon-guard). |
 | `gnomon dashboard [--port <n>] [--no-open] [--dir <path>]` | A command center in the browser, on 127.0.0.1 only: projects, sessions as a timeline, what the policy refused, audit-chain verification, contracts, token measurements; setup, check, trust and endpoint test as buttons that run those commands, asking first before anything that writes, downloads or spends. Alias: `ui`. See [The command center](#the-command-center--gnomon-dashboard). |

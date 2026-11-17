@@ -26,6 +26,20 @@
 
 ## [Unreleased]
 
+### Added — `gnomon audit metrics`, process metrics from the trails
+
+`gnomon audit metrics [--last <n>] [--session <id>] [--json]` reads the newest
+session trails whose hash chains verify. It counts how the agent worked:
+- turns and stop reasons;
+- model calls and tokens, per model;
+- tool calls by tool and outcome, with refusal and apparatus rates;
+- approvals, verify runs and gates;
+- escalations and degradations;
+- per session that wrote code, whether a check passed after the last write.
+
+It is model-free. An edited trail is left out and sets exit 2. Schema
+`gnomon.metrics/1` (CONTRACTS.md §49, `conformance/metrics_report.json`).
+
 ### Added — the data-flow register and an opt-in residency rule
 
 `gnomon compliance dataflow` lists every destination the surface can send

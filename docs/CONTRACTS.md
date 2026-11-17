@@ -4195,3 +4195,49 @@ The fact `dataflow_register` backs GDPR Art. 30, Art. 44 and DORA Art. 28.
 **Fixture**: `conformance/dataflow_report.json`. The register is tested in
 `packages/gnomon-cli/src/dataflow.test.ts` and the rule in
 `packages/gnomon-core/src/residency.test.ts`.
+
+## 49. Process metrics — `gnomon audit metrics`, `gnomon.metrics/1`, `v: 1`
+
+Counts over gnomon's own session trails in the `[audit] dir`, with no model
+and nothing judged. The window is the newest `--last` (default 50) session
+trails by modification time. `--session <id>` keeps the trail with that name,
+or the one ending in it. Trails whose `session_start.mode` is `guard`,
+`check`, `trial` or `eval` belong to gnomon's own commands and are skipped.
+A trail whose hash chain does not verify, or that cannot be read, is listed
+in `excluded` and left out of every count.
+
+| Key | Meaning |
+|---|---|
+| `schema` | `"gnomon.metrics/1"` |
+| `project`, `audit` | the project root; `enabled` and `dir` |
+| `window` | `last`, `trails_seen`, `sessions` |
+| `sessions` | per trail, see below |
+| `totals` | the same counts summed, plus `sessions`, `unsealed`, and `process` (`writes`, `sessions_with_writes`, `verified_after_last_write`: `yes`, `no`, `no_verify`; `refusal_rate`, `apparatus_rate`) |
+| `excluded` | `trail`, `problem` |
+| `exit` | 0 every trail read verified, 2 one was excluded, 10 could not run |
+
+The per-session keys, and the records each one comes from:
+
+| Key | Source |
+|---|---|
+| `trail`, `mode`, `role`, `harness`, `surface_hash`, `started` | the trail's `session_start` |
+| `ended` | `session_end` |
+| `sealed`, `chain_ok` | `verifyTrail` |
+| `turns`, `stop_reasons`, `turn_buckets` | `turn` records |
+| `model_calls` (`n`, `errors` = code ≠ 0, `prompt_tokens`, `completion_tokens`, `ms`, `by_model`) | `model_call` (§29) |
+| `tool_calls` (`n`, `gated`, `by_tool`, `by_bucket`) | `tool_call` |
+| `approvals` (decision → n) | `approval` |
+| `verify` (`runs`, `passed`, `failed`, `unrunnable`) | `verify` |
+| `gates` (`completion`, `finish`: action, or `accept:<outcome>` → n) | `completion_gate` (§30), `finish_gate` (§33) |
+| `escalations`, `degradations` (id → n), `stall_signals`, `record_tamper` | their records |
+| `process` (`writes`, `verified_after_last_write`, `refusal_rate`, `apparatus_rate`) | derived, below |
+
+`writes` counts `write` and `edit` tool calls with bucket `result`.
+`verified_after_last_write` is true when a `verify` record with
+`passed: true` follows the last such write. It is false when verify ran but
+none passed after that write, and null when the session ran no verify.
+Rates are rounded to 4 places, and null when there is no tool call.
+
+**Fixture**: `conformance/metrics_report.json`. The tests,
+`packages/gnomon-cli/src/metrics.test.ts`, write trails with gnomon's own
+`AuditTrail`, edit one, and check the counts, the exclusion and the CLI.

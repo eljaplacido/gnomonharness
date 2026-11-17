@@ -1,0 +1,31 @@
+{
+  "version": "0.1.0",
+  "_comment": [
+    "The `gnomon audit metrics --json` document, schema gnomon.metrics/1 (docs/CONTRACTS.md §49).",
+    "Counts over gnomon's own session trails whose hash chains verify; model-free, nothing judged.",
+    "A key added or renamed, a non-session mode added, or an exit moved is a contract change:",
+    "packages/gnomon-cli/src/metrics.test.ts asserts these lists against the code and real reports."
+  ],
+  "schema": "gnomon.metrics/1",
+  "exit_codes": {
+    "0": "every trail read verified",
+    "2": "a session trail failed verification and was left out of the totals",
+    "10": "metrics could not run (no .gnomon/, a bad --last)"
+  },
+  "default_last": 50,
+  "non_session_modes": ["guard", "check", "trial", "eval"],
+  "report_keys": {
+    "required": ["schema", "project", "audit", "window", "sessions", "totals", "excluded", "exit"],
+    "optional": []
+  },
+  "session_keys": {
+    "required": ["trail", "mode", "role", "harness", "surface_hash", "started", "ended", "sealed", "chain_ok", "turns", "stop_reasons", "turn_buckets", "model_calls", "tool_calls", "approvals", "verify", "gates", "escalations", "degradations", "stall_signals", "record_tamper", "process"],
+    "optional": []
+  },
+  "totals_keys": {
+    "required": ["sessions", "unsealed", "turns", "stop_reasons", "turn_buckets", "model_calls", "tool_calls", "approvals", "verify", "gates", "escalations", "degradations", "stall_signals", "record_tamper", "process"],
+    "optional": []
+  },
+  "process_keys": { "required": ["writes", "verified_after_last_write", "refusal_rate", "apparatus_rate"], "optional": [] },
+  "verified_after_last_write": "a verify record with passed: true after the last write or edit tool_call with bucket result; null when the session ran no verify"
+}

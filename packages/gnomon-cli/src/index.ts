@@ -1461,6 +1461,26 @@ async function cmdAudit(args: CliArgs): Promise<void> {
   }
   const sub = subcommandOr(args, "show");
 
+  // Process metrics (metrics.ts): counts over the verified session trails.
+  if (sub === "metrics") {
+    const { buildMetricsReport, formatMetrics, METRICS_SCHEMA, METRICS_EXIT } = await import("./metrics.js");
+    const lastFlag = args.flags.last;
+    const last = lastFlag && lastFlag !== "true" ? Number(lastFlag) : undefined;
+    if (last !== undefined && !(Number.isInteger(last) && last > 0)) {
+      process.exit(commandError(args, METRICS_SCHEMA, `--last needs a positive whole number, not ${lastFlag}.`, METRICS_EXIT.couldNotRun));
+    }
+    const session = args.flags.session && args.flags.session !== "true" ? args.flags.session : undefined;
+    try {
+      const report = buildMetricsReport(projectRoot(args), { last, session });
+      if (args.json) console.log(JSON.stringify(report, null, 2));
+      else for (const l of formatMetrics(report)) console.log(l);
+      if (report.exit !== 0) process.exit(report.exit);
+    } catch (err) {
+      process.exit(commandError(args, METRICS_SCHEMA, `metrics could not run: ${err instanceof Error ? err.message : String(err)}`, METRICS_EXIT.couldNotRun));
+    }
+    return;
+  }
+
   // record_tamper events (record_guard.ts): list them, and let a person
   // resolve one. Accepting a skill is refused while any is unresolved.
   if (sub === "tamper") {
@@ -2933,7 +2953,7 @@ Commands:
           report what came back. A model listing is not a test of a key —
           some providers serve one to no key at all.
 
-  audit [show|verify|anchor|tamper|resolve <trail>:<seq> --reason <text>] [--dir <path>]
+  audit [show|verify|anchor|tamper|metrics|resolve <trail>:<seq> --reason <text>] [--dir <path>]
     Audit trails, when [audit] is enabled. 'verify' re-hashes each record
     and checks the chain, so a trail altered after the fact is detectable.
     With [audit.anchor] declared it also checks every sealed head against
@@ -2944,6 +2964,12 @@ Commands:
     that gnomon did not make (exit 3 while any is unresolved). 'resolve'
     is a person's acknowledgement of one, recorded; skill accept refuses
     while any is unresolved.
+    'metrics [--last <n>] [--session <id>] [--json]' counts how the agent
+    worked, from the newest n (default 50) session trails whose chains
+    verify: turns and stop reasons, model calls and tokens, tool calls by
+    tool and outcome, approvals, verify runs, whether a check passed after
+    the last write, gates, escalations, degradations. Model-free. Exit 0,
+    2 when a trail failed verification (left out), 10 could not run.
 
   skill [list [--candidates]|accept <id> [--evidence <report.json>]|reject <id> [--reason <text>]|mine [--json]] [--dir <path>]
     Skills the harness has learned. An agent proposes into
