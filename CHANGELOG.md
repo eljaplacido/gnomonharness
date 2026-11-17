@@ -26,6 +26,32 @@
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-11-18
+
+Security, evaluation and compliance become named pillars beside governance.
+All of them run on the same hash-chained audit trail, guard and published
+contracts. Everything below is additive: without the new commands and keys,
+a surface behaves exactly as under 0.5.0. The model-free suites match 0.5.0's
+figures: surface-fidelity, silent-success, fault-disclosure,
+degradation-contract, context-cost and chaos.
+
+- **Security:**
+  - `gnomon security`, the posture report;
+  - `gnomon security test`, a 24-case attack corpus mapped to OWASP LLM ids;
+  - `docs/THREAT-MODEL.md`;
+  - the repository-authority fixes from the 2026-11-17 review;
+  - the kernel sandbox, `exec = "os"`.
+- **Evaluation:**
+  - `gnomon eval`, paired measurement of a profile or a surface on your own
+    tasks;
+  - `gnomon audit metrics`, process metrics from the verified trails.
+- **Compliance:**
+  - `gnomon compliance`, an evidence map for nine frameworks that never says
+    "compliant";
+  - `compliance dataflow`, with the opt-in `[compliance] allowed_regions`
+    residency rule;
+  - `compliance pack`, a hashed evidence bundle.
+
 ### Added — `gnomon compliance pack`, the evidence pack, and the threat model
 
 `gnomon compliance pack --out <dir>` writes every read-only report into one
@@ -5234,7 +5260,8 @@ was written.
 
 <!-- 0.4.4 and 0.4.5 were never published, so 0.5.0 compares against 0.4.3 and
      their links point at the tags, not at (draft) release pages. -->
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/eljaplacido/gnomonharness/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/eljaplacido/gnomonharness/compare/v0.4.3...v0.5.0
 [0.4.5]: https://github.com/eljaplacido/gnomonharness/tree/v0.4.5
 [0.4.4]: https://github.com/eljaplacido/gnomonharness/tree/v0.4.4
