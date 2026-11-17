@@ -4129,3 +4129,69 @@ only for one model name or one system prompt. The tests cover:
 - a better profile (exit 0) and a worse one (exit 2);
 - a surface arm built from the previous commit;
 - the refusals, the budget stop, and the sealed record.
+
+## 48. Data flows and residency — `gnomon compliance dataflow`, `gnomon.dataflow/1`, `[compliance] allowed_regions`, `v: 1`
+
+**The register.** `gnomon compliance dataflow` is read-only and model-free.
+It reports every destination the surface can send to.
+
+| Key | Meaning |
+|---|---|
+| `schema` | `"gnomon.dataflow/1"` |
+| `project`, `surface_hash` | the project root and its surface hash |
+| `residency` | `allowed_regions` (null without the rule), `refused` (routes refused or closed, plus a closed shadow), `closed` (sides dropped) |
+| `destinations` | `kind` (`model`, `shadow`, `mcp`, `network_tool`, `anchor`), `name`, `host`, `locality` (`loopback`, `private`, `remote`, `process`), `region`, `region_source` (`this_machine`, `declared`, `undeclared`, or null where no region applies), `sends`, `key_env` (a variable name, never a value), `used_by` (`role`, `as`: `primary`, `fallback`, `escalate` or `tool`, `admitted`: true, false, or null without the rule), `note`? |
+| `records` | `audit`, `record`, `dir`, `leaves_machine: false` |
+| `telemetry` | `"none"` |
+| `harness` | what gnomon itself contacts: the newer-version check (docs/PRIVACY.md §2) |
+| `exit` | 0 every route admitted or no rule, 2 the rule refuses or closed one, 10 could not run |
+
+Model routes are listed as the surface declares them. A route the rule closed
+is still listed, with `admitted: false`.
+
+**The rule.** The rule is opt-in, and it does nothing until
+`.gnomon/policy.toml` declares it:
+
+```toml
+[compliance]
+allowed_regions = ["eu"]
+```
+
+`[endpoints.<name>] region` in config.toml declares where an endpoint's
+provider processes requests. Without the rule, it is only a declaration that
+the register reports. With the rule, a destination is admitted when its URL is
+loopback, or when it is an endpoint whose declared region is in the list
+(case-insensitive). Anything else is refused, including a private-network or
+remote host with no declared region: gnomon never infers a region from a URL.
+Each kind of route is handled as follows:
+
+- A primary endpoint the rule refuses: `resolveEndpoint` throws, naming the
+  endpoint, the host and the rule. The role does not run. It is never
+  rerouted.
+- A fallback or escalation (by endpoint or by its own `url`) the rule refuses:
+  it is dropped when the configuration loads (`applyResidency`), and the role
+  runs without it. It is listed in `config.residency.closed`.
+- `[shadow]` on a host other than this machine: switched off
+  (`residency.shadow_closed`).
+- `GNOMON_MODEL_URL` other than loopback: refused.
+
+MCP servers and `webfetch` are outside the rule. `[sandbox] network` and
+governance decide those, and the register lists them.
+
+`auditSurface` treats these declarations as follows:
+- `allowed_regions` that is not a list of non-empty strings: fatal;
+- a `region` that is not a non-empty string: fatal;
+- each role refused by the rule, each closed side and a closed shadow: a
+  warning;
+- `[compliance]` in config.toml: fatal, because the block is read from
+  policy.toml.
+
+Without the rule every route is built byte-for-byte as before (Rule 1).
+
+**Compliance probe** `residency_held` (§46) holds when nothing a role sends
+leaves this machine, or when the rule is declared. GDPR Art. 44 maps to it.
+The fact `dataflow_register` backs GDPR Art. 30, Art. 44 and DORA Art. 28.
+
+**Fixture**: `conformance/dataflow_report.json`. The register is tested in
+`packages/gnomon-cli/src/dataflow.test.ts` and the rule in
+`packages/gnomon-core/src/residency.test.ts`.

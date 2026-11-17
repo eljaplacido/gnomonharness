@@ -126,6 +126,11 @@ text = "No telemetry and no background service; every network destination is dec
 ref = "docs/PRIVACY.md"
 
 [[facts]]
+id = "dataflow_register"
+text = "gnomon compliance dataflow lists every destination a role can send prompts and repository content to, with host, locality, declared region and what is sent; an opt-in residency rule refuses the rest"
+ref = "README.md#data-flows-and-residency--gnomon-compliance-dataflow"
+
+[[facts]]
 id = "metadata_default"
 text = "The scaffolded audit trail records metadata, not prompt or response text"
 ref = "README.md#governance-and-audit"
@@ -282,8 +287,8 @@ id = "art30"
 title = "Art. 30 — Records of processing activities"
 scope = "shared"
 project = ["audit_on"]
-harness = ["no_telemetry"]
-note = "The destinations a surface can send data to are listed in docs/PRIVACY.md; the register itself is the controller's."
+harness = ["no_telemetry", "dataflow_register"]
+note = "gnomon compliance dataflow lists the destinations this surface can send data to; the record of processing itself is the controller's."
 
 [[controls]]
 framework = "gdpr"
@@ -298,9 +303,9 @@ framework = "gdpr"
 id = "art44"
 title = "Art. 44 — Transfers of personal data to third countries"
 scope = "shared"
-project = ["endpoints_local"]
-harness = []
-note = "Where a remote endpoint is hosted is not something gnomon can read from a URL; the transfer assessment is the organisation's."
+project = ["residency_held"]
+harness = ["dataflow_register"]
+note = "gnomon enforces the regions the endpoints declare; whether a declaration is accurate, and the transfer assessment, are the organisation's."
 
 # ── OWASP Top 10 for LLM Applications (2025) ─────────────────────────────────
 
@@ -697,7 +702,7 @@ id = "art28"
 title = "Art. 28 — General principles of ICT third-party risk management"
 scope = "shared"
 project = ["endpoints_local"]
-harness = ["zero_deps", "provenance"]
+harness = ["zero_deps", "provenance", "dataflow_register"]
 note = "A remote model endpoint is an ICT third-party service; registering and contracting it is the entity's."
 
 [[controls]]

@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3503 TypeScript tests (2873 core, 605 cli, 18
-> natives, 7 tui) and 120 Rust tests — **3623 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3520 TypeScript tests (2884 core, 611 cli, 18
+> natives, 7 tui) and 120 Rust tests — **3640 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2496,6 +2496,59 @@ Exit 0 when every control gnomon can evidence has its evidence, 2 when one is
 partial or a gap, 10 when it could not run. The contract is [CONTRACTS.md
 §46](docs/CONTRACTS.md).
 
+### Data flows and residency — `gnomon compliance dataflow`
+
+Before an organisation can let an agent near personal data, it has to know
+where the data goes. `gnomon compliance dataflow` lists every route:
+- each model endpoint a role can reach, as primary, fallback or escalation,
+  with its host, locality, declared region, the name of its key variable
+  (never the value) and what is sent;
+- the MCP servers the surface can start, and the roles that can fetch from
+  the network;
+- a `[shadow]` endpoint, and where sealed trail heads are anchored;
+- where the records are kept;
+- the newer-version check gnomon itself makes.
+
+It is a starting point for a record of processing (GDPR Art. 30) or a register
+of ICT third parties (DORA).
+
+```bash
+gnomon compliance dataflow          # text
+gnomon compliance dataflow --json   # gnomon.dataflow/1
+```
+
+**Residency is opt-in.** Declare where each remote endpoint's provider
+processes requests, and the regions you allow:
+
+```toml
+# .gnomon/config.toml
+[endpoints.cloud]
+url = "https://api.example.com/v1"
+region = "eu"
+
+# .gnomon/policy.toml
+[compliance]
+allowed_regions = ["eu"]
+```
+
+With the rule declared, gnomon enforces it:
+- a role whose endpoint is outside it refuses to run, with the reason;
+- a fallback or escalation outside it is dropped, and the role runs without it;
+- a `[shadow]` off this machine is switched off;
+- `GNOMON_MODEL_URL` pointing off this machine is refused.
+
+This machine (a loopback URL) is always admitted. A region is never
+inferred from a URL, because a hostname does not say where a request is
+processed. A private-network or remote endpoint that declares no region is
+refused. Without the rule, nothing changes: `region` is a declaration the
+register reports. Whether a declared region is accurate is for the
+organisation to check, against its provider contract. The rule covers model
+endpoints and the shadow, not MCP servers or `webfetch` (`[sandbox] network`
+and governance decide those); the register lists those too. Exit 0 when every
+route is admitted or no rule is declared, 2 when the rule refuses or closed
+one, 10 when it could not run. The contract is
+[CONTRACTS.md §48](docs/CONTRACTS.md).
+
 ### Evaluation on your own tasks — `gnomon eval`
 
 A public benchmark says how a model does on someone else's tasks. `gnomon
@@ -3253,6 +3306,7 @@ Contract: [CONTRACTS §17](docs/CONTRACTS.md).
 | `gnomon doctor [--json] [--catalog <file>]` | Read-only: this machine, whether every role's model answers, and what changed since setup. Says what would fix each problem; never changes anything. Exit 0 nothing to do, 1 something needs attention, 10 could not run. |
 | `gnomon security [--json]` | Read-only: this project's security posture in one place — trust, where each role's commands run and what contains them, other harnesses' guard hooks, the audit trail. Risks (exit 2) are what is wrong now; advice names a setting that would contain more. See [Security posture](#security-posture--gnomon-security). |
 | `gnomon compliance [--framework <id,...>] [--json]` | Read-only: which controls of the EU AI Act, GDPR, OWASP LLM Top 10, ISO/IEC 42001, NIST AI RMF, ISO/IEC 27001, SOC 2, the Cyber Resilience Act and DORA this project has gnomon evidence for, from a dated catalog — evidence, partial, gap (with the setting that closes it), a gnomon property, or the organisation's. A mapping, never an assessment. See [Compliance evidence](#compliance-evidence--gnomon-compliance). |
+| `gnomon compliance dataflow [--json]` | Read-only: every place this surface can send prompts and repository content — model endpoints per role (primary, fallback, escalation) with host, locality and declared region, MCP servers, network-fetching roles, the shadow and anchor — and, with the opt-in `[compliance] allowed_regions` rule, which routes it admits. See [Data flows and residency](#data-flows-and-residency--gnomon-compliance-dataflow). |
 | `gnomon eval [--against profile:<name>\|surface:<ref>] [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]` | Measure on this project's own tasks (the trial spec): alone, the pass rate; with `--against`, whether another profile or another commit's `.gnomon/` does better, in paired interleaved clones judged by each task's check. Exit 0 meets the spec, 2 does not, 10 no answer. Changes nothing. See [Evaluation on your own tasks](#evaluation-on-your-own-tasks--gnomon-eval). |
 | `gnomon init [--from <path>] [--force] [--no-verify]` | Write a surface. `--from` copies an existing one. `--no-verify` writes the scaffold without `[verify]` and with audit off, for benchmark comparability. |
 | `gnomon migrate [--check]` | Bring an existing `.gnomon/` up to the current shipped defaults. `--check` reports without writing and exits 1 if anything is pending. |

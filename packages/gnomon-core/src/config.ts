@@ -152,6 +152,14 @@ export interface EndpointConfig {
    * resolveEndpoint refuses the endpoint by name.
    */
   untrusted_host?: string;
+  /**
+   * Where this endpoint's provider processes what is sent to it, as the
+   * operator declares it: "eu", "us", "fi", or any label `[compliance]
+   * allowed_regions` uses. Read only by the residency rule (resolveResidency)
+   * and the data-flow register; never inferred from the URL, because a
+   * hostname does not say where a request is processed.
+   */
+  region?: string;
   /** ollama | openai — selects the request/response shape */
   kind?: EndpointKind;
   api_key_env?: string;
@@ -1420,7 +1428,12 @@ export function reloadConfig(config: GnomonConfig): GnomonConfig {
   );
 }
 
-export function loadConfig(root?: string, profileOverride?: string): GnomonConfig {
+export function loadConfig(
+  root?: string,
+  profileOverride?: string,
+  /** `residency: false` reads the roles as declared, before `[compliance] allowed_regions` closes any side (the data-flow register). */
+  opts: { residency?: boolean } = {}
+): GnomonConfig {
   const gnomonDir = resolveGnomonDir(root);
   const baseRoles = ((loadToml<Record<string, unknown>>(gnomonDir, "roles.toml") as Record<string, unknown>).roles ?? {}) as Roles;
   const cfg = loadToml<Config>(gnomonDir, "config.toml");
@@ -1432,7 +1445,8 @@ export function loadConfig(root?: string, profileOverride?: string): GnomonConfi
   const applied = applyProfile(baseRoles, profiles, wanted);
 
   const workRoot = workRootFor(gnomonDir);
-  return {
+  const ruled = opts.residency === false ? (c: GnomonConfig) => c : applyResidency;
+  return ruled({
     gnomonDir,
     ...(workRoot ? { workRoot } : {}),
     profile: {
@@ -1456,7 +1470,7 @@ export function loadConfig(root?: string, profileOverride?: string): GnomonConfi
         : "";
       return { content, version: "0.1" } as SystemPrompt;
     })(),
-  };
+  });
 }
 
 /** Complete gnomon configuration */
@@ -1469,6 +1483,12 @@ export interface GnomonConfig {
    * Read through workRootOf.
    */
   workRoot?: string;
+  /**
+   * Set only when policy.toml declares `[compliance] allowed_regions`: the
+   * rule, and each fallback or escalation it closed (applyResidency). A
+   * primary endpoint it does not admit is refused by resolveEndpoint.
+   */
+  residency?: Residency;
   /** Which profile was applied to `roles`, and whether a flag chose it. */
   profile?: {
     name?: string;
@@ -2160,6 +2180,18 @@ export function endpointKind(
  * that does not exist is a configuration error worth naming, not something to
  * silently paper over with a guessed URL.
  */
+/**
+ * The endpoint a name reaches, declared or built in, as written: no trust
+ * clamp message and no residency refusal. For reports that describe a route
+ * (the data-flow register); a run resolves through resolveEndpoint.
+ */
+export function endpointAsDeclared(config: GnomonConfig, name: string): EndpointConfig | undefined {
+  const declared = config.config.endpoints?.[name];
+  if (declared?.url) return declared;
+  if (declared?.untrusted_host) return { ...declared, url: `https://${declared.untrusted_host}` };
+  return BUILTIN_ENDPOINTS[name];
+}
+
 export function resolveEndpoint(
   config: GnomonConfig,
   name: string = DEFAULT_ENDPOINT
@@ -2173,9 +2205,12 @@ export function resolveEndpoint(
         "--trust or GNOMON_TRUST=<surface hash> if you have already reviewed it."
     );
   }
-  if (declared?.url) return declared;
-  const builtin = BUILTIN_ENDPOINTS[name];
-  if (builtin) return builtin;
+  const found = declared?.url ? declared : BUILTIN_ENDPOINTS[name];
+  if (found) {
+    const refused = residencyRefusal(config, found.url, found.region, `Endpoint "${name}"`);
+    if (refused) throw new Error(refused);
+    return found;
+  }
 
   const known = [
     ...Object.keys(config.config.endpoints ?? {}),
@@ -2235,6 +2270,7 @@ const ENDPOINT_KEYS = new Set([
   "reasoning_effort",
   "sampling",
   "prompt_cache",
+  "region",
 ]);
 
 /**
@@ -2602,6 +2638,9 @@ const KNOWN_BLOCKS = new Set([
   // [governance] in policy.toml: resolveLevels (governance.ts). Listed with
   // the feature.
   "governance",
+  // [compliance] in policy.toml: resolveResidency reads allowed_regions.
+  // Listed with the feature.
+  "compliance",
 ]);
 
 /**
@@ -2747,6 +2786,8 @@ const BLOCK_OWNER: Record<string, BlockOwner> = {
   bootstrap: { file: "policy.toml", read: true },
   // resolveLevels (governance.ts) reads config.policy.governance.
   governance: { file: "policy.toml", read: true },
+  // resolveResidency reads config.policy.compliance.allowed_regions.
+  compliance: { file: "policy.toml", read: true },
   endpoints: { file: "config.toml", read: true },
   defaults: { file: "config.toml", read: true },
   context: { file: "config.toml", read: true },
@@ -2849,6 +2890,10 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
   // `paths` is the `[governance.paths]` sub-table (secret / CI path lists),
   // whose own keys auditGovernance checks.
   ["policy.toml", "governance", [...GOVERNANCE_KEYS, "paths"]],
+  // resolveResidency. An entry that is not a non-empty string is fatal
+  // (auditResidency): a rule that silently admitted less, or more, than it
+  // says is the inert-control failure this audit exists for.
+  ["policy.toml", "compliance", ["allowed_regions"]],
 ];
 
 const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "escalate", "fallback", "max_steps", "max_steps_total", "max_tokens", "model", "exec", "image", "source", "profile", "reasoning_effort", "task_allow", "temperature", "tools", "top_p", "write_allow", "governance"]);
@@ -4273,7 +4318,80 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
   }
 
   problems.push(...auditGovernance(config));
+  problems.push(...auditResidency(config));
 
+  return problems;
+}
+
+/**
+ * `[compliance] allowed_regions` and each endpoint's `region`.
+ *
+ *  - allowed_regions that is not a list of non-empty strings: FATAL. A rule
+ *    that silently admitted something other than it reads is worse than no
+ *    rule (resolveAllowedRegions would drop the bad entries).
+ *  - a `region` that is not a non-empty string: FATAL, for the same reason.
+ *  - with the rule declared, each role whose primary endpoint it refuses:
+ *    warned here, refused when the role runs (resolveEndpoint); each fallback
+ *    or escalation it closed: warned (applyResidency dropped it).
+ *  - a `region` with no rule: nothing. It is a declaration the data-flow
+ *    register reports, and it admits nothing on its own.
+ */
+function auditResidency(config: GnomonConfig): SurfaceProblem[] {
+  const problems: SurfaceProblem[] = [];
+  const raw = (config.policy as Record<string, any> | undefined)?.compliance?.allowed_regions;
+  if (raw !== undefined && (!Array.isArray(raw) || raw.some((x) => typeof x !== "string" || x.trim() === ""))) {
+    problems.push({
+      where: ".gnomon/policy.toml [compliance]",
+      problem: `allowed_regions must be a list of region names, like ["eu"]; this one would not read as written.`,
+      fix: `allowed_regions = ["eu"] (any labels your endpoints' region keys use).`,
+      fatal: true,
+    });
+  }
+  for (const [name, ep] of Object.entries((config.config?.endpoints ?? {}) as unknown as Record<string, Record<string, unknown>>)) {
+    if (!ep || !("region" in ep)) continue;
+    if (typeof ep.region !== "string" || ep.region.trim() === "") {
+      problems.push({
+        where: `.gnomon/config.toml [endpoints.${name}]`,
+        problem: `region must be a non-empty string, like "eu".`,
+        fix: `region = "<where this provider processes requests>"`,
+        fatal: true,
+      });
+    }
+  }
+  if (!config.residency) return problems;
+  for (const role of Object.keys(config.roles ?? {})) {
+    const name = config.roles[role]?.endpoint ?? DEFAULT_ENDPOINT;
+    try {
+      resolveEndpoint(config, name);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("[compliance] allowed_regions")) continue;
+      problems.push({
+        where: `.gnomon/roles.toml [roles.${role}]`,
+        problem: `${msg.split(". Declare")[0]}. The ${role} role will refuse to run.`,
+        fix: `Declare region on [endpoints.${name}], or route ${role} to an endpoint the rule admits.`,
+        fatal: false,
+      });
+    }
+  }
+  if (config.residency.shadow_closed) {
+    problems.push({
+      where: ".gnomon/config.toml [shadow]",
+      problem: `[shadow] posts to ${config.residency.shadow_closed}, which declares no region; [compliance] allowed_regions switches it off.`,
+      fix: "Point [shadow] url at this machine, or remove the block.",
+      fatal: false,
+    });
+  }
+  for (const c of config.residency.closed) {
+    problems.push({
+      where: `.gnomon/roles.toml [roles.${c.role}.${c.side}]`,
+      problem:
+        `the ${c.side} to ${c.destination}${c.region ? ` (region "${c.region}")` : " (no region declared)"} is closed by ` +
+        `[compliance] allowed_regions; ${c.role} runs without it.`,
+      fix: `Declare an admitted region on the endpoint it names, or remove the ${c.side}.`,
+      fatal: false,
+    });
+  }
   return problems;
 }
 
@@ -4561,6 +4679,120 @@ export function listEndpoints(config: GnomonConfig): string[] {
  */
 export type EndpointLocality = "loopback" | "private" | "remote";
 
+// ---------------------------------------------------------------------------
+// Residency: `[compliance] allowed_regions` (CONTRACTS.md §48)
+// ---------------------------------------------------------------------------
+
+/** The rule as declared, and what it closed when the configuration loaded. */
+export interface Residency {
+  /** Lower-cased, as declared in policy.toml. */
+  allowed: string[];
+  /** Each fallback or escalation the rule dropped: the role runs without it. */
+  closed: Array<{ role: string; side: "fallback" | "escalate"; destination: string; region: string | null }>;
+  /** `[shadow]` on a host other than this machine, switched off by the rule; null when not. */
+  shadow_closed: string | null;
+}
+
+/**
+ * `[compliance] allowed_regions`, or null when undeclared: no rule, and every
+ * route is built exactly as it was before the key existed (Rule 1).
+ */
+export function resolveAllowedRegions(config: Pick<GnomonConfig, "policy">): string[] | null {
+  const v = (config.policy as Record<string, any> | undefined)?.compliance?.allowed_regions;
+  if (!Array.isArray(v)) return null;
+  return v.filter((x): x is string => typeof x === "string" && x.trim() !== "").map((x) => x.trim().toLowerCase());
+}
+
+/**
+ * Why the residency rule refuses a destination, or null when it admits it
+ * (or there is no rule). This machine (a loopback URL) is always admitted:
+ * nothing leaves it. Anything else is admitted only by a declared region the
+ * rule lists. A private-network or remote host with no declared region is
+ * refused: an address does not say where a request is processed, so the rule
+ * fails closed rather than guessing.
+ */
+export function residencyRefusal(
+  config: Pick<GnomonConfig, "policy">,
+  url: string,
+  region: string | undefined,
+  what: string
+): string | null {
+  const allowed = resolveAllowedRegions(config);
+  if (allowed === null) return null;
+  if (endpointLocality(url) === "loopback") return null;
+  const declared = typeof region === "string" && region.trim() ? region.trim().toLowerCase() : null;
+  if (declared && allowed.includes(declared)) return null;
+  let host = url;
+  try {
+    host = new URL(url).host || url;
+  } catch {
+    // keep the url as written
+  }
+  const rule = `[compliance] allowed_regions = [${allowed.map((r) => `"${r}"`).join(", ")}] in .gnomon/policy.toml`;
+  return declared
+    ? `${what} sends prompts and repository content to ${host}, declared region "${declared}", which ${rule} does not admit.`
+    : `${what} sends prompts and repository content to ${host}, which declares no region, and ${rule} admits only this ` +
+        `machine and the regions it lists. Declare region = "<where its provider processes requests>" on the endpoint ` +
+        `in .gnomon/config.toml, or route the role to an endpoint the rule admits.`;
+}
+
+/**
+ * Apply the rule to a loaded configuration. Without one, returns `config`
+ * untouched. With one, a fallback or escalation whose destination the rule
+ * does not admit is dropped -- the role runs without it, as trust's clamp
+ * drops an ungranted side -- and recorded in `residency.closed`. A primary
+ * endpoint is not rewritten: resolveEndpoint refuses it by name, so a role
+ * routed there stops with the reason instead of running somewhere else.
+ */
+export function applyResidency(config: GnomonConfig): GnomonConfig {
+  const allowed = resolveAllowedRegions(config);
+  if (allowed === null) return config;
+  const closed: Residency["closed"] = [];
+  const endpoints = (config.config?.endpoints ?? {}) as Record<string, EndpointConfig | undefined>;
+  for (const [role, def] of Object.entries(config.roles ?? {})) {
+    if (!def) continue;
+    for (const side of ["fallback", "escalate"] as const) {
+      const block = (def as Record<string, any>)[side] as { url?: string; endpoint?: string } | undefined;
+      if (!block || typeof block !== "object") continue;
+      const epName = block.endpoint ?? (block.url ? undefined : DEFAULT_ENDPOINT);
+      const ep = epName ? (endpoints[epName]?.url ? endpoints[epName] : BUILTIN_ENDPOINTS[epName]) : undefined;
+      const url = block.url ?? ep?.url ?? "";
+      if (!url) continue;
+      // A side's own url is its destination; the endpoint's region describes
+      // the endpoint's url only.
+      const region = block.url && block.url !== ep?.url ? undefined : ep?.region;
+      if (residencyRefusal(config, url, region, side) === null) continue;
+      delete (def as Record<string, unknown>)[side];
+      let destination = url;
+      try {
+        destination = new URL(url).host || url;
+      } catch {
+        // as written
+      }
+      closed.push({ role, side, destination, region: typeof region === "string" ? region.toLowerCase() : null });
+    }
+  }
+  // [shadow] posts excerpts of the prompt and tool arguments, and declares no
+  // region: off this machine, the rule switches it off, as trust's clamp does
+  // for an untrusted surface.
+  let shadow_closed: string | null = null;
+  const shadow = (config.config as { shadow?: Record<string, unknown> } | undefined)?.shadow;
+  if (shadow?.enabled === true) {
+    const url = resolveShadow(config).url;
+    if (endpointLocality(url) !== "loopback") {
+      shadow_closed = (() => {
+        try {
+          return new URL(url).host || url;
+        } catch {
+          return url;
+        }
+      })();
+      config = { ...config, config: { ...config.config, shadow: { ...shadow, enabled: false } } } as GnomonConfig;
+    }
+  }
+  return { ...config, residency: { allowed, closed, shadow_closed } };
+}
+
 export function endpointLocality(url: string): EndpointLocality {
   let host: string;
   try {
@@ -4728,6 +4960,11 @@ export function routeRole(
   // parse URL from", while the startup note, which tests the variable for
   // truthiness, said nothing was overridden.
   const url = process.env.GNOMON_MODEL_URL || endpoint.url;
+  // The override is a destination no endpoint declares a region for.
+  if (url !== endpoint.url) {
+    const refused = residencyRefusal(config, url, undefined, "GNOMON_MODEL_URL");
+    if (refused) throw new Error(refused);
+  }
   const kind = endpointKind(endpoint);
   const target: RouteTarget = {
     model,

@@ -49,6 +49,16 @@ Requests to the configured endpoint that are not a model turn:
 `GNOMON_MODEL_URL` overrides every role's endpoint URL for one run; the session
 prints a note when it is set, and the audit record carries `endpoint_url`.
 
+`gnomon compliance dataflow` lists every route this section and §5 describe
+for one surface: each role's endpoints with host, locality and declared
+region, plus MCP servers, the shadow and the anchor. To keep inference inside
+named regions, declare `region` on each remote endpoint and
+`[compliance] allowed_regions` in policy.toml. A role routed elsewhere then
+refuses to run, and a fallback, escalation or shadow outside the regions is
+switched off (README, "Data flows and residency"). The rule governs what
+roles send. A command you run against an endpoint you name, like
+`gnomon endpoint test`, still reaches it.
+
 ## 2. Newer-version check
 
 | | |
