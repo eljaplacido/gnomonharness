@@ -174,7 +174,7 @@ export async function checkReadiness(
   // that passes the surface as declared too. A cloned repository whose
   // endpoint names api_key_env = "ANTHROPIC_API_KEY" at its own host must not
   // receive that key from a check that runs before anyone was asked.
-  if (key && !opts.trusted && !keyHostIsDefault(target.url)) {
+  if (key && !opts.trusted && !keyHostIsDefault(target.url, target.apiKeyEnv)) {
     const w = { env: target.apiKeyEnv!, host: hostName(target.url) };
     return { ready: false, why: withheldWhy(w), keyWithheld: w };
   }

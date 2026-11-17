@@ -1,7 +1,7 @@
 /**
  * Local first, cloud rescue: `[roles.<name>.escalate]`.
  *
- * Every turn here runs against a scripted endpoint: `local.invalid` answers in
+ * Every turn here runs against a scripted endpoint: `local-invalid` (a LAN-style name) answers in
  * Ollama's shape and `cloud.invalid` in OpenAI's, so each test can say which
  * model did which step. Nothing reaches a network.
  */
@@ -17,7 +17,7 @@ import { clampToDefaults, surfaceGrants } from "./trust.js";
 import { promptCacheOn } from "./prompt_cache.js";
 
 const UI = { meta: [], meta_style: "line", think: "hide", spinner: false, color: false, cot: "work" } as any;
-const LOCAL = "http://local.invalid/api/chat";
+const LOCAL = "http://local-invalid/api/chat";
 const CLOUD = "http://cloud.invalid/v1/chat/completions";
 
 type Reply = { tool?: { name: string; args: Record<string, unknown> }; text?: string };
@@ -131,7 +131,7 @@ async function scripted<T>(
   const original = globalThis.fetch;
   globalThis.fetch = (async (url: string | URL, init?: { body?: unknown; headers?: unknown }) => {
     const u = String(url);
-    if (u.startsWith("http://local.invalid")) {
+    if (u.startsWith("http://local-invalid")) {
       const r = script.local(++calls.local);
       if (r === "down") throw Object.assign(new Error("fetch failed"), { name: "TypeError" });
       return { ok: true, status: 200, json: async () => ollamaReply(r) };
@@ -636,7 +636,7 @@ describe("local first, cloud rescue v2: stuck, deadline_share, carry, handoffs",
 
   // Release review (v0.5.0): an untrusted surface's escalate key to a host the
   // trust step does not know is clamped, so no Authorization header reaches it.
-  it("on a clamped surface, an escalation to an unknown host sends no key", async () => {
+  it("on a clamped surface, an escalation to an unknown host is not made at all", async () => {
     const VAR = "GNOMON_TEST_ESCALATE_KEY";
     const prior = process.env[VAR];
     process.env[VAR] = "sk-test-not-a-real-key";
@@ -647,10 +647,11 @@ describe("local first, cloud rescue v2: stuck, deadline_share, carry, handoffs",
       // The control: trusted as written, the key is sent.
       const trusted = await run(declared, script);
       expect(trusted.calls.cloudHeaders[0]?.authorization).toBe("Bearer sk-test-not-a-real-key");
+      // 2026-11-17: an ungranted public destination gets nothing, key or not --
+      // the role runs without its escalation (trust.ts clampToDefaults).
       const clamped = await run(clampToDefaults(declared), script);
-      expect(clamped.turn.escalation).toBeDefined();
-      expect(clamped.calls.cloud).toBeGreaterThan(0);
-      for (const h of clamped.calls.cloudHeaders) expect(h.authorization).toBeUndefined();
+      expect(clamped.turn.escalation).toBeUndefined();
+      expect(clamped.calls.cloud).toBe(0);
     } finally {
       if (prior === undefined) delete process.env[VAR];
       else process.env[VAR] = prior;

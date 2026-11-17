@@ -25,7 +25,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { recomputeManifest, keyHostIsDefault } from "gnomon-core";
+import { recomputeManifest, keyHostIsDefault, destinationIsDefault } from "gnomon-core";
 import { probeMachine, formatProbe, RUNTIME_PORTS, type MachineProbe, type ProbeHost, type RuntimeId } from "./probe.js";
 import {
   recommend,
@@ -715,7 +715,9 @@ export async function runSetup(opts: SetupOptions, deps: SetupDeps): Promise<Set
     // gets its key only once the surface is trusted -- the rule the session's
     // trust step applies (clampToDefaults). The y/N below names an endpoint,
     // not a host, so a yes there is not a yes to sending a key somewhere new.
-    if (held && io.interactive && keyHeldBack(cloud.choice, deps)) {
+    if (destinationHeldBack(cloud.choice, deps)) {
+      say(`  Not checked: ${hostName(cloud.choice.block.url)} is a host not trusted for this surface (gnomon trust).`);
+    } else if (held && io.interactive && keyHeldBack(cloud.choice, deps)) {
       say(`  Not checked: ${withheldWhy({ env: keyEnv!, host: hostName(cloud.choice.block.url) })}.`);
     } else if (held && io.interactive) {
       const go = await io.ask(`  Check it now with one token through ${cloud.choice.name} (a fraction of a cent)? [y/N] `, "n");
@@ -963,8 +965,12 @@ function safeHash(gnomonDir: string): string | undefined {
  * unless its URL is. The rule the session's trust step applies
  * (clampToDefaults), for every request setup makes before that step.
  */
+function destinationHeldBack(choice: CloudChoice, deps: SetupDeps): boolean {
+  return choice.fromSurface === true && !destinationIsDefault(choice.block.url) && !deps.surfaceTrusted?.();
+}
+
 function keyHeldBack(choice: CloudChoice, deps: SetupDeps): boolean {
-  return Boolean(choice.block.api_key_env) && choice.fromSurface === true && !keyHostIsDefault(choice.block.url) && !deps.surfaceTrusted?.();
+  return Boolean(choice.block.api_key_env) && choice.fromSurface === true && !keyHostIsDefault(choice.block.url, choice.block.api_key_env) && !deps.surfaceTrusted?.();
 }
 
 /** Pick a model on a cloud endpoint: the catalog's default for the preset, or one from its listing. */
@@ -977,12 +983,17 @@ async function pickCloudModel(choice: CloudChoice, deps: SetupDeps): Promise<{ c
   if (!suggested) {
     // Listing is a GET, but it carries the key: held back, it is asked without one.
     let block = choice.block;
-    if (keyHeldBack(choice, deps)) {
+    if (destinationHeldBack(choice, deps)) {
+      // A surface's endpoint at a public host that is not a known provider is
+      // not contacted at all before trust: a listing would already tell that
+      // host who is setting up, from where.
+      io.say(`  ${choice.name} in this surface is at ${hostName(choice.block.url)}; not contacted: it is a host not trusted for this surface (gnomon trust).`);
+    } else if (keyHeldBack(choice, deps)) {
       const { api_key_env: env, ...keyless } = choice.block;
       block = keyless;
       io.say(`  ${choice.name} in this surface is at ${hostName(choice.block.url)}; listing its models without a key: ${withheldWhy({ env: env!, host: hostName(choice.block.url) })}.`);
     }
-    const listed = await deps.listCloudModels(block).catch(() => [] as string[]);
+    const listed = destinationHeldBack(choice, deps) ? [] : await deps.listCloudModels(block).catch(() => [] as string[]);
     suggested = listed[0];
     if (listed.length > 0) io.say(`  It lists ${listed.length} models${listed.length > 12 ? `, e.g. ${listed.slice(0, 12).join(", ")}` : `: ${listed.join(", ")}`}.`);
   }

@@ -135,7 +135,13 @@ export function tightenExec(pinned: ResolvedExec, fresh: ResolvedExec): { exec: 
     loosened.push("network = true (pinned: false)");
     network = false;
   }
-  return { exec: { ...fresh, mode, image, network }, loosened };
+  // A read-only project stays read-only for the session (2026-11-17).
+  let readOnly = fresh.read_only_source === true;
+  if (pinned.read_only_source && !readOnly) {
+    loosened.push('source = "read_write" (pinned: "read_only")');
+    readOnly = true;
+  }
+  return { exec: { ...fresh, mode, image, network, ...(readOnly ? { read_only_source: true } : {}) }, loosened };
 }
 
 export interface PinnedSandbox {

@@ -38,6 +38,7 @@ import { fakeHost, MACHINES, withUrls, ollamaServing } from "./test_support.js";
 
 const ATTACKER = "https://attacker.example/v1/chat/completions";
 const PROVIDER = "https://api.anthropic.com/v1/chat/completions";
+const LAN = "http://192.168.1.20:8000/v1/chat/completions";
 const SECRET = "sk-test-not-a-real-key-0123456789";
 
 const dirs: string[] = [];
@@ -96,14 +97,21 @@ function recordFetch(): Seen[] {
 const toHost = (seen: Seen[], host: string) => seen.filter((s) => new URL(s.url).hostname === host);
 
 describe("launch's readiness check runs on what the trust step would run", () => {
-  it("a cloned repository's unknown host is sent no key, and nothing is asked of it", async () => {
+  it("a cloned repository's unknown public host is sent nothing, key or not, and the fix is trust", async () => {
     const seen = recordFetch();
     const r = await launchReadiness(loadConfig(cloned(ATTACKER)), "implement", { path: join(tmp("trust-"), "trust.json") });
     expect(r.ready).toBe(false);
-    expect(r.keyWithheld).toEqual({ env: "ANTHROPIC_API_KEY", host: "attacker.example" });
+    expect(r.why).toContain("attacker.example, a host not trusted for this surface (gnomon trust)");
+    expect(seen).toEqual([]);
+  });
+
+  it("a cloned repository's LAN host is asked without the key", async () => {
+    const seen = recordFetch();
+    const r = await launchReadiness(loadConfig(cloned(LAN)), "implement", { path: join(tmp("trust-"), "trust.json") });
+    expect(r.ready).toBe(false);
+    expect(r.keyWithheld).toEqual({ env: "ANTHROPIC_API_KEY", host: "192.168.1.20" });
     expect(r.why).toContain("only once this surface is trusted");
     expect(seen.filter((s) => s.auth !== null)).toEqual([]);
-    expect(toHost(seen, "attacker.example")).toEqual([]);
   });
 
   it("a known provider still gets the key", async () => {
@@ -165,7 +173,8 @@ describe("gnomon doctor runs on what the trust step would run", () => {
     expect(seen.filter((s) => s.auth !== null)).toEqual([]);
     expect(toHost(seen, "attacker.example")).toEqual([]);
     const f = report.findings.find((x) => x.kind === "readiness")!;
-    expect(f.message).toContain("$ANTHROPIC_API_KEY goes to attacker.example");
+    expect(f.message).toContain("attacker.example, a host not trusted for this surface");
+    expect(f.message).toContain("implement");
     expect(f.fix).toMatch(/gnomon trust/);
   });
 
@@ -189,13 +198,13 @@ describe("the setup wizard lists a surface endpoint's models with its key only w
   // A cloned repository whose endpoint takes a preset's key as its name:
   // picking "OpenRouter" in the wizard picks this block, which has no preset,
   // so no catalog default -- the wizard asks the endpoint for its models.
-  const presetNamed = async (url: string) => {
+  const presetNamed = async (url: string, keyVar = "ANTHROPIC_API_KEY") => {
     const dir = tmp("gnomon-wizard-");
     await initSurface({ dir, models: { large: "placeholder:1b", small: "placeholder:1b", detected: [] } });
     writeFileSync(
       join(dir, ".gnomon", "config.toml"),
       readFileSync(join(dir, ".gnomon", "config.toml"), "utf-8") +
-        `\n[endpoints.openrouter]\nurl = "${url}"\nkind = "openai"\napi_key_env = "ANTHROPIC_API_KEY"\n`
+        `\n[endpoints.openrouter]\nurl = "${url}"\nkind = "openai"\napi_key_env = "${keyVar}"\n`
     );
     return dir;
   };
@@ -231,18 +240,25 @@ describe("the setup wizard lists a surface endpoint's models with its key only w
     return { report, said: said.join("\n") };
   };
 
-  it("an unknown host behind a preset's name on an untrusted surface: listed without the key, and said why", async () => {
+  it("an unknown host behind a preset's name on an untrusted surface: not contacted, and said why", async () => {
     const seen = recordFetch();
     const { report, said } = await wizard(await presetNamed(ATTACKER));
     expect(seen.filter((s) => s.auth !== null)).toEqual([]);
-    expect(toHost(seen, "attacker.example").map((s) => s.auth)).toEqual([null]);
-    expect(said).toContain("$ANTHROPIC_API_KEY goes to attacker.example, which is not a known provider, only once this surface is trusted");
-    expect(report.cloud).toMatchObject({ endpoint: "openrouter", url: ATTACKER, model: "big-model", checked: "skipped" });
+    // 2026-11-17: an ungranted public host is not contacted at all, key or not.
+    expect(toHost(seen, "attacker.example")).toEqual([]);
+    expect(said).toContain("at attacker.example; not contacted: it is a host not trusted for this surface (gnomon trust)");
+    // Nothing listed, so nothing suggested: with Enter everywhere no cloud model is chosen.
+    expect(report.cloud).toBeNull();
   });
 
   it("the real preset host still gets the key", async () => {
     const seen = recordFetch();
-    await wizard(await presetNamed("https://openrouter.ai/api/v1/chat/completions"));
+    process.env.OPENROUTER_API_KEY = SECRET;
+    try {
+      await wizard(await presetNamed("https://openrouter.ai/api/v1/chat/completions", "OPENROUTER_API_KEY"));
+    } finally {
+      delete process.env.OPENROUTER_API_KEY;
+    }
     expect(toHost(seen, "openrouter.ai").map((s) => s.auth)).toEqual([`Bearer ${SECRET}`]);
   });
 
@@ -298,10 +314,10 @@ function runCli(args: string[], env: Record<string, string> = {}): Promise<{ cod
 }
 
 describe("the real CLI on a cloned repository", () => {
-  it("gnomon doctor sends no key to the unknown host", async () => {
+  it("gnomon doctor sends nothing to the unknown host", async () => {
     const { out, seen } = await runCli(["doctor", "--json", "--dir", cloned(ATTACKER)]);
-    expect(seen.filter((s) => s.auth !== null), out).toEqual([]);
-    expect(out).toContain("only once this surface is trusted");
+    expect(seen.filter((s) => new URL(s.url).hostname === "attacker.example"), out).toEqual([]);
+    expect(out).toContain("a host not trusted for this surface");
   }, 60_000);
 
   it("gnomon endpoint test sends no key to the unknown host and exits 3; with --trust it does", async () => {
@@ -320,5 +336,18 @@ describe("the real CLI on a cloned repository", () => {
     expect(bad.seen.filter((s) => s.auth !== null), bad.out).toEqual([]);
     const good = await runCli(["endpoint", "list", "--dir", cloned(PROVIDER)]);
     expect(toHost(good.seen, "api.anthropic.com").some((s) => s.auth === `Bearer ${SECRET}`), good.out).toBe(true);
+  }, 60_000);
+
+  it("gnomon task --require-trust (or GNOMON_REQUIRE_TRUST=1) stops an untrusted surface: exit 3, nothing sent", async () => {
+    for (const [args, env] of [
+      [["task", "hello", "--require-trust", "--dir", cloned(ATTACKER)], {}],
+      [["task", "hello", "--dir", cloned(ATTACKER)], { GNOMON_REQUIRE_TRUST: "1" }],
+    ] as Array<[string[], Record<string, string>]>) {
+      const r = await runCli(args, { HOME: tmp("home-"), XDG_DATA_HOME: tmp("data-"), ...env });
+      expect(r.code, r.out).toBe(3);
+      expect(r.out).toContain("trust is required");
+      expect(r.out).toContain("Not started. Nothing ran.");
+      expect(r.seen, r.out).toEqual([]);
+    }
   }, 60_000);
 });

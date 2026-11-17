@@ -1243,6 +1243,42 @@ describe("the surface is not writable by a tool call", () => {
     expect(readFileSync(join(root, ".gnomon", "policy.toml"), "utf-8")).toBe(before);
   });
 
+  // 2026-11-17 review: one line in trust.json and the next session trusts
+  // whatever the surface says. gnomon's own state on this machine is refused
+  // like a record: every role, every /allow level, no [governance] needed.
+  it("refuses a write into gnomon's own state on this machine (trust store, keys, exec floors), at every /allow level", async () => {
+    const data = mkdtempSync(join(tmpdir(), "gnomon-state-"));
+    const prior = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = data;
+    try {
+      mkdirSync(join(data, "gnomon"), { recursive: true });
+      writeFileSync(join(data, "gnomon", "trust.json"), "{}\n");
+      for (const allow of ["strict", "custom", "all"] as const) {
+        // Forward slashes: the command is shell text, where a Windows
+        // backslash is an escape (C:\Users\... would name C:Users...).
+        const d = data.split("\\").join("/");
+        for (const command of [
+          `printf '{"entries":[]}' > '${d}/gnomon/trust.json'`,
+          `cp /dev/null '${d}/gnomon/credentials.json'`,
+          `rm -rf '${d}/gnomon'`,
+          `rm -rf '${d}'`,
+        ]) {
+          const r = await executeTool("bash", { command }, ctx({ gate: "never", allow }), new Set(["bash"]));
+          expect(r.code, `${allow}: ${command}`).toBe(TOOL_DENIED);
+          expect(r.content, command).toContain("gnomon's own state on this machine");
+        }
+      }
+      const w = await executeTool("write", { path: join(data, "gnomon", "trust.json"), content: "{}" }, ctx({ gate: "never", allow: "all" }), offered);
+      // The file tools refuse it earlier still, as outside the sandbox.
+      expect([TOOL_DENIED, 3]).toContain(w.code);
+      expect(readFileSync(join(data, "gnomon", "trust.json"), "utf-8")).toBe("{}\n");
+    } finally {
+      if (prior === undefined) delete process.env.XDG_DATA_HOME;
+      else process.env.XDG_DATA_HOME = prior;
+      rmSync(data, { recursive: true, force: true });
+    }
+  });
+
   it("detects — does not prevent — a surface moved by bash it cannot read", async () => {
     // A script FILE is not in the command line, so the change is reported
     // after the fact rather than blocked.

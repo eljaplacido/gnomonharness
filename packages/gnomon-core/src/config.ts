@@ -145,6 +145,13 @@ export type RoutingMode = "manual" | "suggest" | "auto";
  */
 export interface EndpointConfig {
   url: string;
+  /**
+   * Set only by the trust step's clamp (trust.ts clampToDefaults), never read
+   * from a surface: the host this endpoint would send prompts to, which this
+   * machine has not trusted for this surface. The url is then empty, and
+   * resolveEndpoint refuses the endpoint by name.
+   */
+  untrusted_host?: string;
   /** ollama | openai — selects the request/response shape */
   kind?: EndpointKind;
   api_key_env?: string;
@@ -587,6 +594,15 @@ export interface RoleDef {
   task_allow?: string[];
   /** Per-role override of [sandbox] exec. See resolveExec. */
   exec?: string;
+  /**
+   * `"read_only"`: under exec = "docker", this role's commands see the project
+   * mounted read-only, with a scratch /tmp (HOME and TMPDIR point there). For
+   * a verifier: an allowed `npm test` still runs the project's own scripts,
+   * and only a mount the kernel enforces keeps them from changing what they
+   * judge (2026-11-17 review). Absent or `"read_write"`: as before. Needs
+   * exec = "docker"; on the host it cannot be enforced, so it stops the run.
+   */
+  source?: string;
   /** Per-role override of [sandbox] image. */
   image?: string;
   /**
@@ -2139,6 +2155,14 @@ export function resolveEndpoint(
   name: string = DEFAULT_ENDPOINT
 ): EndpointConfig {
   const declared = config.config.endpoints?.[name];
+  if (declared?.untrusted_host) {
+    throw new Error(
+      `Endpoint "${name}" sends prompts and repository content to ${declared.untrusted_host}, ` +
+        "a host not trusted for this surface (gnomon trust).\n" +
+        "Run `gnomon trust` in a terminal to review and accept it, or start the run with " +
+        "--trust or GNOMON_TRUST=<surface hash> if you have already reviewed it."
+    );
+  }
   if (declared?.url) return declared;
   const builtin = BUILTIN_ENDPOINTS[name];
   if (builtin) return builtin;
@@ -2805,7 +2829,7 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
   ["policy.toml", "governance", [...GOVERNANCE_KEYS, "paths"]],
 ];
 
-const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "escalate", "fallback", "max_steps", "max_steps_total", "max_tokens", "model", "exec", "image", "profile", "reasoning_effort", "task_allow", "temperature", "tools", "top_p", "write_allow", "governance"]);
+const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "escalate", "fallback", "max_steps", "max_steps_total", "max_tokens", "model", "exec", "image", "source", "profile", "reasoning_effort", "task_allow", "temperature", "tools", "top_p", "write_allow", "governance"]);
 
 /**
  * Spellings people reach for when they mean to supply a secret directly.
@@ -3034,13 +3058,20 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
         if (spec.block !== block) continue;
         const value = (body as Record<string, unknown> | undefined)?.[spec.key];
         if (typeof value !== "string" || spec.values.includes(value)) continue;
+        // Fail closed where the fallback is LESS containment: a misspelt
+        // `exec` would run every command on the host, which the surface asked
+        // not to (2026-11-17 review). The other enumerations fall back to the
+        // stricter or the default value, and stay warnings.
+        const failsOpen = spec.block === "sandbox" && spec.key === "exec";
         problems.push({
           where: `.gnomon/${file} [${block}]`,
-          problem:
-            `${spec.key} = "${value}" is not one of ${spec.values.join(" | ")}, so this ` +
-            `silently falls back to "${spec.falls_back_to}".`,
+          problem: failsOpen
+            ? `${spec.key} = "${value}" is not one of ${spec.values.join(" | ")}; it would fall back to ` +
+              `"${spec.falls_back_to}" and run every command on the host, so the run stops instead.`
+            : `${spec.key} = "${value}" is not one of ${spec.values.join(" | ")}, so this ` +
+              `silently falls back to "${spec.falls_back_to}".`,
           fix: `Use one of: ${spec.values.join(", ")}. \`gnomon enumerations\` lists them.`,
-          fatal: false,
+          fatal: failsOpen,
         });
       }
     }
@@ -3053,9 +3084,9 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
   if (repoCode !== undefined && typeof repoCode !== "boolean") {
     problems.push({
       where: ".gnomon/policy.toml [approval]",
-      problem: `repo_code = ${JSON.stringify(repoCode)} is not a boolean, so it is read as false: calls that run repository code are not asked about.`,
+      problem: `repo_code = ${JSON.stringify(repoCode)} is not a boolean; it would be read as false and calls that run repository code would not be asked about, so the run stops instead.`,
       fix: "Write repo_code = true (or false), unquoted.",
-      fatal: false,
+      fatal: true,
     });
   }
 
@@ -3280,10 +3311,32 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
         problems.push({
           where,
           problem:
-            `exec = "${value}" is not one of ${EXEC_VALUES.join(" | ")}, so this role ` +
-            `silently falls back to "off" — no sandbox, and no warning.`,
+            `exec = "${value}" is not one of ${EXEC_VALUES.join(" | ")}; this role would fall back ` +
+            `to "off" and run its commands on the host, so the run stops instead.`,
           fix: `Use one of: ${EXEC_VALUES.join(", ")}. Only "docker" is wired in this build.`,
-          fatal: false,
+          fatal: true,
+        });
+      }
+    }
+
+    // `source = "read_only"` is a request for containment: a misspelling, or
+    // a role whose commands run on the host, would quietly leave the project
+    // writable -- so either stops the run.
+    {
+      const value = (rawRole as RoleDef)?.source;
+      if (value !== undefined && value !== "read_only" && value !== "read_write") {
+        problems.push({
+          where,
+          problem: `source = ${JSON.stringify(value)} is not one of read_only | read_write; the project would stay writable, so the run stops instead.`,
+          fix: 'Use source = "read_only" (with exec = "docker") or leave it out.',
+          fatal: true,
+        });
+      } else if (value === "read_only" && resolveExec(config, role).mode !== "docker") {
+        problems.push({
+          where,
+          problem: 'source = "read_only" needs exec = "docker": on the host nothing can enforce it, so the run stops instead.',
+          fix: 'Set exec = "docker" on this role (or in [sandbox]), or remove source.',
+          fatal: true,
         });
       }
     }
@@ -4940,6 +4993,8 @@ export interface ResolvedExec {
   image: string;
   /** Whether the sandbox gets a network. Follows [sandbox] network. */
   network: boolean;
+  /** The role's `source = "read_only"`: the project mounted read-only (docker only). */
+  read_only_source?: boolean;
 }
 
 /**
@@ -4997,7 +5052,8 @@ export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
     (typeof roleDef?.image === "string" && roleDef.image) ||
     (typeof sandbox.image === "string" && sandbox.image) ||
     "debian:stable-slim";
-  return { mode, image, network: sandbox.network === true };
+  const readOnly = roleDef?.source === "read_only";
+  return { mode, image, network: sandbox.network === true, ...(readOnly ? { read_only_source: true } : {}) };
 }
 
 /**
