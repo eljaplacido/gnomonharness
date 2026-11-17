@@ -2584,8 +2584,35 @@ async function cmdCompliance(args: CliArgs): Promise<number> {
       return commandError(args, DATAFLOW_SCHEMA, `dataflow could not run: ${err instanceof Error ? err.message : String(err)}`, DATAFLOW_EXIT.couldNotRun);
     }
   }
+  if (sub === "pack") {
+    const { buildPack, verifyPack, formatPack, formatPackVerify, PACK_SCHEMA, PACK_EXIT } = await import("./pack.js");
+    const verify = args.flags.verify;
+    try {
+      if (verify !== undefined) {
+        if (verify === "true") return commandError(args, PACK_SCHEMA, "--verify needs the pack's directory.", PACK_EXIT.couldNotRun);
+        const r = verifyPack(verify);
+        if (args.json) console.log(JSON.stringify(r, null, 2));
+        else for (const l of formatPackVerify(r)) console.log(l);
+        return r.exit;
+      }
+      const out = args.flags.out;
+      if (!out || out === "true") return commandError(args, PACK_SCHEMA, "--out <dir> names where to write the pack (a new or empty directory).", PACK_EXIT.couldNotRun);
+      const fw = args.flags.framework;
+      const frameworks = fw && fw !== "true" ? fw.split(",").map((s) => s.trim()).filter(Boolean) : undefined;
+      const r = buildPack(dir, out, loadControls(args.flags.catalog ?? defaultControlsPath()), {
+        frameworks,
+        trust: trustOptions(args),
+        withTrails: args.flags["with-trails"] !== undefined,
+      });
+      if (args.json) console.log(JSON.stringify({ ...r.manifest, out: r.out, pack_sha256: r.pack_sha256 }, null, 2));
+      else for (const l of formatPack(r)) console.log(l);
+      return PACK_EXIT.ok;
+    } catch (err) {
+      return commandError(args, PACK_SCHEMA, `pack could not run: ${err instanceof Error ? err.message : String(err)}`, PACK_EXIT.couldNotRun);
+    }
+  }
   if (sub !== "controls") {
-    return commandError(args, COMPLIANCE_SCHEMA, `Unknown compliance subcommand: ${sub}. Use: controls (the default) | dataflow`, COMPLIANCE_EXIT.couldNotRun);
+    return commandError(args, COMPLIANCE_SCHEMA, `Unknown compliance subcommand: ${sub}. Use: controls (the default) | dataflow | pack`, COMPLIANCE_EXIT.couldNotRun);
   }
   try {
     const catalog = loadControls(args.flags.catalog ?? defaultControlsPath());
@@ -3132,6 +3159,16 @@ Commands:
     no evidence for it). A mapping, never an assessment: it never says
     compliant, and it is not legal advice. Read-only. Exit 0 no gap,
     2 a gap or partial, 10 could not run.
+
+  compliance pack --out <dir> [--framework <id,...>] [--with-trails] [--json]
+  compliance pack --verify <dir> [--json]
+    The evidence pack: every read-only report (surface manifest, compliance,
+    security posture and test, data flows, process metrics, every audit
+    trail verified, the eval and trial reports) as JSON and text in a new
+    directory, with pack.json naming each file's sha256. --with-trails copies
+    the trails too. --verify re-hashes a pack: exit 0 every file matches,
+    2 one is missing or changed. Changes nothing in the project; never says
+    compliant. Exit 10 could not run.
 
   compliance dataflow [--json] [--dir <path>]
     The data-flow register: every model endpoint a role can reach (primary,

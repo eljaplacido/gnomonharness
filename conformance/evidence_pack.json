@@ -1,0 +1,36 @@
+{
+  "version": "0.1.0",
+  "_comment": [
+    "`gnomon compliance pack --out <dir>`: the evidence pack, manifest schema gnomon.evidence_pack/1",
+    "(docs/CONTRACTS.md §51). A part or file added or renamed, a manifest key renamed or an exit moved",
+    "is a contract change: packages/gnomon-cli/src/pack.test.ts asserts these lists against a real pack."
+  ],
+  "schema": "gnomon.evidence_pack/1",
+  "exit_codes": {
+    "0": "written (pack), or every file matches its hash (--verify)",
+    "2": "--verify: a file is missing or does not match its hash",
+    "10": "could not run: no .gnomon/, no --out, an --out that is not empty or is inside the surface, no pack.json to verify"
+  },
+  "parts": ["surface", "compliance", "security", "security_test", "dataflow", "metrics", "audit", "evals"],
+  "always": [
+    "surface/manifest.json",
+    "compliance.json", "compliance.txt",
+    "security.json", "security.txt",
+    "security_test.json", "security_test.txt",
+    "dataflow.json", "dataflow.txt",
+    "metrics.json", "metrics.txt",
+    "audit/verify.json",
+    "README.txt"
+  ],
+  "optional_files": {
+    "audit/trails/<trail>.jsonl": "with --with-trails: each trail in the audit directory, copied",
+    "evals/<path>/report.json": "every eval and trial report under .gnomon-trials/"
+  },
+  "manifest_keys": {
+    "required": ["schema", "created", "project", "surface_hash", "harness", "catalog", "exits", "audit", "evals", "disclaimer", "files"],
+    "optional": []
+  },
+  "file_keys": { "required": ["path", "part", "sha256", "bytes"], "optional": [] },
+  "verify_keys": { "required": ["schema", "pack", "pack_sha256", "files", "missing", "changed", "exit"], "optional": [] },
+  "never": "the pack never says compliant and carries the catalog's disclaimer; it changes nothing in the project"
+}

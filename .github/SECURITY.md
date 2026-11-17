@@ -192,10 +192,15 @@ reason: the process holds your provider keys and a shell.
   connecting, but a DNS name that resolves differently between the check and the
   request is a residual rebinding window. It is narrow and it is real; it is
   documented in `tools.ts` where the check lives.
-- The audit trail is tamper-evident against edits, not against a rewrite.
-  Anyone with write access to `.gnomon-audit/` can re-chain every record and
-  `gnomon audit verify` will pass. Closing that needs an external anchor —
-  signing, or publishing chain heads somewhere append-only.
+- The audit trail's hash chain is tamper-evident against edits, not against
+  a rewrite: anyone with write access to `.gnomon-audit/` can re-chain every
+  record. `[audit.attest]` (signed heads) and `[audit.anchor]` (heads copied to
+  a git remote, an RFC 3161 time-stamp authority or a command) close that, and
+  `gnomon audit verify` checks them; without one declared, a full re-chain
+  passes verification.
+
+`docs/THREAT-MODEL.md` ties each threat to its control, the evidence that it
+holds (`gnomon security test` among it) and its limit.
 
 ## Synthetic secrets in this repository
 
