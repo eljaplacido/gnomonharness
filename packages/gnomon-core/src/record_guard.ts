@@ -28,9 +28,10 @@
  * call (the snapshot compares the ends of the call), and anything that rewrites
  * a file while preserving size, mtime, ctime and inode -- which needs root, a
  * clock change, or a raw device. Only containment keeps the agent away from
- * the records in the first place: `exec = "docker"` today
- * (docs/THREAT-MODEL-EXEC.md); a kernel sandbox (`exec os`, #74/#156) is
- * proposed and not merged.
+ * the records in the first place: `exec = "docker"` (docs/THREAT-MODEL-EXEC.md).
+ * The kernel sandbox (`exec = "os"`) does NOT: the records live under the
+ * project root, which a sandboxed bash may write. It keeps writes inside the
+ * root; this guard is what notices a write to the records within it.
  */
 
 import { readdirSync, lstatSync, readFileSync, readlinkSync, existsSync, statSync, type Stats } from "node:fs";

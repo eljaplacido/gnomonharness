@@ -10,8 +10,6 @@
 
 import * as readline from "node:readline";
 import { safeGit } from "./git_safe.js";
-import { pinCredentials, holdCredentials, heldNotice, type CredentialPin } from "./credential_pin.js";
-import { pinSandbox, applySandboxPin, describeLoosening, type SandboxPin } from "./sandbox_pin.js";
 import { checkCitations } from "./citations.js";
 import { mustFailFirst, readVerifyExit } from "./must_fail_first.js";
 import { resolve, dirname, join, basename, sep, relative } from "node:path";
@@ -102,9 +100,16 @@ import {
   ARGS_MALFORMED,
   type SpillSink,
   DIFF_ELIDED,
+  osSandboxSummary,
+  osSandboxForbid,
+  gnomonInstallWritable,
+  gnomonInstallReadRoots,
+  loadOsSandboxProbe,
   DEADLINE_ABORT,
 } from "./tools.js";
 import { RecordGuard, describeChanges, type TamperFinding } from "./record_guard.js";
+import { pinSandbox, applySandboxPin, describeLoosening, type SandboxPin } from "./sandbox_pin.js";
+import { pinCredentials, holdCredentials, heldNotice, type CredentialPin } from "./credential_pin.js";
 import { StallSignals, STALL_SIGNAL_PATTERNS, normalizeCommand, type StallSignalCounters } from "./stall_signals.js";
 import { JobTable, scratchDirs, statSnapshot, statChangedPaths } from "./tools.js";
 import { resolveSandboxProfile, sandboxProfileRecord } from "./sandbox_profile.js";
@@ -6419,6 +6424,7 @@ async function agenticTurn(
       ? `${snap.text}\n${envSnapshotNetworkLine({
           network: ctx.network,
           docker: ctx.exec?.mode === "docker",
+          os: ctx.exec?.mode === "os",
           packageIndex: ctx.packageIndex ?? [],
         })}`
       : snap.text;
@@ -10247,8 +10253,10 @@ export const LIVE_SAFE_COMMANDS = new Set([
  * canary from a network = false surface with curl. bash now refuses the
  * obvious clients too (bashNetworkEgress), and that is still an intent filter
  * -- a script or a package manager reaches the network without naming curl --
- * so the note keeps saying what it is not, and points at the setting that is
- * isolation: [sandbox] exec = "docker", which runs bash with --network none.
+ * so the note keeps saying what it is not, and points at the settings that
+ * are isolation: [sandbox] exec = "docker", which runs bash with --network
+ * none, and exec = "os", which blocks egress in the kernel (and suppresses
+ * this note when it is enforcing).
  */
 /** The operator's line for a reload whose looser sandbox was not applied (sandbox_pin.ts). */
 export function sandboxKeptNotice(kept: readonly string[]): string {
@@ -11288,7 +11296,8 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         console.log(
           "  network off they were NOT process isolation: a package manager or a script"
         );
-        console.log('  run through `bash` reached the network anyway. [sandbox] exec = "docker" is.');
+        console.log('  run through `bash` reached the network anyway. [sandbox] exec = "os" or "docker" is,');
+        console.log("  and this grant lifts that too for the session.");
       }
       return true;
     }
@@ -13111,14 +13120,53 @@ export async function runPromptLoop(
     const sandboxLevel = resolveSandboxLevel(config);
     const networkDeclared =
       (policy.sandbox as { network?: boolean } | undefined)?.network;
+    // exec = "os": say what the kernel will enforce, or that bash will refuse.
+    // Probed here, at the door, so an unsupported kernel is found before the
+    // first command rather than by it.
+    const execHere = resolveExec(config, state.currentRole);
+    // Loaded here when any role may run bash under exec = "os", so the summary
+    // below and a later `/explain sandbox` can probe synchronously.
+    if (listRoles(config).some((r) => resolveExec(config, r).mode === "os") || execHere.mode === "os") {
+      await loadOsSandboxProbe();
+    }
+    // The sandbox this session is held to from here on (sandbox_pin.ts).
+    state.sandboxPin ??= pinSandbox(config);
+    // Where the keys go, as this session starts (credential_pin.ts).
+    state.credentialPin ??= pinCredentials(state.config);
+    const osSummary =
+      execHere.mode === "os"
+        ? osSandboxSummary(
+            (state.network ?? networkDeclared) === true,
+            undefined,
+            execHere.reads,
+            osSandboxForbid(resolve(config.gnomonDir, ".."), resolveExtraRoots(config))
+          )
+        : undefined;
+    if (osSummary) console.log(paint(ui, osSummary.ok ? "gray" : "red", `  ${osSummary.line}`));
+    if (osSummary?.ok) {
+      const writable = osSandboxForbid(resolve(config.gnomonDir, ".."), resolveExtraRoots(config)).slice(0, -1);
+      const probed = (await loadOsSandboxProbe())(osSandboxForbid(resolve(config.gnomonDir, ".."), resolveExtraRoots(config)));
+      const inside = "error" in probed ? [] : gnomonInstallWritable(writable, gnomonInstallReadRoots(probed.bin));
+      if (inside.length > 0) {
+        console.log(
+          paint(ui, "yellow",
+            `  sandbox: gnomon itself is inside a tree bash may write (${inside.join(", ")}) — a command can change ` +
+            `gnomon, and the next gnomon you run is the changed one. Run gnomon from an install outside the project ` +
+            `and its extra_roots to keep it out of reach.`)
+        );
+      }
+    }
     if (resolveSandboxProfile(config) === "container") {
       console.log(
         paint(ui, "yellow", '  note: [sandbox] profile = "container" — network, /tmp, bash and the soft shell follow the container; integrity refusals stay')
       );
-    } else if (sandboxLevel !== "off" && networkDeclared === false) {
+    } else if (sandboxLevel !== "off" && networkDeclared === false && !(osSummary?.ok)) {
       // One line. It printed four on every launch, which is a wall nobody
       // reads by the third session; the substance fits in one, and `/network`
       // and `gnomon explain` carry the long form for whoever asks.
+      //
+      // Not printed when exec = "os" is enforcing: then bash IS isolated from
+      // the network, and the line above says so.
       console.log(paint(ui, "yellow", NETWORK_OFF_NOTE));
     }
     // No declared check means no turn is ever checked: "done" is the model's

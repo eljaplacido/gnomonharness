@@ -226,7 +226,8 @@ so both format drift and non-determinism fail the build.
   "guard_rule": ["tools", "malformed", "bash_deny", "bash_allow", "sudo", "sandbox", "surface",
                  "record", "git_hooks", "host_hooks", "write_allow", "outside_root", "secret_path",
                  "ci_path", "network", "url", "repo_code", "approval", "ungoverned", "error"],
-  "guard_tool": ["bash", "write", "edit", "read", "webfetch", "grep", "glob", "execute"]
+  "guard_tool": ["bash", "write", "edit", "read", "webfetch", "grep", "glob", "execute"],
+  "exec": ["off", "docker", "os"]
 }
 ```
 
@@ -241,6 +242,16 @@ can say is published, not only exported). `gnomon-core`'s guard test holds
 the build fails when a kind is added to the `AuditKind` type and not to
 `AUDIT_KINDS`. The skill enumerations #113 also names (candidate signals, trial
 verdicts and statuses) stay in their own fixtures (§12, §13) for now.
+
+**`exec` was added with the `os` value**, as the last key, so the keys
+published before it keep their positions. It was the one enumerated surface
+key missing from the contract: `[sandbox] exec` had a closed set of values in
+`config.ts` (`EXEC_VALUES`) and an audit for misspellings, but `gnomon
+enumerations` did not publish it. All three values are implemented.
+`os_sandbox.test.ts` fails if `EXEC_VALUES` and the golden disagree. An `exec`
+value outside the set (`"OS"`, `"landlock"`, `"os "`) does not fall back to
+`"off"`: the surface audit stops the run, and `bash` refuses every command
+under it as well.
 
 **`role_profile` is implemented.** This paragraph said it was "declared and not
 implemented" and stayed there after `495fa40` made it route: `applyProfile`
@@ -2846,7 +2857,10 @@ never admitted. Entries must be bare host names; an unknown host is accepted
 and reported, since a private mirror is legitimate. It is an exception to an
 intent filter, not containment: under `exec = "docker"` the container still
 runs with `--network none`, which no host list opens, so there the allowlist
-admits nothing (the refusal is the one without it) and the audit says so; with the network allowed it does nothing
+admits nothing (the refusal is the one without it) and the audit says so. The
+same holds under `exec = "os"`: its `network = false` supervisor admits loopback
+only and has no per-host allow, so the allowlist admits nothing there either,
+and the audit says so too; with the network allowed it does nothing
 either. `gnomon guard` reads it as the loop does. `counters.package_index`
 (`admitted`, `hosts`) is on every turn of a `network = false` surface that
 lists hosts, and an admitted call's `tool_call` record carries

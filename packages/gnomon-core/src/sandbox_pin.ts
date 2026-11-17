@@ -1,25 +1,22 @@
 /**
  * The sandbox a session started under is a floor, not a suggestion.
  *
- * `[sandbox] exec`, `image`, `network`, `extra_roots` and `level` live in
- * .gnomon/policy.toml (and a role's `exec` and `image` in roles.toml), which
- * are files inside the project root -- and the project root is exactly what a
- * sandboxed bash may write: exec = "docker" bind-mounts it. The loop reloads
- * the surface when a tool call moves it (prompt_loop: surface drift ->
- * reloadConfig) and resolved the sandbox afresh every turn, so a contained
- * command could write `exec = "off"` into policy.toml and run on the host
- * from the next turn. The cage held the key to itself. (PR #156 second
- * review; third review, finding 1, reproduced on the released docker mode.)
+ * `[sandbox] exec`, `reads`, `read_roots`, `network`, `extra_roots` and
+ * `level` live in .gnomon/policy.toml (and a role's `exec` in roles.toml),
+ * which are files inside the project root -- and the project root is exactly
+ * what a sandboxed bash may write. The loop reloads the surface when a tool
+ * call moves it (prompt_loop: surface drift -> reloadConfig) and resolved the
+ * sandbox afresh every turn, so a sandboxed command could write
+ * `exec = "off"` into policy.toml and run unsandboxed from the next turn. The
+ * cage held the key to itself.
  *
- * So the session PINS what it started with, per role, and every later reading
- * of the surface may only TIGHTEN it: off -> docker, network true -> false,
- * fewer extra_roots, a stricter level. A change that would loosen it -- or a
- * different image for a docker role -- is not applied; it is reported, and
- * takes effect only when the operator restarts gnomon, which re-reads the
- * surface through the trust decision (trust.ts: a role that ran contained in
- * this project and now asks for exec = "off" is a grant to be accepted, not a
- * default). Tightening is applied at once and becomes the new floor (a
- * ratchet), so it cannot be undone silently either.
+ * So the session PINS what it started with, and every later reading of the
+ * surface may only TIGHTEN it: off -> os, reads all -> scoped, network
+ * true -> false, fewer extra_roots or read_roots, a stricter level. A change
+ * that would loosen it is not applied; it is reported, and takes effect only
+ * when the operator restarts gnomon -- which re-reads the surface, through the
+ * trust decision, as a person's act. Tightening is applied at once and becomes
+ * the new floor (a ratchet), so it cannot be undone silently either.
  *
  * The session's own grants (`/network`, `/sandbox`) are not part of the pin:
  * those are typed by the operator, which is the consent the pin exists to
@@ -54,10 +51,11 @@ export interface SandboxPin {
   /** Per role, as pinned (and ratcheted). */
   roles: Map<string, ResolvedExec>;
   /**
-   * Each granted extra root by the REAL path it had when first pinned, or
-   * null when it did not exist then. A root declared as a path the command
-   * can re-point (a symlink inside the root) keeps granting what it granted
-   * at the start, not wherever it points now. Null: not granted this session.
+   * Each granted root (extra_roots, read_roots) by the REAL path it had when
+   * first pinned, or null when it did not exist then. A root declared as a
+   * path the command can re-point (a symlink inside the root) keeps granting
+   * what it granted at the start, not wherever it points now (second
+   * review, finding I). Null: not granted this session.
    */
   real: Map<string, string | null>;
 }
@@ -106,7 +104,12 @@ export function pinSandbox(config: GnomonConfig): SandboxPin {
     real: new Map(),
   };
   for (const r of pin.extraRoots) realOf(pin, r);
+  for (const e of [pin.defaultExec, ...roles.values()]) for (const r of e.readRoots ?? []) realOf(pin, r);
   return pin;
+}
+
+export function readsRank(r: string): number {
+  return r === "all" ? 0 : r === "scoped" ? 1 : 2; // an invalid value refuses: tightest
 }
 
 /**
@@ -115,13 +118,20 @@ export function pinSandbox(config: GnomonConfig): SandboxPin {
  */
 export function tightenExec(pinned: ResolvedExec, fresh: ResolvedExec): { exec: ResolvedExec; loosened: string[] } {
   const loosened: string[] = [];
+  // An invalid exec refuses every command: nothing is tighter. Leaving it,
+  // for any valid value, is loosening.
+  if (fresh.invalid !== undefined) return { exec: fresh, loosened };
+  if (pinned.invalid !== undefined) {
+    loosened.push(`exec = ${JSON.stringify(fresh.mode)} (the session started with exec = ${JSON.stringify(pinned.invalid)}, which refuses bash)`);
+    return { exec: pinned, loosened };
+  }
   let mode = fresh.mode;
   let image = fresh.image;
   if (pinned.mode !== "off" && fresh.mode !== pinned.mode) {
     loosened.push(`exec = "${fresh.mode}" (pinned: "${pinned.mode}")`);
     mode = pinned.mode;
     image = pinned.image;
-  } else if (fresh.mode !== "off" && fresh.image !== pinned.image) {
+  } else if (fresh.mode === "docker" && fresh.image !== pinned.image) {
     // Another image is another program set the commands run with -- one the
     // surface (that is, the container) chose. Not applied mid-session, from
     // whatever mode: off -> docker with an image of the surface's choosing
@@ -135,13 +145,41 @@ export function tightenExec(pinned: ResolvedExec, fresh: ResolvedExec): { exec: 
     loosened.push("network = true (pinned: false)");
     network = false;
   }
+  let reads = fresh.reads;
+  let readRoots = fresh.readRoots;
+  // reads / read_roots are read under exec = "os" only; pinned under it.
+  if (pinned.mode === "os") {
+    if (readsRank(fresh.reads) < readsRank(pinned.reads)) {
+      loosened.push(`reads = ${JSON.stringify(fresh.reads)} (pinned: ${JSON.stringify(pinned.reads)})`);
+      reads = pinned.reads;
+    }
+    if (readsRank(pinned.reads) >= 1) {
+      const extra = readRoots.filter((r) => !pinned.readRoots.includes(r));
+      if (extra.length > 0) {
+        loosened.push(`read_roots += ${extra.join(", ")}`);
+        readRoots = readRoots.filter((r) => pinned.readRoots.includes(r));
+      }
+    }
+  }
   // A read-only project stays read-only for the session (2026-11-17).
   let readOnly = fresh.read_only_source === true;
   if (pinned.read_only_source && !readOnly) {
     loosened.push('source = "read_write" (pinned: "read_only")');
     readOnly = true;
   }
-  return { exec: { ...fresh, mode, image, network, ...(readOnly ? { read_only_source: true } : {}) }, loosened };
+  return {
+    exec: {
+      mode,
+      image,
+      network,
+      reads,
+      readRoots,
+      // A misspelt exec mid-session keeps bash refusing, not running unsandboxed.
+      ...(fresh.invalid !== undefined ? { invalid: fresh.invalid } : {}),
+      ...(readOnly ? { read_only_source: true } : {}),
+    },
+    loosened,
+  };
 }
 
 export interface PinnedSandbox {
@@ -185,8 +223,6 @@ export function applySandboxPin(pin: SandboxPin, config: GnomonConfig, role: str
   if (added.length > 0) loosened.push(`extra_roots += ${added.join(", ")}`);
   const extraRoots = freshRoots.filter((r) => pin.extraRoots.includes(r));
 
-  // A role the session did not start with gets what a role without its own
-  // `exec` had at the start: a new role named `exec = "off"` is a loosening.
   const pinnedExec = pin.roles.get(role) ?? pin.defaultExec;
   const t = tightenExec(pinnedExec, resolveExec(config, role));
   loosened.push(...t.loosened);
@@ -196,12 +232,13 @@ export function applySandboxPin(pin: SandboxPin, config: GnomonConfig, role: str
   pin.container = container;
   pin.extraRoots = extraRoots;
   pin.roles.set(role, t.exec);
+  // What the call is granted: the roots by the real paths pinned for them.
   return {
     level,
     network,
     extraRoots: pinnedReal(pin, extraRoots),
     container,
-    exec: t.exec,
+    exec: { ...t.exec, readRoots: pinnedReal(pin, t.exec.readRoots ?? []) },
     loosened,
   };
 }

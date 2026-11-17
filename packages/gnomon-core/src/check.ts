@@ -56,6 +56,7 @@ import {
 import { floorLossNotice, governingExecFloor, uncontainableRootAt } from "./trust.js";
 import { strictestOf } from "./exec_floor.js";
 import { emptySurface, hostSurface } from "./host_surface.js";
+import { readsRank } from "./sandbox_pin.js";
 import { parseSurfaceTree, readSurfaceBlobs, SurfaceTreeError, writeSurfaceTree, type SurfaceEntry } from "./surface_tree.js";
 import { AuditTrail, redact, resolveAudit, verifyTrail } from "./audit.js";
 import { harnessBuild } from "./build.js";
@@ -353,12 +354,20 @@ function checkExec(
 ): ResolvedExec {
   const warnings = (verdict.warnings ??= []);
   const fromBase = resolveExec(config, role);
-  const live: ResolvedExec = host.loaded
-    ? resolveExec(host.config, role)
-    : { mode: "off", image: resolveExec(host.config).image, network: false };
+  const live: ResolvedExec = host.loaded ? resolveExec(host.config, role) : { ...resolveExec(host.config), network: false };
   const { floor, lost } = governingExecFloor(host.config);
   if (lost) warnings.push(floorLossNotice(lost));
   const strict = floor ? strictestOf(floor) : undefined;
+
+  // An exec that refuses bash -- recorded so in the floor, or declared so by
+  // the live surface or the base -- refuses here too: nothing is tighter.
+  const invalid = strict?.mode === "invalid" ? "(as recorded for this project)" : (live.invalid ?? fromBase.invalid);
+  if (invalid !== undefined) {
+    const exec: ResolvedExec = { ...live, mode: "off", network: false, invalid };
+    verdict.exec = { mode: exec.mode, image: exec.image, network: exec.network };
+    if (warnings.length === 0) delete verdict.warnings;
+    return exec;
+  }
 
   let mode: ResolvedExec["mode"] = "off";
   let image = live.image;
@@ -378,7 +387,15 @@ function checkExec(
         `[verify] runs without network until \`gnomon trust grant\` accepts it`
     );
   }
-  const exec: ResolvedExec = { mode, image, network };
+  // What an "os" sandbox may read: the live surface's, never looser than the
+  // floor recorded (a base's `reads = "all"` or `read_roots = ["~"]` would
+  // hand [verify] the host's files).
+  let reads = live.reads;
+  if (strict?.mode === "os" && strict.reads !== undefined && readsRank(reads) < readsRank(strict.reads)) {
+    warnings.push(`the live surface asks for reads = ${JSON.stringify(reads)}; this project ran with ${JSON.stringify(strict.reads)}, so the check does`);
+    reads = strict.reads;
+  }
+  const exec: ResolvedExec = { mode, image, network, reads, readRoots: live.readRoots };
 
   const said: string[] = [];
   if (fromBase.mode !== exec.mode) said.push(`exec = "${fromBase.mode}"`);

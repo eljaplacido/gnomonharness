@@ -857,8 +857,11 @@ export function governingExecFloor(
   const st = floorState(path);
   const g = governingFloor(st.floors, root);
   if (st.lost && !g?.exact) {
-    const contain = (e: { mode: string; image: string }) => (contained(e.mode) ? { mode: e.mode, image: e.image } : { mode: "docker", image: e.image });
-    const roles: Record<string, { mode: string; image: string }> = { "*": contain(resolveExec(config)) };
+    const contain = (e: ReturnType<typeof resolveExec>): FloorEntry => {
+      const f = floorEntry(e);
+      return contained(f.mode) ? f : { mode: "docker", image: e.image };
+    };
+    const roles: Record<string, FloorEntry> = { "*": contain(resolveExec(config)) };
     for (const r of listRoles(config)) roles[r] = contain(resolveExec(config, r));
     return { floor: { root, roles, network: false, at: st.lost }, lost: st.lost, ...(g ? { inherited: true } : {}) };
   }
@@ -931,10 +934,18 @@ export function grantTrust(config: GnomonConfig, by: string, path = trustPath())
 
 const contained = (mode: string) => mode !== "off";
 
+type FloorEntry = { mode: string; image: string; reads?: string };
+
+/** One resolved exec, as the floor keeps it: an exec that refuses bash is "invalid", not "off". */
+function floorEntry(e: { mode: string; image: string; reads?: string; invalid?: string }): FloorEntry {
+  const mode = e.invalid !== undefined ? "invalid" : e.mode;
+  return mode === "os" && e.reads !== undefined ? { mode, image: e.image, reads: e.reads } : { mode, image: e.image };
+}
+
 /** Each role's resolved exec under `config`, and `*` for a role with none of its own. */
-function execMap(config: GnomonConfig): Record<string, { mode: string; image: string }> {
-  const pick = (e: { mode: string; image: string }) => ({ mode: e.mode, image: e.image });
-  const out: Record<string, { mode: string; image: string }> = { "*": pick(resolveExec(config)) };
+function execMap(config: GnomonConfig): Record<string, FloorEntry> {
+  const pick = floorEntry;
+  const out: Record<string, FloorEntry> = { "*": pick(resolveExec(config)) };
   for (const r of listRoles(config)) out[r] = pick(resolveExec(config, r));
   return out;
 }
@@ -967,14 +978,18 @@ export function recordExecFloor(config: GnomonConfig, path = trustPath(), opts: 
     // Raised from its own floor, or from the one that governs it (an
     // ancestor's, or the contained default while the floors are lost).
     const had = floors.find((f) => f.root === root) ?? (opts.lower ? undefined : governingExecFloor(config, path).floor);
-    let roles: Record<string, { mode: string; image: string }> = now;
+    let roles: Record<string, FloorEntry> = now;
     if (had && !opts.lower) {
       roles = { ...had.roles };
       for (const [role, e] of Object.entries(now)) {
         const was = had.roles[role] ?? had.roles["*"];
-        if (!was || !contained(was.mode)) roles[role] = e;
-        else if (contained(e.mode) && !(was.mode === "docker" && e.mode === "docker" && was.image !== e.image)) roles[role] = e;
-        else roles[role] = was;
+        // A step down from the floor -- out of the container, into another
+        // image, from scoped reads to all -- keeps the floor.
+        const down =
+          !contained(e.mode) ||
+          (was?.mode === "docker" && e.mode === "docker" && was.image !== e.image) ||
+          (was?.mode === "os" && was.reads === "scoped" && e.mode === "os" && e.reads === "all");
+        roles[role] = !was || !contained(was.mode) || !down ? e : was;
       }
     }
     const any = Object.values(roles).some((e) => contained(e.mode));
@@ -1041,13 +1056,20 @@ export function execDowngrades(config: GnomonConfig, floor: ExecFloor | undefine
   for (const role of listRoles(config)) {
     const was = floor.roles[role] ?? floor.roles["*"];
     if (!was) continue;
-    const now = resolveExec(config, role);
+    const now = floorEntry(resolveExec(config, role));
     if (contained(was.mode) && now.mode === "off") {
       out.push({
         key: `exec:${role}:off`,
         subject: `role ${role}`,
         grants: `runs bash on this machine (exec = "off"); it ran in ${was.mode} here`,
         default: `exec = "${was.mode}", as this project last ran`,
+      });
+    } else if (was.mode === "os" && was.reads === "scoped" && now.mode === "os" && now.reads === "all") {
+      out.push({
+        key: `exec:${role}:reads-all`,
+        subject: `role ${role}`,
+        grants: `bash reads every file your user can (reads = "all"); it ran with reads = "scoped" here`,
+        default: `reads = "scoped", as this project last ran`,
       });
     } else if (now.mode === "docker" && now.image !== was.image) {
       // Any image change is a grant, whatever the floor's mode (fifth review,
@@ -1067,13 +1089,21 @@ export function execDowngrades(config: GnomonConfig, floor: ExecFloor | undefine
 /** Put every role `execDowngrades` names back where it ran: its exec and its image. */
 function restoreExecFloor(c: GnomonConfig, floor: ExecFloor): void {
   for (const g of execDowngrades(c, floor)) {
-    const [, role, kind] = /^exec:(.*):(off|image)$/.exec(g.key)! as unknown as [string, string, string];
-    const was = floor.roles[role] ?? floor.roles["*"]!;
-    const def = (c.roles[role] ??= {} as RoleDef) as RoleDef & { exec?: string; image?: string };
-    // An image change from a floor that ran on the host keeps the container
-    // it asked for, in the image the floor knew; anything else goes back.
-    if (!(kind === "image" && !contained(was.mode))) def.exec = was.mode;
-    def.image = was.image;
+    const [, role, what] = /^exec:(.*):(off|image|reads-all)$/.exec(g.key)!;
+    const was = floor.roles[role!] ?? floor.roles["*"]!;
+    if (what === "off" || what === "image") {
+      const def = (c.roles[role!] ??= {} as RoleDef) as RoleDef & { exec?: string; image?: string };
+      // An image change from a floor that ran on the host keeps the container
+      // it asked for, in the image the floor knew; anything else goes back.
+      if (!(what === "image" && !contained(was.mode))) def.exec = was.mode;
+      def.image = was.image;
+    }
+    // reads is [sandbox]-wide: putting it back scopes every os role, which is
+    // only ever tighter.
+    if (was.reads === "scoped") {
+      const policy = (c.policy ??= {}) as Record<string, any>;
+      policy.sandbox = { ...(policy.sandbox ?? {}), reads: "scoped" };
+    }
   }
 }
 
