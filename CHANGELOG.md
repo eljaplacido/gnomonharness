@@ -26,6 +26,15 @@
 
 ## [Unreleased]
 
+### Added — `gnomon security`, the posture report
+
+A read-only report of a project's security posture: trust, where each role's
+commands run and what contains them, other harnesses' guard hooks, and the
+audit trail (newest 50 chains verified, unresolved tamper events). Risks set
+exit 2; advice names the setting that would contain more. Runs no model and
+writes nothing; it is not on any session's path. Schema `gnomon.security/1`
+(CONTRACTS.md §45, `conformance/security_posture.json`).
+
 ### Security — a repository cannot grant itself authority (review of 2026-11-17)
 
 "Everything that describes the agent's behaviour lives in the repository;

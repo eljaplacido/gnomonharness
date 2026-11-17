@@ -1,0 +1,53 @@
+{
+  "version": "0.1.0",
+  "_comment": [
+    "The `gnomon security --json` document, schema gnomon.security/1 (docs/CONTRACTS.md §45).",
+    "",
+    "Read-only: trust, each role's containment, other harnesses' guard hooks and",
+    "the audit trail, from what gnomon already enforces and records. A finding id",
+    "added, a key renamed or an exit moved is a contract change:",
+    "packages/gnomon-cli/src/security.test.ts asserts SECURITY_FINDING_IDS and",
+    "SECURITY_EXIT equal the lists here and checks real reports against the keys."
+  ],
+  "schema": "gnomon.security/1",
+  "exit_codes": {
+    "0": "no risk (advice may be listed)",
+    "2": "a risk: a broken hash chain, an unresolved record_tamper event, a guard hook missing, modified or switched off, or a fatal surface problem",
+    "10": "security could not run (no .gnomon/, or a surface that does not load)"
+  },
+  "finding_ids": [
+    "surface_fatal",
+    "chain_broken",
+    "record_tamper",
+    "host_hook",
+    "audit_off",
+    "host_exec",
+    "judge_can_write",
+    "approval_never_on_host",
+    "sandbox_network",
+    "surface_warning"
+  ],
+  "risk_ids": ["surface_fatal", "chain_broken", "record_tamper", "host_hook"],
+  "severities": ["risk", "advice"],
+  "trail_limit": 50,
+  "report_keys": {
+    "required": ["schema", "project", "surface_hash", "trust", "approval", "roles", "hosts", "audit", "findings", "exit"],
+    "optional": []
+  },
+  "role_keys": {
+    "required": ["role", "exec", "network", "read_only_source", "bash", "writes", "bash_allowlist", "write_scoped"],
+    "optional": ["governance"]
+  },
+  "audit_keys": {
+    "required": ["enabled", "anchored", "trails", "verified", "broken", "tamper_unresolved"],
+    "optional": []
+  },
+  "finding_keys": {
+    "required": ["id", "severity", "message"],
+    "optional": ["fix"]
+  },
+  "error_keys": {
+    "required": ["schema", "error", "exit"],
+    "optional": []
+  }
+}

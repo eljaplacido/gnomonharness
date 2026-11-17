@@ -3996,3 +3996,37 @@ witness.
 `gnomon guard` wrote, a liveness record and a real scorecard against it (with
 a checker that refuses any schema keyword it does not implement), and
 `packages/gnomon-core/src/guard.test.ts` the liveness behaviour.
+
+## 45. Security posture — `gnomon security`, `gnomon.security/1`, `v: 1`
+
+A read-only report of what an agent in this project can do, what contains
+it, and whether the record of it is intact. It reads what gnomon already
+enforces and records -- trust (§8), `resolveExec` per role,
+governance levels (§36), `gnomon guard status` (§44) and the audit trails
+(`verifyTrail`, `record_tamper`) -- and decides, runs and writes nothing.
+
+| Key | Meaning |
+|---|---|
+| `schema` | `"gnomon.security/1"` |
+| `project`, `surface_hash` | the project root and its surface hash |
+| `trust` | `status` (`default`, `trusted`, `untrusted`), `via`?, `grants` (`subject`, `grants`, `default`), `uncovered` (count). Evaluated as `gnomon task` would, never stopping: `--require-trust` does not apply |
+| `approval` | the approval gate: `never`, `on_write`, `always` |
+| `roles` | per role, sorted: `role`, `exec` (`off`, `docker`, `os`), `network` (a sandbox network; false on the host), `read_only_source`, `bash`, `writes` (write or edit offered), `bash_allowlist`, `write_scoped`, `governance`? (family → level) |
+| `hosts` | `guard status`'s hosts: `host`, `state` |
+| `audit` | `enabled`, `anchored`, `trails` (count in the audit dir), `verified` (the newest `trail_limit`), `broken` (file names), `tamper_unresolved` |
+| `findings` | `id`, `severity` (`risk` or `advice`), `message`, `fix`? |
+| `exit` | 0 no risk, 2 a risk, 10 could not run |
+
+Risk ids: `surface_fatal`, `chain_broken`, `record_tamper`, `host_hook`.
+Advice ids: `audit_off`, `host_exec`, `judge_can_write`,
+`approval_never_on_host`, `sandbox_network`, `surface_warning`. An id's
+severity is fixed; adding an id is a minor change with a fixture update.
+
+**What it is not.** A posture is configuration, not a test: it says a role's
+commands run under `exec = "os"`, not that Landlock held on this kernel
+(`gnomon-exec sandbox-probe` says that). It verifies the newest 50 trails;
+`gnomon audit verify` verifies all of them and checks anchors.
+
+**Fixture**: `conformance/security_posture.json`;
+`packages/gnomon-cli/src/security.test.ts` checks the ids, exits and trail
+limit equal it and validates real reports against its key lists.
