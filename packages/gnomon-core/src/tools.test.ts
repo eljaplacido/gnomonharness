@@ -1254,11 +1254,14 @@ describe("the surface is not writable by a tool call", () => {
       mkdirSync(join(data, "gnomon"), { recursive: true });
       writeFileSync(join(data, "gnomon", "trust.json"), "{}\n");
       for (const allow of ["strict", "custom", "all"] as const) {
+        // Forward slashes: the command is shell text, where a Windows
+        // backslash is an escape (C:\Users\... would name C:Users...).
+        const d = data.split("\\").join("/");
         for (const command of [
-          `printf '{"entries":[]}' > ${data}/gnomon/trust.json`,
-          `cp /dev/null ${data}/gnomon/credentials.json`,
-          `rm -rf ${data}/gnomon`,
-          `rm -rf ${data}`,
+          `printf '{"entries":[]}' > '${d}/gnomon/trust.json'`,
+          `cp /dev/null '${d}/gnomon/credentials.json'`,
+          `rm -rf '${d}/gnomon'`,
+          `rm -rf '${d}'`,
         ]) {
           const r = await executeTool("bash", { command }, ctx({ gate: "never", allow }), new Set(["bash"]));
           expect(r.code, `${allow}: ${command}`).toBe(TOOL_DENIED);
