@@ -5,6 +5,10 @@
 //!   - Maps exit codes to outcome buckets (result/refusal/apparatus_failure)
 //!   - Records ordered session steps with manifest + step outcomes
 //!   - Validates sessions against conformance fixtures
+//!   - Runs a command under the OS sandbox (`sandbox`, `sandbox-probe`): the
+//!     backend of `[sandbox] exec = "os"`. See src/sandbox.rs.
+
+mod sandbox;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -537,6 +541,88 @@ fn print_usage() {
     println!("  gnomon-exec step     --cmd <command> [--timeout-ms <ms>]");
     println!("  gnomon-exec validate   --session <file> [--fixture <golden.json>]");
     println!("  gnomon-exec hash       --session <file>");
+    println!("  gnomon-exec sandbox    --root <dir> [--write <dir>]... [--network on|off|none]");
+    println!("                         [--reads all|scoped] [--read <path>]... [--readonly <path>]... -- <program> [args...]");
+    println!("  gnomon-exec sandbox-probe");
+    println!("  gnomon-exec sandbox-clean <dir> [--dev N --ino N]   (empty a per-call temp dir; follows no link)");
+    println!("  gnomon-exec sandbox-kill --supervisor <pid>:<start>... -- <pid> [signal]");
+}
+
+/// `gnomon-exec sandbox`. Every usage error is a refusal (exit 125): a wrapper
+/// that guessed at a malformed policy would be running SOMETHING unsandboxed.
+fn sandbox_cmd(args: &[String]) -> ! {
+    let mut root: Option<std::path::PathBuf> = None;
+    let mut writable = Vec::new();
+    let mut readable = Vec::new();
+    let mut reads = sandbox::Reads::All;
+    let mut network = false;
+    let mut loopback = true;
+    let mut report_fd: Option<i32> = None;
+    let mut readonly = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        let value = |i: usize| -> &String {
+            args.get(i + 1).unwrap_or_else(|| sandbox::refuse(&format!("{a} needs a value")))
+        };
+        match a {
+            "--root" => {
+                root = Some(value(i).into());
+                i += 2;
+            }
+            "--write" => {
+                writable.push(value(i).into());
+                i += 2;
+            }
+            "--read" => {
+                readable.push(value(i).into());
+                i += 2;
+            }
+            "--readonly" => {
+                readonly.push(value(i).into());
+                i += 2;
+            }
+            "--reads" => {
+                reads = match value(i).as_str() {
+                    "all" => sandbox::Reads::All,
+                    "scoped" => sandbox::Reads::Scoped,
+                    v => sandbox::refuse(&format!("--reads must be all or scoped, not {v:?}")),
+                };
+                i += 2;
+            }
+            "--report-fd" => {
+                // Where to write the supervisor's pid (gnomon's sandbox-kill).
+                // 0-2 are the command's own stdio: never those.
+                report_fd = match value(i).parse::<i32>() {
+                    Ok(n) if n > 2 => Some(n),
+                    _ => sandbox::refuse("--report-fd must be a descriptor number above 2"),
+                };
+                i += 2;
+            }
+            "--network" => {
+                // `none`: off, and loopback refused too.
+                (network, loopback) = match value(i).as_str() {
+                    "on" => (true, true),
+                    "off" => (false, true),
+                    "none" => (false, false),
+                    v => sandbox::refuse(&format!("--network must be on, off or none, not {v:?}")),
+                };
+                i += 2;
+            }
+            "--" => {
+                i += 1;
+                break;
+            }
+            other => sandbox::refuse(&format!("unknown argument {other:?} (the command goes after `--`)")),
+        }
+    }
+    let Some(root) = root else { sandbox::refuse("--root is required") };
+    // A --read with reads = all would read as a restriction that is not there.
+    if reads == sandbox::Reads::All && !readable.is_empty() {
+        sandbox::refuse("--read is meaningful only with --reads scoped (under --reads all every path is readable)");
+    }
+    let policy = sandbox::Policy { root, writable, readable, reads, network, loopback, report_fd, readonly };
+    sandbox::run(&policy, &args[i..])
 }
 
 fn main() {
@@ -689,6 +775,50 @@ fn main() {
             });
 
             println!("{}", session_steps_hash(&record.session.steps));
+        }
+
+        "sandbox" => sandbox_cmd(&args[2..]),
+
+        "sandbox-clean" => {
+            // Empty a per-call temp dir without following any link out of it,
+            // and only the directory gnomon made (`--dev`/`--ino`, recorded at
+            // mkdtemp). See sandbox::clean.
+            let Some(dir) = args.get(2) else {
+                eprintln!("gnomon-exec: sandbox-clean needs a directory");
+                std::process::exit(2);
+            };
+            let num = |flag: &str| -> Option<u64> {
+                let i = args.iter().position(|a| a == flag)?;
+                match args.get(i + 1).and_then(|v| v.parse::<u64>().ok()) {
+                    Some(v) => Some(v),
+                    None => {
+                        eprintln!("gnomon-exec: sandbox-clean {flag} needs a number");
+                        std::process::exit(2);
+                    }
+                }
+            };
+            let id = match (num("--dev"), num("--ino")) {
+                (Some(d), Some(i)) => Some((d, i)),
+                (None, None) => None,
+                _ => {
+                    eprintln!("gnomon-exec: sandbox-clean takes --dev and --ino together");
+                    std::process::exit(2);
+                }
+            };
+            if let Err(e) = sandbox::clean(Path::new(dir), id) {
+                eprintln!("gnomon-exec: {e}");
+                std::process::exit(1);
+            }
+        }
+
+        "sandbox-kill" => {
+            // Signal a process an earlier sandboxed call started -- and only
+            // such a process. Run by gnomon, outside the sandbox.
+            std::process::exit(sandbox::kill_cmd(&args[2..]));
+        }
+
+        "sandbox-probe" => {
+            println!("{}", serde_json::to_string_pretty(&sandbox::probe()).unwrap());
         }
 
         "--help" | "-h" => print_usage(),

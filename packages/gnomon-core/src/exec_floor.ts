@@ -28,7 +28,8 @@ import { gnomonDataDir, restrictToOwner } from "./credentials.js";
 
 export interface ExecFloor {
   root: string;
-  roles: Record<string, { mode: string; image: string }>;
+  /** mode is the resolved exec, or "invalid" for one that refuses bash; reads only under "os". */
+  roles: Record<string, { mode: string; image: string; reads?: string }>;
   /**
    * `[sandbox] network` when a session here last started contained (seventh
    * review, B4). false is a floor: `gnomon check` will not run [verify] with
@@ -134,7 +135,7 @@ export function within(parent: string, child: string): boolean {
 export const containedMode = (mode: string): boolean => mode !== "off";
 
 /** The strictest entry of a floor: a contained one, preferring the default's. */
-export function strictestOf(floor: ExecFloor): { mode: string; image: string } | undefined {
+export function strictestOf(floor: ExecFloor): { mode: string; image: string; reads?: string } | undefined {
   const star = floor.roles["*"];
   if (star && containedMode(star.mode)) return star;
   return Object.values(floor.roles).find((e) => containedMode(e.mode));

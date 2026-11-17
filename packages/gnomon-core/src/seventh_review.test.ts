@@ -32,7 +32,7 @@ import { runCheck } from "./check.js";
 import { guardToolCall } from "./guard.js";
 import { recordExecFloor, surfaceGrants } from "./trust.js";
 import { _resetGitSafety } from "./git_safe.js";
-import { repoStateDir } from "./root_fs.js";
+import { repoStateDir, restoreProtected, snapshotProtected } from "./root_fs.js";
 import { measureTreeDelta } from "./prompt_loop.js";
 
 const REPO_SURFACE = resolve(process.cwd(), "..", "..", ".gnomon");
@@ -321,4 +321,35 @@ describe("seventh review — L4: the archive listing the write precheck runs is 
     expect(Date.now() - t0).toBeLessThan(3_000);
     expect(out.content).toMatch(/Refused/);
   }, 20_000);
+});
+
+describe("seventh review — B5 under exec = \"os\": the Linux snapshot covers the same git dirs", () => {
+  it.skipIf(!posix)("a linked worktree's commondir and a submodule's config are put back; the user's index and the command's own worktree are not touched", () => {
+    const lib = repo(POLICY("off"));
+    const r = repo(POLICY("os"));
+    execFileSync("git", ["-c", "protocol.file.allow=always", "submodule", "add", "-q", lib.root, "libs/a"], { cwd: r.root });
+    r.git("commit", "-qm", "sub");
+    const wt = join(tmp("gnomon-r7-wt-"), "wt");
+    r.git("worktree", "add", "-q", wt);
+    const admin = join(r.root, ".git", "worktrees", "wt");
+    const subConfig = join(r.root, ".git", "modules", "libs", "a", "config");
+    const before = { commondir: readFileSync(join(admin, "commondir"), "utf-8"), sub: readFileSync(subConfig, "utf-8") };
+    const snap = snapshotProtected(r.root);
+    // While the command runs the user works in their worktree (its index),
+    // and the command adds a worktree of its own...
+    writeFileSync(join(wt, "new.txt"), "x\n");
+    execFileSync("git", ["add", "new.txt"], { cwd: wt });
+    const index = readFileSync(join(admin, "index"));
+    r.git("worktree", "add", "-q", join(r.root, "own"));
+    // ...then redirects the user's worktree and plants an fsmonitor in the submodule.
+    writeFileSync(join(admin, "commondir"), "/tmp/evil\n");
+    writeFileSync(subConfig, `${before.sub}[core]\n\tfsmonitor = touch /tmp/pwned\n`);
+    const out = restoreProtected(snap);
+    expect(readFileSync(join(admin, "commondir"), "utf-8")).toBe(before.commondir);
+    expect(readFileSync(subConfig, "utf-8")).toBe(before.sub);
+    expect(out.restored.length).toBeGreaterThan(0);
+    expect(readFileSync(join(admin, "index")).equals(index)).toBe(true);
+    expect(existsSync(join(r.root, ".git", "worktrees", "own", "commondir"))).toBe(true);
+    expect(execFileSync("git", ["status", "--porcelain"], { cwd: join(r.root, "own"), encoding: "utf-8" })).toBe("");
+  });
 });

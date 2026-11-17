@@ -66,9 +66,9 @@ describe("gnomon-natives surface", () => {
   });
 
   describe("enumerations", () => {
-    it("returns exactly 10 keys", () => {
+    it("returns exactly 11 keys", () => {
       const e = enumerations();
-      expect(Object.keys(e)).toHaveLength(10);
+      expect(Object.keys(e)).toHaveLength(11);
       expect(Object.keys(e)).toEqual(
         expect.arrayContaining([
           "edit_format",
@@ -81,6 +81,7 @@ describe("gnomon-natives surface", () => {
           "guard_decision",
           "guard_rule",
           "guard_tool",
+          "exec",
         ])
       );
     });

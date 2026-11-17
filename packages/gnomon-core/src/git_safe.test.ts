@@ -17,7 +17,7 @@ import { mkdtempSync, writeFileSync, rmSync, existsSync, appendFileSync, utimesS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { safeGit, hardenGitArgs, _resetGitSafety, gitHardenedEnv, pinRepository, containerStarted, containerGone, planGit } from "./git_safe.js";
+import { safeGit, hardenGitArgs, _resetGitSafety, gitHardenedEnv, pinRepository, containerStarted, containerGone, planGit, setGitSandbox } from "./git_safe.js";
 import { measureTreeDelta, treeSnapshot } from "./prompt_loop.js";
 
 const onWindows = process.platform === "win32";
@@ -341,5 +341,14 @@ describe.skipIf(onWindows)("fourth review — the repository git uses is pinned,
     expect(p!.env.GIT_COMMON_DIR).toBe(join(real, ".git"));
     expect(p!.env.GIT_CEILING_DIRECTORIES).toBeTruthy();
     expect(p!.args.join(" ")).toContain("safe.bareRepository=explicit");
+  });
+
+  it("under exec = \"os\" the sandboxed git is handed the same named repository", () => {
+    setGitSandbox((argv, env) => ({ file: "gnomon-exec", args: ["sandbox", "--", ...argv], env }));
+    const p = planGit(["status"], { cwd: repo });
+    expect(p!.file).toBe("gnomon-exec");
+    expect(p!.args.slice(0, 5)).toEqual(["sandbox", "--", "git", "-c", "safe.bareRepository=explicit"]);
+    expect(p!.env.GIT_DIR).toBe(join(realpathSync(repo), ".git"));
+    expect(p!.env.GIT_WORK_TREE).toBe(realpathSync(repo));
   });
 });

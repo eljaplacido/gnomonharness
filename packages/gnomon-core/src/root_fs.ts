@@ -33,9 +33,11 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   readlinkSync,
+  rmSync,
+  chmodSync,
   realpathSync,
   statSync,
   renameSync,
@@ -391,7 +393,7 @@ const MAX_GIT_DIRS = 256;
  * inside `root`: rewritten, it redirected the submodule to a git dir the
  * container made.
  */
-function gitControlPaths(root: string, gitDir: string, seen = { n: 0 }): ControlPath[] {
+function gitControlPaths(root: string, gitDir: string, seen = { n: 0 }, opts: { lenient?: boolean } = {}): ControlPath[] {
   if (++seen.n > MAX_GIT_DIRS) throw new RootWriteError(`${gitDir}: more than ${MAX_GIT_DIRS} nested git directories; not setting up a sandbox over them`);
   const out: ControlPath[] = [
     { path: join(gitDir, "config"), kind: "file" },
@@ -402,9 +404,17 @@ function gitControlPaths(root: string, gitDir: string, seen = { n: 0 }): Control
     { path: join(gitDir, "hooks"), kind: "dir", create: true },
     { path: join(gitDir, "info"), kind: "dir", create: true },
   ];
-  for (const wt of childDirs(join(gitDir, "worktrees"))) out.push({ path: wt, kind: "dir" });
-  for (const sub of submoduleGitDirs(join(gitDir, "modules"))) {
-    out.push(...gitControlPaths(root, sub, seen));
+  for (const wt of childDirs(join(gitDir, "worktrees"), opts.lenient)) {
+    // Lenient (the exec = "os" snapshot on Linux, which puts back what it
+    // recorded): only a worktree's redirects. Its index and HEAD are the
+    // user's git's to change while a command runs, and putting them back
+    // would undo the user's work.
+    if (opts.lenient) {
+      for (const f of ["commondir", "config.worktree", "gitdir"]) out.push({ path: join(wt, f), kind: "file" });
+    } else out.push({ path: wt, kind: "dir" });
+  }
+  for (const sub of submoduleGitDirs(join(gitDir, "modules"), 0, opts.lenient)) {
+    out.push(...gitControlPaths(root, sub, seen, opts));
     const file = submoduleGitFile(root, sub);
     if (file) out.push({ path: file, kind: "file" });
   }
@@ -412,10 +422,11 @@ function gitControlPaths(root: string, gitDir: string, seen = { n: 0 }): Control
 }
 
 /** The plain directories directly in `dir` (none when it is absent or not a plain directory). */
-function childDirs(dir: string): string[] {
+function childDirs(dir: string, lenient = false): string[] {
   const st = lstatOrNull(dir);
   if (!st) return [];
   if (st.isSymbolicLink() || !st.isDirectory()) {
+    if (lenient) return [];
     throw new RootWriteError(`${dir} is not a plain directory; the sandbox will not run with it there`);
   }
   let names: string[];
@@ -433,12 +444,12 @@ function childDirs(dir: string): string[] {
 }
 
 /** The git dirs under a `modules/` directory: a dir holding a HEAD file is one; any other is a name prefix. */
-function submoduleGitDirs(modules: string, depth = 0): string[] {
+function submoduleGitDirs(modules: string, depth = 0, lenient = false): string[] {
   if (depth > 16) return [];
   const out: string[] = [];
-  for (const d of childDirs(modules)) {
+  for (const d of childDirs(modules, lenient)) {
     if (lstatOrNull(join(d, "HEAD"))?.isFile()) out.push(d);
-    else out.push(...submoduleGitDirs(d, depth + 1));
+    else out.push(...submoduleGitDirs(d, depth + 1, lenient));
   }
   return out;
 }
@@ -475,6 +486,162 @@ function chainBelow(root: string, path: string): string[] {
     out.push(cur);
   }
   return out;
+}
+
+/**
+ * What a guarded command found and put back (exec = "os" on Linux, where the
+ * kernel cannot make a subtree of the root read-only: Landlock is an
+ * allow-list, and a write grant on the root covers everything beneath it).
+ */
+export interface ProtectedSnapshot {
+  root: string;
+  entries: Map<string, { kind: "file" | "dir"; mode: number; data: Buffer | null }>;
+  /** Where the walk started, when the snapshot was taken (absent: found again at restore). */
+  tops?: string[];
+  /**
+   * `.git` itself, when it is a directory (sixth review, finding 3): Landlock
+   * cannot stop it being renamed away (`mv .git .git-old && mkdir .git`), so
+   * the restore compares it and says so when it is not the same directory.
+   */
+  git?: FileIdentity | null;
+}
+
+/** Files above this are recorded by kind only; a change to one is reported, not restored. */
+const SNAPSHOT_FILE_CAP = 4 * 1024 * 1024;
+
+/** The paths walkProtected starts from under `root`, found from what is there now. */
+function protectedTops(root: string): string[] {
+  // The surface and git's control files: the ones a command can use to
+  // loosen the next one. Not the record dirs, which gnomon writes between
+  // commands itself (root_fs.ts writes and the record guard cover them).
+  // Found from what is there now, never refusing: a symlink in place of one
+  // is exactly what this has to see and remove.
+  const base = resolve(root);
+  const git = join(base, ".git");
+  const g = lstatOrNull(git);
+  // `.gnomon-loops/` too (sixth review, finding 7): loop state, which no
+  // command run inside a session has gnomon write.
+  const tops = [join(base, ".gnomon"), join(base, ".gnomon-loops")];
+  if (g?.isDirectory()) {
+    // The same control files the docker mounts read-only (gitControlPaths),
+    // linked worktrees' redirects and submodules' git dirs included
+    // (seventh review, B5). Never refusing: past the cap, the top level.
+    let paths: string[];
+    try {
+      paths = gitControlPaths(base, git, { n: 0 }, { lenient: true }).map((p) => p.path);
+    } catch {
+      paths = [join(git, "config"), join(git, "commondir"), join(git, "config.worktree"), join(git, "hooks"), join(git, "info")];
+    }
+    tops.push(...paths);
+  } else if (g) tops.push(git);
+  return tops;
+}
+
+/**
+ * Walk the protected paths. `tops` as recorded when the snapshot was taken:
+ * a submodule or worktree the command itself made is its own (protected from
+ * the next command on), and is not removed as if it had been planted.
+ */
+function walkProtected(root: string, onEntry: (abs: string, st: Stats) => void, tops = protectedTops(root)): void {
+  const walk = (abs: string) => {
+    const st = lstatOrNull(abs);
+    if (!st) return;
+    onEntry(abs, st);
+    if (st.isDirectory()) {
+      let names: string[] = [];
+      try {
+        names = readdirSync(abs);
+      } catch {
+        names = [];
+      }
+      for (const n of names.sort()) walk(join(abs, n));
+    }
+  };
+  for (const t of tops) walk(t);
+}
+
+/** Record the surface and git's control files under `root`, contents included. */
+export function snapshotProtected(root: string): ProtectedSnapshot {
+  const entries: ProtectedSnapshot["entries"] = new Map();
+  const tops = protectedTops(root);
+  walkProtected(root, (abs, st) => {
+    if (st.isDirectory()) entries.set(abs, { kind: "dir", mode: st.mode & 0o7777, data: null });
+    else if (st.isFile()) {
+      let data: Buffer | null = null;
+      if (st.size <= SNAPSHOT_FILE_CAP) {
+        try {
+          data = readFileSync(abs);
+        } catch {
+          data = null;
+        }
+      }
+      entries.set(abs, { kind: "file", mode: st.mode & 0o7777, data });
+    }
+  });
+  const git = join(resolve(root), ".git");
+  return { root, entries, tops, git: lstatOrNull(git)?.isDirectory() ? identityOf(git) : undefined };
+}
+
+/**
+ * Put back what changed since `snap` was taken: remove what appeared (links
+ * included), recreate what went, rewrite what changed. Returns the paths it
+ * touched, relative to the root, and what it could not restore.
+ */
+export function restoreProtected(snap: ProtectedSnapshot): { restored: string[]; unrestorable: string[] } {
+  const restored: string[] = [];
+  const unrestorable: string[] = [];
+  const rel = (p: string) => relative(resolve(snap.root), p) || ".";
+  if (snap.git) {
+    const git = join(resolve(snap.root), ".git");
+    const is = identityOf(git);
+    // ctime moves with any entry made or removed inside; the inode does not.
+    if (!is || is.dev !== snap.git.dev || is.ino !== snap.git.ino) {
+      unrestorable.push(".git (the directory was replaced: the repository the command started with was moved or removed)");
+    }
+  }
+  const now = new Map<string, Stats>();
+  walkProtected(snap.root, (abs, st) => now.set(abs, st), snap.tops);
+  // Appeared, or changed kind: removed, deepest first.
+  for (const abs of [...now.keys()].sort((a, b) => b.length - a.length)) {
+    const st = now.get(abs)!;
+    const was = snap.entries.get(abs);
+    const sameKind = was && ((was.kind === "dir" && st.isDirectory() && !st.isSymbolicLink()) || (was.kind === "file" && st.isFile()));
+    if (sameKind) continue;
+    try {
+      rmSync(abs, { recursive: true, force: true });
+      restored.push(rel(abs));
+    } catch {
+      unrestorable.push(rel(abs));
+    }
+  }
+  // Recreated or rewritten, shallowest first.
+  for (const [abs, was] of [...snap.entries].sort((a, b) => a[0].length - b[0].length)) {
+    const st = lstatOrNull(abs);
+    try {
+      if (was.kind === "dir") {
+        if (!st) {
+          ensureDirIn(snap.root, abs, was.mode);
+          if (!restored.includes(rel(abs))) restored.push(rel(abs));
+        }
+        continue;
+      }
+      if (was.data === null) {
+        if (!st) unrestorable.push(rel(abs));
+        continue;
+      }
+      const same = st && st.isFile() && st.size === was.data.length && readFileSync(abs).equals(was.data);
+      if (!same) {
+        writeFileIn(snap.root, abs, was.data, was.mode);
+        if (!restored.includes(rel(abs))) restored.push(rel(abs));
+      } else if (st && (st.mode & 0o7777) !== was.mode) {
+        chmodSync(abs, was.mode);
+        if (!restored.includes(rel(abs))) restored.push(rel(abs));
+      }
+    } catch {
+      unrestorable.push(rel(abs));
+    }
+  }
+  return { restored, unrestorable };
 }
 
 /** Create `file` with `data` unless something is there already; a failure leaves it absent. */

@@ -28,6 +28,9 @@ pub struct Enumerations {
     pub guard_rule: Vec<String>,
     /// The tool kinds `gnomon guard` decides a call as (docs/CONTRACTS.md §10).
     pub guard_tool: Vec<String>,
+    /// `[sandbox] exec`: where `bash` runs. Added last, so the keys
+    /// published before it keep their positions.
+    pub exec: Vec<String>,
 }
 
 impl Enumerations {
@@ -112,6 +115,7 @@ impl Enumerations {
                 "glob".into(),
                 "execute".into(),
             ],
+            exec: vec!["off".into(), "docker".into(), "os".into()],
         }
     }
 }
@@ -146,6 +150,7 @@ mod tests {
         assert!(json.contains("governance_family"));
         assert!(json.contains("audit_kind"));
         assert!(json.contains("guard_rule"));
+        assert!(json.contains("\"exec\""));
 
         // Must be valid JSON
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -162,6 +167,7 @@ mod tests {
         assert_eq!(obj.get("guard_decision").unwrap().as_array().unwrap().len(), 3);
         assert_eq!(obj.get("guard_rule").unwrap().as_array().unwrap().len(), 20);
         assert_eq!(obj.get("guard_tool").unwrap().as_array().unwrap().len(), 8);
+        assert_eq!(obj.get("exec").unwrap().as_array().unwrap().len(), 3);
     }
 
     #[test]
@@ -180,6 +186,7 @@ mod tests {
         assert_eq!(enums.guard_decision, decoded.guard_decision);
         assert_eq!(enums.guard_rule, decoded.guard_rule);
         assert_eq!(enums.guard_tool, decoded.guard_tool);
+        assert_eq!(enums.exec, decoded.exec);
     }
 
     #[test]
@@ -201,6 +208,9 @@ mod tests {
         // governance_level, weakest first; governance_family
         assert_eq!(enums.governance_level, vec!["observe", "advise", "prevent", "enforce"]);
         assert_eq!(enums.governance_family, vec!["write", "bash", "network", "secrets", "rules", "ci"]);
+        // exec values: config.ts EXEC_VALUES must say the same, and
+        // os_sandbox.test.ts holds the two together through the golden.
+        assert_eq!(enums.exec, vec!["off", "docker", "os"]);
     }
 
     #[test]
@@ -212,7 +222,7 @@ mod tests {
         // Should not have any extra keys
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let obj = parsed.as_object().unwrap();
-        assert_eq!(obj.len(), 10);
+        assert_eq!(obj.len(), 11);
         assert!(obj.contains_key("edit_format"));
         assert!(obj.contains_key("sandbox"));
         assert!(obj.contains_key("approval"));
@@ -222,5 +232,6 @@ mod tests {
         for k in ["audit_kind", "guard_decision", "guard_rule", "guard_tool"] {
             assert!(obj.contains_key(k));
         }
+        assert!(obj.contains_key("exec"));
     }
 }

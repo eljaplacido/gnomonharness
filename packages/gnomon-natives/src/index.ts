@@ -23,6 +23,9 @@ export {
   simulatePatch,
   // Session
   runSessionStep,
+  // The OS sandbox behind [sandbox] exec = "os"
+  osSandbox,
+  _resetOsSandbox,
   // Version
   version,
   // Where installed binaries and machine-local state live
@@ -39,4 +42,6 @@ export type {
   PatchSetResult,
   SessionStep,
   SessionRecord,
+  SandboxProbe,
+  OsSandbox,
 } from "./surface.js";

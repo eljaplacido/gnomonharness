@@ -333,3 +333,26 @@ describe("sixth review — finding 8: MCP servers do not start in the project", 
     expect(mcpSpawnDir(loadConfig(project("off")))).toBeUndefined();
   });
 });
+
+describe("sixth review — exec = \"os\" on Linux: the snapshot guard covers what the kernel cannot", () => {
+  it.skipIf(!posix)("config.worktree and .gnomon-loops/ are put back, and a renamed-away .git is reported", async () => {
+    const { snapshotProtected, restoreProtected } = await import("./root_fs.js");
+    const root = project("os");
+    execFileSync("git", ["init", "-q", root]);
+    mkdirSync(join(root, ".gnomon-loops"), { recursive: true });
+    writeFileSync(join(root, ".gnomon-loops", "nightly.json"), '{"tripped":true}\n');
+    writeFileSync(join(root, ".git", "config.worktree"), "");
+    const snap = snapshotProtected(root);
+    // The command: un-trip the loop, plant a worktree config, swap .git.
+    writeFileSync(join(root, ".gnomon-loops", "nightly.json"), '{"tripped":false}\n');
+    writeFileSync(join(root, ".git", "config.worktree"), "[core]\n\tfsmonitor = touch /tmp/pwned\n");
+    execFileSync("mv", [join(root, ".git"), join(root, ".git-old")]);
+    mkdirSync(join(root, ".git"));
+    writeFileSync(join(root, ".git", "config"), "[core]\n\tfsmonitor = touch /tmp/pwned\n");
+    const { unrestorable } = restoreProtected(snap);
+    expect(readFileSync(join(root, ".gnomon-loops", "nightly.json"), "utf-8")).toBe('{"tripped":true}\n');
+    expect(readFileSync(join(root, ".git", "config"), "utf-8")).not.toMatch(/fsmonitor/);
+    expect(readFileSync(join(root, ".git", "config.worktree"), "utf-8")).toBe("");
+    expect(unrestorable.join("\n")).toMatch(/\.git .*replaced/);
+  });
+});

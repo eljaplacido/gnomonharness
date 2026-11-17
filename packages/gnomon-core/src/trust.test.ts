@@ -798,3 +798,43 @@ describe("the exec floor: a role that ran contained here does not leave it unask
     expect(floorsIn(path).length).toBe(1);
   });
 });
+
+describe("the exec floor under exec = \"os\"", () => {
+  const osPolicy = (reads: string, exec = "os") =>
+    `[approval]\ngate = "on_write"\n\n[sandbox]\nlevel = "confined"\nnetwork = false\nexec = "${exec}"\nreads = "${reads}"\n`;
+
+  it("reads = scoped -> all between sessions is a grant, clamped back to scoped headless", () => {
+    const path = storeIn();
+    const root = project({ policy: osPolicy("scoped") });
+    recordExecFloor(loadConfig(root), path);
+    writeFileSync(join(root, ".gnomon", "policy.toml"), osPolicy("all"));
+    const ev = evaluateTrust(loadConfig(root), { path });
+    expect(ev.status).toBe("untrusted");
+    expect(ev.uncovered.map((g) => g.key)).toContain("exec:implement:reads-all");
+    const headless = settleTrustHeadless(loadConfig(root), { path, warn: () => {} });
+    expect(resolveExec(headless.config, "implement")).toMatchObject({ mode: "os", reads: "scoped" });
+  });
+
+  it("--trust keeps reads scoped, and neither it nor the disk lowers the floor (fourth review, finding 5)", () => {
+    const path = storeIn();
+    const root = project({ policy: osPolicy("scoped") });
+    recordExecFloor(loadConfig(root), path);
+    writeFileSync(join(root, ".gnomon", "policy.toml"), osPolicy("all"));
+    const s = settleTrustHeadless(loadConfig(root), { path, flag: true, warn: () => {} });
+    expect(resolveExec(s.config, "implement")).toMatchObject({ mode: "os", reads: "scoped" });
+    recordExecFloor(loadConfig(root), path);
+    expect(evaluateTrust(loadConfig(root), { path }).uncovered.map((g) => g.key)).toContain("exec:implement:reads-all");
+  });
+
+  it("os -> off is a grant; an exec that refuses bash is not a downgrade", () => {
+    const path = storeIn();
+    const root = project({ policy: osPolicy("all") });
+    recordExecFloor(loadConfig(root), path);
+    writeFileSync(join(root, ".gnomon", "policy.toml"), osPolicy("all", "off"));
+    expect(evaluateTrust(loadConfig(root), { path }).uncovered.map((g) => g.key)).toContain("exec:implement:off");
+    const clamped = settleTrustHeadless(loadConfig(root), { path, warn: () => {} }).config;
+    expect(resolveExec(clamped, "implement").mode).toBe("os");
+    writeFileSync(join(root, ".gnomon", "policy.toml"), osPolicy("all", "OS"));
+    expect(evaluateTrust(loadConfig(root), { path }).status).toBe("default");
+  });
+});

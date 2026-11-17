@@ -35,7 +35,7 @@ describe("a misspelling that would loosen containment stops the run", () => {
   it("[sandbox] exec that is not off or docker", () => {
     const found = fatal(surface(`[sandbox]\nexec = "dokcer"\n`));
     expect(found).toHaveLength(1);
-    expect(found[0]!.problem).toMatch(/exec = "dokcer".*run every command on the host, so the run stops instead/);
+    expect(found[0]!.problem).toMatch(/exec = "dokcer".*must not run anywhere, so the run stops instead/);
     expect(fatal(surface(`[sandbox]\nexec = "docker"\n`))).toEqual([]);
     expect(fatal(surface(`[sandbox]\nexec = "off"\n`))).toEqual([]);
   });
@@ -43,7 +43,7 @@ describe("a misspelling that would loosen containment stops the run", () => {
   it("a role's exec override that is not off or docker", () => {
     const found = fatal(surface("", `[roles.implement]\nmodel = "m"\nexec = "bwrap"\n`));
     expect(found).toHaveLength(1);
-    expect(found[0]!.problem).toMatch(/exec = "bwrap".*on the host, so the run stops instead/);
+    expect(found[0]!.problem).toMatch(/exec = "bwrap".*must not run anywhere, so the run stops instead/);
   });
 
   it("[approval] repo_code that is not a boolean", () => {

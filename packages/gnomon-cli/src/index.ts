@@ -2789,7 +2789,7 @@ Commands:
 
   enumerations
     Show the enumerations contract (edit_format, sandbox, approval, role_profile, governance_level,
-    governance_family, audit_kind, guard_decision, guard_rule, guard_tool)
+    governance_family, audit_kind, guard_decision, guard_rule, guard_tool, exec)
 
   session [--dir <path>] <command> [command ...]
     Run commands as a session, recording outcomes. Each command runs with
