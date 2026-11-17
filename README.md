@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3471 TypeScript tests (2858 core, 588 cli, 18
-> natives, 7 tui) and 120 Rust tests — **3591 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3480 TypeScript tests (2858 core, 597 cli, 18
+> natives, 7 tui) and 120 Rust tests — **3600 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2432,6 +2432,37 @@ Tool results map to buckets exactly like process exit codes
 
 A tool the model invents is refused **by name**, with the real list.
 
+### Security posture — `gnomon security`
+
+Every boundary above is a setting, and they live in four files. `gnomon
+security` reads them back as one answer: does this machine trust what the
+surface grants, where does each role's `bash` run (host, `exec = "os"`,
+`exec = "docker"`) and with what network, source and allow-lists, are the
+guard hooks of other harnesses still installed, and is the audit trail on,
+anchored and intact.
+
+```bash
+gnomon security          # text
+gnomon security --json   # gnomon.security/1, for CI or the dashboard
+```
+
+It sorts what it finds into two kinds:
+
+- **Risks** are wrong now, and set exit 2: a hash chain that does not hold
+  (the newest 50 trails are verified), an unresolved `record_tamper` event, a
+  guard hook that was installed and is now missing, modified or switched off,
+  a fatal surface problem.
+- **Advice** names a choice that contains less than gnomon can, with the
+  setting that would: roles whose commands run on the host, a judge with no
+  write tool that can still write through `bash`, `approval = never` on the
+  host, a sandbox with a network, the audit trail off. A fresh `gnomon init`
+  gets two of these — the scaffold runs commands on the host — and exits 0.
+
+It runs no model, starts no container and writes nothing, so it is safe in a
+pre-commit hook or a CI step. The contract is [CONTRACTS.md
+§45](docs/CONTRACTS.md); vulnerability reports go to
+[SECURITY.md](.github/SECURITY.md).
+
 ---
 
 ## Context and Memory
@@ -3157,6 +3188,7 @@ Contract: [CONTRACTS §17](docs/CONTRACTS.md).
 | `gnomon launch` | Create `.gnomon/` if missing, then open the loop. **The one to remember.** |
 | `gnomon setup [--json] [--yes] [--pull <tag>] [--model <tag>] [--speed-check] [--mode local\|hybrid\|cloud] [--cloud-endpoint <url\|preset\|name> --cloud-model <name>] [--cloud-key-env <VAR>] [--catalog <file>] [--expect-proposal <digest>]` | Scan this machine, recommend a local model it can run from a dated catalog, pull it only on a yes, speed-check it, connect an optional cloud model, suggest local only, hybrid or cloud first, and write `.gnomon/` only after you accept the diff. `--yes` approves the write, never a download (`--pull` names one) or spending; `--expect-proposal` writes only the change a `--json` run printed as `proposal.digest`. Exit 0 written, 3 the surface or the change moved, 4 needs consent or a model, 12 the model server stopped answering. See [Get started in 3 steps](#get-started-in-3-steps). |
 | `gnomon doctor [--json] [--catalog <file>]` | Read-only: this machine, whether every role's model answers, and what changed since setup. Says what would fix each problem; never changes anything. Exit 0 nothing to do, 1 something needs attention, 10 could not run. |
+| `gnomon security [--json]` | Read-only: this project's security posture in one place — trust, where each role's commands run and what contains them, other harnesses' guard hooks, the audit trail. Risks (exit 2) are what is wrong now; advice names a setting that would contain more. See [Security posture](#security-posture--gnomon-security). |
 | `gnomon init [--from <path>] [--force] [--no-verify]` | Write a surface. `--from` copies an existing one. `--no-verify` writes the scaffold without `[verify]` and with audit off, for benchmark comparability. |
 | `gnomon migrate [--check]` | Bring an existing `.gnomon/` up to the current shipped defaults. `--check` reports without writing and exits 1 if anything is pending. |
 | `gnomon prompt [--continue \| --resume <id>] [--trust]` | Interactive loop. An untrusted surface that grants more than the defaults is shown and asked about first. |

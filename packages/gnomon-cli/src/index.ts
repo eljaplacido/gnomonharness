@@ -2452,6 +2452,23 @@ async function cmdDoctor(args: CliArgs): Promise<number> {
   }
 }
 
+/** `gnomon security`: the read-only posture report (security.ts). */
+async function cmdSecurity(args: CliArgs): Promise<number> {
+  const { buildSecurityReport, formatSecurity, SECURITY_EXIT, SECURITY_SCHEMA } = await import("./security.js");
+  const dir = projectRoot(args);
+  if (!existsSync(join(dir, ".gnomon"))) {
+    return commandError(args, SECURITY_SCHEMA, `No .gnomon/ in ${dir}: nothing governs this directory (gnomon init).`, SECURITY_EXIT.couldNotRun);
+  }
+  try {
+    const report = buildSecurityReport(dir, trustOptions(args));
+    if (args.json) console.log(JSON.stringify(report, null, 2));
+    else for (const l of formatSecurity(report)) console.log(l);
+    return report.exit;
+  } catch (err) {
+    return commandError(args, SECURITY_SCHEMA, `security could not run: ${err instanceof Error ? err.message : String(err)}`, SECURITY_EXIT.couldNotRun);
+  }
+}
+
 /**
  * `gnomon acp`: serve the Agent Client Protocol on stdio, for an editor.
  *
@@ -2723,6 +2740,7 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "guard" },
   { name: "dashboard", aliases: ["ui"] },
   { name: "chaos" },
+  { name: "security" },
 ];
 
 function showHelp(): void {
@@ -2945,6 +2963,16 @@ Commands:
     change asks you to confirm what it will do first. Serves 127.0.0.1 only;
     the printed link signs one tab in once. Ctrl-C stops it. Exit 0 stopped,
     4 port unavailable, 10 failed to start. Alias: ui.
+
+  security [--json] [--dir <path>]
+    Read-only: this project's security posture in one place. Whether this
+    machine trusts what the surface grants; per role, where its commands run
+    (host, os sandbox, docker), with what network, source and allow-lists;
+    the guard hooks of other harnesses; the audit trail (on, anchored, the
+    newest 50 chains verified, unresolved tamper events). Risks are what is
+    wrong now (a broken chain, a tamper event, a hook switched off, a fatal
+    surface problem); advice names a setting that would contain more. Runs
+    no model and changes nothing. Exit 0 no risk, 2 a risk, 10 could not run.
 
   chaos [--json] [--seed <n>] [--faults <id,...>] [--schedules <s,...>] [--out <file>]
     The fault-injection suite. A scripted model behind a loopback endpoint
@@ -3177,6 +3205,11 @@ async function main(): Promise<void> {
     case "check": {
       const { cmdCheck } = await import("./check.js");
       process.exit(await cmdCheck(args));
+    }
+    case "security": {
+      const code = await cmdSecurity(args);
+      if (code !== 0) process.exit(code);
+      break;
     }
     case "chaos": {
       // Its own argv parser, like guard: subcommands and flags it alone reads.

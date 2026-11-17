@@ -99,6 +99,8 @@ export * from "./credentials.js";
 export * from "./loops.js";
 // Workspace trust: whether this machine's user accepted what a surface grants.
 export * from "./trust.js";
+// Governance levels per role, read by `gnomon security` (the posture report).
+export { resolveLevels, type GovernanceLevels } from "./governance.js";
 // The tool definitions a model was offered, hashed, and MCP servers' tools
 // against this machine's pins (GV10).
 export * from "./tools_hash.js";
