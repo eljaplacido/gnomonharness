@@ -1048,8 +1048,10 @@ describe("model API errors", () => {
     // The gap this was built for: a turn writes a script, runs `bash -n` on
     // it, reports "syntax check passed" and stops. Nothing ran. The check is
     // the only thing in the loop that can contradict a model's own account of
-    // its work.
-    const config: any = loadConfig("../..");
+    // its work. A private copy of the surface: the check runs in the root, and
+    // the record guard must not see other test files writing to the live
+    // checkout's records.
+    const config: any = privateSurfaceConfig();
     config.policy = { ...config.policy, verify: { command: "exit 1", max_rounds: 1 } };
     const state: any = { config, exchanges: [], currentRole: "implement" };
 
