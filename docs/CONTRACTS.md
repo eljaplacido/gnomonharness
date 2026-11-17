@@ -221,7 +221,8 @@ so both format drift and non-determinism fail the build.
                  "skill_accept", "skill_reject", "skill_trial", "record_tamper",
                  "record_tamper_resolved", "record_notice", "mcp_tools", "stall_signal",
                  "completion_gate", "todo_gate", "job", "deliverable_first", "first_token_stall",
-                 "checkpoint", "finish_gate", "model_call", "escalation", "session_end"],
+                 "checkpoint", "finish_gate", "model_call", "escalation", "eval_run",
+                 "session_end"],
   "guard_decision": ["allow", "deny", "ask"],
   "guard_rule": ["tools", "malformed", "bash_deny", "bash_allow", "sudo", "sandbox", "surface",
                  "record", "git_hooks", "host_hooks", "write_allow", "outside_root", "secret_path",
@@ -4067,3 +4068,64 @@ catalog entry is data and moves with releases.
 `packages/gnomon-cli/src/compliance.test.ts` checks the lists equal the code's,
 that every fact's `ref` names an existing file and heading, and validates real
 reports against the key lists.
+
+## 47. `gnomon eval` — schema `gnomon.eval/1`, audit kind `eval_run`, `v: 1`
+
+A skill trial (§13) asks whether one proposed skill helps. `gnomon eval` asks
+the same question about a profile or a surface, and without `--against` it
+measures the surface alone. The spec, the clones, the validity rule, the
+budget, the billed-endpoint check and the statistics are a trial's, from the
+same code (`skill_trial.ts`, used by `eval.ts`).
+
+**Arms.**
+
+| `--against` | Candidate arm | One difference, checked before any cell |
+|---|---|---|
+| (none) | none: mode `single` | — |
+| `profile:<name>` | this checkout under profile `<name>` | the same surface hash; the profile is not the base's |
+| `surface:<git ref>` | HEAD's code, `.gnomon/` exactly as the ref has it, the base's profile | `arms.differ` lists the manifest paths that differ, and must not be empty |
+
+The base arm is HEAD under the spec's `model_profile`, else `--profile`, else
+the surface default. The checkout's surface hash must be HEAD's. Trust is
+settled on each arm's configuration as its cells load it. A profile arm is
+looked up for this checkout. A surface arm comes from a commit no trust entry
+names, so it is admitted only by `--trust`, or when it grants nothing beyond
+the scaffold. A clamped arm is refused. Each cell's task record carries its
+own arm's decision. The model and endpoint are pinned per arm; a cell that ran
+elsewhere is an apparatus failure.
+
+**Verdict.** `paired` mode works like a trial, with the candidate in the skill
+arm's place. `single` mode is `true` when `[thresholds] min_pass_rate` (in
+(0, 1], read only by eval) is met or not declared, and `false` when it is
+declared and not met. In both modes the verdict is `"undetermined"` when there
+is no valid cell or the budget is spent.
+
+| Exit | Means |
+|---|---|
+| 0 | `meets_thresholds: true` |
+| 2 | `meets_thresholds: false` |
+| 10 | `"undetermined"`, or the eval could not start: no spec or one out of bounds, an unknown profile, a ref that is not a commit, identical arms, this checkout's surface not HEAD's, a clamped arm, or a billed endpoint with no `max_requests` and no `--yes-spend` |
+
+**Report keys:** `schema`, `mode`, `spec`, `harness`, `role`, `arms`
+(`base`, `candidate` or null, `differ`; each arm has `kind` (`head`,
+`profile`, `surface`), `label`, `profile`, `surface_commit`, `surface_hash`,
+`model`, `endpoint`), `pairs`, `cells`, `endpoints` (`pass`, `output_tokens`,
+`requests`, `wall_ms`, with the candidate's fields null in `single` mode),
+`mde` (null in `single`), `thresholds`, `budget`, `trust` (`base`,
+`candidate`), `leftovers`, `status`, `meets_thresholds`, `reasons`.
+
+**Output.** The run writes `.gnomon-trials/_eval/<utc>-<suffix>/report.json`
+and `cells.jsonl`. These sit under the trials directory, so the guard and the
+record guard protect them as they protect a trial's. An `eval_run` record is
+written in a sealed trail of its own (`session_start` mode `eval`, `eval_run`,
+`session_end`), even when `[audit]` is off. Its keys are `schema`, `mode`,
+`report`, `report_sha256`, `spec`, `role`, `arms`, `pairs`, `cells`,
+`endpoints`, `status` and `meets_thresholds`. An eval changes nothing.
+
+**Fixture**: `conformance/eval_report.json`, asserted by
+`packages/gnomon-core/src/eval.test.ts` against a scripted model that solves
+only for one model name or one system prompt. The tests cover:
+- single mode, with and without `min_pass_rate`;
+- a better profile (exit 0) and a worse one (exit 2);
+- a surface arm built from the previous commit;
+- the refusals, the budget stop, and the sealed record.

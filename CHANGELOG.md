@@ -26,6 +26,19 @@
 
 ## [Unreleased]
 
+### Added — `gnomon eval`, measurement on your own tasks
+
+`gnomon eval` runs a skill trial's paired, interleaved, clone-isolated cells
+for a profile (`--against profile:<name>`) or for another commit's `.gnomon/`
+with HEAD's code (`--against surface:<ref>`). Without `--against`, it
+measures the surface's pass rate on the trial spec's tasks, and an optional
+`[thresholds] min_pass_rate` turns that into a gate. Pass or fail comes from
+each task's check command. The statistics are a trial's: McNemar, Wilson and
+the sign test. Each run writes a report under `.gnomon-trials/_eval/` and an
+`eval_run` record in a sealed trail. An eval changes nothing. Schema
+`gnomon.eval/1` (CONTRACTS.md §47, `conformance/eval_report.json`). New audit
+kind: `eval_run`.
+
 ### Added — `gnomon compliance`, the evidence map
 
 Which controls of the EU AI Act, the GDPR, the OWASP Top 10 for LLM

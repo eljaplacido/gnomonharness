@@ -79,6 +79,8 @@ export * from "./record_tamper.js";
 export * from "./live_record.js";
 export * from "./skill_mine.js";
 export * from "./skill_trial.js";
+// `gnomon eval`: the trial's cells, for a profile or a surface instead of a skill.
+export * from "./eval.js";
 export * from "./audit.js";
 // [audit.anchor]: sealed heads copied to a witness the trail's writer cannot
 // rewrite (a remote ref, an RFC 3161 authority, an operator command).

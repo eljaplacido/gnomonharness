@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3488 TypeScript tests (2858 core, 605 cli, 18
-> natives, 7 tui) and 120 Rust tests — **3608 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3503 TypeScript tests (2873 core, 605 cli, 18
+> natives, 7 tui) and 120 Rust tests — **3623 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2496,6 +2496,36 @@ Exit 0 when every control gnomon can evidence has its evidence, 2 when one is
 partial or a gap, 10 when it could not run. The contract is [CONTRACTS.md
 §46](docs/CONTRACTS.md).
 
+### Evaluation on your own tasks — `gnomon eval`
+
+A public benchmark says how a model does on someone else's tasks. `gnomon
+eval` says how this surface does on yours, and whether a change would do
+better, measured the way a [skill trial](#skills) is: on the tasks in
+`.gnomon/trials/<name>.toml`, each judged by its own `check` command, never by
+the model's prose.
+
+```bash
+gnomon eval                                # this surface's pass rate, with a Wilson interval
+gnomon eval --against profile:local_first  # would this profile do better?
+gnomon eval --against surface:main         # would main's .gnomon/ (with HEAD's code) do better?
+```
+
+With `--against`, each task × attempt runs once per arm, base then
+candidate, interleaved, each cell a `gnomon task` in a fresh private clone.
+The two arms differ in one thing, checked before anything runs: a profile arm
+has the same surface hash under another profile; a surface arm has HEAD's
+code with `.gnomon/` from the ref, and the report lists the paths that differ.
+Pass rate uses exact McNemar on the pairs, and tokens, requests and wall time
+use a sign test. The thresholds are the spec's, declared before the run. A
+cell whose endpoint failed is an apparatus failure, reported and never scored.
+A billed endpoint needs `[budget] max_requests` or `--yes-spend`.
+
+Alone, the report is a measurement; `[thresholds] min_pass_rate` in the spec
+turns it into a gate. Each run writes `.gnomon-trials/_eval/<utc>/` and an
+`eval_run` audit record. An eval changes nothing: switching the profile or
+merging the surface is a person's decision. Exit 0 meets the spec, 2 does
+not, 10 no answer. The contract is [CONTRACTS.md §47](docs/CONTRACTS.md).
+
 ---
 
 ## Context and Memory
@@ -3223,6 +3253,7 @@ Contract: [CONTRACTS §17](docs/CONTRACTS.md).
 | `gnomon doctor [--json] [--catalog <file>]` | Read-only: this machine, whether every role's model answers, and what changed since setup. Says what would fix each problem; never changes anything. Exit 0 nothing to do, 1 something needs attention, 10 could not run. |
 | `gnomon security [--json]` | Read-only: this project's security posture in one place — trust, where each role's commands run and what contains them, other harnesses' guard hooks, the audit trail. Risks (exit 2) are what is wrong now; advice names a setting that would contain more. See [Security posture](#security-posture--gnomon-security). |
 | `gnomon compliance [--framework <id,...>] [--json]` | Read-only: which controls of the EU AI Act, GDPR, OWASP LLM Top 10, ISO/IEC 42001, NIST AI RMF, ISO/IEC 27001, SOC 2, the Cyber Resilience Act and DORA this project has gnomon evidence for, from a dated catalog — evidence, partial, gap (with the setting that closes it), a gnomon property, or the organisation's. A mapping, never an assessment. See [Compliance evidence](#compliance-evidence--gnomon-compliance). |
+| `gnomon eval [--against profile:<name>\|surface:<ref>] [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]` | Measure on this project's own tasks (the trial spec): alone, the pass rate; with `--against`, whether another profile or another commit's `.gnomon/` does better, in paired interleaved clones judged by each task's check. Exit 0 meets the spec, 2 does not, 10 no answer. Changes nothing. See [Evaluation on your own tasks](#evaluation-on-your-own-tasks--gnomon-eval). |
 | `gnomon init [--from <path>] [--force] [--no-verify]` | Write a surface. `--from` copies an existing one. `--no-verify` writes the scaffold without `[verify]` and with audit off, for benchmark comparability. |
 | `gnomon migrate [--check]` | Bring an existing `.gnomon/` up to the current shipped defaults. `--check` reports without writing and exits 1 if anything is pending. |
 | `gnomon prompt [--continue \| --resume <id>] [--trust]` | Interactive loop. An untrusted surface that grants more than the defaults is shown and asked about first. |

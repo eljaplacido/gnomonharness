@@ -294,6 +294,11 @@ export type AuditKind =
   // reader asking "which model did this work" has to find it without parsing
   // turn records.
   | "escalation"
+  // The outcome of `gnomon eval` (eval.ts): the report's hash, the spec, both
+  // arms (profile, surface commit and hash, model, endpoint), the cells and
+  // `meets_thresholds`. Its own kind for the reason `skill_trial` is: no turn
+  // produced it, and it compares arms of many turns against declared numbers.
+  | "eval_run"
   | "session_end";
 
 /**
@@ -333,6 +338,7 @@ export const AUDIT_KINDS = [
   "finish_gate",
   "model_call",
   "escalation",
+  "eval_run",
   "session_end",
 ] as const satisfies readonly AuditKind[];
 type MissingAuditKind = Exclude<AuditKind, (typeof AUDIT_KINDS)[number]>;
