@@ -156,11 +156,15 @@ function judge(expect: Expect, decision: CaseResult["decision"]): boolean {
   return decision === expect;
 }
 
-export function runSecurityTest(dir: string, opts: { role?: string; cases?: AttackCase[] } = {}): SecurityTestReport {
+export function runSecurityTest(
+  dir: string,
+  /** `scratchParent`: where the scratch repository is made (default: the system temp directory). */
+  opts: { role?: string; cases?: AttackCase[]; scratchParent?: string } = {}
+): SecurityTestReport {
   const picked = testRole(dir, opts.role);
   if ("error" in picked) throw new Error(picked.error);
   const cases = opts.cases ?? CORPUS;
-  const holder = mkdtempSync(join(tmpdir(), "gnomon-sectest-"));
+  const holder = mkdtempSync(join(opts.scratchParent ?? tmpdir(), "gnomon-sectest-"));
   const sb = join(holder, "repo");
   const out = join(holder, "outside");
   const home = join(holder, "home");

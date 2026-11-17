@@ -4295,3 +4295,35 @@ expectations, families, OWASP ids, keys and exits.
 - `[approval] gate = "never"` fails the asked cases while the structural
   denials hold;
 - role resolution and the CLI errors.
+
+## 51. Evidence pack — `gnomon compliance pack`, `gnomon.evidence_pack/1`, `v: 1`
+
+`gnomon compliance pack --out <dir> [--framework <ids>] [--with-trails]`
+writes a new directory, refusing one that exists and is not empty, and one
+inside the project's `.gnomon/`. The directory holds:
+- `surface/manifest.json`;
+- `compliance`, `security`, `security_test`, `dataflow` and `metrics`, each
+  as `.json` (the command's `--json` document) and `.txt`;
+- `audit/verify.json`: per trail in the `[audit] dir`, its `records`, `ok`,
+  `sealed`, `sha256` and `problem`?;
+- `audit/trails/*.jsonl`, only with `--with-trails`;
+- `evals/<path>/report.json`, for every report under `.gnomon-trials/`;
+- `README.txt` and `pack.json`.
+
+**`pack.json` keys:** `schema`, `created`, `project`, `surface_hash`,
+`harness`, `catalog` (`as_of`, `stale`), `exits` (each report's own exit),
+`audit` (`trails`, `verified`, `broken`, `copied`), `evals`, `disclaimer`,
+`files` (`path`, `part`, `sha256`, `bytes`). `part` is one of `surface`,
+`compliance`, `security`, `security_test`, `dataflow`, `metrics`, `audit`,
+`evals` or `readme`. The command prints `pack.json`'s own sha256, for
+anchoring.
+
+`--verify <dir>` re-hashes every listed file. A path that resolves outside the
+directory counts as changed. Its keys are `schema`, `pack`, `pack_sha256`,
+`files`, `missing`, `changed` and `exit`. The pack command exits 0 when the
+pack is written, and `--verify` exits 0 when every file matches. `--verify`
+exits 2 when a file is missing or changed. Either exits 10 when it could not
+run. The pack changes nothing in the project and never says compliant.
+
+**Fixture**: `conformance/evidence_pack.json`;
+`packages/gnomon-cli/src/pack.test.ts`.

@@ -59,13 +59,14 @@ describe("gnomon security test: the contract", () => {
 
   it("a fresh scaffold holds every case, and the scratch repository is gone afterwards", async () => {
     const dir = await project();
-    const before = new Set(readdirTmp());
-    const r = runSecurityTest(dir);
+    const parent = mkdtempSync(join(tmpdir(), "gnomon-sectest-p-scratch-"));
+    const r = runSecurityTest(dir, { scratchParent: parent });
     shapeHolds(r);
     expect(r.cases.filter((c) => !c.pass).map((c) => `${c.id}: ${c.decision}`)).toEqual([]);
     expect(r).toMatchObject({ passed: CORPUS.length, total: CORPUS.length, exit: 0, role: "implement" });
     expect(r.by_owasp.LLM06!.total).toBeGreaterThan(0);
-    expect(readdirTmp().filter((n) => !before.has(n))).toEqual([]);
+    expect(readdirSync(parent)).toEqual([]);
+    rmSync(parent, { recursive: true, force: true });
     // Nothing in the project moved: no trail, no hook, no bait.
     expect(existsSync(join(dir, ".gnomon-audit"))).toBe(false);
     expect(existsSync(join(dir, ".env"))).toBe(false);
@@ -97,6 +98,3 @@ describe("gnomon security test: the contract", () => {
   });
 });
 
-function readdirTmp(): string[] {
-  return readdirSync(tmpdir()).filter((n: string) => n.startsWith("gnomon-sectest-") && !n.startsWith("gnomon-sectest-p-"));
-}

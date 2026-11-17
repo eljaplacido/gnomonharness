@@ -26,6 +26,25 @@
 
 ## [Unreleased]
 
+### Added — `gnomon compliance pack`, the evidence pack, and the threat model
+
+`gnomon compliance pack --out <dir>` writes every read-only report into one
+new directory:
+- the surface manifest;
+- compliance, security posture and security test;
+- data flows and process metrics;
+- every audit trail verified, with the trails themselves under
+  `--with-trails`;
+- the eval and trial reports.
+
+Each report is written as JSON and text, beside a `pack.json` hashing every
+file. `--verify <dir>` re-hashes a pack. Schema `gnomon.evidence_pack/1`
+(CONTRACTS.md §51, `conformance/evidence_pack.json`).
+
+`docs/THREAT-MODEL.md` ties each threat to its control, the evidence that it
+holds and its limit, and lists the non-goals. SECURITY.md now names
+`[audit.attest]` and `[audit.anchor]` as what closes a re-chain.
+
 ### Added — `gnomon security test`, a model-free attack corpus
 
 `gnomon security test [--role <r>] [--json]` pipes 24 tool calls through the

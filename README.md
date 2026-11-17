@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3529 TypeScript tests (2884 core, 620 cli, 18
-> natives, 7 tui) and 120 Rust tests — **3649 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3533 TypeScript tests (2884 core, 624 cli, 18
+> natives, 7 tui) and 120 Rust tests — **3653 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2531,7 +2531,32 @@ coding agent usually is not. gnomon never prints "compliant", and the catalog
 is not legal advice: review it with someone qualified before you rely on it.
 Exit 0 when every control gnomon can evidence has its evidence, 2 when one is
 partial or a gap, 10 when it could not run. The contract is [CONTRACTS.md
-§46](docs/CONTRACTS.md).
+§46](docs/CONTRACTS.md). How the security controls answer each threat, with
+the evidence and the limits, is in [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md).
+
+### Evidence pack — `gnomon compliance pack`
+
+When an auditor or a customer asks for the evidence, `gnomon compliance pack`
+writes all of it into one new directory:
+- the surface manifest;
+- the compliance map, the security posture and the security test;
+- the data-flow register and the process metrics;
+- the verification of every audit trail;
+- the eval and trial reports on disk.
+
+Each report is there as JSON (the published schemas) and as text, beside a
+`pack.json` that names every file with its sha256.
+
+```bash
+gnomon compliance pack --out evidence-2026-11 --with-trails   # --with-trails copies the trails too
+gnomon compliance pack --verify evidence-2026-11              # exit 2 names a changed or missing file
+```
+
+A pack that verifies is unchanged since it was written. To show *when* it was
+written, record `pack.json`'s sha256 (printed) somewhere its writer cannot
+rewrite, for example by anchoring it. The pack only bundles what the reports
+say. It changes nothing in the project, carries the catalog's disclaimer, and
+never says compliant. The contract is [CONTRACTS.md §51](docs/CONTRACTS.md).
 
 ### Data flows and residency — `gnomon compliance dataflow`
 
@@ -3369,6 +3394,7 @@ Contract: [CONTRACTS §17](docs/CONTRACTS.md).
 | `gnomon security [--json]` | Read-only: this project's security posture in one place — trust, where each role's commands run and what contains them, other harnesses' guard hooks, the audit trail. Risks (exit 2) are what is wrong now; advice names a setting that would contain more. See [Security posture](#security-posture--gnomon-security). |
 | `gnomon security test [--role <r>] [--json]` | A model-free attack corpus (24 cases, mapped to OWASP LLM01/02/03/06) through the real guard against a scratch copy of this surface. Exit 2 names each case that did not hold. See [Security test](#security-test--gnomon-security-test). |
 | `gnomon compliance [--framework <id,...>] [--json]` | Read-only: which controls of the EU AI Act, GDPR, OWASP LLM Top 10, ISO/IEC 42001, NIST AI RMF, ISO/IEC 27001, SOC 2, the Cyber Resilience Act and DORA this project has gnomon evidence for, from a dated catalog — evidence, partial, gap (with the setting that closes it), a gnomon property, or the organisation's. A mapping, never an assessment. See [Compliance evidence](#compliance-evidence--gnomon-compliance). |
+| `gnomon compliance pack --out <dir> [--with-trails]` / `--verify <dir>` | Every read-only report (compliance, security posture and test, data flows, metrics, audit verification, eval reports) as JSON and text in one directory, with `pack.json` hashing each file; `--verify` re-hashes it. See [Evidence pack](#evidence-pack--gnomon-compliance-pack). |
 | `gnomon compliance dataflow [--json]` | Read-only: every place this surface can send prompts and repository content — model endpoints per role (primary, fallback, escalation) with host, locality and declared region, MCP servers, network-fetching roles, the shadow and anchor — and, with the opt-in `[compliance] allowed_regions` rule, which routes it admits. See [Data flows and residency](#data-flows-and-residency--gnomon-compliance-dataflow). |
 | `gnomon eval [--against profile:<name>\|surface:<ref>] [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]` | Measure on this project's own tasks (the trial spec): alone, the pass rate; with `--against`, whether another profile or another commit's `.gnomon/` does better, in paired interleaved clones judged by each task's check. Exit 0 meets the spec, 2 does not, 10 no answer. Changes nothing. See [Evaluation on your own tasks](#evaluation-on-your-own-tasks--gnomon-eval). |
 | `gnomon init [--from <path>] [--force] [--no-verify]` | Write a surface. `--from` copies an existing one. `--no-verify` writes the scaffold without `[verify]` and with audit off, for benchmark comparability. |
