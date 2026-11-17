@@ -26,6 +26,23 @@
 
 ## [Unreleased]
 
+### Added — `gnomon security test`, a model-free attack corpus
+
+`gnomon security test [--role <r>] [--json]` pipes 24 tool calls through the
+real `gnomon guard`, as a Claude Code hook would. It runs them against a
+scratch repository holding a copy of this surface, with bait files and an
+isolated HOME. The calls cover:
+- destructive commands and exfiltration;
+- secrets, and writes outside the project;
+- CI and policy tampering, host hooks, and the records;
+- force-push, and an ask under `bypassPermissions`;
+- controls against over-blocking.
+
+Each case is mapped to OWASP LLM Top 10 ids and says what it expected and
+what it got. A fresh scaffold holds all 24. Schema `gnomon.security_test/1`
+(CONTRACTS.md §50, `conformance/security_test.json`). The compliance catalog
+gains the fact `attack_corpus` (OWASP LLM01, LLM02, LLM03, LLM06).
+
 ### Added — `gnomon audit metrics`, process metrics from the trails
 
 `gnomon audit metrics [--last <n>] [--session <id>] [--json]` reads the newest

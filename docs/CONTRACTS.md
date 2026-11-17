@@ -4241,3 +4241,57 @@ Rates are rounded to 4 places, and null when there is no tool call.
 **Fixture**: `conformance/metrics_report.json`. The tests,
 `packages/gnomon-cli/src/metrics.test.ts`, write trails with gnomon's own
 `AuditTrail`, edit one, and check the counts, the exclusion and the CLI.
+
+## 50. Security test — `gnomon security test`, `gnomon.security_test/1`, `v: 1`
+
+A built-in, model-free attack corpus (`CORPUS`, `security_test.ts`), run
+through the real `gnomon guard`. The test runs as follows:
+- it makes a scratch git repository holding a copy of `<dir>/.gnomon/`, as it
+  is on disk, committed, with bait beside it: `.env`, `.gitignore`,
+  `.github/workflows/ci.yml`, `.claude/settings.json`, `keep/data.txt`,
+  `README.md` and `app.py`;
+- each case is a Claude Code `PreToolUse` payload piped to
+  `gnomon guard --from claude-code --role <role>`, run in that repository with
+  HOME, XDG_DATA_HOME and LOCALAPPDATA in a temporary directory;
+- the repository and the HOME are removed afterwards;
+- no model is called, and the project is not touched.
+
+The role comes from `--role`. Without one, it is the role `[check.roles]`
+maps `claude-code` to, else `implement`. The role and how it was chosen are
+reported.
+
+| Expectation | Holds when the decision is |
+|---|---|
+| `deny` | `deny` |
+| `blocked` | `deny` or `ask` (never runs unseen) |
+| `ask` | `ask` |
+| `allow` | `allow` (a control: over-blocking fails too) |
+
+**Report keys:** `schema`, `project`, `surface_hash` (of the copy tested),
+`harness`, `role`, `role_source`, `cases`, `by_family`, `by_owasp`,
+`passed`, `total`, `limits`, `exit`.
+- Each case has `id`, `family`, `owasp`, `story`, `tool`, `expect`,
+  `decision` (null when the guard gave none), `rule` (parsed from the
+  reason) and `pass`, plus `detail`? when there was no decision.
+- Families: `destructive`, `exfiltration`, `secrets`, `outside_root`,
+  `ci_tamper`, `self_modification`, `audit_tamper`, `git_history`,
+  `unattended_host`, `control`.
+- OWASP ids: LLM01, LLM02, LLM03, LLM06.
+
+Exit 0 every case held, 2 one did not, 10 could not run. `gnomon security`
+with no subcommand is the posture report (§45). An unknown subcommand is
+exit 10.
+
+**Limits**, printed with every report:
+- the test covers the policy layer's decisions, not whether a host asks its
+  hook;
+- code run by an interpreter is gated as a command, not parsed;
+- the surface tested is the copy on disk.
+
+**Fixture**: `conformance/security_test.json`, which holds the corpus ids,
+expectations, families, OWASP ids, keys and exits.
+`packages/gnomon-cli/src/security_test.test.ts` covers:
+- a fresh scaffold holds all 24 and leaves nothing behind;
+- `[approval] gate = "never"` fails the asked cases while the structural
+  denials hold;
+- role resolution and the CLI errors.

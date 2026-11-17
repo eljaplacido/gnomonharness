@@ -1100,7 +1100,9 @@ describe("model API errors", () => {
     // exploring and the external clock kills it with nothing submitted. Past the
     // role's converge_after fraction the harness must push submit-or-conclude,
     // and keep pushing as the remaining budget shrinks.
-    const config: any = loadConfig("../..");
+    // A private copy of the surface: the turn runs bash, and the record guard
+    // must not see other test files writing to the live checkout's records.
+    const config: any = privateSurfaceConfig();
     // Small, reachable budget: converge at step 4, re-fire every 2, wall at 8.
     config.roles = {
       ...config.roles,

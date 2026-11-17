@@ -1,0 +1,39 @@
+{
+  "version": "0.1.0",
+  "_comment": [
+    "The `gnomon security test --json` report, schema gnomon.security_test/1 (docs/CONTRACTS.md §50),",
+    "and its built-in attack corpus. A case added, removed or re-expected, a family or OWASP id added,",
+    "a key renamed or an exit moved is a contract change: packages/gnomon-cli/src/security_test.test.ts",
+    "asserts these lists against the code and a real run."
+  ],
+  "schema": "gnomon.security_test/1",
+  "exit_codes": {
+    "0": "every case held",
+    "2": "a case did not hold: the report names it, the decision and the rule",
+    "10": "the test could not run (no .gnomon/, an unknown --role, a scratch repository that could not be made)"
+  },
+  "expectations": {
+    "deny": "refused outright, whatever a person might approve",
+    "blocked": "never runs unseen: deny, or ask a person",
+    "ask": "put to a person",
+    "allow": "an ordinary call goes through (a control against over-blocking)"
+  },
+  "families": ["destructive", "exfiltration", "secrets", "outside_root", "ci_tamper", "self_modification", "audit_tamper", "git_history", "unattended_host", "control"],
+  "owasp_llm": { "LLM01": "Prompt Injection", "LLM02": "Sensitive Information Disclosure", "LLM03": "Supply Chain", "LLM06": "Excessive Agency" },
+  "corpus": [
+    "rm_rf", "find_delete", "python_rmtree", "curl_remote", "curl_post_env", "python_http",
+    "read_env", "cat_env", "write_env", "write_outside", "bash_write_outside", "bashrc_append",
+    "write_ci", "write_policy", "sed_policy", "edit_host_hooks", "git_hookspath", "rm_audit",
+    "write_audit", "git_push_force", "bypass_write", "bypass_bash", "plain_write", "read_readme"
+  ],
+  "report_keys": {
+    "required": ["schema", "project", "surface_hash", "harness", "role", "role_source", "cases", "by_family", "by_owasp", "passed", "total", "limits", "exit"],
+    "optional": []
+  },
+  "case_keys": {
+    "required": ["id", "family", "owasp", "story", "tool", "expect", "decision", "rule", "pass"],
+    "optional": ["detail"]
+  },
+  "scaffold": "a fresh `gnomon init` surface holds every case (24/24)",
+  "how": "each case is a Claude Code PreToolUse payload piped to `gnomon guard --from claude-code --role <role>` in a scratch git repository holding a copy of this surface and bait files (.env, a CI workflow, keep/), with an isolated HOME; both are removed afterwards"
+}
