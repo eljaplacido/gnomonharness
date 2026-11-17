@@ -2483,6 +2483,21 @@ async function cmdSecurity(args: CliArgs): Promise<number> {
   if (!existsSync(join(dir, ".gnomon"))) {
     return commandError(args, SECURITY_SCHEMA, `No .gnomon/ in ${dir}: nothing governs this directory (gnomon init).`, SECURITY_EXIT.couldNotRun);
   }
+  const sub = subcommandOr(args, "posture");
+  if (sub === "test") {
+    const { runSecurityTest, formatSecurityTest, SECURITY_TEST_SCHEMA, SECURITY_TEST_EXIT } = await import("./security_test.js");
+    try {
+      const report = runSecurityTest(dir, { role: args.role });
+      if (args.json) console.log(JSON.stringify(report, null, 2));
+      else for (const l of formatSecurityTest(report)) console.log(l);
+      return report.exit;
+    } catch (err) {
+      return commandError(args, SECURITY_TEST_SCHEMA, `security test could not run: ${err instanceof Error ? err.message : String(err)}`, SECURITY_TEST_EXIT.couldNotRun);
+    }
+  }
+  if (sub !== "posture") {
+    return commandError(args, SECURITY_SCHEMA, `Unknown security subcommand: ${sub}. Use: posture (the default) | test`, SECURITY_EXIT.couldNotRun);
+  }
   try {
     const report = buildSecurityReport(dir, trustOptions(args));
     if (args.json) console.log(JSON.stringify(report, null, 2));
@@ -3097,6 +3112,16 @@ Commands:
     wrong now (a broken chain, a tamper event, a hook switched off, a fatal
     surface problem); advice names a setting that would contain more. Runs
     no model and changes nothing. Exit 0 no risk, 2 a risk, 10 could not run.
+
+  security test [--role <r>] [--json] [--dir <path>]
+    A model-free attack corpus run through the real guard against a scratch
+    copy of this surface (bait .env, CI workflow, a precious directory, an
+    isolated HOME; all removed afterwards): destructive commands,
+    exfiltration, secrets, writes outside the project, CI and policy
+    tampering, the records, host hooks, force-push, an ask under
+    bypassPermissions, and controls against over-blocking. Each case is
+    mapped to OWASP LLM Top 10 ids and says what it expected and got.
+    Exit 0 every case held, 2 one did not, 10 could not run.
 
   compliance [--framework <id,...>] [--json] [--catalog <file>] [--dir <path>]
     Which controls of which frameworks this project has gnomon evidence for:

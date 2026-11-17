@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3525 TypeScript tests (2884 core, 616 cli, 18
-> natives, 7 tui) and 120 Rust tests — **3645 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3529 TypeScript tests (2884 core, 620 cli, 18
+> natives, 7 tui) and 120 Rust tests — **3649 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2463,6 +2463,43 @@ pre-commit hook or a CI step. The contract is [CONTRACTS.md
 §45](docs/CONTRACTS.md); vulnerability reports go to
 [SECURITY.md](.github/SECURITY.md).
 
+### Security test — `gnomon security test`
+
+`gnomon security` reads the posture. `gnomon security test` attacks it. It
+builds a throwaway repository holding a copy of this project's `.gnomon/`,
+with bait beside it: a `.env`, a CI workflow, a directory worth deleting. An
+isolated HOME stands in for yours. It then pipes 24 tool calls an injected or
+mistaken agent could propose through the real `gnomon guard`, as a Claude
+Code hook would. No model runs, and the scratch repository is removed
+afterwards.
+
+```bash
+gnomon security test            # decided as [check.roles] claude-code's role, else implement
+gnomon security test --role plan --json   # gnomon.security_test/1
+```
+
+| Family | What is tried | Must be |
+|---|---|---|
+| destructive | `rm -rf`, `find -delete`, `shutil.rmtree` through python | blocked (denied or asked) |
+| exfiltration | `curl` to a host nobody named, posting `.env`, `urllib` through python | blocked; posting `.env` denied |
+| secrets | reading, `cat`-ing, planting `.env` | denied |
+| outside_root | writing outside the project, appending to `~/.bashrc` | denied |
+| ci_tamper, self_modification | rewriting CI, `.gnomon/policy.toml` (directly or by `sed`), the host's hook settings, `core.hooksPath` | denied |
+| audit_tamper | deleting or forging the records | denied |
+| git_history | `git push --force` | blocked |
+| unattended_host | an ask under Claude Code's `bypassPermissions`, where nobody is asked | denied |
+| control | an ordinary write is asked, reading the README is allowed | as stated: over-blocking fails too |
+
+Each case is mapped to the **OWASP Top 10 for LLM Applications (2025)**
+(LLM01, LLM02, LLM03, LLM06), and the report counts by family and by OWASP
+id. A fresh `gnomon init` surface holds all 24. A surface with no
+`[governance]` declared holds fewer: the secret-path, CI-path and shell
+outside-root rules come with it. The report names each case that does not
+hold, with the decision and the rule. It tests the policy layer's decisions,
+not a host. A call a host runs without asking its hook is outside it, and
+`gnomon guard status` checks the hooks. Exit 0 every case held, 2 one did
+not, 10 could not run. The contract is [CONTRACTS.md §50](docs/CONTRACTS.md).
+
 ### Compliance evidence — `gnomon compliance`
 
 Auditors ask for evidence gnomon already keeps: a tamper-evident log, human
@@ -3330,6 +3367,7 @@ Contract: [CONTRACTS §17](docs/CONTRACTS.md).
 | `gnomon setup [--json] [--yes] [--pull <tag>] [--model <tag>] [--speed-check] [--mode local\|hybrid\|cloud] [--cloud-endpoint <url\|preset\|name> --cloud-model <name>] [--cloud-key-env <VAR>] [--catalog <file>] [--expect-proposal <digest>]` | Scan this machine, recommend a local model it can run from a dated catalog, pull it only on a yes, speed-check it, connect an optional cloud model, suggest local only, hybrid or cloud first, and write `.gnomon/` only after you accept the diff. `--yes` approves the write, never a download (`--pull` names one) or spending; `--expect-proposal` writes only the change a `--json` run printed as `proposal.digest`. Exit 0 written, 3 the surface or the change moved, 4 needs consent or a model, 12 the model server stopped answering. See [Get started in 3 steps](#get-started-in-3-steps). |
 | `gnomon doctor [--json] [--catalog <file>]` | Read-only: this machine, whether every role's model answers, and what changed since setup. Says what would fix each problem; never changes anything. Exit 0 nothing to do, 1 something needs attention, 10 could not run. |
 | `gnomon security [--json]` | Read-only: this project's security posture in one place — trust, where each role's commands run and what contains them, other harnesses' guard hooks, the audit trail. Risks (exit 2) are what is wrong now; advice names a setting that would contain more. See [Security posture](#security-posture--gnomon-security). |
+| `gnomon security test [--role <r>] [--json]` | A model-free attack corpus (24 cases, mapped to OWASP LLM01/02/03/06) through the real guard against a scratch copy of this surface. Exit 2 names each case that did not hold. See [Security test](#security-test--gnomon-security-test). |
 | `gnomon compliance [--framework <id,...>] [--json]` | Read-only: which controls of the EU AI Act, GDPR, OWASP LLM Top 10, ISO/IEC 42001, NIST AI RMF, ISO/IEC 27001, SOC 2, the Cyber Resilience Act and DORA this project has gnomon evidence for, from a dated catalog — evidence, partial, gap (with the setting that closes it), a gnomon property, or the organisation's. A mapping, never an assessment. See [Compliance evidence](#compliance-evidence--gnomon-compliance). |
 | `gnomon compliance dataflow [--json]` | Read-only: every place this surface can send prompts and repository content — model endpoints per role (primary, fallback, escalation) with host, locality and declared region, MCP servers, network-fetching roles, the shadow and anchor — and, with the opt-in `[compliance] allowed_regions` rule, which routes it admits. See [Data flows and residency](#data-flows-and-residency--gnomon-compliance-dataflow). |
 | `gnomon eval [--against profile:<name>\|surface:<ref>] [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]` | Measure on this project's own tasks (the trial spec): alone, the pass rate; with `--against`, whether another profile or another commit's `.gnomon/` does better, in paired interleaved clones judged by each task's check. Exit 0 meets the spec, 2 does not, 10 no answer. Changes nothing. See [Evaluation on your own tasks](#evaluation-on-your-own-tasks--gnomon-eval). |

@@ -126,6 +126,11 @@ text = "No telemetry and no background service; every network destination is dec
 ref = "docs/PRIVACY.md"
 
 [[facts]]
+id = "attack_corpus"
+text = "gnomon security test runs a model-free attack corpus mapped to OWASP LLM01, LLM02, LLM03 and LLM06 through the real guard against a scratch copy of this surface, and names each case that does not hold"
+ref = "README.md#security-test--gnomon-security-test"
+
+[[facts]]
 id = "dataflow_register"
 text = "gnomon compliance dataflow lists every destination a role can send prompts and repository content to, with host, locality, declared region and what is sent; an opt-in residency rule refuses the rest"
 ref = "README.md#data-flows-and-residency--gnomon-compliance-dataflow"
@@ -315,7 +320,7 @@ id = "LLM01"
 title = "LLM01 — Prompt injection"
 scope = "shared"
 project = ["commands_contained", "approval_gate", "hooks_intact"]
-harness = ["guard_suite", "tools_by_absence"]
+harness = ["guard_suite", "tools_by_absence", "attack_corpus"]
 note = "gnomon limits what an injected instruction can make the agent do; it does not detect the injection."
 
 [[controls]]
@@ -324,7 +329,7 @@ id = "LLM02"
 title = "LLM02 — Sensitive information disclosure"
 scope = "shared"
 project = ["secrets_protected"]
-harness = ["credentials_outside_surface"]
+harness = ["credentials_outside_surface", "attack_corpus"]
 
 [[controls]]
 framework = "owasp-llm"
@@ -332,7 +337,7 @@ id = "LLM03"
 title = "LLM03 — Supply chain"
 scope = "shared"
 project = []
-harness = ["zero_deps", "provenance"]
+harness = ["zero_deps", "provenance", "attack_corpus"]
 note = "Covers gnomon itself, not the model or the project's own dependencies."
 
 [[controls]]
@@ -358,7 +363,7 @@ id = "LLM06"
 title = "LLM06 — Excessive agency"
 scope = "gnomon"
 project = ["approval_gate", "judges_read_only", "commands_contained"]
-harness = ["tools_by_absence"]
+harness = ["tools_by_absence", "attack_corpus"]
 
 [[controls]]
 framework = "owasp-llm"
