@@ -216,7 +216,8 @@ export async function runDoctor(opts: { dir: string }, deps: DoctorDeps): Promis
           target = routeRole(config, role).target;
         } catch (err) {
           const msg = err instanceof Error ? err.message.split("\n")[0]! : String(err);
-          if (/not trusted for this surface/.test(msg)) closed.set(msg, [...(closed.get(msg) ?? []), role]);
+          // Closed by trust, or refused by the residency rule: said, not dropped.
+          if (/not trusted for this surface|\[compliance\] allowed_regions/.test(msg)) closed.set(msg, [...(closed.get(msg) ?? []), role]);
           continue;
         }
         const key = `${target.endpoint ?? ""}\u0000${target.model}`;

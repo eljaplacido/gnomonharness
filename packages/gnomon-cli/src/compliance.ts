@@ -33,6 +33,7 @@ import {
   type TrustOptions,
 } from "gnomon-core";
 import { buildSecurityReport, type SecurityReport } from "./security.js";
+import { buildDataflowReport, type DataflowReport } from "./dataflow.js";
 
 export const COMPLIANCE_SCHEMA = "gnomon.compliance/1";
 export const COMPLIANCE_EXIT = { clean: 0, gaps: 2, couldNotRun: 10 } as const;
@@ -43,6 +44,7 @@ export const CONTROL_SCOPES = ["gnomon", "shared", "organisation"] as const;
 interface ProbeInput {
   config: GnomonConfig;
   posture: SecurityReport;
+  dataflow: DataflowReport;
 }
 interface ProbeDef {
   /** What holding it means, in words. */
@@ -131,6 +133,13 @@ export const PROBES: Record<string, ProbeDef> = {
     holds: "every role's model endpoint is on this machine or a private network",
     fix: "route roles to a local endpoint, or record the remote provider as a recipient of prompts and repository content",
     check: ({ config }) => roleEndpointUrls(config).every((u) => u !== "" && endpointLocality(u) !== "remote"),
+  },
+  residency_held: {
+    holds: "nothing a role sends leaves this machine, or [compliance] allowed_regions limits it to the regions the endpoints declare",
+    fix: 'declare region = "<where the provider processes requests>" on each remote endpoint and [compliance] allowed_regions = ["<region>"] in .gnomon/policy.toml (gnomon compliance dataflow lists the routes)',
+    check: ({ dataflow }) =>
+      dataflow.residency.allowed_regions !== null ||
+      dataflow.destinations.every((d) => (d.kind !== "model" || d.used_by.length === 0 || d.locality === "loopback") && (d.kind !== "shadow" || d.locality === "loopback")),
   },
 };
 export const PROBE_IDS = Object.keys(PROBES);
@@ -255,7 +264,7 @@ export function buildComplianceReport(
   }
   const config = loadConfig(dir);
   const posture = buildSecurityReport(dir, opts.trust ?? {}, opts.platform);
-  const input: ProbeInput = { config, posture };
+  const input: ProbeInput = { config, posture, dataflow: buildDataflowReport(dir) };
   const memo = new Map<string, boolean>();
   const holds = (id: string): boolean => {
     if (!memo.has(id)) {

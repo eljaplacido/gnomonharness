@@ -1,0 +1,40 @@
+{
+  "version": "0.1.0",
+  "_comment": [
+    "The `gnomon compliance dataflow --json` document, schema gnomon.dataflow/1, and the",
+    "residency rule it reports on: [compliance] allowed_regions in policy.toml and",
+    "[endpoints.<name>] region in config.toml (docs/CONTRACTS.md §48).",
+    "A kind, side, source, locality or key added or renamed, or an exit moved, is a contract",
+    "change: packages/gnomon-cli/src/dataflow.test.ts asserts these lists against the code",
+    "and real reports, and packages/gnomon-core/src/residency.test.ts the rule."
+  ],
+  "schema": "gnomon.dataflow/1",
+  "exit_codes": {
+    "0": "every declared route is admitted, or no residency rule is declared",
+    "2": "the residency rule refuses or closed a route (a primary refused when its role runs, a fallback or escalation dropped, a non-local shadow switched off)",
+    "10": "dataflow could not run (no .gnomon/)"
+  },
+  "destination_kinds": ["model", "shadow", "mcp", "network_tool", "anchor"],
+  "route_sides": ["primary", "fallback", "escalate"],
+  "region_sources": ["this_machine", "declared", "undeclared"],
+  "localities": ["loopback", "private", "remote", "process"],
+  "report_keys": {
+    "required": ["schema", "project", "surface_hash", "residency", "destinations", "records", "telemetry", "harness", "exit"],
+    "optional": []
+  },
+  "residency_keys": { "required": ["allowed_regions", "refused", "closed"], "optional": [] },
+  "destination_keys": {
+    "required": ["kind", "name", "host", "locality", "region", "region_source", "sends", "key_env", "used_by"],
+    "optional": ["note"]
+  },
+  "use_keys": { "required": ["role", "as", "admitted"], "optional": [] },
+  "rule": {
+    "admitted": "a loopback URL (this machine), or an endpoint whose declared region is in allowed_regions (case-insensitive)",
+    "refused_primary": "resolveEndpoint throws naming the endpoint, host and rule; the role does not run",
+    "closed_side": "a fallback or escalation outside the rule is dropped and the role runs without it (config.residency.closed)",
+    "shadow": "a [shadow] off this machine is switched off (config.residency.shadow_closed)",
+    "override": "GNOMON_MODEL_URL off this machine is refused",
+    "undeclared": "a private-network or remote host with no declared region is refused: a URL never decides a region",
+    "no_rule": "without allowed_regions every route is built exactly as before; region is only a declaration"
+  }
+}

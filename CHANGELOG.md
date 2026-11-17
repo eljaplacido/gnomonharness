@@ -26,6 +26,28 @@
 
 ## [Unreleased]
 
+### Added — the data-flow register and an opt-in residency rule
+
+`gnomon compliance dataflow` lists every destination the surface can send
+data to:
+- each role's model endpoints (primary, fallback, escalation), with host,
+  locality, declared region, key variable name and what is sent;
+- MCP servers, network-fetching roles, the shadow and the anchor witness;
+- where the records stay, and gnomon's own version check.
+
+`[endpoints.<name>] region` declares where a provider processes requests. The
+opt-in `[compliance] allowed_regions` in policy.toml enforces it:
+- a role routed outside the listed regions refuses to run;
+- a fallback or escalation outside them is dropped;
+- a non-local shadow is switched off;
+- `GNOMON_MODEL_URL` off this machine is refused.
+
+A region is never inferred from a URL. Without the rule, nothing changes.
+
+`gnomon compliance` adds the probe `residency_held`, now behind GDPR Art. 44.
+Schema `gnomon.dataflow/1` (CONTRACTS.md §48,
+`conformance/dataflow_report.json`).
+
 ### Added — `gnomon eval`, measurement on your own tasks
 
 `gnomon eval` runs a skill trial's paired, interleaved, clone-isolated cells

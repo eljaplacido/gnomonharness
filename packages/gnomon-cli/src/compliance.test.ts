@@ -118,7 +118,8 @@ describe("gnomon compliance: the contract", () => {
     const later = new Date(Date.parse(CATALOG.as_of) + (CATALOG.stale_after_days + 2) * 86_400_000);
     const r = buildComplianceReport(dir, CATALOG, { frameworks: ["gdpr"], platform: "linux", now: later });
     expect(r.frameworks.map((f) => f.id)).toEqual(["gdpr"]);
-    expect(r.controls.find((c) => c.id === "art44")!.probes[0]).toMatchObject({ id: "endpoints_local", holds: false });
+    expect(r.controls.find((c) => c.id === "art28")!.probes[0]).toMatchObject({ id: "endpoints_local", holds: false });
+    expect(r.controls.find((c) => c.id === "art44")!.probes[0]).toMatchObject({ id: "residency_held", holds: false });
     expect(r.catalog.stale).toBe(true);
   });
 

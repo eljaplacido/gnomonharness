@@ -2537,6 +2537,21 @@ async function cmdCompliance(args: CliArgs): Promise<number> {
   if (!existsSync(join(dir, ".gnomon"))) {
     return commandError(args, COMPLIANCE_SCHEMA, `No .gnomon/ in ${dir}: nothing governs this directory (gnomon init).`, COMPLIANCE_EXIT.couldNotRun);
   }
+  const sub = subcommandOr(args, "controls");
+  if (sub === "dataflow") {
+    const { buildDataflowReport, formatDataflow, DATAFLOW_SCHEMA, DATAFLOW_EXIT } = await import("./dataflow.js");
+    try {
+      const report = buildDataflowReport(dir);
+      if (args.json) console.log(JSON.stringify(report, null, 2));
+      else for (const l of formatDataflow(report)) console.log(l);
+      return report.exit;
+    } catch (err) {
+      return commandError(args, DATAFLOW_SCHEMA, `dataflow could not run: ${err instanceof Error ? err.message : String(err)}`, DATAFLOW_EXIT.couldNotRun);
+    }
+  }
+  if (sub !== "controls") {
+    return commandError(args, COMPLIANCE_SCHEMA, `Unknown compliance subcommand: ${sub}. Use: controls (the default) | dataflow`, COMPLIANCE_EXIT.couldNotRun);
+  }
   try {
     const catalog = loadControls(args.flags.catalog ?? defaultControlsPath());
     const fw = args.flags.framework;
@@ -3066,6 +3081,16 @@ Commands:
     no evidence for it). A mapping, never an assessment: it never says
     compliant, and it is not legal advice. Read-only. Exit 0 no gap,
     2 a gap or partial, 10 could not run.
+
+  compliance dataflow [--json] [--dir <path>]
+    The data-flow register: every model endpoint a role can reach (primary,
+    fallback, escalation) with host, locality, declared region and what goes
+    there; MCP servers; roles that can fetch from the network; the audit
+    anchor's witness; where records stay. With [compliance] allowed_regions
+    in policy.toml (opt-in), each route says whether the rule admits it: a
+    role routed outside the listed regions refuses to run, and a fallback or
+    escalation outside them is dropped. Read-only. Exit 0 every route
+    admitted or no rule, 2 one refused or closed, 10 could not run.
 
   eval [--against profile:<name>|surface:<git ref>] [--spec <name>] [--yes]
        [--yes-spend] [--trust] [--json] [--dir <path>]
