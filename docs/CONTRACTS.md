@@ -4286,7 +4286,10 @@ exit 10.
 - the test covers the policy layer's decisions, not whether a host asks its
   hook;
 - code run by an interpreter is gated as a command, not parsed;
-- the surface tested is the copy on disk.
+- the surface tested is the copy on disk;
+- on Windows, a shell redirection to an absolute Windows path outside the
+  project is asked about rather than refused, so `bash_write_outside`
+  expects `blocked` there (`expect_win32`).
 
 **Fixture**: `conformance/security_test.json`, which holds the corpus ids,
 expectations, families, OWASP ids, keys and exits.
