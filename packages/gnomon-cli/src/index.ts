@@ -2998,7 +2998,8 @@ Commands:
 
   compliance [--framework <id,...>] [--json] [--catalog <file>] [--dir <path>]
     Which controls of which frameworks this project has gnomon evidence for:
-    eu-ai-act, gdpr, owasp-llm, from a dated catalog. Each control is
+    eu-ai-act, gdpr, owasp-llm, iso-42001, nist-ai-rmf, iso-27001, soc2,
+    cra (gnomon itself as the product) and dora, from a dated catalog. Each control is
     evidence (every setting holds), partial, gap (each names the setting
     that would close it), a gnomon property, or organisational (gnomon has
     no evidence for it). A mapping, never an assessment: it never says

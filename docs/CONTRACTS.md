@@ -4058,7 +4058,8 @@ Statuses: `evidence` (every probe holds), `partial`, `gap` (none holds),
 `harness` (no project probe; the facts are the evidence), `organisational`.
 Probes read the same state as `gnomon security` (§45) plus `[verify]`,
 `[audit] record` and each role's endpoint locality; a probe that cannot read
-its input does not hold. Frameworks: `eu-ai-act`, `gdpr`, `owasp-llm`. Adding a
+its input does not hold. Frameworks: `eu-ai-act`, `gdpr`, `owasp-llm`, `iso-42001`, `nist-ai-rmf`,
+`iso-27001`, `soc2`, `cra` (gnomon itself as the product), `dora`. Adding a
 probe, status or framework is a minor change with a fixture update; a
 catalog entry is data and moves with releases.
 
