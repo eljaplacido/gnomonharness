@@ -38,6 +38,10 @@ import {
   runTrial,
   recordTrial,
   trialExit,
+  runEval,
+  recordEval,
+  evalExit,
+  EVAL_SCHEMA,
   runTask,
   parseDeadline,
   unstartedTaskRecord,
@@ -2469,6 +2473,62 @@ async function cmdSecurity(args: CliArgs): Promise<number> {
   }
 }
 
+/**
+ * `gnomon eval` (gnomon-core eval.ts): a trial's paired cells for a profile
+ * or a surface. Exit 0 meets the spec, 2 does not, 10 no answer -- including
+ * an eval that could not start.
+ */
+async function cmdEval(args: CliArgs): Promise<number> {
+  const config = loadConfig(args.dir, args.flags["profile"]);
+  const flag = (k: string) => (typeof args.flags[k] === "string" && args.flags[k] !== "true" ? (args.flags[k] as string) : undefined);
+  const yesSpend = args.flags["yes-spend"] !== undefined || args.positional.includes("--yes-spend");
+  let outcome: Awaited<ReturnType<typeof runEval>>;
+  try {
+    outcome = await runEval(config, {
+      spec: flag("spec"),
+      against: flag("against"),
+      yesSpend,
+      // Settled on each arm's configuration as its cells load it; a clamped
+      // arm is refused before any cell runs.
+      settleTrust: (c) => settleTrustHeadless(c, trustOptions(args)).outcome,
+      // Each cell is a `gnomon task` in its own clone, with that command's
+      // approval rule: --yes approves gated calls in the clone.
+      runCell: (wt, prompt, o) => runTask(loadConfig(wt, o.profile), prompt, { role: o.role, yes: args.yes, trust: o.trust }),
+      log: args.json ? undefined : (line) => console.error(line),
+    });
+  } catch (err) {
+    return commandError(args, EVAL_SCHEMA, `gnomon eval could not start: ${err instanceof Error ? err.message : String(err)}`, 10);
+  }
+  const { report, cells } = outcome;
+  const out = recordEval(config, report, cells);
+  if (args.json) {
+    console.log(JSON.stringify({ ...report, report_path: out.report_path, report_sha256: out.report_sha256 }, null, 2));
+    return evalExit(report.meets_thresholds);
+  }
+  const p = report.endpoints.pass;
+  const b = report.arms.base;
+  const c = report.arms.candidate;
+  console.log(`Eval ${report.spec.name}: ${report.pairs.valid}/${report.pairs.planned} valid ${c ? "pairs" : "cells"} (${report.role})`);
+  console.log(`  base       ${b.label}${b.profile ? ` profile ${b.profile}` : ""} on ${b.model ?? "?"}  pass ${p.base.passes}/${p.base.n}  [${p.base.wilson.join(", ")}]`);
+  if (c && p.candidate) {
+    console.log(`  candidate  ${c.label} on ${c.model ?? "?"}  pass ${p.candidate.passes}/${p.candidate.n}  [${p.candidate.wilson.join(", ")}]  McNemar p = ${p.mcnemar_p}`);
+    if (report.arms.differ.length > 0) console.log(`  differ     ${report.arms.differ.join(", ")}`);
+    const t = report.endpoints.output_tokens;
+    console.log(`  out tokens base ${t.base}  candidate ${t.candidate}  gain ${t.gain === null ? "?" : `${(t.gain * 100).toFixed(1)}%`}`);
+    console.log(`  requests   base ${report.endpoints.requests.base}  candidate ${report.endpoints.requests.candidate}`);
+  } else {
+    console.log(`  out tokens ${report.endpoints.output_tokens.base}  requests ${report.endpoints.requests.base}`);
+  }
+  console.log(`  cells      ${report.cells.result} result, ${report.cells.refusal} refusal, ${report.cells.apparatus_failure} apparatus_failure`);
+  console.log(`  meets_thresholds: ${String(report.meets_thresholds)} (${report.status})`);
+  for (const r of report.reasons) console.log(`    ${r}`);
+  if (report.leftovers.length > 0) console.log(`  leftovers  ${report.leftovers.join(", ")}`);
+  console.log(`Report: ${out.report_path}`);
+  if (out.record) console.log(`Recorded in ${out.trail} (seq ${out.record.seq}, ${out.record.hash?.slice(0, 12)})`);
+  console.log("Nothing was changed. Switching the profile or merging the surface remains a person's decision.");
+  return evalExit(report.meets_thresholds);
+}
+
 /** `gnomon compliance`: the read-only evidence map (compliance.ts). */
 async function cmdCompliance(args: CliArgs): Promise<number> {
   const { buildComplianceReport, formatCompliance, loadControls, defaultControlsPath, COMPLIANCE_EXIT, COMPLIANCE_SCHEMA } = await import("./compliance.js");
@@ -2763,6 +2823,7 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "chaos" },
   { name: "security" },
   { name: "compliance" },
+  { name: "eval" },
 ];
 
 function showHelp(): void {
@@ -3006,6 +3067,16 @@ Commands:
     compliant, and it is not legal advice. Read-only. Exit 0 no gap,
     2 a gap or partial, 10 could not run.
 
+  eval [--against profile:<name>|surface:<git ref>] [--spec <name>] [--yes]
+       [--yes-spend] [--trust] [--json] [--dir <path>]
+    Measure on this project's own tasks (.gnomon/trials/<name>.toml, the
+    skill trial's spec): alone, the surface's pass rate; with --against,
+    whether another profile, or the .gnomon/ of another commit with HEAD's
+    code, does better. Paired and interleaved, each cell a gnomon task in a
+    fresh private clone, judged by the task's check command. Writes
+    .gnomon-trials/_eval/<utc>/ and an eval_run audit record. Changes
+    nothing. Exit 0 meets the spec, 2 does not, 10 no answer.
+
   chaos [--json] [--seed <n>] [--faults <id,...>] [--schedules <s,...>] [--out <file>]
     The fault-injection suite. A scripted model behind a loopback endpoint
     answers a fixed task set and injects one fault per case: errors, timeouts,
@@ -3247,6 +3318,9 @@ async function main(): Promise<void> {
       const code = await cmdCompliance(args);
       if (code !== 0) process.exit(code);
       break;
+    }
+    case "eval": {
+      process.exit(await cmdEval(args));
     }
     case "chaos": {
       // Its own argv parser, like guard: subcommands and flags it alone reads.

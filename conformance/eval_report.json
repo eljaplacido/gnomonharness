@@ -1,0 +1,38 @@
+{
+  "contract": "gnomon eval — docs/CONTRACTS.md section 47",
+  "_comment": [
+    "The `gnomon eval --json` report, schema gnomon.eval/1, and its eval_run audit record.",
+    "A skill trial's cells (section 13) for a profile or a surface instead of a skill:",
+    "same spec (.gnomon/trials/<name>.toml), same clones, same validity rule, same statistics.",
+    "A mode, arm kind, key or exit added, renamed or moved is a contract change:",
+    "packages/gnomon-core/src/eval.test.ts asserts these lists against the code and real reports."
+  ],
+  "schema": "gnomon.eval/1",
+  "modes": ["single", "paired"],
+  "arm_kinds": ["head", "profile", "surface"],
+  "against_forms": ["profile:<name>", "surface:<git ref>"],
+  "verdicts": [true, false, "undetermined"],
+  "statuses": ["complete", "budget_exhausted", "apparatus_failure"],
+  "exit_codes": { "true": 0, "false": 2, "undetermined": 10, "could_not_start": 10 },
+  "report_keys": {
+    "required": ["schema", "mode", "spec", "harness", "role", "arms", "pairs", "cells", "endpoints", "mde", "thresholds", "budget", "trust", "leftovers", "status", "meets_thresholds", "reasons"],
+    "optional": []
+  },
+  "arm_keys": {
+    "required": ["kind", "label", "profile", "surface_commit", "surface_hash", "model", "endpoint"],
+    "optional": []
+  },
+  "audit_kind": "eval_run",
+  "trail": ["session_start", "eval_run", "session_end"],
+  "session_start_mode": "eval",
+  "record_envelope": ["seq", "ts", "kind", "prev", "hash"],
+  "record_keys": {
+    "required": ["schema", "mode", "report", "report_sha256", "spec", "role", "arms", "pairs", "cells", "endpoints", "status", "meets_thresholds"],
+    "optional": []
+  },
+  "report_dir": ".gnomon-trials/_eval/<utc>-<suffix>/ (report.json, cells.jsonl)",
+  "single_mode_verdict": "true when [thresholds] min_pass_rate (in (0, 1]) is met or not declared; false when declared and not met; undetermined with no valid cell or the budget spent",
+  "paired_mode_verdict": "a skill trial's, with the candidate arm in the skill arm's place",
+  "one_difference": "profile arm: same surface hash, another profile; surface arm: HEAD's code with .gnomon/ from the ref, the base's profile, differing manifest paths listed in arms.differ",
+  "trust_settled_on": "each arm's configuration as its cells load it; a surface arm from another commit is admitted only by --trust or a scaffold-only surface"
+}

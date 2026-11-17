@@ -328,7 +328,7 @@ function git(root: string, args: string[]): string {
  * nowhere to go. What it cannot isolate is the user's global git config; the
  * surface's sandbox governs that, as it does for any session.
  */
-interface Sandbox {
+export interface Sandbox {
   dir: string;
   /** Remove it. Never throws: returns the path left behind, if any. */
   dispose: () => string | null;
@@ -409,7 +409,7 @@ export interface TrialOptions {
   log?: (line: string) => void;
 }
 
-interface SignSummary {
+export interface SignSummary {
   skill_lower: number;
   skill_higher: number;
   ties: number;
@@ -973,3 +973,17 @@ export function recordTrial(
   trail.write("session_end", {});
   return { dir: rel, report_path: `${rel}/report.json`, report_sha256, record, trail: trail.path };
 }
+
+/**
+ * The cell machinery, shared with `gnomon eval` (eval.ts): the same private
+ * clones, shell, git, sign test and freezing, so an eval's cells are a
+ * trial's cells and not a second implementation of them.
+ */
+export {
+  sh as trialShell,
+  git as trialGit,
+  freshSandbox as trialSandbox,
+  processSignals as trialProcessSignals,
+  sign as signSummary,
+  deepFreeze as trialFreeze,
+};
