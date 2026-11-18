@@ -72,13 +72,13 @@ install, add `--setup`: `curl -fsSL …/scripts/install.sh | sh -s -- --setup`,
 or in PowerShell `& ([scriptblock]::Create((irm …/scripts/install.ps1))) -Setup`
 (or `$env:GNOMON_SETUP = '1'` before the `irm | iex` line). Setup still asks
 before every download and write. No registry account, no clone, no pnpm, no Rust, no sudo. This
-is the recommended route: it installs the latest release, v0.6.0, with its
+is the recommended route: it installs the latest release, v0.6.1, with its
 native binaries.
 
 What it does: checks for Node ≥ 22 (if it is missing or old it prints the exact
 command for your OS — NodeSource, Homebrew, nvm, winget — and stops; it never
 installs Node as root on its own), resolves the latest release
-(`GNOMON_VERSION=0.6.0` pins one), installs the npm package, and puts the native
+(`GNOMON_VERSION=0.6.1` pins one), installs the npm package, and puts the native
 binaries in `~/.local/share/gnomon/bin` (`%LOCALAPPDATA%\gnomon\bin` on Windows),
 where `surface`, `enumerations`, `session`, `apply` and `simulate` find them
 with no environment variable. Every download is checked against the release's
@@ -95,19 +95,19 @@ package fails in dpkg while the distro's `npm` and `libnode-dev` are installed.
 ### By hand — the same packages, no script
 
 ```bash
-V=0.6.0
+V=0.6.1
 B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz \
          $B/gnomon-tui-$V.tgz  $B/gnomon-harness-$V.tgz
 ```
 
 ```powershell
-$V="0.6.0"
+$V="0.6.1"
 $B="https://github.com/eljaplacido/gnomonharness/releases/download/v$V"
 npm i -g "$B/gnomon-core-$V.tgz" "$B/gnomon-natives-$V.tgz" "$B/gnomon-tui-$V.tgz" "$B/gnomon-harness-$V.tgz"
 ```
 
-Two blocks because they have to be: `V=0.6.0` is not an assignment in
+Two blocks because they have to be: `V=0.6.1` is not an assignment in
 PowerShell and `\` is not its line continuation. The four are one package split
 up — `gnomon-harness` is the CLI and the other three its libraries — so npm
 needs all four URLs; from the registry, one name is enough (below). This
@@ -120,9 +120,9 @@ route does not fetch the native binaries; see
 npm i -g gnomon-harness
 ```
 
-Available from v0.5.0. v0.6.0 arrives once the release's npm workflow
-completes (`npm view gnomon-harness version` prints 0.6.0; until then the
-registry has 0.5.0). The package is `gnomon-harness` and the command is
+Available from v0.5.0. v0.6.1 arrives once the release's npm workflow
+completes (`npm view gnomon-harness version` prints 0.6.1; until then the
+registry has 0.6.0). The package is `gnomon-harness` and the command is
 `gnomon` (the name `gnomon` on npm belongs to an unrelated logging utility).
 From the registry the four packages are one name because npm resolves the
 three libraries by name. Versions 0.3.3 to 0.4.5 were never published there;
