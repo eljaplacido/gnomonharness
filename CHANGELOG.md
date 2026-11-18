@@ -26,6 +26,28 @@
 
 ## [Unreleased]
 
+## [0.6.2] — 2026-11-18
+
+`gnomon eval` measures other harnesses, on your own tasks, the way it
+measures gnomon (#200). The model-free suites match 0.6.1.
+
+- **`--against command:<name>`** runs another harness's CLI, declared in the
+  trial spec under `[harness.<name>]` (an argv array, no shell; `{prompt}` is
+  replaced by the task's prompt, else the prompt goes on stdin), on each task
+  in the same fresh clone as gnomon's cells, judged by the same check and the
+  same paired statistics.
+- **`--base command:<name>`** puts a harness in gnomon's place: alone it
+  measures that harness; with `--against command:<other>` it compares two.
+- gnomon does not meter another harness: its tokens and requests are null,
+  not zero, and the verdict rests on pass. Nothing caps that spend, so a
+  harness not declared `local = true` needs `--yes-spend`.
+- **Contained to its clone.** opencode takes its project directory from
+  `PWD`; the child's `PWD` is the clone. Each command cell compares the
+  project checkout before and after, and a harness that changed it is an
+  apparatus failure naming the paths, never scored. Found and fixed against a
+  real `opencode run` on a local model before release.
+- Schema `gnomon.eval/2` (CONTRACTS.md §47).
+
 ## [0.6.1] — 2026-11-18
 
 The 0.6.0 pillars, extended to every harness `gnomon guard` governs. A
@@ -5300,7 +5322,8 @@ was written.
 
 <!-- 0.4.4 and 0.4.5 were never published, so 0.5.0 compares against 0.4.3 and
      their links point at the tags, not at (draft) release pages. -->
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/eljaplacido/gnomonharness/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/eljaplacido/gnomonharness/compare/v0.4.3...v0.5.0

@@ -11,9 +11,10 @@ A white paper and a how-to, for two readers:
 [README.md](../README.md) is the reference; this guide is the path through it.
 Its commands were run against gnomon 0.3.1 (`master` at `bc8f27a`) and every
 TOML snippet was loaded by that build (install pins below name the latest
-release, v0.6.1. v0.6.0 added `gnomon security test`, `gnomon compliance`
+release, v0.6.2. v0.6.0 added `gnomon security test`, `gnomon compliance`
 (with `dataflow` and `pack`), `gnomon eval` and `gnomon audit metrics`; v0.6.1
-extends them to the other harnesses `gnomon guard` governs. v0.4.4
+extends them to the other harnesses `gnomon guard` governs, and v0.6.2 lets
+`gnomon eval` measure those harnesses too. v0.4.4
 and v0.4.5 were drafted and never published, so v0.5.0 was the first release
 with `gnomon task --deadline`, the completion
 gate, the sweep knobs, replay on by default for hosted endpoints, the docker
@@ -295,7 +296,7 @@ download is checked against the release's `SHA256SUMS`.
 
 | Variable | Effect |
 |---|---|
-| `GNOMON_VERSION=0.6.1` | Pin a published release (`curl … \| GNOMON_VERSION=0.6.1 sh`); a draft release cannot be installed |
+| `GNOMON_VERSION=0.6.2` | Pin a published release (`curl … \| GNOMON_VERSION=0.6.2 sh`); a draft release cannot be installed |
 | `GNOMON_NPM_PREFIX` | Where npm installs |
 | `GNOMON_NO_NATIVE=1` | Skip the native binaries |
 | `GITHUB_TOKEN` | Lift GitHub's anonymous API rate limit |
@@ -309,14 +310,14 @@ and `simulate` will not work unless you build from source; everything else does.
 The four packages are one program split up, so npm needs all four URLs:
 
 ```bash
-V=0.6.1
+V=0.6.2
 B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz \
          $B/gnomon-tui-$V.tgz  $B/gnomon-harness-$V.tgz
 ```
 
 ```powershell
-$V="0.6.1"
+$V="0.6.2"
 $B="https://github.com/eljaplacido/gnomonharness/releases/download/v$V"
 npm i -g "$B/gnomon-core-$V.tgz" "$B/gnomon-natives-$V.tgz" "$B/gnomon-tui-$V.tgz" "$B/gnomon-harness-$V.tgz"
 ```
@@ -343,7 +344,7 @@ global link, run `~/gnomon/gnomon <command>` from any project. Windows steps:
 ### 3.4 Verify the install
 
 ```bash
-gnomon --version        # gnomon/0.6.1+npm for a release install; +<commit> from a checkout
+gnomon --version        # gnomon/0.6.2+npm for a release install; +<commit> from a checkout
 gnomon enumerations     # prints the enumerations JSON: proves the native binaries are found
 ```
 
