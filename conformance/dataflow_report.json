@@ -1,20 +1,20 @@
 {
   "version": "0.1.0",
   "_comment": [
-    "The `gnomon compliance dataflow --json` document, schema gnomon.dataflow/1, and the",
+    "The `gnomon compliance dataflow --json` document, schema gnomon.dataflow/2, and the",
     "residency rule it reports on: [compliance] allowed_regions in policy.toml and",
     "[endpoints.<name>] region in config.toml (docs/CONTRACTS.md §48).",
     "A kind, side, source, locality or key added or renamed, or an exit moved, is a contract",
     "change: packages/gnomon-cli/src/dataflow.test.ts asserts these lists against the code",
     "and real reports, and packages/gnomon-core/src/residency.test.ts the rule."
   ],
-  "schema": "gnomon.dataflow/1",
+  "schema": "gnomon.dataflow/2",
   "exit_codes": {
     "0": "every declared route is admitted, or no residency rule is declared",
     "2": "the residency rule refuses or closed a route (a primary refused when its role runs, a fallback or escalation dropped, a non-local shadow switched off)",
     "10": "dataflow could not run (no .gnomon/)"
   },
-  "destination_kinds": ["model", "shadow", "mcp", "network_tool", "anchor"],
+  "destination_kinds": ["model", "shadow", "mcp", "network_tool", "anchor", "host_agent"],
   "route_sides": ["primary", "fallback", "escalate"],
   "region_sources": ["this_machine", "declared", "undeclared"],
   "localities": ["loopback", "private", "remote", "process"],
@@ -22,7 +22,8 @@
     "required": ["schema", "project", "surface_hash", "residency", "destinations", "records", "telemetry", "harness", "exit"],
     "optional": []
   },
-  "residency_keys": { "required": ["allowed_regions", "refused", "closed"], "optional": [] },
+  "residency_keys": { "required": ["allowed_regions", "refused", "closed", "outside"], "optional": [] },
+  "host_agent": "another harness governed here by gnomon guard: its hook installed (guard status, any state but not_installed) or its calls seen by the guard. gnomon decides its tool calls but does not route its model requests, so host, locality, region and region_source are null; residency.outside names each one, and the compliance probe residency_held does not hold while there is one",
   "destination_keys": {
     "required": ["kind", "name", "host", "locality", "region", "region_source", "sends", "key_env", "used_by"],
     "optional": ["note"]

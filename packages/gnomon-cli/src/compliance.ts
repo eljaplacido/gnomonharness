@@ -135,11 +135,13 @@ export const PROBES: Record<string, ProbeDef> = {
     check: ({ config }) => roleEndpointUrls(config).every((u) => u !== "" && endpointLocality(u) !== "remote"),
   },
   residency_held: {
-    holds: "nothing a role sends leaves this machine, or [compliance] allowed_regions limits it to the regions the endpoints declare",
-    fix: 'declare region = "<where the provider processes requests>" on each remote endpoint and [compliance] allowed_regions = ["<region>"] in .gnomon/policy.toml (gnomon compliance dataflow lists the routes)',
+    holds:
+      "nothing a role sends leaves this machine, or [compliance] allowed_regions limits it to the regions the endpoints declare; and no other harness governed here sends to a model gnomon cannot see",
+    fix: 'declare region = "<where the provider processes requests>" on each remote endpoint and [compliance] allowed_regions = ["<region>"] in .gnomon/policy.toml (gnomon compliance dataflow lists the routes); a harness governed by gnomon guard sends to its own provider, which gnomon has no evidence of: record where, outside gnomon',
     check: ({ dataflow }) =>
-      dataflow.residency.allowed_regions !== null ||
-      dataflow.destinations.every((d) => (d.kind !== "model" || d.used_by.length === 0 || d.locality === "loopback") && (d.kind !== "shadow" || d.locality === "loopback")),
+      dataflow.residency.outside.length === 0 &&
+      (dataflow.residency.allowed_regions !== null ||
+        dataflow.destinations.every((d) => (d.kind !== "model" || d.used_by.length === 0 || d.locality === "loopback") && (d.kind !== "shadow" || d.locality === "loopback"))),
   },
 };
 export const PROBE_IDS = Object.keys(PROBES);

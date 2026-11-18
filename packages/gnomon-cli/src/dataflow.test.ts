@@ -129,6 +129,29 @@ describe("gnomon compliance dataflow: the contract", () => {
     expect(held(dir)).toBe(true);
   });
 
+  it("another harness governed here is listed as a host agent, outside the residency rule, and residency_held does not hold", async () => {
+    const dir = await project();
+    const home = mkdtempSync(join(tmpdir(), "gnomon-dataflow-home-"));
+    try {
+      spawnSync("git", ["init", "-q"], { cwd: dir });
+      const env = { ...process.env, HOME: home, USERPROFILE: home, XDG_DATA_HOME: join(home, "x"), GNOMON_NO_UPDATE_CHECK: "1" };
+      const inst = spawnSync(process.execPath, [join(ROOT, "packages/gnomon-cli/gnomon.js"), "guard", "install", "opencode", "--write"], { cwd: dir, env, encoding: "utf-8" });
+      expect(inst.status, inst.stderr).toBe(0);
+      appendFileSync(join(dir, ".gnomon/policy.toml"), `\n[compliance]\nallowed_regions = ["eu"]\n`);
+      const r = buildDataflowReport(dir);
+      shapeHolds(r);
+      expect(r.destinations.find((d) => d.kind === "host_agent")).toMatchObject({ name: "opencode", host: null, locality: null, region: null, used_by: [] });
+      expect(r.residency.outside).toEqual(["opencode"]);
+      expect(r.exit).toBe(0);
+      expect(formatDataflow(r).join("\n")).toMatch(/The rule covers gnomon's own routes, not opencode/);
+      const probe = buildComplianceReport(dir, loadControls(), { frameworks: ["gdpr"], platform: "linux" })
+        .controls.find((c) => c.id === "art44")!.probes.find((p) => p.id === "residency_held")!;
+      expect(probe.holds).toBe(false);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it("the CLI: an unknown subcommand is exit 10 with the error document", async () => {
     const dir = await project();
     const r = spawnSync(process.execPath, [join(ROOT, "packages/gnomon-cli/gnomon.js"), "compliance", "nope", "--json", "--dir", dir], { encoding: "utf-8" });

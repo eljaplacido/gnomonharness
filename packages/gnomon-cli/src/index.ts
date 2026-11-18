@@ -3174,7 +3174,9 @@ Commands:
     The data-flow register: every model endpoint a role can reach (primary,
     fallback, escalation) with host, locality, declared region and what goes
     there; MCP servers; roles that can fetch from the network; the audit
-    anchor's witness; where records stay. With [compliance] allowed_regions
+    anchor's witness; where records stay; other harnesses governed here by
+    gnomon guard, whose model requests gnomon does not route (named, and
+    outside the residency rule). With [compliance] allowed_regions
     in policy.toml (opt-in), each route says whether the rule admits it: a
     role routed outside the listed regions refuses to run, and a fallback or
     escalation outside them is dropped. Read-only. Exit 0 every route

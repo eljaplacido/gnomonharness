@@ -5,7 +5,9 @@
  * ICT third parties): every model endpoint a role can reach, as primary,
  * fallback or escalation, with its host, locality, declared region and what
  * goes there; the MCP servers it can start; the roles that can fetch from the
- * network; where sealed trail heads are copied; and where the records stay.
+ * network; where sealed trail heads are copied; where the records stay; and
+ * every other harness gnomon guards here (Claude Code, opencode, Cursor),
+ * whose agent sends to a model this surface does not route.
  *
  * Read-only and model-free. With `[compliance] allowed_regions` declared it
  * also says which routes the rule admits and which it refuses or closed
@@ -29,10 +31,11 @@ import {
   type McpServerDef,
   type GnomonConfig,
 } from "gnomon-core";
+import { guardStatus } from "./guard.js";
 
-export const DATAFLOW_SCHEMA = "gnomon.dataflow/1";
+export const DATAFLOW_SCHEMA = "gnomon.dataflow/2";
 export const DATAFLOW_EXIT = { clean: 0, refused: 2, couldNotRun: 10 } as const;
-export const DESTINATION_KINDS = ["model", "shadow", "mcp", "network_tool", "anchor"] as const;
+export const DESTINATION_KINDS = ["model", "shadow", "mcp", "network_tool", "anchor", "host_agent"] as const;
 export const ROUTE_SIDES = ["primary", "fallback", "escalate"] as const;
 export const REGION_SOURCES = ["this_machine", "declared", "undeclared"] as const;
 export const LOCALITIES = ["loopback", "private", "remote", "process"] as const;
@@ -65,7 +68,8 @@ export interface DataflowReport {
   schema: typeof DATAFLOW_SCHEMA;
   project: string;
   surface_hash: string;
-  residency: { allowed_regions: string[] | null; refused: number; closed: number };
+  /** `outside`: the guarded harnesses whose model traffic the rule cannot see. */
+  residency: { allowed_regions: string[] | null; refused: number; closed: number; outside: string[] };
   destinations: Destination[];
   records: { audit: boolean; record: string; dir: string; leaves_machine: false };
   telemetry: "none";
@@ -207,13 +211,36 @@ export function buildDataflowReport(dir: string): DataflowReport {
     });
   }
 
+  // Other harnesses governed here: their hook installed, or their calls seen
+  // by the guard. gnomon decides their tool calls; it does not route their
+  // model requests, so where those go is the host's own configuration.
+  const gs = guardStatus(dir);
+  const hostState = new Map<string, string>();
+  for (const h of gs.hosts) if (h.state !== "not_installed") hostState.set(h.host, `hook ${h.state}`);
+  for (const sess of gs.sessions) if (sess.via && !hostState.has(sess.via)) hostState.set(sess.via, "calls seen by the guard");
+  for (const [host, how] of [...hostState.entries()].sort()) {
+    destinations.push({
+      kind: "host_agent",
+      name: host,
+      host: null,
+      locality: null,
+      region: null,
+      region_source: null,
+      sends: "whatever that harness sends its own model provider: prompts, and the repository content its agent reads",
+      key_env: null,
+      used_by: [],
+      note: `governed by gnomon guard (${how}); its model destination is set in ${host}'s own configuration, outside this surface and outside [compliance] allowed_regions`,
+    });
+  }
+  const outside = [...hostState.keys()].sort();
+
   const refused =
     destinations.reduce((n, d) => n + d.used_by.filter((u) => u.admitted === false).length, 0) + (config.residency?.shadow_closed ? 1 : 0);
   return {
     schema: DATAFLOW_SCHEMA,
     project: dir,
     surface_hash: recomputeManifest(join(dir, ".gnomon")).surface_hash,
-    residency: { allowed_regions: allowed, refused, closed: config.residency?.closed.length ?? 0 },
+    residency: { allowed_regions: allowed, refused, closed: config.residency?.closed.length ?? 0, outside },
     destinations,
     records: { audit: audit.enabled, record: String(audit.record), dir: audit.dir, leaves_machine: false },
     telemetry: "none",
@@ -237,10 +264,14 @@ export function formatDataflow(r: DataflowReport): string[] {
       ? `Residency: [compliance] allowed_regions = [${r.residency.allowed_regions.map((x) => `"${x}"`).join(", ")}]`
       : "Residency: no rule ([compliance] allowed_regions is not declared)"
   );
+  if (r.residency.allowed_regions && r.residency.outside.length > 0) {
+    out.push(`  The rule covers gnomon's own routes, not ${r.residency.outside.join(", ")}: set where those send in their own configuration.`);
+  }
   out.push("");
   for (const d of r.destinations) {
     const where = d.region_source === "this_machine" ? "this machine" : d.region ? `region ${d.region}` : d.region_source === "undeclared" ? "region undeclared" : "";
-    out.push(`  ${d.kind.padEnd(12)} ${d.name}${d.host && d.host !== d.name ? `  ${d.host}` : ""}  (${d.locality ?? "?"}${where ? `, ${where}` : ""})`);
+    const loc = d.kind === "host_agent" ? "not routed by gnomon" : (d.locality ?? "?");
+    out.push(`  ${d.kind.padEnd(12)} ${d.name}${d.host && d.host !== d.name ? `  ${d.host}` : ""}  (${loc}${where ? `, ${where}` : ""})`);
     out.push(`      sends: ${d.sends}`);
     if (d.key_env) out.push(`      key from: ${d.key_env}`);
     for (const u of d.used_by) {

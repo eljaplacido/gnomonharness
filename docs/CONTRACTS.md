@@ -4130,17 +4130,17 @@ only for one model name or one system prompt. The tests cover:
 - a surface arm built from the previous commit;
 - the refusals, the budget stop, and the sealed record.
 
-## 48. Data flows and residency — `gnomon compliance dataflow`, `gnomon.dataflow/1`, `[compliance] allowed_regions`, `v: 1`
+## 48. Data flows and residency — `gnomon compliance dataflow`, `gnomon.dataflow/2`, `[compliance] allowed_regions`, `v: 2`
 
 **The register.** `gnomon compliance dataflow` is read-only and model-free.
 It reports every destination the surface can send to.
 
 | Key | Meaning |
 |---|---|
-| `schema` | `"gnomon.dataflow/1"` |
+| `schema` | `"gnomon.dataflow/2"` (version 1, in 0.6.0, had no `host_agent` kind and no `residency.outside`) |
 | `project`, `surface_hash` | the project root and its surface hash |
-| `residency` | `allowed_regions` (null without the rule), `refused` (routes refused or closed, plus a closed shadow), `closed` (sides dropped) |
-| `destinations` | `kind` (`model`, `shadow`, `mcp`, `network_tool`, `anchor`), `name`, `host`, `locality` (`loopback`, `private`, `remote`, `process`), `region`, `region_source` (`this_machine`, `declared`, `undeclared`, or null where no region applies), `sends`, `key_env` (a variable name, never a value), `used_by` (`role`, `as`: `primary`, `fallback`, `escalate` or `tool`, `admitted`: true, false, or null without the rule), `note`? |
+| `residency` | `allowed_regions` (null without the rule), `refused` (routes refused or closed, plus a closed shadow), `closed` (sides dropped), `outside` (the host agents, below: model traffic the rule cannot see) |
+| `destinations` | `kind` (`model`, `shadow`, `mcp`, `network_tool`, `anchor`, `host_agent`), `name`, `host`, `locality` (`loopback`, `private`, `remote`, `process`), `region`, `region_source` (`this_machine`, `declared`, `undeclared`, or null where no region applies), `sends`, `key_env` (a variable name, never a value), `used_by` (`role`, `as`: `primary`, `fallback`, `escalate` or `tool`, `admitted`: true, false, or null without the rule), `note`? |
 | `records` | `audit`, `record`, `dir`, `leaves_machine: false` |
 | `telemetry` | `"none"` |
 | `harness` | what gnomon itself contacts: the newer-version check (docs/PRIVACY.md §2) |
@@ -4188,8 +4188,19 @@ governance decide those, and the register lists them.
 
 Without the rule every route is built byte-for-byte as before (Rule 1).
 
+**Host agents.** Every other harness governed here by `gnomon guard` is a
+`host_agent` destination: one whose hook `gnomon guard status` finds in any
+state but `not_installed`, or whose calls the guard has decided for. gnomon
+decides its tool calls but does not route its model requests, so `host`,
+`locality`, `region` and `region_source` are null, `used_by` is empty, and
+the note says where that harness's destination is set. `residency.outside`
+names each one. They do not change the exit: the rule does not refuse what it
+cannot see, and the text report says so under the rule.
+
 **Compliance probe** `residency_held` (§46) holds when nothing a role sends
-leaves this machine, or when the rule is declared. GDPR Art. 44 maps to it.
+leaves this machine, or when the rule is declared, and in either case only
+while `residency.outside` is empty: gnomon has no evidence of where another
+harness sends. GDPR Art. 44 maps to it.
 The fact `dataflow_register` backs GDPR Art. 30, Art. 44 and DORA Art. 28.
 
 **Fixture**: `conformance/dataflow_report.json`. The register is tested in
