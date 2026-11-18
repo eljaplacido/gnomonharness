@@ -26,6 +26,46 @@
 
 ## [Unreleased]
 
+## [0.6.1] — 2026-11-18
+
+The 0.6.0 pillars, extended to every harness `gnomon guard` governs. A
+security test, the process metrics and the data-flow register now see Claude
+Code, opencode and Cursor, not only gnomon's own sessions. The model-free
+suites match 0.6.0.
+
+- **`gnomon security test` runs the attack corpus as each host calls the
+  guard** (#195):
+  - each case is sent in Claude Code's, opencode's and Cursor's own hook input
+    and the answer read as that host reads it (`--host <one>|all`);
+  - a call a host gives its hook no event for is listed as not covered and
+    never counted as held (Cursor has no hook before a file write, and
+    `bypassPermissions` exists only in Claude Code);
+  - a fresh scaffold holds claude-code 24/24, opencode 22/22, cursor 15/15;
+  - schema `gnomon.security_test/2`: `hosts` and `not_covered` replace `role`
+    and `role_source` (CONTRACTS.md §50).
+- **`gnomon audit metrics` counts other harnesses' guarded sessions** (#196):
+  - per host, from the guard's own hash-chained trails: calls, decisions,
+    rules, tools, a refusal rate;
+  - calls a lowered `[governance]` level let through that their rule would
+    refuse (`below_verdict`);
+  - a host's model calls and tokens are not in the guard's trail, so they are
+    not counted;
+  - schema `gnomon.metrics/2` (§49).
+- **`gnomon compliance dataflow` names the harnesses gnomon guards** (#197):
+  - each is a `host_agent` destination: gnomon decides its tool calls but
+    does not route its model requests;
+  - `residency.outside` lists them, and the text says the residency rule
+    cannot see them;
+  - the compliance probe `residency_held` (GDPR Art. 44) does not hold while
+    one exists;
+  - schema `gnomon.dataflow/2` (§48).
+- **This repository declares `[governance]`** (#194): its own `.gnomon/`
+  held 18 of the 24 attack cases and now holds all of them.
+- **Compliance catalog** (#193): every article, clause, control and criterion
+  id and title was checked against its framework's published text; the CRA
+  note gives the commercial-supply qualifier and the application dates. The
+  mapping itself still wants a qualified reviewer.
+
 ## [0.6.0] — 2026-11-18
 
 Security, evaluation and compliance become named pillars beside governance.
@@ -5260,7 +5300,8 @@ was written.
 
 <!-- 0.4.4 and 0.4.5 were never published, so 0.5.0 compares against 0.4.3 and
      their links point at the tags, not at (draft) release pages. -->
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/eljaplacido/gnomonharness/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/eljaplacido/gnomonharness/compare/v0.4.3...v0.5.0
 [0.4.5]: https://github.com/eljaplacido/gnomonharness/tree/v0.4.5
