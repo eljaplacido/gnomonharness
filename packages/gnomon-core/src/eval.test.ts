@@ -20,6 +20,8 @@ import {
   evalExit,
   isEvalAbort,
   parseAgainst,
+  parseBase,
+  runHarnessCommand,
   EVAL_SCHEMA,
   EVAL_MODES,
   EVAL_ARM_KINDS,
@@ -140,7 +142,10 @@ describe("gnomon eval: the contract", () => {
   it("parses --against and refuses anything else", () => {
     expect(parseAgainst("profile:smart")).toEqual({ kind: "profile", profile: "smart" });
     expect(parseAgainst("surface:main~1")).toEqual({ kind: "surface", ref: "main~1" });
-    expect(() => parseAgainst("model:x")).toThrow(/profile:<name> or surface:<git ref>/);
+    expect(parseAgainst("command:claude")).toEqual({ kind: "command", name: "claude" });
+    expect(() => parseAgainst("model:x")).toThrow(/profile:<name>, surface:<git ref> or command:<harness>/);
+    expect(parseBase("command:opencode")).toEqual({ kind: "command", name: "opencode" });
+    expect(() => parseBase("profile:smart")).toThrow(/--base "profile:smart": expected command:<harness>/);
   });
 });
 
@@ -305,3 +310,116 @@ describe("gnomon eval: the record", () => {
     expect(report.budget.requests_used).toBeGreaterThanOrEqual(3);
   });
 });
+
+/** Two stand-ins for another harness's CLI: one that fixes the task, one that does nothing. */
+const HARNESSES =
+  `[harness.fixer]\ncommand = ["node", "-e", 'require("fs").writeFileSync("fixed.txt", "ok")', "{prompt}"]\nlocal = true\n\n` +
+  `[harness.idle]\ncommand = ["node", "-e", 'process.stdin.resume(); process.stdin.on("end", () => {})']\nlocal = true\n\n` +
+  `[harness.paid]\ncommand = ["node", "--version"]\n\n` +
+  `[harness.missing]\ncommand = ["gnomon-no-such-harness-binary"]\nlocal = true\n\n`;
+
+describe("gnomon eval: another harness as an arm (command:<name>)", () => {
+  it("gnomon against another harness's CLI: same clones, same check, its tokens and requests not metered", async () => {
+    project({ budget: HARNESSES });
+    const { report, cells } = await evaluate(scripted, { against: "command:fixer" });
+    shapeHolds(report);
+    expect(report.schema).toBe("gnomon.eval/2");
+    expect(report.arms.candidate).toMatchObject({ kind: "command", label: "command:fixer", profile: null, model: null, endpoint: null });
+    expect(report.arms.candidate!.command![0]).toBe("node");
+    expect(report.arms.base.kind).toBe("head");
+    // Interleaved per pair, base first, as for any eval.
+    expect(cells.map((c) => c.arm)).toEqual(Array(6).fill(["base", "candidate"]).flat());
+    expect(cells.filter((c) => c.arm === "candidate").every((c) => c.valid && c.passed && c.model === "command:fixer" && c.stop_reason === "exited")).toBe(true);
+    expect(report.endpoints.pass).toMatchObject({ base: { passes: 0, n: 6 }, candidate: { passes: 6, n: 6 }, candidate_only: 6 });
+    expect(report.endpoints.output_tokens).toEqual({ base: expect.any(Number), candidate: null, gain: null, sign: null });
+    expect(report.endpoints.requests.candidate).toBeNull();
+    expect(report.meets_thresholds).toBe(true);
+    // The base arm's clones are gnomon's own: none of them was fixed.
+    expect(cells.filter((c) => c.arm === "base").every((c) => c.valid && c.passed === false)).toBe(true);
+  }, 60_000);
+
+  it("two other harnesses, no gnomon arm: no model is contacted and no trust is settled", async () => {
+    project({ budget: HARNESSES });
+    let settled = 0;
+    const { report, cells } = await evaluate(down, { base: "command:idle", against: "command:fixer", settleTrust: () => (settled++, undefined) });
+    shapeHolds(report);
+    expect(settled).toBe(0);
+    expect(report.arms.base).toMatchObject({ kind: "command", label: "command:idle" });
+    expect(cells.every((c) => c.valid)).toBe(true);
+    expect(report.endpoints.pass).toMatchObject({ base: { passes: 0 }, candidate: { passes: 6 } });
+    expect(report.endpoints.output_tokens).toEqual({ base: null, candidate: null, gain: null, sign: null });
+    expect(report.trust).toEqual({ base: null, candidate: null });
+    const rec = recordEval(loadConfig(root), report, cells);
+    expect(verifyTrail(join(root, ".gnomon-audit", `${rec.trail!.split("/").pop()}`)).ok).toBe(true);
+  }, 60_000);
+
+  it("refuses before any cell: an undeclared harness, a paid one without --yes-spend, the same harness twice, --base beside a gnomon arm", async () => {
+    project({ budget: HARNESSES });
+    const abort = async (o: Partial<Parameters<typeof runEval>[1]>, re: RegExp) => {
+      const err = await evaluate(down, o).then(() => null, (e) => e);
+      expect(isEvalAbort(err), String(err)).toBe(true);
+      expect(String(err.message)).toMatch(re);
+    };
+    await abort({ against: "command:nope" }, /declares no \[harness\.nope\] \(declared: fixer, idle, paid, missing\)/);
+    await abort({ against: "command:paid" }, /cannot meter or cap[\s\S]*--yes-spend/);
+    await abort({ base: "command:fixer", against: "command:fixer" }, /both are command:fixer/);
+    await abort({ base: "command:fixer", against: "profile:smart" }, /compared only with --against command:/);
+  });
+
+  it("--base command:<name> alone measures that harness on the tasks, in single mode", async () => {
+    project({ budget: HARNESSES });
+    const { report } = await evaluate(down, { base: "command:fixer" });
+    shapeHolds(report);
+    expect(report).toMatchObject({ mode: "single", meets_thresholds: true });
+    expect(report.arms.base).toMatchObject({ kind: "command", label: "command:fixer" });
+    expect(report.endpoints.pass.base).toMatchObject({ passes: 6, n: 6 });
+    expect(report.endpoints.requests.base).toBeNull();
+  }, 60_000);
+
+  it("a harness that follows PWD works in its clone; one that writes into the project checkout is caught, not scored", async () => {
+    const lit = (x: string) => x.replace(/\\/g, "/");
+    project({
+      budget:
+        HARNESSES +
+        `[harness.pwd]\ncommand = ["node", "-e", 'require("fs").writeFileSync(require("path").join(process.env.PWD, "fixed.txt"), "ok")']\nlocal = true\n\n` +
+        `[harness.escaper]\ncommand = ["node", "-e", 'require("fs").writeFileSync("${lit(root)}/escaped.txt", "x"); require("fs").writeFileSync("fixed.txt", "ok")']\nlocal = true\n\n`,
+    });
+    const pwd = await evaluate(down, { base: "command:pwd" });
+    expect(pwd.report.endpoints.pass.base).toMatchObject({ passes: 6, n: 6 });
+    expect(existsSync(join(root, "fixed.txt"))).toBe(false);
+    const esc = await evaluate(down, { base: "command:escaper" });
+    expect(esc.cells.every((c) => !c.valid && /changed the project checkout, not only its clone \(escaped\.txt \?\? /.test(c.invalid_reason ?? ""))).toBe(true);
+    expect(esc.report.meets_thresholds).toBe("undetermined");
+  }, 60_000);
+
+  it("a harness that cannot start is an apparatus failure, never a fail", async () => {
+    project({ budget: HARNESSES });
+    const { report, cells } = await evaluate(scripted, { against: "command:missing" });
+    const cand = cells.filter((c) => c.arm === "candidate");
+    expect(cand.every((c) => !c.valid && c.bucket === "apparatus_failure" && /could not start/.test(c.invalid_reason ?? ""))).toBe(true);
+    expect(report.pairs.valid).toBe(0);
+    expect(report.meets_thresholds).toBe("undetermined");
+  }, 60_000);
+
+  it("the CLI's argv: {prompt} is replaced in an argument, else the prompt goes on stdin; a timeout kills it", async () => {
+    root = mkdtempSync(join(tmpdir(), "gnomon-eval-cmd-"));
+    const arg = await runHarnessCommand(
+      { name: "a", command: ["node", "-e", 'require("fs").writeFileSync("p.txt", process.argv[1])', "{prompt}"], timeout_seconds: 30, local: true },
+      root,
+      "fix it; rm -rf / is just text"
+    );
+    expect(arg).toMatchObject({ code: 0, timed_out: false });
+    expect(readFileSync(join(root, "p.txt"), "utf-8")).toBe("fix it; rm -rf / is just text");
+    const stdin = await runHarnessCommand(
+      { name: "s", command: ["node", "-e", 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>require("fs").writeFileSync("s.txt",d))'], timeout_seconds: 30, local: true },
+      root,
+      "from stdin"
+    );
+    expect(stdin.code).toBe(0);
+    expect(readFileSync(join(root, "s.txt"), "utf-8")).toBe("from stdin");
+    const slow = await runHarnessCommand({ name: "t", command: ["node", "-e", "setTimeout(() => {}, 60000)"], timeout_seconds: 1, local: true }, root, "x");
+    expect(slow.timed_out).toBe(true);
+    expect(slow.duration_ms).toBeLessThan(15_000);
+  }, 30_000);
+});
+

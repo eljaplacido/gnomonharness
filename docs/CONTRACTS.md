@@ -4069,11 +4069,11 @@ catalog entry is data and moves with releases.
 that every fact's `ref` names an existing file and heading, and validates real
 reports against the key lists.
 
-## 47. `gnomon eval` — schema `gnomon.eval/1`, audit kind `eval_run`, `v: 1`
+## 47. `gnomon eval` — schema `gnomon.eval/2`, audit kind `eval_run`, `v: 2`
 
 A skill trial (§13) asks whether one proposed skill helps. `gnomon eval` asks
-the same question about a profile or a surface, and without `--against` it
-measures the surface alone. The spec, the clones, the validity rule, the
+the same question about a profile, a surface or another harness, and without
+`--against` it measures one arm alone. The spec, the clones, the validity rule, the
 budget, the billed-endpoint check and the statistics are a trial's, from the
 same code (`skill_trial.ts`, used by `eval.ts`).
 
@@ -4084,6 +4084,45 @@ same code (`skill_trial.ts`, used by `eval.ts`).
 | (none) | none: mode `single` | — |
 | `profile:<name>` | this checkout under profile `<name>` | the same surface hash; the profile is not the base's |
 | `surface:<git ref>` | HEAD's code, `.gnomon/` exactly as the ref has it, the base's profile | `arms.differ` lists the manifest paths that differ, and must not be empty |
+| `command:<harness>` | another harness's CLI, as `[harness.<harness>]` in the spec declares it, in the same clones | the harness; `arms.differ` is empty |
+
+**Command arms** (version 2). The spec declares each harness:
+
+```toml
+[harness.claude]
+command = ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits"]
+timeout_seconds = 1800   # default
+local = false            # default; true = it reaches no paid provider
+```
+
+- `command` is an argv array, never a shell line. `{prompt}` in an argument
+  is replaced by the task's prompt; with none, the prompt is written to the
+  command's stdin. It runs in the cell's fresh clone with the process
+  environment and `PWD` set to the clone (opencode takes its project from
+  `PWD`), so the harness uses its own login and configuration. It runs
+  on the host, as a task's `setup` and `check` do: the spec is part of the
+  hashed surface, and a harness with `gnomon guard` hooks committed in the
+  repository is governed by them in its clone.
+- A cell is valid when the command started, the project checkout is as it
+  was (HEAD, and `git status` with each listed path's size and mtime,
+  `.gnomon-trials/` and `.gnomon-audit/` aside), and the check ran. A harness
+  that changed the checkout is an apparatus failure naming the paths: gnomon
+  cannot undo it, and does not score it. A command that cannot start is an
+  apparatus failure; a timeout kills its process group and
+  is scored by the check (`stop_reason` `timeout`, else `exited`).
+- gnomon does not meter another harness: a command arm's `output_tokens` and
+  `requests` are null, the token and request sign tests are null, and the
+  verdict rests on pass alone.
+- A harness not declared `local = true` is refused without `--yes-spend`:
+  `[budget] max_requests` cannot bound requests gnomon does not see.
+- `--base command:<harness>` replaces the HEAD arm. Alone it measures that
+  harness in `single` mode; with `--against` only `command:<other>` is
+  accepted. No gnomon arm runs then, so no trust is settled, no endpoint is
+  checked and the checkout's surface need not be HEAD's.
+- A command arm has `kind` `command`, `label` `command:<harness>`, `command`
+  (the argv as declared), `profile`, `model` and `endpoint` null, and HEAD's
+  `surface_commit` and `surface_hash` (the clone's). Its cells' `model` is
+  `command:<harness>`.
 
 The base arm is HEAD under the spec's `model_profile`, else `--profile`, else
 the surface default. The checkout's surface hash must be HEAD's. Trust is
@@ -4104,13 +4143,15 @@ is no valid cell or the budget is spent.
 |---|---|
 | 0 | `meets_thresholds: true` |
 | 2 | `meets_thresholds: false` |
-| 10 | `"undetermined"`, or the eval could not start: no spec or one out of bounds, an unknown profile, a ref that is not a commit, identical arms, this checkout's surface not HEAD's, a clamped arm, or a billed endpoint with no `max_requests` and no `--yes-spend` |
+| 10 | `"undetermined"`, or the eval could not start: no spec or one out of bounds, an unknown profile, a ref that is not a commit, identical arms, this checkout's surface not HEAD's, a clamped arm, a billed endpoint with no `max_requests` and no `--yes-spend`, an undeclared or malformed `[harness.<name>]`, or a harness not declared local with no `--yes-spend` |
 
 **Report keys:** `schema`, `mode`, `spec`, `harness`, `role`, `arms`
 (`base`, `candidate` or null, `differ`; each arm has `kind` (`head`,
-`profile`, `surface`), `label`, `profile`, `surface_commit`, `surface_hash`,
-`model`, `endpoint`), `pairs`, `cells`, `endpoints` (`pass`, `output_tokens`,
-`requests`, `wall_ms`, with the candidate's fields null in `single` mode),
+`profile`, `surface`, `command`), `label`, `profile`, `surface_commit`,
+`surface_hash`, `model`, `endpoint`, and `command`? on a command arm),
+`pairs`, `cells`, `endpoints` (`pass`, `output_tokens`, `requests`,
+`wall_ms`, with the candidate's fields null in `single` mode and a command
+arm's tokens and requests null),
 `mde` (null in `single`), `thresholds`, `budget`, `trust` (`base`,
 `candidate`), `leftovers`, `status`, `meets_thresholds`, `reasons`.
 
@@ -4128,7 +4169,11 @@ only for one model name or one system prompt. The tests cover:
 - single mode, with and without `min_pass_rate`;
 - a better profile (exit 0) and a worse one (exit 2);
 - a surface arm built from the previous commit;
-- the refusals, the budget stop, and the sealed record.
+- the refusals, the budget stop, and the sealed record;
+- command arms, with stand-in CLIs: gnomon against one, two against each
+  other with no model contacted, one alone, one that cannot start, one that
+  follows `PWD`, one that writes into the project checkout, the spend and
+  declaration refusals, `{prompt}` against stdin, and the timeout.
 
 ## 48. Data flows and residency — `gnomon compliance dataflow`, `gnomon.dataflow/2`, `[compliance] allowed_regions`, `v: 2`
 

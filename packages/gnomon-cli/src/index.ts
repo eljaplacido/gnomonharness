@@ -2527,6 +2527,7 @@ async function cmdEval(args: CliArgs): Promise<number> {
     outcome = await runEval(config, {
       spec: flag("spec"),
       against: flag("against"),
+      base: flag("base"),
       yesSpend,
       // Settled on each arm's configuration as its cells load it; a clamped
       // arm is refused before any cell runs.
@@ -2549,15 +2550,17 @@ async function cmdEval(args: CliArgs): Promise<number> {
   const b = report.arms.base;
   const c = report.arms.candidate;
   console.log(`Eval ${report.spec.name}: ${report.pairs.valid}/${report.pairs.planned} valid ${c ? "pairs" : "cells"} (${report.role})`);
-  console.log(`  base       ${b.label}${b.profile ? ` profile ${b.profile}` : ""} on ${b.model ?? "?"}  pass ${p.base.passes}/${p.base.n}  [${p.base.wilson.join(", ")}]`);
+  const on = (a: typeof b) => (a.kind === "command" ? `(${a.command!.join(" ")})` : `on ${a.model ?? "?"}`);
+  const m = (v: number | null) => (v === null ? "not metered" : String(v));
+  console.log(`  base       ${b.label}${b.profile ? ` profile ${b.profile}` : ""} ${on(b)}  pass ${p.base.passes}/${p.base.n}  [${p.base.wilson.join(", ")}]`);
   if (c && p.candidate) {
-    console.log(`  candidate  ${c.label} on ${c.model ?? "?"}  pass ${p.candidate.passes}/${p.candidate.n}  [${p.candidate.wilson.join(", ")}]  McNemar p = ${p.mcnemar_p}`);
+    console.log(`  candidate  ${c.label} ${on(c)}  pass ${p.candidate.passes}/${p.candidate.n}  [${p.candidate.wilson.join(", ")}]  McNemar p = ${p.mcnemar_p}`);
     if (report.arms.differ.length > 0) console.log(`  differ     ${report.arms.differ.join(", ")}`);
     const t = report.endpoints.output_tokens;
-    console.log(`  out tokens base ${t.base}  candidate ${t.candidate}  gain ${t.gain === null ? "?" : `${(t.gain * 100).toFixed(1)}%`}`);
-    console.log(`  requests   base ${report.endpoints.requests.base}  candidate ${report.endpoints.requests.candidate}`);
+    console.log(`  out tokens base ${m(t.base)}  candidate ${m(t.candidate)}  gain ${t.gain === null ? "?" : `${(t.gain * 100).toFixed(1)}%`}`);
+    console.log(`  requests   base ${m(report.endpoints.requests.base)}  candidate ${m(report.endpoints.requests.candidate)}`);
   } else {
-    console.log(`  out tokens ${report.endpoints.output_tokens.base}  requests ${report.endpoints.requests.base}`);
+    console.log(`  out tokens ${m(report.endpoints.output_tokens.base)}  requests ${m(report.endpoints.requests.base)}`);
   }
   console.log(`  cells      ${report.cells.result} result, ${report.cells.refusal} refusal, ${report.cells.apparatus_failure} apparatus_failure`);
   console.log(`  meets_thresholds: ${String(report.meets_thresholds)} (${report.status})`);
@@ -2565,7 +2568,7 @@ async function cmdEval(args: CliArgs): Promise<number> {
   if (report.leftovers.length > 0) console.log(`  leftovers  ${report.leftovers.join(", ")}`);
   console.log(`Report: ${out.report_path}`);
   if (out.record) console.log(`Recorded in ${out.trail} (seq ${out.record.seq}, ${out.record.hash?.slice(0, 12)})`);
-  console.log("Nothing was changed. Switching the profile or merging the surface remains a person's decision.");
+  console.log("Nothing was changed. Switching the profile, the surface or the harness remains a person's decision.");
   return evalExit(report.meets_thresholds);
 }
 
@@ -3189,13 +3192,18 @@ Commands:
     escalation outside them is dropped. Read-only. Exit 0 every route
     admitted or no rule, 2 one refused or closed, 10 could not run.
 
-  eval [--against profile:<name>|surface:<git ref>] [--spec <name>] [--yes]
+  eval [--against profile:<name>|surface:<git ref>|command:<harness>]
+       [--base command:<harness>] [--spec <name>] [--yes]
        [--yes-spend] [--trust] [--json] [--dir <path>]
     Measure on this project's own tasks (.gnomon/trials/<name>.toml, the
     skill trial's spec): alone, the surface's pass rate; with --against,
-    whether another profile, or the .gnomon/ of another commit with HEAD's
-    code, does better. Paired and interleaved, each cell a gnomon task in a
-    fresh private clone, judged by the task's check command. Writes
+    whether another profile, the .gnomon/ of another commit with HEAD's
+    code, or another harness's CLI ([harness.<name>] command in the spec:
+    Claude Code, opencode, ...) does better. --base command:<harness> puts
+    another harness in place of gnomon's arm. Paired and interleaved, each
+    cell in a fresh private clone, judged by the task's check command. A
+    command arm's requests and tokens are not metered (null), and it needs
+    --yes-spend unless the spec declares it local = true. Writes
     .gnomon-trials/_eval/<utc>/ and an eval_run audit record. Changes
     nothing. Exit 0 meets the spec, 2 does not, 10 no answer.
 
