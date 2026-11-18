@@ -9,6 +9,15 @@
  *   gnomon eval                         -- how does this surface do on its tasks?
  *   gnomon eval --against profile:NAME  -- would this profile do better?
  *   gnomon eval --against surface:REF   -- would the surface at REF do better?
+ *   gnomon eval --against command:NAME  -- how does another harness do, on the same tasks?
+ *   gnomon eval --base command:A --against command:B   -- two other harnesses
+ *
+ * A command arm runs another harness's CLI (Claude Code's `claude -p`,
+ * `opencode run`, ...) as the spec declares it under [harness.NAME], in the
+ * same fresh clone per cell, judged by the same check. gnomon does not meter
+ * another harness's model requests or tokens, so a command arm reports them
+ * as null rather than zero, and its spend is the operator's: --yes-spend is
+ * required unless the spec declares the harness local.
  *
  * The rules are a trial's, because an eval is a small benchmark too:
  *   - Two arms, one difference. A profile arm runs the same surface under
@@ -24,7 +33,8 @@
  * switches the profile or merges the surface.
  */
 
-import { readFileSync, rmSync } from "node:fs";
+import { readFileSync, rmSync, statSync } from "node:fs";
+import { spawn, type ChildProcess } from "node:child_process";
 import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { GnomonConfig, loadConfig, parseToml, recomputeManifest, resolveRouting, routeRole, isLocalEndpoint } from "./config.js";
@@ -55,26 +65,159 @@ import {
   type TrialStatus,
 } from "./skill_trial.js";
 
-export const EVAL_SCHEMA = "gnomon.eval/1";
+export const EVAL_SCHEMA = "gnomon.eval/2";
 /** Reports go beside skill trials', so the record guard and `guard` protect them alike. */
 export const EVAL_RUNS_SUBDIR = "_eval";
 export const EVAL_MODES = ["single", "paired"] as const;
 export type EvalMode = (typeof EVAL_MODES)[number];
-export const EVAL_ARM_KINDS = ["head", "profile", "surface"] as const;
+export const EVAL_ARM_KINDS = ["head", "profile", "surface", "command"] as const;
 export type EvalArmKind = (typeof EVAL_ARM_KINDS)[number];
 export type EvalArmName = "base" | "candidate";
 
 /** `--against`, parsed. */
-export type Against = { kind: "profile"; profile: string } | { kind: "surface"; ref: string };
+export type Against = { kind: "profile"; profile: string } | { kind: "surface"; ref: string } | { kind: "command"; name: string };
 
 export function parseAgainst(text: string): Against {
-  const m = /^(profile|surface):(.+)$/.exec(text.trim());
-  if (!m) throw new EvalAbort(`--against "${text}": expected profile:<name> or surface:<git ref>.`);
-  return m[1] === "profile" ? { kind: "profile", profile: m[2]! } : { kind: "surface", ref: m[2]! };
+  const m = /^(profile|surface|command):(.+)$/.exec(text.trim());
+  if (!m) throw new EvalAbort(`--against "${text}": expected profile:<name>, surface:<git ref> or command:<harness>.`);
+  return m[1] === "profile" ? { kind: "profile", profile: m[2]! } : m[1] === "surface" ? { kind: "surface", ref: m[2]! } : { kind: "command", name: m[2]! };
+}
+
+/** `--base`: only another harness can stand in for gnomon's HEAD arm. */
+export function parseBase(text: string): { kind: "command"; name: string } {
+  const m = /^command:(.+)$/.exec(text.trim());
+  if (!m) throw new EvalAbort(`--base "${text}": expected command:<harness> (the base arm is otherwise this checkout's HEAD).`);
+  return { kind: "command", name: m[1]! };
+}
+
+/** `[harness.NAME]` in a trial spec: another harness's CLI, run as an eval arm. */
+export interface HarnessCommand {
+  name: string;
+  /** argv, never a shell line. `{prompt}` in an argument is replaced by the task's prompt; without one the prompt goes on stdin. */
+  command: string[];
+  timeout_seconds: number;
+  /** Declared to reach no paid provider: the arm runs without --yes-spend. */
+  local: boolean;
+}
+export const HARNESS_DEFAULT_TIMEOUT_SECONDS = 1800;
+
+/** Read `[harness.NAME]` from the spec; throws naming the file and the key. */
+export function loadHarnessCommand(gnomonDir: string, spec: TrialSpec, name: string): HarnessCommand {
+  const doc = parseToml(readFileSync(join(gnomonDir, TRIALS_DIR, `${spec.name}.toml`), "utf-8")) as Record<string, any>;
+  const table = doc.harness?.[name] as Record<string, unknown> | undefined;
+  const declared = Object.keys((doc.harness ?? {}) as object);
+  if (!table) {
+    throw new EvalAbort(
+      `command:${name}: ${spec.path} declares no [harness.${name}]` +
+        (declared.length ? ` (declared: ${declared.join(", ")})` : "") +
+        `. Declare command = ["<cli>", "<arg>", "{prompt}"], and local = true if it reaches no paid provider.`
+    );
+  }
+  const cmd = table.command;
+  if (!Array.isArray(cmd) || cmd.length === 0 || !cmd.every((a) => typeof a === "string" && a.length > 0)) {
+    throw new EvalAbort(`${spec.path} [harness.${name}] command must be a non-empty array of strings (argv, no shell).`);
+  }
+  const t = table.timeout_seconds ?? HARNESS_DEFAULT_TIMEOUT_SECONDS;
+  if (typeof t !== "number" || !(t > 0)) throw new EvalAbort(`${spec.path} [harness.${name}] timeout_seconds must be a positive number.`);
+  if (table.local !== undefined && typeof table.local !== "boolean") throw new EvalAbort(`${spec.path} [harness.${name}] local must be true or false.`);
+  return { name, command: cmd as string[], timeout_seconds: t, local: table.local === true };
+}
+
+/** One run of another harness's CLI in a cell's clone. */
+export interface CommandRun {
+  code: number | null;
+  timed_out: boolean;
+  /** Set when the command could not be started at all. */
+  error?: string;
+  duration_ms: number;
+}
+
+/**
+ * What the project checkout looks like: HEAD and every changed or untracked
+ * path, gnomon's own record directories aside. Compared around a command
+ * cell, so a harness that worked outside its clone is caught, not scored.
+ */
+export function checkoutState(root: string): string {
+  const head = trialGit(root, ["rev-parse", "HEAD"]);
+  const status = trialGit(root, ["status", "--porcelain", "--untracked-files=all", "--", ".", ":(exclude).gnomon-trials", ":(exclude).gnomon-audit"]);
+  // Size and mtime too: a path already changed before the cell, rewritten by
+  // it, leaves `git status` as it was.
+  const lines = status
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => {
+      const path = l.slice(3).replace(/^"|"$/g, "").split(" -> ").pop()!;
+      try {
+        const st = statSync(join(root, path));
+        return `${path} ${l.slice(0, 2).trim()} ${st.size} ${st.mtimeMs}`;
+      } catch {
+        return `${path} ${l.slice(0, 2).trim()} gone`;
+      }
+    });
+  return [head, ...lines].join("\n");
+}
+
+/** Live command-arm processes, so an interrupt does not leave one running. */
+const LIVE_CHILDREN = new Set<ChildProcess>();
+function killTree(child: ChildProcess, sig: NodeJS.Signals): void {
+  try {
+    if (process.platform !== "win32" && child.pid) process.kill(-child.pid, sig);
+    else child.kill(sig);
+  } catch {
+    /* already gone */
+  }
+}
+
+export function runHarnessCommand(def: HarnessCommand, dir: string, prompt: string): Promise<CommandRun> {
+  const usesArg = def.command.some((a) => a.includes("{prompt}"));
+  const argv = def.command.map((a) => a.split("{prompt}").join(prompt));
+  const t0 = Date.now();
+  return new Promise((done) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(argv[0]!, argv.slice(1), {
+        cwd: dir,
+        // PWD too: some harnesses (opencode) take their project directory
+        // from PWD, which is otherwise inherited from where gnomon was
+        // started, and would work in the operator's checkout, not the clone.
+        env: { ...process.env, PWD: dir },
+        stdio: [usesArg ? "ignore" : "pipe", "ignore", "ignore"],
+        detached: process.platform !== "win32",
+      });
+    } catch (err) {
+      done({ code: null, timed_out: false, error: err instanceof Error ? err.message : String(err), duration_ms: 0 });
+      return;
+    }
+    LIVE_CHILDREN.add(child);
+    let timedOut = false;
+    let settled = false;
+    const finish = (r: CommandRun) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      clearTimeout(hard);
+      LIVE_CHILDREN.delete(child);
+      done(r);
+    };
+    let hard: NodeJS.Timeout | undefined;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree(child, "SIGTERM");
+      hard = setTimeout(() => killTree(child, "SIGKILL"), 5000);
+    }, def.timeout_seconds * 1000);
+    child.on("error", (err) => finish({ code: null, timed_out: false, error: err.message, duration_ms: Date.now() - t0 }));
+    child.on("exit", (code) => finish({ code, timed_out: timedOut, duration_ms: Date.now() - t0 }));
+    if (!usesArg && child.stdin) {
+      child.stdin.on("error", () => {});
+      child.stdin.end(prompt);
+    }
+  });
 }
 
 export interface EvalArm {
   kind: EvalArmKind;
+  /** A command arm's argv as the spec declares it ({prompt} unreplaced). */
+  command?: string[];
   /** What a person would call it: "HEAD", "profile:fast", "surface:main". */
   label: string;
   profile: string | null;
@@ -136,8 +279,9 @@ export interface EvalReport {
       gain: number | null;
       mcnemar_p: number | null;
     };
-    output_tokens: { base: number; candidate: number | null; gain: number | null; sign: Sign | null };
-    requests: { base: number; candidate: number | null; sign: Sign | null };
+    /** Null for an arm gnomon does not meter (a command arm). */
+    output_tokens: { base: number | null; candidate: number | null; gain: number | null; sign: Sign | null };
+    requests: { base: number | null; candidate: number | null; sign: Sign | null };
     wall_ms: { base: number; candidate: number | null; sign: Sign | null };
   };
   mde: { discordant_pairs: number; pass_rate_difference: number | null } | null;
@@ -163,8 +307,12 @@ export type EvalCellRunner = (
 
 export interface EvalOptions {
   spec?: string;
-  /** `profile:<name>` or `surface:<git ref>`; absent runs one arm. */
+  /** `profile:<name>`, `surface:<git ref>` or `command:<harness>`; absent runs one arm. */
   against?: string;
+  /** `command:<harness>`: another harness in place of this checkout's HEAD as the base arm. */
+  base?: string;
+  /** How a command arm's CLI is run; tests replace it. */
+  runCommand?: (def: HarnessCommand, dir: string, prompt: string) => Promise<CommandRun>;
   runCell: EvalCellRunner;
   yesSpend?: boolean;
   /** As for a trial: settle trust for a configuration a cell will run. Clamped is refused. */
@@ -214,6 +362,27 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
   }
   const min_pass_rate = minPassRate(spec, config.gnomonDir);
   const against = opts.against ? parseAgainst(opts.against) : null;
+  const baseCmd = opts.base ? parseBase(opts.base) : null;
+  if (baseCmd && against && against.kind !== "command") {
+    throw new EvalAbort(`--base command:${baseCmd.name} is compared only with --against command:<harness>; a gnomon arm is the base by default.`);
+  }
+  if (baseCmd && against?.kind === "command" && baseCmd.name === against.name) {
+    throw new EvalAbort(`The arms are identical: both are command:${baseCmd.name}.`);
+  }
+  // Another harness's CLI, per arm, as the spec declares it.
+  const cmdOf: Partial<Record<EvalArmName, HarnessCommand>> = {};
+  if (baseCmd) cmdOf.base = loadHarnessCommand(config.gnomonDir, spec, baseCmd.name);
+  if (against?.kind === "command") cmdOf.candidate = loadHarnessCommand(config.gnomonDir, spec, against.name);
+  for (const def of Object.values(cmdOf)) {
+    if (def && !def.local && !opts.yesSpend) {
+      throw new EvalAbort(
+        `command:${def.name} runs ${def.command[0]}, which gnomon cannot meter or cap: its model requests are its own. ` +
+          `Pass --yes-spend to accept that spend, or declare local = true in [harness.${def.name}] if it reaches no paid provider.`
+      );
+    }
+  }
+  const gnomonBase = !cmdOf.base;
+  const runCommand = opts.runCommand ?? runHarnessCommand;
   const role = spec.role ?? resolveRouting(config).default;
   const baseProfile = spec.model_profile ?? (config.profile?.overridden ? config.profile.requested : undefined);
   const baseConfig = spec.model_profile ? loadConfig(root, spec.model_profile) : config;
@@ -242,6 +411,7 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
   };
   const signals = opts.signals ?? trialProcessSignals;
   const onSignal = (sig: "SIGINT" | "SIGTERM") => () => {
+    for (const c of [...LIVE_CHILDREN]) killTree(c, "SIGKILL");
     for (const sb of [...live]) done(sb);
     signals.off("SIGINT", onInt);
     signals.off("SIGTERM", onTerm);
@@ -277,7 +447,7 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
       const ma = shaOf(a.manifest);
       const mb = shaOf(b.manifest);
       differ = [...new Set([...ma.keys(), ...mb.keys()])].filter((p) => ma.get(p) !== mb.get(p)).sort();
-      if (against) {
+      if (against && against.kind !== "command") {
         // The candidate's configuration as its cells will load it: trust and
         // the billed check below are settled on exactly that.
         // A profile arm is this checkout under another profile, so trust is
@@ -310,20 +480,20 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
       throw new EvalAbort(`The arms differ in ${differ.join(", ")} as well as the profile.`);
     }
     const checkout = recomputeManifest(config.gnomonDir).surface_hash;
-    if (checkout !== baseHash) {
+    if (gnomonBase && checkout !== baseHash) {
       throw new EvalAbort(
         `This checkout's surface (${checkout.slice(0, 12)}) is not HEAD's (${baseHash.slice(0, 12)}). ` +
           `Commit or discard the changes under .gnomon/, then run the eval again.`
       );
     }
-    const baseTrust = opts.settleTrust?.(baseConfig);
+    const baseTrust = gnomonBase ? opts.settleTrust?.(baseConfig) : undefined;
     if (baseTrust?.decision === "clamped") {
       throw new EvalAbort(
         `This surface${baseProfile ? ` under profile "${baseProfile}"` : ""} grants ${baseTrust.grants.join(", ")} beyond ` +
           `gnomon's defaults and this machine has not trusted it. Trust it first (\`gnomon trust grant\`, or --trust).`
       );
     }
-    billedCheck(baseConfig, role, "the base arm");
+    if (gnomonBase) billedCheck(baseConfig, role, "the base arm");
 
     const arms: EvalArmName[] = against ? ["base", "candidate"] : ["base"];
     const cells: EvalCell[] = [];
@@ -374,6 +544,34 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
               cell.invalid_reason = `surface ${cell.surface_hash.slice(0, 12)} is not the ${arm} arm's ${want.slice(0, 12)}`;
             } else if (task.setup && trialShell(task.setup, wt.dir, timeout).code !== 0) {
               cell.invalid_reason = "setup did not exit 0";
+            } else if (cmdOf[arm]) {
+              // Another harness: its CLI in this clone, then the same check.
+              const def = cmdOf[arm]!;
+              const before = checkoutState(root);
+              const run = await runCommand(def, wt.dir, task.prompt);
+              const after = checkoutState(root);
+              cell.duration_ms = run.duration_ms;
+              cell.model = `command:${def.name}`;
+              cell.code = run.code ?? 10;
+              cell.stop_reason = run.error ? "apparatus" : run.timed_out ? "timeout" : "exited";
+              if (run.error) {
+                cell.invalid_reason = `command:${def.name} could not start: ${run.error}`;
+              } else if (after !== before) {
+                const moved = after.split("\n").filter((l) => l && !before.split("\n").includes(l));
+                cell.invalid_reason =
+                  `command:${def.name} changed the project checkout, not only its clone (${moved.slice(0, 5).join("; ") || "HEAD moved"}): ` +
+                  `not contained, so not scored. Review those changes in ${root}.`;
+              } else {
+                const ran = trialShell(task.check, wt.dir, timeout);
+                cell.check_exit = ran.code;
+                if (ran.code === null) {
+                  cell.invalid_reason = `check did not run: ${ran.error}`;
+                } else {
+                  cell.bucket = "result";
+                  cell.valid = true;
+                  cell.passed = ran.code === 0;
+                }
+              }
             } else {
               const t0 = Date.now();
               const profile = arm === "candidate" ? candProfile : baseProfile;
@@ -426,6 +624,19 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
 
     const armOf = (name: EvalArmName): EvalArm => {
       const cand = name === "candidate";
+      const def = cmdOf[name];
+      if (def) {
+        return {
+          kind: "command",
+          command: [...def.command],
+          label: `command:${def.name}`,
+          profile: null,
+          surface_commit: head,
+          surface_hash: baseHash,
+          model: null,
+          endpoint: null,
+        };
+      }
       const profile = (cand ? candProfile : baseProfile) ?? null;
       return {
         kind: !cand ? "head" : against!.kind,
@@ -438,7 +649,10 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
       };
     };
     const report: EvalReport = {
-      ...summariseEval(spec, { ...spec.thresholds, ...(min_pass_rate !== undefined ? { min_pass_rate } : {}) }, against !== null, cells, planned, pair, requestsUsed, status),
+      ...summariseEval(spec, { ...spec.thresholds, ...(min_pass_rate !== undefined ? { min_pass_rate } : {}) }, against !== null, cells, planned, pair, requestsUsed, status, {
+        base: Boolean(cmdOf.base),
+        candidate: Boolean(cmdOf.candidate),
+      }),
       harness: harnessBuild(),
       role,
       arms: { base: armOf("base"), candidate: against ? armOf("candidate") : null, differ },
@@ -489,7 +703,9 @@ function summariseEval(
   planned: number,
   run: number,
   requestsUsed: number,
-  status: TrialStatus
+  status: TrialStatus,
+  /** Arms gnomon does not meter (command arms): their tokens and requests are null. */
+  unmetered: { base: boolean; candidate: boolean } = { base: false, candidate: false }
 ): Summary {
   const sum = (xs: number[]) => xs.reduce((a, b) => a + b, 0);
   const buckets = { result: 0, refusal: 0, apparatus_failure: 0 };
@@ -540,8 +756,8 @@ function summariseEval(
       cells: { total: cells.length, ...buckets },
       endpoints: {
         pass: { base: { passes, n, wilson: wilson(passes, n, th.alpha) }, candidate: null, base_only: null, candidate_only: null, gain: null, mcnemar_p: null },
-        output_tokens: { base: sum(valid.map((c) => c.tokens_out ?? 0)), candidate: null, gain: null, sign: null },
-        requests: { base: sum(valid.map((c) => c.requests)), candidate: null, sign: null },
+        output_tokens: { base: unmetered.base ? null : sum(valid.map((c) => c.tokens_out ?? 0)), candidate: null, gain: null, sign: null },
+        requests: { base: unmetered.base ? null : sum(valid.map((c) => c.requests)), candidate: null, sign: null },
         wall_ms: { base: sum(valid.map((c) => c.duration_ms)), candidate: null, sign: null },
       },
       mde: null,
@@ -635,8 +851,14 @@ function summariseEval(
         gain,
         mcnemar_p: Math.round(mcnemar * 1e6) / 1e6,
       },
-      output_tokens: { base: baseTok, candidate: candTok, gain: tokenGain, sign: tokenSign },
-      requests: { base: sum(reqPairs.map(([b]) => b)), candidate: sum(reqPairs.map(([, s]) => s)), sign: renameSign(signSummary(reqPairs)) },
+      output_tokens:
+        unmetered.base || unmetered.candidate
+          ? { base: unmetered.base ? null : baseTok, candidate: unmetered.candidate ? null : candTok, gain: null, sign: null }
+          : { base: baseTok, candidate: candTok, gain: tokenGain, sign: tokenSign },
+      requests:
+        unmetered.base || unmetered.candidate
+          ? { base: unmetered.base ? null : sum(reqPairs.map(([b]) => b)), candidate: unmetered.candidate ? null : sum(reqPairs.map(([, s]) => s)), sign: null }
+          : { base: sum(reqPairs.map(([b]) => b)), candidate: sum(reqPairs.map(([, s]) => s)), sign: renameSign(signSummary(reqPairs)) },
       wall_ms: { base: sum(wallPairs.map(([b]) => b)), candidate: sum(wallPairs.map(([, s]) => s)), sign: renameSign(signSummary(wallPairs)) },
     },
     mde: { discordant_pairs: k, pass_rate_difference: n >= k ? Math.round((k / n) * 1e4) / 1e4 : null },
@@ -701,5 +923,5 @@ export function recordEval(
 }
 
 /** For `gnomon eval --help` and the docs: the arms a person can name. */
-export const EVAL_AGAINST_FORMS = ["profile:<name>", "surface:<git ref>"] as const;
+export const EVAL_AGAINST_FORMS = ["profile:<name>", "surface:<git ref>", "command:<harness>"] as const;
 

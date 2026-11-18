@@ -1,16 +1,17 @@
 {
   "contract": "gnomon eval — docs/CONTRACTS.md section 47",
   "_comment": [
-    "The `gnomon eval --json` report, schema gnomon.eval/1, and its eval_run audit record.",
-    "A skill trial's cells (section 13) for a profile or a surface instead of a skill:",
+    "The `gnomon eval --json` report, schema gnomon.eval/2, and its eval_run audit record.",
+    "A skill trial's cells (section 13) for a profile, a surface or another harness's CLI instead of a skill:",
     "same spec (.gnomon/trials/<name>.toml), same clones, same validity rule, same statistics.",
     "A mode, arm kind, key or exit added, renamed or moved is a contract change:",
     "packages/gnomon-core/src/eval.test.ts asserts these lists against the code and real reports."
   ],
-  "schema": "gnomon.eval/1",
+  "schema": "gnomon.eval/2",
   "modes": ["single", "paired"],
-  "arm_kinds": ["head", "profile", "surface"],
-  "against_forms": ["profile:<name>", "surface:<git ref>"],
+  "arm_kinds": ["head", "profile", "surface", "command"],
+  "against_forms": ["profile:<name>", "surface:<git ref>", "command:<harness>"],
+  "base_forms": ["command:<harness>"],
   "verdicts": [true, false, "undetermined"],
   "statuses": ["complete", "budget_exhausted", "apparatus_failure"],
   "exit_codes": { "true": 0, "false": 2, "undetermined": 10, "could_not_start": 10 },
@@ -20,7 +21,7 @@
   },
   "arm_keys": {
     "required": ["kind", "label", "profile", "surface_commit", "surface_hash", "model", "endpoint"],
-    "optional": []
+    "optional": ["command"]
   },
   "audit_kind": "eval_run",
   "trail": ["session_start", "eval_run", "session_end"],
@@ -34,5 +35,13 @@
   "single_mode_verdict": "true when [thresholds] min_pass_rate (in (0, 1]) is met or not declared; false when declared and not met; undetermined with no valid cell or the budget spent",
   "paired_mode_verdict": "a skill trial's, with the candidate arm in the skill arm's place",
   "one_difference": "profile arm: same surface hash, another profile; surface arm: HEAD's code with .gnomon/ from the ref, the base's profile, differing manifest paths listed in arms.differ",
+  "command_arm": {
+    "declared": "[harness.<name>] in the trial spec: command (argv array, no shell; {prompt} in an argument is replaced by the task's prompt, else the prompt is written to stdin), timeout_seconds (default 1800), local (default false)",
+    "cell": "the command runs in the cell's fresh clone with the process environment and PWD set to the clone; then the task's check. Valid when the command started, the project checkout is unchanged (HEAD, git status with size and mtime per path, the record dirs aside) and the check ran; a changed checkout is apparatus_failure naming the paths; a command that cannot start is apparatus_failure. stop_reason exited or timeout; model command:<name>",
+    "unmetered": "gnomon does not meter another harness: that arm's output_tokens and requests are null, and the token and request sign tests are null; the verdict rests on pass",
+    "spend": "a harness not declared local = true is refused without --yes-spend: [budget] max_requests cannot bound requests gnomon does not see",
+    "base": "--base command:<name> replaces the HEAD arm: alone it measures that harness (single mode); with --against only command:<other>. No gnomon arm runs, so no trust is settled and no model endpoint is checked",
+    "arm": "kind command, label command:<name>, command (argv as declared), profile, model and endpoint null, surface_commit and surface_hash HEAD's (the clone)"
+  },
   "trust_settled_on": "each arm's configuration as its cells load it; a surface arm from another commit is admitted only by --trust or a scaffold-only surface"
 }

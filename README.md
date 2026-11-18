@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3537 TypeScript tests (2884 core, 628 cli, 18
-> natives, 7 tui) and 120 Rust tests — **3657 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3544 TypeScript tests (2891 core, 628 cli, 18
+> natives, 7 tui) and 120 Rust tests — **3664 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2666,6 +2666,8 @@ the model's prose.
 gnomon eval                                # this surface's pass rate, with a Wilson interval
 gnomon eval --against profile:local_first  # would this profile do better?
 gnomon eval --against surface:main         # would main's .gnomon/ (with HEAD's code) do better?
+gnomon eval --against command:claude --yes-spend        # gnomon against Claude Code, same tasks
+gnomon eval --base command:claude --against command:opencode --yes-spend   # two other harnesses
 ```
 
 With `--against`, each task × attempt runs once per arm, base then
@@ -2678,10 +2680,38 @@ use a sign test. The thresholds are the spec's, declared before the run. A
 cell whose endpoint failed is an apparatus failure, reported and never scored.
 A billed endpoint needs `[budget] max_requests` or `--yes-spend`.
 
+**Other harnesses as arms.** Declare another harness's CLI in the spec and
+name it with `command:<name>`. It runs on each task in the same fresh clone
+as gnomon's cells, judged by the same check and the same statistics:
+
+```toml
+# .gnomon/trials/default.toml
+[harness.claude]
+command = ["claude", "-p", "{prompt}", "--permission-mode", "acceptEdits"]
+
+[harness.opencode]
+command = ["opencode", "run", "--auto", "{prompt}"]   # --auto: approve its own writes, nobody is there to
+local = true    # only if its model is on this machine: then no --yes-spend
+```
+
+`command` is an argv array, never a shell line; `{prompt}` is replaced by the
+task's prompt, or the prompt goes on stdin. The harness uses its own login
+and configuration, and if its `gnomon guard` hook is committed in the
+repository, the same rules govern it in each clone. It runs non-interactively,
+so give it the flag that lets it act unattended (opencode's `--auto`, Claude
+Code's `--permission-mode`), or it may answer without doing the work. A
+harness that changes your project checkout instead of its clone is caught:
+the cell is an apparatus failure naming the paths, never scored. gnomon does not meter
+another harness's requests or tokens: the report shows them as null, not
+zero, and the verdict rests on pass. Because nothing caps that spend, a
+harness not declared `local = true` needs `--yes-spend`. `--base
+command:<name>` puts a harness in gnomon's place: alone it measures that
+harness, and with `--against command:<other>` it compares two.
+
 Alone, the report is a measurement; `[thresholds] min_pass_rate` in the spec
 turns it into a gate. Each run writes `.gnomon-trials/_eval/<utc>/` and an
-`eval_run` audit record. An eval changes nothing: switching the profile or
-merging the surface is a person's decision. Exit 0 meets the spec, 2 does
+`eval_run` audit record. An eval changes nothing: switching the profile,
+merging the surface or changing harness is a person's decision. Exit 0 meets the spec, 2 does
 not, 10 no answer. The contract is [CONTRACTS.md §47](docs/CONTRACTS.md).
 
 ---
@@ -3414,7 +3444,7 @@ Contract: [CONTRACTS §17](docs/CONTRACTS.md).
 | `gnomon compliance [--framework <id,...>] [--json]` | Read-only: which controls of the EU AI Act, GDPR, OWASP LLM Top 10, ISO/IEC 42001, NIST AI RMF, ISO/IEC 27001, SOC 2, the Cyber Resilience Act and DORA this project has gnomon evidence for, from a dated catalog — evidence, partial, gap (with the setting that closes it), a gnomon property, or the organisation's. A mapping, never an assessment. See [Compliance evidence](#compliance-evidence--gnomon-compliance). |
 | `gnomon compliance pack --out <dir> [--with-trails]` / `--verify <dir>` | Every read-only report (compliance, security posture and test, data flows, metrics, audit verification, eval reports) as JSON and text in one directory, with `pack.json` hashing each file; `--verify` re-hashes it. See [Evidence pack](#evidence-pack--gnomon-compliance-pack). |
 | `gnomon compliance dataflow [--json]` | Read-only: every place this surface can send prompts and repository content — model endpoints per role (primary, fallback, escalation) with host, locality and declared region, MCP servers, network-fetching roles, the shadow and anchor — and, with the opt-in `[compliance] allowed_regions` rule, which routes it admits. See [Data flows and residency](#data-flows-and-residency--gnomon-compliance-dataflow). |
-| `gnomon eval [--against profile:<name>\|surface:<ref>] [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]` | Measure on this project's own tasks (the trial spec): alone, the pass rate; with `--against`, whether another profile or another commit's `.gnomon/` does better, in paired interleaved clones judged by each task's check. Exit 0 meets the spec, 2 does not, 10 no answer. Changes nothing. See [Evaluation on your own tasks](#evaluation-on-your-own-tasks--gnomon-eval). |
+| `gnomon eval [--against profile:<name>\|surface:<ref>\|command:<harness>] [--base command:<harness>] [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]` | Measure on this project's own tasks (the trial spec): alone, the pass rate; with `--against`, whether another profile, another commit's `.gnomon/`, or another harness's CLI (`[harness.<name>]` in the spec) does better, in paired interleaved clones judged by each task's check. Exit 0 meets the spec, 2 does not, 10 no answer. Changes nothing. See [Evaluation on your own tasks](#evaluation-on-your-own-tasks--gnomon-eval). |
 | `gnomon init [--from <path>] [--force] [--no-verify]` | Write a surface. `--from` copies an existing one. `--no-verify` writes the scaffold without `[verify]` and with audit off, for benchmark comparability. |
 | `gnomon migrate [--check]` | Bring an existing `.gnomon/` up to the current shipped defaults. `--check` reports without writing and exits 1 if anything is pending. |
 | `gnomon prompt [--continue \| --resume <id>] [--trust]` | Interactive loop. An untrusted surface that grants more than the defaults is shown and asked about first. |
