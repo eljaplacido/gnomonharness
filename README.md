@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3536 TypeScript tests (2884 core, 627 cli, 18
-> natives, 7 tui) and 120 Rust tests — **3656 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3537 TypeScript tests (2884 core, 628 cli, 18
+> natives, 7 tui) and 120 Rust tests — **3657 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2576,14 +2576,19 @@ where the data goes. `gnomon compliance dataflow` lists every route:
   the network;
 - a `[shadow]` endpoint, and where sealed trail heads are anchored;
 - where the records are kept;
-- the newer-version check gnomon itself makes.
+- the newer-version check gnomon itself makes;
+- every **other harness** governed here by `gnomon guard` (Claude Code,
+  opencode, Cursor). gnomon decides its tool calls, but its model requests go
+  where that harness's own configuration says. The register names it, so the
+  flow is not missing from the record, and says that the residency rule
+  below cannot see it.
 
 It is a starting point for a record of processing (GDPR Art. 30) or a register
 of ICT third parties (DORA).
 
 ```bash
 gnomon compliance dataflow          # text
-gnomon compliance dataflow --json   # gnomon.dataflow/1
+gnomon compliance dataflow --json   # gnomon.dataflow/2
 ```
 
 **Residency is opt-in.** Declare where each remote endpoint's provider
