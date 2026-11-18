@@ -4196,24 +4196,28 @@ The fact `dataflow_register` backs GDPR Art. 30, Art. 44 and DORA Art. 28.
 `packages/gnomon-cli/src/dataflow.test.ts` and the rule in
 `packages/gnomon-core/src/residency.test.ts`.
 
-## 49. Process metrics — `gnomon audit metrics`, `gnomon.metrics/1`, `v: 1`
+## 49. Process metrics — `gnomon audit metrics`, `gnomon.metrics/2`, `v: 2`
 
 Counts over gnomon's own session trails in the `[audit] dir`, with no model
 and nothing judged. The window is the newest `--last` (default 50) session
 trails by modification time. `--session <id>` keeps the trail with that name,
-or the one ending in it. Trails whose `session_start.mode` is `guard`,
-`check`, `trial` or `eval` belong to gnomon's own commands and are skipped.
+or the one ending in it. Trails whose `session_start.mode` is `check`,
+`trial` or `eval` belong to gnomon's own commands and are skipped. Trails
+whose mode is `guard` are other harnesses' sessions (one per host session
+`gnomon guard` decided for) and are counted under `guarded`, in a window of
+their own `--last`.
 A trail whose hash chain does not verify, or that cannot be read, is listed
 in `excluded` and left out of every count.
 
 | Key | Meaning |
 |---|---|
-| `schema` | `"gnomon.metrics/1"` |
+| `schema` | `"gnomon.metrics/2"` (version 1, in 0.6.0, skipped guard trails and had no `guarded`) |
 | `project`, `audit` | the project root; `enabled` and `dir` |
 | `window` | `last`, `trails_seen`, `sessions` |
 | `sessions` | per trail, see below |
 | `totals` | the same counts summed, plus `sessions`, `unsealed`, and `process` (`writes`, `sessions_with_writes`, `verified_after_last_write`: `yes`, `no`, `no_verify`; `refusal_rate`, `apparatus_rate`) |
-| `excluded` | `trail`, `problem` |
+| `guarded` | `sessions` (per guard trail, below) and `totals`: `sessions`, `calls`, `decisions`, `rules`, `by_tool`, `by_host` (host → `sessions`, `calls`, `deny`, `ask`), `below_verdict`, `refusal_rate` (deny ÷ calls) |
+| `excluded` | `trail`, `problem`, for agent and guard trails alike |
 | `exit` | 0 every trail read verified, 2 one was excluded, 10 could not run |
 
 The per-session keys, and the records each one comes from:
@@ -4232,6 +4236,16 @@ The per-session keys, and the records each one comes from:
 | `escalations`, `degradations` (id → n), `stall_signals`, `record_tamper` | their records |
 | `process` (`writes`, `verified_after_last_write`, `refusal_rate`, `apparatus_rate`) | derived, below |
 
+Each guarded session has `trail`; `host` (the `session_start`'s `via`:
+claude-code, opencode, cursor), `agent`, `role`, `surface_hash` and
+`started` from its `session_start`; `ended` (the last record's `ts`); and,
+from its `guard` records (§10), `calls`, `decisions` (decision → n), `rules`
+(rule → n), `by_tool` (the host's own tool name where it differs) and
+`below_verdict`: calls whose `verdict` differs from the `decision`
+answered, which is a `[governance]` level of observe or advise letting
+through what the rule refuses (§36). A host's model calls and tokens are
+not in its guard trail, so they are not counted.
+
 `writes` counts `write` and `edit` tool calls with bucket `result`.
 `verified_after_last_write` is true when a `verify` record with
 `passed: true` follows the last such write. It is false when verify ran but
@@ -4240,7 +4254,9 @@ Rates are rounded to 4 places, and null when there is no tool call.
 
 **Fixture**: `conformance/metrics_report.json`. The tests,
 `packages/gnomon-cli/src/metrics.test.ts`, write trails with gnomon's own
-`AuditTrail`, edit one, and check the counts, the exclusion and the CLI.
+`AuditTrail`, edit one, and check the counts, the exclusion and the CLI;
+the guarded counts come from trails the real `gnomon guard` writes for
+Claude Code and opencode calls.
 
 ## 50. Security test — `gnomon security test`, `gnomon.security_test/2`, `v: 2`
 
