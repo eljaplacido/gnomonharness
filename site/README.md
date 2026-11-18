@@ -23,7 +23,7 @@ Not in this directory, and so not deployed from it:
 
 - **The whitepaper PDF.** The v0.3.2 edition (`whitepaper/gnomon-whitepaper-v0.3.2-{light,dark}.pdf`
   on the live site) is withdrawn: it carries November 2026 peer comparisons
-  the site no longer cites. Regenerating it for v0.5.0 is deferred; when it
+  the site no longer cites. Regenerating it is deferred; when it
   exists, add it under `site/whitepaper/` and link it from §12 and the hero.
 - **`docs/GUIDE.md`.** The live site served an old copy at `/docs/GUIDE.md`;
   the page now links to the guide on GitHub instead, so it cannot go stale.
@@ -32,7 +32,7 @@ Not in this directory, and so not deployed from it:
 
 ## Content policy
 
-The page follows the repository's benchmark policy for v0.5.0:
+The page follows the repository's benchmark policy (since v0.5.0; unchanged in 0.6.x):
 
 - gnomon's own results only for November 2026 onwards; no new peer numbers;
 - comparisons with other harnesses only where they were published before
