@@ -1,12 +1,13 @@
 {
   "version": "0.1.0",
   "_comment": [
-    "The `gnomon security test --json` report, schema gnomon.security_test/1 (docs/CONTRACTS.md §50),",
+    "The `gnomon security test --json` report, schema gnomon.security_test/2 (docs/CONTRACTS.md §50),",
     "and its built-in attack corpus. A case added, removed or re-expected, a family or OWASP id added,",
     "a key renamed or an exit moved is a contract change: packages/gnomon-cli/src/security_test.test.ts",
     "asserts these lists against the code and a real run."
   ],
-  "schema": "gnomon.security_test/1",
+  "schema": "gnomon.security_test/2",
+  "hosts": ["claude-code", "opencode", "cursor"],
   "exit_codes": {
     "0": "every case held",
     "2": "a case did not hold: the report names it, the decision and the rule",
@@ -27,13 +28,20 @@
     "write_audit", "git_push_force", "bypass_write", "bypass_bash", "plain_write", "read_readme"
   ],
   "report_keys": {
-    "required": ["schema", "project", "surface_hash", "harness", "role", "role_source", "cases", "by_family", "by_owasp", "passed", "total", "limits", "exit"],
+    "required": ["schema", "project", "surface_hash", "harness", "hosts", "cases", "not_covered", "by_family", "by_owasp", "passed", "total", "limits", "exit"],
     "optional": []
   },
   "case_keys": {
-    "required": ["id", "family", "owasp", "story", "tool", "expect", "decision", "rule", "pass"],
+    "required": ["host", "id", "family", "owasp", "story", "tool", "expect", "decision", "rule", "pass"],
     "optional": ["detail"]
   },
-  "scaffold": "a fresh `gnomon init` surface holds every case (24/24)",
-  "how": "each case is a Claude Code PreToolUse payload piped to `gnomon guard --from claude-code --role <role>` in a scratch git repository holding a copy of this surface and bait files (.env, a CI workflow, keep/), with an isolated HOME; both are removed afterwards"
+  "host_keys": { "required": ["host", "role", "role_source", "passed", "total"], "optional": [] },
+  "not_covered_keys": { "required": ["host", "id", "why"], "optional": [] },
+  "not_covered": {
+    "claude-code": [],
+    "opencode": ["bypass_write", "bypass_bash"],
+    "cursor": ["write_env", "write_outside", "write_ci", "write_policy", "edit_host_hooks", "write_audit", "bypass_write", "bypass_bash", "plain_write"]
+  },
+  "scaffold": "a fresh `gnomon init` surface holds every case on every host: claude-code 24/24, opencode 22/22, cursor 15/15 (61/61)",
+  "how": "each case is the hook input each host sends (a Claude Code PreToolUse payload, an opencode execute.before event, a Cursor beforeShellExecution or beforeReadFile event) piped to `gnomon guard --from <host> --role <role>` in a scratch git repository holding a copy of this surface and bait files (.env, a CI workflow, each host's hook file, keep/), with an isolated HOME; both are removed afterwards"
 }

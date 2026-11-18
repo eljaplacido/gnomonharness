@@ -4242,23 +4242,33 @@ Rates are rounded to 4 places, and null when there is no tool call.
 `packages/gnomon-cli/src/metrics.test.ts`, write trails with gnomon's own
 `AuditTrail`, edit one, and check the counts, the exclusion and the CLI.
 
-## 50. Security test — `gnomon security test`, `gnomon.security_test/1`, `v: 1`
+## 50. Security test — `gnomon security test`, `gnomon.security_test/2`, `v: 2`
 
 A built-in, model-free attack corpus (`CORPUS`, `security_test.ts`), run
-through the real `gnomon guard`. The test runs as follows:
+through the real `gnomon guard` as each harness it governs would call it:
+Claude Code, opencode and Cursor (`--host <one>`, or `all`, the default).
+The test runs as follows:
 - it makes a scratch git repository holding a copy of `<dir>/.gnomon/`, as it
   is on disk, committed, with bait beside it: `.env`, `.gitignore`,
-  `.github/workflows/ci.yml`, `.claude/settings.json`, `keep/data.txt`,
-  `README.md` and `app.py`;
-- each case is a Claude Code `PreToolUse` payload piped to
-  `gnomon guard --from claude-code --role <role>`, run in that repository with
-  HOME, XDG_DATA_HOME and LOCALAPPDATA in a temporary directory;
+  `.github/workflows/ci.yml`, each host's hook file (`.claude/settings.json`,
+  `.opencode/plugins/gnomon-guard.js`, `.cursor/hooks.json`),
+  `keep/data.txt`, `README.md` and `app.py`;
+- each case, for each host, is the hook input that host sends (`hostPayload`):
+  a Claude Code `PreToolUse` payload, an opencode `execute.before` event, a
+  Cursor `beforeShellExecution` or `beforeReadFile` event. It is piped to
+  `gnomon guard --from <host> --role <role>` in that repository, with HOME,
+  XDG_DATA_HOME and LOCALAPPDATA in a temporary directory, and the answer is
+  read as that host reads it (`readAnswer`);
+- a case a host gives its hook no event for is listed in `not_covered` with
+  why, and counted nowhere: Cursor has no event before a file write or edit
+  (`gnomon check` judges those afterwards), and `bypassPermissions` is a
+  Claude Code permission mode;
 - the repository and the HOME are removed afterwards;
 - no model is called, and the project is not touched.
 
 The role comes from `--role`. Without one, it is the role `[check.roles]`
-maps `claude-code` to, else `implement`. The role and how it was chosen are
-reported.
+maps the host to, else `implement`. Each host's role and how it was chosen
+are reported.
 
 | Expectation | Holds when the decision is |
 |---|---|
@@ -4268,9 +4278,12 @@ reported.
 | `allow` | `allow` (a control: over-blocking fails too) |
 
 **Report keys:** `schema`, `project`, `surface_hash` (of the copy tested),
-`harness`, `role`, `role_source`, `cases`, `by_family`, `by_owasp`,
-`passed`, `total`, `limits`, `exit`.
-- Each case has `id`, `family`, `owasp`, `story`, `tool`, `expect`,
+`harness`, `hosts`, `cases`, `not_covered`, `by_family`, `by_owasp`,
+`passed`, `total`, `limits`, `exit`. Version 1 (0.6.0) tested Claude Code
+only and had `role` and `role_source` where `hosts` is now.
+- Each host has `host`, `role`, `role_source`, `passed` and `total`.
+- Each `not_covered` entry has `host`, `id` and `why`.
+- Each case has `host`, `id`, `family`, `owasp`, `story`, `tool`, `expect`,
   `decision` (null when the guard gave none), `rule` (parsed from the
   reason) and `pass`, plus `detail`? when there was no decision.
 - Families: `destructive`, `exfiltration`, `secrets`, `outside_root`,
@@ -4285,6 +4298,7 @@ exit 10.
 **Limits**, printed with every report:
 - the test covers the policy layer's decisions, not whether a host asks its
   hook;
+- Cursor's file writes and edits are not covered before the fact;
 - code run by an interpreter is gated as a command, not parsed;
 - the surface tested is the copy on disk;
 - on Windows, a shell redirection to an absolute Windows path outside the
@@ -4294,10 +4308,13 @@ exit 10.
 **Fixture**: `conformance/security_test.json`, which holds the corpus ids,
 expectations, families, OWASP ids, keys and exits.
 `packages/gnomon-cli/src/security_test.test.ts` covers:
-- a fresh scaffold holds all 24 and leaves nothing behind;
-- `[approval] gate = "never"` fails the asked cases while the structural
-  denials hold;
-- role resolution and the CLI errors.
+- a fresh scaffold holds every case on every host (claude-code 24/24,
+  opencode 22/22, cursor 15/15) and leaves nothing behind;
+- the not-covered list per host is the fixture's;
+- `[approval] gate = "never"` fails the asked cases on every host while the
+  structural denials hold;
+- each host's answer is read as that host reads it;
+- role resolution per host and the CLI errors.
 
 ## 51. Evidence pack — `gnomon compliance pack`, `gnomon.evidence_pack/1`, `v: 1`
 
