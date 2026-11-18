@@ -7,6 +7,13 @@
  * passed after the last edit, which gates fired, when it escalated or
  * degraded. Deterministic and model-free: counts over records, nothing judged.
  *
+ * Other harnesses governed through `gnomon guard` (Claude Code, opencode,
+ * Cursor) are counted too, from the guard's own per-session trails: how many
+ * calls each host put to the guard, what it answered, which rules fired, and
+ * how many calls a lowered [governance] level let through that its rule would
+ * have refused. A host's model calls and tokens are not in those trails, so
+ * they are not counted for it.
+ *
  * Only a trail whose hash chain holds is counted. A broken one is listed, left
  * out of the totals, and makes the exit 2: numbers read from a record that was
  * edited afterwards are not evidence of anything.
@@ -16,10 +23,10 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, resolveAudit, verifyTrail } from "gnomon-core";
 
-export const METRICS_SCHEMA = "gnomon.metrics/1";
+export const METRICS_SCHEMA = "gnomon.metrics/2";
 export const METRICS_EXIT = { clean: 0, finding: 2, couldNotRun: 10 } as const;
 export const METRICS_DEFAULT_LAST = 50;
-/** Trails that are not an agent's session: gnomon's own commands. */
+/** Trails that are not a gnomon agent session: gnomon's own commands, and the guard (counted as guarded sessions). */
 export const NON_SESSION_MODES = ["guard", "check", "trial", "eval"] as const;
 const WRITE_TOOLS = new Set(["write", "edit"]);
 
@@ -56,6 +63,35 @@ export interface SessionMetrics {
   };
 }
 
+/** One host session governed through `gnomon guard`, read from its guard trail. */
+export interface GuardedSession {
+  trail: string;
+  /** The harness that asked (claude-code, opencode, cursor, or the generic contract). */
+  host: string | null;
+  agent: string | null;
+  role: string | null;
+  surface_hash: string | null;
+  started: string | null;
+  ended: string | null;
+  calls: number;
+  decisions: Count;
+  rules: Count;
+  by_tool: Count;
+  /** Calls answered below their rule's own verdict ([governance] observe or advise). */
+  below_verdict: number;
+}
+
+export interface GuardedTotals {
+  sessions: number;
+  calls: number;
+  decisions: Count;
+  rules: Count;
+  by_tool: Count;
+  by_host: Record<string, { sessions: number; calls: number; deny: number; ask: number }>;
+  below_verdict: number;
+  refusal_rate: number | null;
+}
+
 export interface MetricsReport {
   schema: typeof METRICS_SCHEMA;
   project: string;
@@ -73,8 +109,39 @@ export interface MetricsReport {
       apparatus_rate: number | null;
     };
   };
+  /** Other harnesses' sessions, from the guard's trails. */
+  guarded: { sessions: GuardedSession[]; totals: GuardedTotals };
   excluded: Array<{ trail: string; problem: string }>;
   exit: number;
+}
+
+/** Count one guard trail's decisions. */
+export function guardedMetrics(trail: string, records: Array<Record<string, any>>): GuardedSession {
+  const start = records.find((r) => r.kind === "session_start") ?? {};
+  const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  const g: GuardedSession = {
+    trail,
+    host: str(start.via),
+    agent: str(start.agent),
+    role: str(start.role),
+    surface_hash: str(start.surface_hash),
+    started: str(start.ts),
+    ended: str(records[records.length - 1]?.ts),
+    calls: 0,
+    decisions: {},
+    rules: {},
+    by_tool: {},
+    below_verdict: 0,
+  };
+  for (const r of records) {
+    if (r.kind !== "guard") continue;
+    g.calls++;
+    inc(g.decisions, r.decision);
+    if (typeof r.rule === "string" && r.rule) inc(g.rules, r.rule);
+    inc(g.by_tool, r.host_tool ?? r.tool);
+    if (typeof r.verdict === "string" && r.verdict !== r.decision) g.below_verdict++;
+  }
+  return g;
 }
 
 const inc = (c: Count, k: unknown, by = 1) => {
@@ -219,21 +286,43 @@ export function buildMetricsReport(dir: string, opts: { last?: number; session?:
         .map((x) => x.f)
     : [];
   const sessions: SessionMetrics[] = [];
+  const guarded: GuardedSession[] = [];
   const excluded: MetricsReport["excluded"] = [];
+  let excludedAgent = 0;
+  let excludedGuard = 0;
   for (const f of all) {
-    if (sessions.length + excluded.length >= last) break;
+    if (sessions.length + excludedAgent >= last && guarded.length + excludedGuard >= last) break;
     const id = f.replace(/\.jsonl$/, "");
     if (opts.session && id !== opts.session && !id.endsWith(opts.session)) continue;
     const records = readRecords(join(audit.dir, f));
     const start = records?.find((r) => r.kind === "session_start");
-    if (records && (!start || (NON_SESSION_MODES as readonly string[]).includes(start.mode))) continue;
+    const isGuard = start?.mode === "guard";
+    if (records && (!start || (!isGuard && (NON_SESSION_MODES as readonly string[]).includes(start.mode)))) continue;
+    if (isGuard ? guarded.length + excludedGuard >= last : sessions.length + excludedAgent >= last) continue;
     const v = verifyTrail(join(audit.dir, f));
     if (!records || !v.ok) {
       excluded.push({ trail: f, problem: v.problem ?? (v.broken.length ? `the hash chain does not hold at seq ${v.broken.join(", ")}` : "not a readable trail") });
+      if (isGuard) excludedGuard++;
+      else excludedAgent++;
       continue;
     }
-    sessions.push(sessionMetrics(f, records, { ok: v.ok, sealed: v.sealed }));
+    if (isGuard) guarded.push(guardedMetrics(f, records));
+    else sessions.push(sessionMetrics(f, records, { ok: v.ok, sealed: v.sealed }));
   }
+  const gt: GuardedTotals = { sessions: guarded.length, calls: 0, decisions: {}, rules: {}, by_tool: {}, by_host: {}, below_verdict: 0, refusal_rate: null };
+  for (const g of guarded) {
+    gt.calls += g.calls;
+    addCounts(gt.decisions, g.decisions);
+    addCounts(gt.rules, g.rules);
+    addCounts(gt.by_tool, g.by_tool);
+    gt.below_verdict += g.below_verdict;
+    const h = (gt.by_host[g.host ?? "unknown"] ??= { sessions: 0, calls: 0, deny: 0, ask: 0 });
+    h.sessions++;
+    h.calls += g.calls;
+    h.deny += g.decisions.deny ?? 0;
+    h.ask += g.decisions.ask ?? 0;
+  }
+  gt.refusal_rate = rate(gt.decisions.deny ?? 0, gt.calls);
 
   const t = { ...empty(), sessions: sessions.length, unsealed: sessions.filter((s) => !s.sealed).length };
   let writes = 0;
@@ -288,6 +377,7 @@ export function buildMetricsReport(dir: string, opts: { last?: number; session?:
         apparatus_rate: rate(t.tool_calls.by_bucket.apparatus_failure ?? 0, t.tool_calls.n),
       },
     },
+    guarded: { sessions: guarded, totals: gt },
     excluded,
     exit: excluded.length > 0 ? METRICS_EXIT.finding : METRICS_EXIT.clean,
   };
@@ -320,6 +410,15 @@ export function formatMetrics(r: MetricsReport): string[] {
     out.push(`  gates          completion: ${top(t.gates.completion)}; finish: ${top(t.gates.finish)}`);
     out.push(`  escalations    ${t.escalations}; degradations: ${top(t.degradations)}; stall signals ${t.stall_signals}; tamper events ${t.record_tamper}`);
     if (t.unsealed > 0) out.push(`  unsealed       ${t.unsealed} session(s) did not end cleanly (killed or still running)`);
+  }
+  const g = r.guarded.totals;
+  if (g.sessions > 0) {
+    out.push(`Other harnesses through gnomon guard: ${g.sessions} session(s)`);
+    out.push(`  by host        ${Object.entries(g.by_host).map(([h, v]) => `${h} ${v.sessions} (${v.calls} calls, ${v.deny} denied, ${v.ask} asked)`).join("; ")}`);
+    out.push(`  calls          ${g.calls}: ${top(g.decisions)}; refusal ${pct(g.refusal_rate)}`);
+    out.push(`  rules          ${top(g.rules, 8)}`);
+    out.push(`  tools          ${top(g.by_tool, 8)}`);
+    if (g.below_verdict > 0) out.push(`  below verdict  ${g.below_verdict} call(s) went through that their rule would refuse ([governance] observe or advise)`);
   }
   for (const e of r.excluded) out.push(`  ✗ ${e.trail}: ${e.problem} — not counted`);
   out.push(r.exit === METRICS_EXIT.finding ? `Summary: ${r.excluded.length} trail(s) failed verification and were left out.` : "Summary: every trail read verified.");

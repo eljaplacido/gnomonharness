@@ -45,6 +45,12 @@ const REPO_SURFACE = resolve(process.cwd(), "..", "..", ".gnomon");
 const makeProject = (): string => {
   const dir = mkdtempSync(join(tmpdir(), "gnomon-loopcmds-"));
   cpSync(REPO_SURFACE, join(dir, ".gnomon"), { recursive: true });
+  // These tests pin the layers under the guard (key routing, the surface
+  // reload, exec pinning). The repository's own [governance] refuses `env`
+  // and writes outside the project before those layers are reached, so the
+  // copy runs without it; [governance] has its own suites.
+  const policy = join(dir, ".gnomon", "policy.toml");
+  writeFileSync(policy, readFileSync(policy, "utf8").replace(/^\[governance\][\s\S]*?(?=^\[|(?![\s\S]))/m, ""));
   return dir;
 };
 

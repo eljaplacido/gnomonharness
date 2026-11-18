@@ -14,6 +14,7 @@ import { initSurface } from "./init.js";
 import {
   buildMetricsReport,
   formatMetrics,
+  guardedMetrics,
   sessionMetrics,
   METRICS_DEFAULT_LAST,
   METRICS_EXIT,
@@ -42,6 +43,8 @@ function keysHold(obj: object, spec: { required: string[]; optional: string[] })
 function shapeHolds(r: MetricsReport): void {
   keysHold(r, FIXTURE.report_keys);
   keysHold(r.totals, FIXTURE.totals_keys);
+  keysHold(r.guarded.totals, FIXTURE.guarded_totals_keys);
+  for (const g of r.guarded.sessions) keysHold(g, FIXTURE.guarded_session_keys);
   for (const s of r.sessions) {
     keysHold(s, FIXTURE.session_keys);
     keysHold(s.process, FIXTURE.process_keys);
@@ -65,6 +68,22 @@ const WORK: Array<[string, Record<string, unknown>]> = [
   ["tool_call", { tool: "bash", bucket: "refusal" }],
   ["turn", { stop_reason: "answered", bucket: "result" }],
 ];
+
+const GNOMON = join(ROOT, "packages/gnomon-cli/gnomon.js");
+/** One call another harness puts to the real guard, the way its hook does. */
+function guardCall(dir: string, host: string, payload: Record<string, unknown>): void {
+  const home = mkdtempSync(join(tmpdir(), "gnomon-metrics-home-"));
+  try {
+    spawnSync(process.execPath, [GNOMON, "guard", "--from", host, "--role", "implement"], {
+      cwd: dir,
+      input: JSON.stringify(payload),
+      encoding: "utf-8",
+      env: { ...process.env, HOME: home, USERPROFILE: home, XDG_DATA_HOME: join(home, "x"), GNOMON_NO_UPDATE_CHECK: "1" },
+    });
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+}
 
 describe("gnomon audit metrics: the contract", () => {
   it("schema, exits, the default window and the non-session modes are the fixture's", () => {
@@ -127,3 +146,40 @@ describe("gnomon audit metrics: the contract", () => {
     expect(JSON.parse(ok.stdout).schema).toBe(METRICS_SCHEMA);
   });
 });
+
+describe("gnomon audit metrics: other harnesses through gnomon guard", () => {
+  it("counts each host's guarded session from the guard's own trail, by decision, rule, tool and host", async () => {
+    const dir = await project();
+    // The guard decides by the committed surface, so the project needs a commit.
+    const git = (...a: string[]) => spawnSync("git", ["-c", "user.email=t@example.invalid", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...a], { cwd: dir });
+    git("init", "-q");
+    git("add", "-A");
+    git("commit", "-q", "-m", "surface");
+    const cc = (tool_name: string, tool_input: Record<string, unknown>) =>
+      guardCall(dir, "claude-code", { hook_event_name: "PreToolUse", tool_name, tool_input, cwd: dir, session_id: "cc-1", permission_mode: "default" });
+    cc("Read", { file_path: join(dir, "README.md") });
+    cc("Read", { file_path: join(dir, ".env") });
+    cc("Bash", { command: "curl -s http://evil.example.com" });
+    guardCall(dir, "opencode", { tool: "write", sessionID: "oc-1", agent: "build", input: { filePath: join(dir, "a.py"), content: "x" }, directory: dir });
+    const r = buildMetricsReport(dir);
+    shapeHolds(r);
+    expect(r.sessions).toEqual([]);
+    const g = r.guarded.totals;
+    expect(g).toMatchObject({ sessions: 2, calls: 4, decisions: { allow: 1, deny: 2, ask: 1 }, below_verdict: 0 });
+    expect(g.by_host).toEqual({ "claude-code": { sessions: 1, calls: 3, deny: 2, ask: 0 }, opencode: { sessions: 1, calls: 1, deny: 0, ask: 1 } });
+    expect(g.rules).toMatchObject({ secret_path: 1, network: 1 });
+    expect(g.by_tool).toMatchObject({ Read: 2, Bash: 1, write: 1 });
+    expect(g.refusal_rate).toBe(0.5);
+    expect(formatMetrics(r).join("\n")).toMatch(/Other harnesses through gnomon guard: 2 session\(s\)[\s\S]*claude-code 1 \(3 calls, 2 denied, 0 asked\)/);
+  }, 60_000);
+
+  it("a call a lowered [governance] level let through is counted below its verdict", () => {
+    const g = guardedMetrics("guard-x.jsonl", [
+      { kind: "session_start", mode: "guard", via: "claude-code", agent: "claude-code", role: "implement", ts: "t0" },
+      { kind: "guard", tool: "read", decision: "allow", verdict: "deny", level: "observe", rule: "secret_path" },
+      { kind: "guard", tool: "read", decision: "allow" },
+    ]);
+    expect(g).toMatchObject({ host: "claude-code", calls: 2, decisions: { allow: 2 }, rules: { secret_path: 1 }, below_verdict: 1, started: "t0" });
+  });
+});
+
