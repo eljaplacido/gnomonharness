@@ -3010,7 +3010,9 @@ Commands:
     worked, from the newest n (default 50) session trails whose chains
     verify: turns and stop reasons, model calls and tokens, tool calls by
     tool and outcome, approvals, verify runs, whether a check passed after
-    the last write, gates, escalations, degradations. Model-free. Exit 0,
+    the last write, gates, escalations, degradations; and, from the
+    guard's trails, other harnesses' sessions (Claude Code, opencode,
+    Cursor): calls, decisions, rules and tools per host. Model-free. Exit 0,
     2 when a trail failed verification (left out), 10 could not run.
 
   skill [list [--candidates]|accept <id> [--evidence <report.json>]|reject <id> [--reason <text>]|mine [--json]] [--dir <path>]

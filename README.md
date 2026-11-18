@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3533 TypeScript tests (2884 core, 624 cli, 18
-> natives, 7 tui) and 120 Rust tests — **3653 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3535 TypeScript tests (2884 core, 626 cli, 18
+> natives, 7 tui) and 120 Rust tests — **3655 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2615,14 +2615,20 @@ one, 10 when it could not run. The contract is
 
 An outcome benchmark says whether a task passed. The trail says how the agent
 got there. `gnomon audit metrics` counts it from gnomon's own session trails,
-with no model and nothing judged:
+and from the guard's trails for other harnesses, with no model and nothing
+judged:
 - turns and stop reasons;
 - model calls, tokens and time, per model;
 - tool calls by tool and outcome, with refusal and apparatus-failure rates;
 - approvals, verify runs, completion and finish gates;
 - escalations, degradations, stall signals and tamper events;
 - for each session that wrote code, **whether a check passed after the last
-  write**, one failed, or none ran.
+  write**, one failed, or none ran;
+- for **other harnesses** governed through `gnomon guard` (Claude Code,
+  opencode, Cursor): sessions and calls per host, what the guard answered,
+  which rules fired, and how many calls a lowered `[governance]` level let
+  through that their rule would refuse. Their model calls and tokens are not
+  in the guard's trail, so they are not counted.
 
 ```bash
 gnomon audit metrics                 # the newest 50 session trails
@@ -2631,9 +2637,9 @@ gnomon audit metrics --session task-2026-11-17T21-27-00-000Z-123
 ```
 
 Only a trail whose hash chain verifies is counted. A trail edited afterwards
-is listed, left out of the totals, and sets exit 2. The trails of `guard`,
-`check`, `skill trial` and `eval` are gnomon's own commands, not sessions, so
-they are skipped. Exit 0 every trail read verified, 2 one did not, 10 could
+is listed, left out of the totals, and sets exit 2. The trails of `check`,
+`skill trial` and `eval` are gnomon's own commands, not sessions, so they are
+skipped. Exit 0 every trail read verified, 2 one did not, 10 could
 not run. The contract is [CONTRACTS.md §49](docs/CONTRACTS.md).
 
 ### Evaluation on your own tasks — `gnomon eval`
