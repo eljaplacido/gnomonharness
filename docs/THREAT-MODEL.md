@@ -32,7 +32,9 @@ evidence, so the claim can be checked rather than believed.
    itself more (bash everywhere, a remote endpoint, an MCP server, an anchor
    command).
 4. **Another harness's agent** (Claude Code, opencode, Cursor), governed
-   through `gnomon guard`.
+   through `gnomon guard`. `gnomon security test` runs the corpus in each
+   one's hook input. Cursor gives no hook before a file write, so its writes
+   are judged afterwards by `gnomon check`.
 5. **Someone with write access to the records**, after the fact.
 
 Out of scope: a compromised operating system, kernel or Node runtime; a

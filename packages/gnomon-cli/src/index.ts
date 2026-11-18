@@ -2485,9 +2485,14 @@ async function cmdSecurity(args: CliArgs): Promise<number> {
   }
   const sub = subcommandOr(args, "posture");
   if (sub === "test") {
-    const { runSecurityTest, formatSecurityTest, SECURITY_TEST_SCHEMA, SECURITY_TEST_EXIT } = await import("./security_test.js");
+    const { runSecurityTest, formatSecurityTest, SECURITY_TEST_SCHEMA, SECURITY_TEST_EXIT, SECURITY_TEST_HOSTS } = await import("./security_test.js");
+    const host = args.flags.host ?? "all";
+    if (host !== "all" && !(SECURITY_TEST_HOSTS as readonly string[]).includes(host)) {
+      return commandError(args, SECURITY_TEST_SCHEMA, `--host ${host}: use one of ${SECURITY_TEST_HOSTS.join(", ")}, or all (the default)`, SECURITY_TEST_EXIT.couldNotRun);
+    }
     try {
-      const report = runSecurityTest(dir, { role: args.role });
+      const hosts = host === "all" ? SECURITY_TEST_HOSTS : ([host] as Array<(typeof SECURITY_TEST_HOSTS)[number]>);
+      const report = runSecurityTest(dir, { role: args.role, hosts });
       if (args.json) console.log(JSON.stringify(report, null, 2));
       else for (const l of formatSecurityTest(report)) console.log(l);
       return report.exit;
@@ -3140,7 +3145,7 @@ Commands:
     surface problem); advice names a setting that would contain more. Runs
     no model and changes nothing. Exit 0 no risk, 2 a risk, 10 could not run.
 
-  security test [--role <r>] [--json] [--dir <path>]
+  security test [--host claude-code|opencode|cursor|all] [--role <r>] [--json] [--dir <path>]
     A model-free attack corpus run through the real guard against a scratch
     copy of this surface (bait .env, CI workflow, a precious directory, an
     isolated HOME; all removed afterwards): destructive commands,
