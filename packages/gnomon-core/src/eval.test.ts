@@ -350,7 +350,7 @@ describe("gnomon eval: another harness as an arm (command:<name>)", () => {
     expect(report.endpoints.output_tokens).toEqual({ base: null, candidate: null, gain: null, sign: null });
     expect(report.trust).toEqual({ base: null, candidate: null });
     const rec = recordEval(loadConfig(root), report, cells);
-    expect(verifyTrail(join(root, ".gnomon-audit", `${rec.trail!.split("/").pop()}`)).ok).toBe(true);
+    expect(verifyTrail(rec.trail!).ok).toBe(true);
   }, 60_000);
 
   it("refuses before any cell: an undeclared harness, a paid one without --yes-spend, the same harness twice, --base beside a gnomon arm", async () => {
