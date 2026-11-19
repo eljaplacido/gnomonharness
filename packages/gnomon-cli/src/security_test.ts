@@ -28,6 +28,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { harnessBuild, loadConfig, recomputeManifest } from "gnomon-core";
+import { LAUNCHER_CANDIDATES, selfLauncher } from "./self_launcher.js";
 
 export const SECURITY_TEST_SCHEMA = "gnomon.security_test/2";
 /** The harnesses whose hook input `gnomon guard --from` reads; the test speaks each one. */
@@ -117,9 +118,11 @@ export interface CaseResult {
   story: string;
   tool: string;
   expect: Expect;
+  /** Null when the guard gave no decision: an apparatus error, not scored as held or not held. */
   decision: "allow" | "deny" | "ask" | null;
   rule: string | null;
   pass: boolean;
+  /** Why there is no decision (set exactly when `decision` is null). */
   detail?: string;
 }
 
@@ -136,13 +139,15 @@ export interface SecurityTestReport {
   surface_hash: string;
   harness: string;
   /** Per host: the role its calls were decided as, and the count. */
-  hosts: Array<{ host: SecurityTestHost; role: string; role_source: string; passed: number; total: number }>;
+  hosts: Array<{ host: SecurityTestHost; role: string; role_source: string; passed: number; total: number; errors: number }>;
   cases: CaseResult[];
   not_covered: NotCovered[];
   by_family: Record<string, { passed: number; total: number }>;
   by_owasp: Record<string, { name: string; passed: number; total: number }>;
   passed: number;
   total: number;
+  /** Cases the guard gave no decision for (counted in `total`, never in `passed`). */
+  errors: number;
   limits: string[];
   exit: number;
 }
@@ -166,8 +171,64 @@ export function testRole(dir: string, given?: string, host: SecurityTestHost = "
   return { error: "no role to test as: pass --role <role>" };
 }
 
-function gnomonBin(): string {
-  return join(dirname(fileURLToPath(import.meta.url)), "..", "gnomon.js");
+/**
+ * How the test starts `gnomon guard`: the node running now and the launcher of
+ * the gnomon running now, found beside this module (self_launcher.ts):
+ * `gnomon.js` in a checkout or a pnpm link (this module is `src/`), and
+ * `bin/gnomon.mjs` in the published package (this module is `dist/`). Never a
+ * shim on PATH (`gnomon.cmd` on Windows needs a shell) and never a gnomon
+ * other than this one. Null when neither launcher is there.
+ *
+ * It looked for `../gnomon.js` only, which the npm package does not ship:
+ * every case of an installed release spawned a missing file and was scored
+ * from the empty answer, 1/24 for Claude Code (#202).
+ */
+export function guardCommand(here: string | URL = import.meta.url, execPath: string = process.execPath): string[] | null {
+  const launcher = selfLauncher(here);
+  return launcher ? [execPath, launcher] : null;
+}
+
+/** The exits `gnomon guard --from <host>` answers with (guard.ts answer()); any other is no answer. */
+const GUARD_EXITS: Record<SecurityTestHost, readonly number[]> = {
+  "claude-code": [0],
+  cursor: [0],
+  // 10 is the guard's own "could not decide", answered as ask with rule `error`.
+  opencode: [0, 2, 3, 10],
+};
+
+/**
+ * What a failed guard said, in one line: node's error line when there is one
+ * (its uncaught-exception output starts with the internal file, `throw err;`
+ * and a caret), else the first two lines that are not a stack frame.
+ */
+export function stderrGist(stderr: string): string {
+  const lines = stderr.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "");
+  const error = lines.find((l) => /^[A-Za-z]*Error\b[^:]*:/.test(l));
+  const text = error ?? lines.filter((l) => !/^at |^node:|^throw err;$|^\^+$/.test(l)).slice(0, 2).join(" ");
+  return text.length > 300 ? `${text.slice(0, 297)}...` : text;
+}
+
+/**
+ * A guard run read as its host reads it, or why it gave no decision. An empty
+ * answer is Claude Code's allow only from a guard that ran and exited as the
+ * guard does: a launch that failed, a signal, a timeout or another exit is an
+ * apparatus error, never a host's decision.
+ */
+export function readGuardRun(
+  host: SecurityTestHost,
+  r: { error?: Error; status: number | null; signal?: NodeJS.Signals | null; stdout?: string | null; stderr?: string | null }
+): { decision: "allow" | "deny" | "ask"; rule: string | null } | { error: string } {
+  const why = stderrGist(r.stderr ?? "");
+  const tail = why ? `: ${why}` : "";
+  if (r.error) return { error: `the guard did not run (${r.error.message})${tail}` };
+  if (r.signal) return { error: `the guard was stopped by ${r.signal}${tail}` };
+  if (r.status === null || !GUARD_EXITS[host].includes(r.status)) return { error: `the guard exited ${r.status}${tail}` };
+  const text = (r.stdout ?? "").trim();
+  try {
+    return readAnswer(host, text);
+  } catch (err) {
+    return { error: `no decision in the guard's answer (${err instanceof Error ? err.message : String(err)})${tail}` };
+  }
 }
 
 function judge(expect: Expect, decision: CaseResult["decision"]): boolean {
@@ -240,10 +301,18 @@ export function readAnswer(host: SecurityTestHost, text: string): { decision: "a
 
 export function runSecurityTest(
   dir: string,
-  /** `scratchParent`: where the scratch repository is made (default: the system temp directory). */
-  opts: { role?: string; cases?: AttackCase[]; scratchParent?: string; hosts?: readonly SecurityTestHost[] } = {}
+  /**
+   * `scratchParent`: where the scratch repository is made (default: the system temp directory).
+   * `guard`: the program the guard is run as, an argv prefix (default: guardCommand(), this gnomon).
+   */
+  opts: { role?: string; cases?: AttackCase[]; scratchParent?: string; hosts?: readonly SecurityTestHost[]; guard?: string[] } = {}
 ): SecurityTestReport {
   const hosts = opts.hosts ?? SECURITY_TEST_HOSTS;
+  const guard = opts.guard ?? guardCommand();
+  if (!guard || guard.length === 0) {
+    const at = fileURLToPath(import.meta.url);
+    throw new Error(`cannot run the guard: no gnomon launcher beside ${at} (looked for ${LAUNCHER_CANDIDATES.join(" and ")})`);
+  }
   const roles = new Map<SecurityTestHost, { role: string; source: string }>();
   for (const h of hosts) {
     const picked = testRole(dir, opts.role, h);
@@ -294,25 +363,25 @@ export function runSecurityTest(
           not_covered.push({ host, id: k.id, why: built.why });
           return;
         }
-        const r = spawnSync(process.execPath, [gnomonBin(), "guard", "--from", host, "--role", role, "--json"], {
+        const r = spawnSync(guard[0]!, [...guard.slice(1), "guard", "--from", host, "--role", role, "--json"], {
           cwd: sb,
           env,
           input: JSON.stringify(built.payload),
           encoding: "utf-8",
           timeout: 30_000,
+          windowsHide: true,
         });
-        let decision: CaseResult["decision"] = null;
-        let rule: string | null = null;
-        let detail: string | undefined;
-        const text = (r.stdout ?? "").trim();
-        try {
-          ({ decision, rule } = readAnswer(host, text));
-        } catch {
-          detail = `no decision: ${(r.stderr || text).trim().split("\n")[0]}`;
-        }
+        const got = readGuardRun(host, r);
+        const decision = "error" in got ? null : got.decision;
+        const rule = "error" in got ? null : got.rule;
         const expected = process.platform === "win32" && k.expect_win32 ? k.expect_win32 : k.expect;
-        results.push({ host, id: k.id, family: k.family, owasp: [...k.owasp], story: k.story, tool: k.tool, expect: expected, decision, rule, pass: judge(expected, decision), ...(detail ? { detail } : {}) });
+        results.push({ host, id: k.id, family: k.family, owasp: [...k.owasp], story: k.story, tool: k.tool, expect: expected, decision, rule, pass: judge(expected, decision), ...("error" in got ? { detail: got.error } : {}) });
       });
+    }
+    // A guard that never answered measured nothing: that is a test that could
+    // not run (exit 10), not a surface that held nothing.
+    if (results.length > 0 && results.every((r) => r.decision === null)) {
+      throw new Error(`the guard gave no decision for any case (run as ${guard.join(" ")} guard): ${results[0]!.detail}`);
     }
 
     const by_family: SecurityTestReport["by_family"] = {};
@@ -328,6 +397,10 @@ export function runSecurityTest(
       }
     }
     const passed = results.filter((r) => r.pass).length;
+    const errors = results.filter((r) => r.decision === null).length;
+    // A case that did not hold is a finding whatever else happened; with none,
+    // a case that was not measured means the run is not a result.
+    const failed = results.length - passed - errors;
     return {
       schema: SECURITY_TEST_SCHEMA,
       project: dir,
@@ -335,7 +408,7 @@ export function runSecurityTest(
       harness: harnessBuild(),
       hosts: hosts.map((host) => {
         const mine = results.filter((r) => r.host === host);
-        return { host, role: roles.get(host)!.role, role_source: roles.get(host)!.source, passed: mine.filter((r) => r.pass).length, total: mine.length };
+        return { host, role: roles.get(host)!.role, role_source: roles.get(host)!.source, passed: mine.filter((r) => r.pass).length, total: mine.length, errors: mine.filter((r) => r.decision === null).length };
       }),
       cases: results,
       not_covered,
@@ -343,8 +416,9 @@ export function runSecurityTest(
       by_owasp,
       passed,
       total: results.length,
+      errors,
       limits: LIMITS,
-      exit: passed === results.length ? SECURITY_TEST_EXIT.clean : SECURITY_TEST_EXIT.failed,
+      exit: failed > 0 ? SECURITY_TEST_EXIT.failed : errors > 0 ? SECURITY_TEST_EXIT.couldNotRun : SECURITY_TEST_EXIT.clean,
     };
   } finally {
     rmSync(holder, { recursive: true, force: true });
@@ -355,14 +429,17 @@ export function formatSecurityTest(r: SecurityTestReport): string[] {
   const out: string[] = [];
   out.push(`Security test of ${r.project} (surface ${r.surface_hash.slice(0, 12)})`);
   for (const h of r.hosts) {
-    out.push(`${h.host}: ${h.passed}/${h.total}, decided as role ${h.role} (${h.role_source})`);
+    out.push(`${h.host}: ${h.passed}/${h.total}${h.errors ? ` (${h.errors} not measured)` : ""}, decided as role ${h.role} (${h.role_source})`);
     for (const fam of ATTACK_FAMILIES) {
       const rows = r.cases.filter((c) => c.host === h.host && c.family === fam);
       if (rows.length === 0) continue;
       out.push(`  ${fam} ${rows.filter((c) => c.pass).length}/${rows.length}`);
       for (const c of rows) {
-        const got = c.decision === null ? "no decision" : `${c.decision}${c.rule ? ` (${c.rule})` : ""}`;
-        out.push(`    ${c.pass ? "✓" : "✗"} ${c.id.padEnd(20)} ${c.story}: expected ${c.expect}, got ${got}${c.detail ? ` — ${c.detail}` : ""}`);
+        if (c.decision === null) {
+          out.push(`    ? ${c.id.padEnd(20)} ${c.story}: expected ${c.expect}, not measured — ${c.detail ?? "no decision"}`);
+          continue;
+        }
+        out.push(`    ${c.pass ? "✓" : "✗"} ${c.id.padEnd(20)} ${c.story}: expected ${c.expect}, got ${c.decision}${c.rule ? ` (${c.rule})` : ""}`);
       }
     }
     const nc = r.not_covered.filter((n) => n.host === h.host);
@@ -372,6 +449,10 @@ export function formatSecurityTest(r: SecurityTestReport): string[] {
   for (const [id, o] of Object.entries(r.by_owasp)) out.push(`  ${id} ${o.name}: ${o.passed}/${o.total}`);
   out.push("Limits:");
   for (const l of r.limits) out.push(`  - ${l}`);
-  out.push(r.exit === 0 ? `Summary: ${r.passed}/${r.total} cases held across ${r.hosts.map((h) => h.host).join(", ")}.` : `Summary: ${r.total - r.passed} of ${r.total} cases did not hold.`);
+  const failed = r.total - r.passed - r.errors;
+  const unmeasured = `${r.errors} of ${r.total} cases were not measured: the guard gave no decision, and a case it did not answer is not scored`;
+  if (r.exit === SECURITY_TEST_EXIT.clean) out.push(`Summary: ${r.passed}/${r.total} cases held across ${r.hosts.map((h) => h.host).join(", ")}.`);
+  else if (failed > 0) out.push(`Summary: ${failed} of ${r.total} cases did not hold.${r.errors ? ` ${unmeasured}.` : ""}`);
+  else out.push(`Summary: no case failed, but ${unmeasured}; this run is not a result.`);
   return out;
 }

@@ -6,10 +6,10 @@
 
 import { describe, it, expect, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { initSurface } from "./init.js";
 import {
   runSecurityTest,
@@ -21,6 +21,8 @@ import {
   SECURITY_TEST_HOSTS,
   hostPayload,
   readAnswer,
+  readGuardRun,
+  guardCommand,
   OWASP_LLM,
   SECURITY_TEST_EXIT,
   SECURITY_TEST_SCHEMA,
@@ -133,3 +135,104 @@ describe("gnomon security test: the contract", () => {
   });
 });
 
+
+// #202: the npm package has no gnomon.js beside dist/, so every case spawned a
+// missing file, and Claude Code's reading of an empty answer scored the failed
+// launch as allow (1/24 on a fresh scaffold, 1/61 across hosts).
+describe("gnomon security test: launching the guard (#202)", () => {
+  const layout = (files: string[]) => {
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-sectest-layout-"));
+    for (const f of files) {
+      mkdirSync(join(dir, f, ".."), { recursive: true });
+      writeFileSync(join(dir, f), "");
+    }
+    return dir;
+  };
+
+  it("runs this node with the launcher of the gnomon running: bin/gnomon.mjs in the package, gnomon.js in a checkout", () => {
+    // `npm i -g gnomon-harness` (and its Windows layout under %APPDATA%\npm\node_modules):
+    // bin, catalog, dashboard, dist, and no gnomon.js.
+    const pkg = layout(["dist/security_test.js", "dist/guard_main.js", "bin/gnomon.mjs", "package.json"]);
+    // A checkout or a pnpm link runs src/ through gnomon.js.
+    const checkout = layout(["src/security_test.ts", "gnomon.js", "bin/gnomon.mjs"]);
+    const neither = layout(["dist/security_test.js"]);
+    try {
+      expect(guardCommand(pathToFileURL(join(pkg, "dist", "security_test.js")), "/opt/node")).toEqual(["/opt/node", join(pkg, "bin", "gnomon.mjs")]);
+      expect(guardCommand(pathToFileURL(join(checkout, "src", "security_test.ts")), "/opt/node")).toEqual(["/opt/node", join(checkout, "gnomon.js")]);
+      expect(guardCommand(pathToFileURL(join(neither, "dist", "security_test.js")))).toBeNull();
+    } finally {
+      for (const d of [pkg, checkout, neither]) rmSync(d, { recursive: true, force: true });
+    }
+    // This module: node itself (never a .cmd shim, which needs a shell) and a file that exists.
+    const mine = guardCommand();
+    expect(mine?.[0]).toBe(process.execPath);
+    expect(existsSync(mine![1]!)).toBe(true);
+  });
+
+  it("a launch that failed, a signal or a foreign exit is an apparatus error, never Claude Code's allow", () => {
+    // What the npm package produced: node could not find the script, exit 1, nothing on stdout.
+    const missing = {
+      status: 1,
+      signal: null,
+      stdout: "",
+      stderr: "node:internal/modules/cjs/loader:1386\n  throw err;\n  ^\n\nError: Cannot find module '/pkg/gnomon.js'\n    at Function._resolveFilename (node:internal/modules/cjs/loader:1383:15)\n",
+    };
+    for (const host of SECURITY_TEST_HOSTS) {
+      expect(readGuardRun(host, missing), host).toEqual({ error: "the guard exited 1: Error: Cannot find module '/pkg/gnomon.js'" });
+    }
+    expect(readGuardRun("claude-code", { error: Object.assign(new Error("spawnSync /nope ENOENT"), { code: "ENOENT" }), status: null, signal: null, stdout: "", stderr: "" })).toMatchObject({ error: expect.stringMatching(/did not run.*ENOENT/) });
+    expect(readGuardRun("claude-code", { status: null, signal: "SIGTERM", stdout: "", stderr: "" })).toEqual({ error: "the guard was stopped by SIGTERM" });
+    // The published launcher's own message spans two lines: the path is on the second.
+    expect(readGuardRun("claude-code", { status: 1, signal: null, stdout: "", stderr: "gnomon: the compiled entry point is missing at\n  /pkg/dist/guard_main.js\n\nThis file is..." })).toEqual({
+      error: "the guard exited 1: gnomon: the compiled entry point is missing at /pkg/dist/guard_main.js",
+    });
+    expect(readGuardRun("cursor", { status: 0, signal: null, stdout: "not json", stderr: "" })).toMatchObject({ error: expect.stringMatching(/no decision in the guard's answer/) });
+    // The guard's own answers still read as decisions.
+    expect(readGuardRun("claude-code", { status: 0, signal: null, stdout: "", stderr: "" })).toEqual({ decision: "allow", rule: null });
+    expect(readGuardRun("opencode", { status: 2, signal: null, stdout: JSON.stringify({ decision: "deny", rule: "secret_path" }), stderr: "" })).toEqual({ decision: "deny", rule: "secret_path" });
+    expect(readGuardRun("opencode", { status: 10, signal: null, stdout: JSON.stringify({ decision: "ask", rule: "error" }), stderr: "" })).toEqual({ decision: "ask", rule: "error" });
+  });
+
+  it("a guard that cannot be launched at all: the test could not run, and says why", async () => {
+    const dir = await project();
+    for (const guard of [[process.execPath, join(dir, "no-such", "gnomon.js")], [join(dir, "no-such-program")]]) {
+      expect(() => runSecurityTest(dir, { guard, hosts: ["claude-code"] })).toThrow(/the guard gave no decision for any case/);
+    }
+  }, 60_000);
+
+  it("a guard that answers some cases and fails others: those are not measured, and the run is exit 10, not a pass or an allow", async () => {
+    const dir = await project();
+    const fake = join(dir, "fake-guard.mjs");
+    // Allows a Read (Claude Code's empty answer), crashes on anything else.
+    writeFileSync(
+      fake,
+      `let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => {
+         if (JSON.parse(s).tool_name === "Read") process.exit(0);
+         process.stderr.write("boom: guard_main.js is missing\\n"); process.exit(1);
+       });`
+    );
+    const cases = CORPUS.filter((k) => k.id === "read_readme" || k.id === "rm_rf");
+    const r = runSecurityTest(dir, { guard: [process.execPath, fake], hosts: ["claude-code"], cases });
+    shapeHolds(r);
+    const rm = r.cases.find((c) => c.id === "rm_rf")!;
+    expect(rm).toMatchObject({ decision: null, rule: null, pass: false, detail: "the guard exited 1: boom: guard_main.js is missing" });
+    expect(r.cases.find((c) => c.id === "read_readme")).toMatchObject({ decision: "allow", pass: true });
+    expect(r).toMatchObject({ passed: 1, total: 2, errors: 1, exit: SECURITY_TEST_EXIT.couldNotRun });
+    expect(r.hosts[0]).toMatchObject({ passed: 1, total: 2, errors: 1 });
+    const text = formatSecurityTest(r).join("\n");
+    expect(text).toMatch(/\? rm_rf .*not measured — the guard exited 1/);
+    expect(text).toMatch(/1 of 2 cases were not measured.*not a result/);
+    expect(text).not.toMatch(/rm_rf .*got allow/);
+  }, 60_000);
+
+  it("a case that did not hold is still a finding (exit 2) beside one that was not measured", async () => {
+    const dir = await project();
+    const fake = join(dir, "fake-guard.mjs");
+    // Allows everything except a Write, on which it crashes.
+    writeFileSync(fake, `let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => process.exit(JSON.parse(s).tool_name === "Write" ? 1 : 0));`);
+    const cases = CORPUS.filter((k) => k.id === "rm_rf" || k.id === "write_env");
+    const r = runSecurityTest(dir, { guard: [process.execPath, fake], hosts: ["claude-code"], cases });
+    expect(r).toMatchObject({ passed: 0, total: 2, errors: 1, exit: SECURITY_TEST_EXIT.failed });
+    expect(formatSecurityTest(r).join("\n")).toMatch(/Summary: 1 of 2 cases did not hold\. 1 of 2 cases were not measured/);
+  }, 60_000);
+});

@@ -4331,6 +4331,18 @@ The test runs as follows:
   `gnomon guard --from <host> --role <role>` in that repository, with HOME,
   XDG_DATA_HOME and LOCALAPPDATA in a temporary directory, and the answer is
   read as that host reads it (`readAnswer`);
+- the guard is run as the node running the test and the launcher of the
+  gnomon running it (`guardCommand`): `gnomon.js` in a checkout or a pnpm
+  link, `bin/gnomon.mjs` in the npm package. No shim and no shell, on Windows
+  too. Through 0.6.2 it looked for `gnomon.js` only, which the package does not
+  ship (#202);
+- a guard run that gives no decision is an apparatus error, not a host's
+  decision (`readGuardRun`): a launch that failed, a signal or timeout, an
+  exit the guard does not answer with (claude-code and cursor 0; opencode 0,
+  2, 3, 10), or an answer with no decision in it. The case has `decision`
+  null and `detail`, and is counted in `total` and `errors`, never in
+  `passed`. Claude Code reads an empty answer as allow only from a guard that
+  exited 0;
 - a case a host gives its hook no event for is listed in `not_covered` with
   why, and counted nowhere: Cursor has no event before a file write or edit
   (`gnomon check` judges those afterwards), and `bypassPermissions` is a
@@ -4351,21 +4363,27 @@ are reported.
 
 **Report keys:** `schema`, `project`, `surface_hash` (of the copy tested),
 `harness`, `hosts`, `cases`, `not_covered`, `by_family`, `by_owasp`,
-`passed`, `total`, `limits`, `exit`. Version 1 (0.6.0) tested Claude Code
-only and had `role` and `role_source` where `hosts` is now.
-- Each host has `host`, `role`, `role_source`, `passed` and `total`.
+`passed`, `total`, `errors` (cases with no decision; absent through 0.6.2),
+`limits`, `exit`. Version 1 (0.6.0) tested Claude Code only and had `role`
+and `role_source` where `hosts` is now.
+- Each host has `host`, `role`, `role_source`, `passed`, `total` and
+  `errors`.
 - Each `not_covered` entry has `host`, `id` and `why`.
 - Each case has `host`, `id`, `family`, `owasp`, `story`, `tool`, `expect`,
-  `decision` (null when the guard gave none), `rule` (parsed from the
-  reason) and `pass`, plus `detail`? when there was no decision.
+  `decision` (null when the guard gave none: an apparatus error), `rule`
+  (parsed from the reason) and `pass`, plus `detail`? saying why there was
+  no decision.
 - Families: `destructive`, `exfiltration`, `secrets`, `outside_root`,
   `ci_tamper`, `self_modification`, `audit_tamper`, `git_history`,
   `unattended_host`, `control`.
 - OWASP ids: LLM01, LLM02, LLM03, LLM06.
 
-Exit 0 every case held, 2 one did not, 10 could not run. `gnomon security`
-with no subcommand is the posture report (§45). An unknown subcommand is
-exit 10.
+Exit 0 every case held, 2 one did not, 10 could not run. A case that did
+not hold is exit 2 whatever else happened; with none, a case that was not
+measured is exit 10, since the run is not a result. A guard that cannot be
+found, or that gives no decision for any case, is exit 10 with the reason and
+no report. `gnomon security` with no subcommand is the posture report (§45).
+An unknown subcommand is exit 10.
 
 **Limits**, printed with every report:
 - the test covers the policy layer's decisions, not whether a host asks its
@@ -4386,7 +4404,15 @@ expectations, families, OWASP ids, keys and exits.
 - `[approval] gate = "never"` fails the asked cases on every host while the
   structural denials hold;
 - each host's answer is read as that host reads it;
+- the guard's launcher in the package and checkout layouts, and a launch
+  that failed, a signal or a foreign exit read as no decision, never allow;
+- a guard that cannot be launched is an error, not a report; one that
+  answers some cases gives exit 10, or 2 beside a case that did not hold;
 - role resolution per host and the CLI errors.
+
+`scripts/check-publishable.sh` runs `gnomon security test --host
+claude-code` from the packed tarballs on a fresh `gnomon init` and requires
+24/24.
 
 ## 51. Evidence pack — `gnomon compliance pack`, `gnomon.evidence_pack/1`, `v: 1`
 
