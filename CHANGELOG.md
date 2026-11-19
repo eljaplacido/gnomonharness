@@ -47,6 +47,27 @@
   reason. `scripts/check-publishable.sh` now runs the security test from the
   packed tarballs and requires 24/24.
 
+`gnomon chaos` announces 19 of its 20 faults (was 17): two that return
+valid, timely, well-formed replies are now read from their symptoms.
+
+- **A prefix-cache miss is said and counted.** An endpoint that reports 0
+  cached prompt tokens on a request that only appended to the one before (same
+  endpoint, model and tools) prefilled the whole prompt again by its own count:
+  33-40 s at 40k tokens on GB10. Said on stderr once per turn, counted in
+  `counters.prefix_cache_misses`. Never inferred where no cache count is
+  reported, never for a partial reuse or a prefix gnomon rewrote, and a hosted
+  API is held to its own minimum (1024 tokens; 4096 for Claude, only with
+  `prompt_cache` on). `cache_miss` is announced.
+- **A hand-back that changed nothing is said.** When the reply to a
+  hand-back sent as a late system message (a failed check, a gate) is the
+  handed-back answer word for word, stderr says the chat template may have
+  dropped it and names `steer_role = "user"`, once per turn;
+  `counters.handback_unheeded` counts each. A symptom, not proof.
+  `late_system_dropped` is announced.
+- **Still silent: `slow_throttle`.** One evenly paced reply has no reference
+  to be slow against; announcing it needs a declared throughput floor, which
+  no surface key provides yet. Pinned as a failing test until announced.
+
 ## [0.6.2] — 2026-11-18
 
 `gnomon eval` measures other harnesses, on your own tasks, the way it

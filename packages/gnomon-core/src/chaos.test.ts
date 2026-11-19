@@ -389,11 +389,15 @@ describe("the endpoint, on the wire", () => {
 // does not fix. Each is an open issue; each entry leaves this list in the
 // change that makes gnomon announce it, because the `it.fails` below turns red
 // that day.
+//
+// Left 2026-11-19: `late_system_dropped` (the reply to a late-system hand-back
+// is the handed-back answer word for word: said, counters.handback_unheeded)
+// and `cache_miss` (0 cached tokens on an append-only request, by the
+// endpoint's own count: said, counters.prefix_cache_misses). See
+// endpoint_symptoms.test.ts.
 const KNOWN_SILENT: Record<string, string> = {
-  late_system_dropped:
-    "a template that drops late system messages is invisible to the loop; needs the endpoint conformance probe (report RS3)",
-  slow_throttle: "no throughput floor is declared, so nothing compares tokens/s against one (report RS3)",
-  cache_miss: "cached_tokens is not read, so a re-prefill is not counted (report RS5)",
+  slow_throttle:
+    "one uniformly paced reply carries no reference to be slow against; it needs a declared throughput floor, which no surface key provides (report RS3)",
 };
 
 describe("the ratchet: every declared fault is announced, or is a known-silent entry", () => {

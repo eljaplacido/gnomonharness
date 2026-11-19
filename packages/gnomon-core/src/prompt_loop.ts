@@ -1759,6 +1759,7 @@ async function callEndpointObserved(
       observe({
         target,
         messages,
+        tools,
         bodyEst: trace.bodyEst,
         code: r.code,
         ms: Date.now() - started,
@@ -4704,6 +4705,22 @@ export interface TurnCounters {
    */
   prompt_cache_refused?: number;
   /**
+   * Requests whose endpoint reported 0 cached prompt tokens although the
+   * request only appended to the previous one, whose prompt was there to
+   * reuse (mediators.ts prefixCacheMiss): a re-prefill, by the endpoint's own
+   * count. Said once per turn on stderr. Absent when none were, and always
+   * absent for an endpoint that reports no cache count.
+   */
+  prefix_cache_misses?: number;
+  /**
+   * Replies identical, word for word, to the answer an end-of-turn stage had
+   * just handed back in a late system message: the hand-back changed
+   * nothing, which is what a chat template that drops late system messages
+   * looks like from the loop. Said once per turn on stderr. Absent when none
+   * were.
+   */
+  handback_unheeded?: number;
+  /**
    * Calls `[approval] after_refusal` sent to a person: each named something a
    * call refused earlier in the turn had named, and would otherwise have run
    * unasked. Absent when none were, which is every turn of a surface that
@@ -6341,6 +6358,15 @@ async function agenticTurn(
   let onFallback = false;
   // Content parts are a dialect, not an accident: said once per turn, not per reply.
   let saidContentParts = false;
+  // A prefix-cache miss (mediators.ts prefixCacheMiss): counted every time,
+  // said once per turn.
+  let saidCacheMiss = false;
+  // The answer an end-of-turn stage just handed back in a late SYSTEM
+  // message, until the next reply is read: a reply identical to it means the
+  // hand-back changed nothing, which is what a chat template that drops late
+  // system messages looks like from here (gnomon chaos: late_system_dropped).
+  let systemHandBack: { stage: EndOfTurnHandBack["stage"]; answer: string } | null = null;
+  let saidHandBackUnheeded = false;
 
   /**
    * The record guard, created on the session's first tool call so its
@@ -6879,6 +6905,56 @@ async function agenticTurn(
             `and were dropped — the reply may be missing text`
         )
       );
+    }
+
+    // Two things a reply can say about the request it answers, both invisible
+    // in the reply itself. Said, not acted on.
+    //
+    // The endpoint reported reusing none of a prefix it had just been sent
+    // (gnomon chaos: cache_miss; report RS5, a 40k re-prefill at 33-40 s on
+    // GB10). Every one counted; said once per turn.
+    const misses = ledger.takeCacheMisses();
+    if (misses) {
+      counters.prefix_cache_misses = (counters.prefix_cache_misses ?? 0) + misses.n;
+      if (!saidCacheMiss) {
+        saidCacheMiss = true;
+        warn(
+          paint(
+            deps.ui,
+            "yellow",
+            `  [endpoint] ${usedModel} reported 0 cached prompt tokens on a request that only appended to the one before ` +
+              `(${misses.last.reusable} tokens were there to reuse) — a prefix-cache miss: by its own count the whole ` +
+              `prompt was prefilled again (said once per turn; counters.prefix_cache_misses counts them)`
+          )
+        );
+      }
+    }
+    // The reply to a late-system hand-back is the answer that was handed
+    // back, word for word: the hand-back changed nothing. gnomon cannot see
+    // the template, so this names the likely cause rather than asserting it;
+    // a model can also ignore a message it was shown.
+    const handedBack = systemHandBack;
+    systemHandBack = null;
+    if (
+      handedBack &&
+      result.code === 0 &&
+      result.toolCalls.length === 0 &&
+      result.content.trim() !== "" &&
+      result.content.trim() === handedBack.answer
+    ) {
+      counters.handback_unheeded = (counters.handback_unheeded ?? 0) + 1;
+      if (!saidHandBackUnheeded) {
+        saidHandBackUnheeded = true;
+        warn(
+          paint(
+            deps.ui,
+            "yellow",
+            `  [endpoint] ${usedModel} gave the same answer, word for word, after the ${handedBack.stage.replace("_", " ")} ` +
+              `hand-back, which went out as a late system message — the chat template may have dropped it. ` +
+              `If it did, declare steer_role = "user" on the endpoint (said once per turn; counters.handback_unheeded counts them)`
+          )
+        );
+      }
     }
 
     // A turn with no tool calls AND no text is not an answer. It was recorded as
@@ -7862,6 +7938,11 @@ async function agenticTurn(
           ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
         });
         working.push({ role: endHandBack.role, content: endHandBack.content });
+        // Sent as a system message only when the endpoint is not steered in
+        // the user role (adaptSteerRole); there, a template cannot drop it.
+        if (endHandBack.role === "system" && adaptTarget(state, usedTarget).steerRole !== "user" && result.content.trim() !== "") {
+          systemHandBack = { stage: endHandBack.stage, answer: result.content.trim() };
+        }
         continue;
       }
 

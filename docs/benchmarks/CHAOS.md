@@ -251,10 +251,18 @@ five minutes can still be run, slowly.
 - **gnomon is measured in-process,** through the function its `task` command
   calls, with stderr captured. A peer is measured black-box. The channels are
   the same, but the harness is not.
-- **Three faults need a probe, not a loop.** `late_system_dropped`,
-  `slow_throttle` and `cache_miss` return valid, timely, well-formed
-  responses. A harness can announce them only by checking the endpoint
-  against expectations it declares (report RS3, RS5).
+- **Three faults return valid, timely, well-formed responses.**
+  `late_system_dropped`, `slow_throttle` and `cache_miss` show only across
+  requests or against an expectation. Two leave a symptom a harness can read
+  without a probe: an endpoint that reports 0 cached tokens on a request that
+  only appended to the one before has said, by its own count, that it
+  prefilled the prompt again (report RS5); and a reply to a late-system
+  hand-back that repeats the handed-back answer word for word is what a
+  dropped message looks like (RS3), though a model that ignored the message
+  looks the same. `slow_throttle` leaves none in a one-request task: a reply
+  paced evenly from its first token to its last carries no reference to be
+  slow against. Only a throughput floor the harness declares can announce
+  it, and a harness that declares none is silent on it by construction.
 
 ## 9. Versioning and proposing a fault
 

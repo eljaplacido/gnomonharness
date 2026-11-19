@@ -763,7 +763,11 @@ with a template error is sent the call once more as user messages, and gets
 them that way for the rest of the session. The turn record counts that in
 `counters.steer_role_adapted`, and its `wire` says `steer_role: "user"`. A
 template that drops the messages gives no error to react to, so declare the
-line for it.
+line for it. gnomon notices one symptom: when the reply to a hand-back sent as
+a late system message (a failed check, a gate) is the handed-back answer word
+for word, it says so on stderr once per turn, names the template and this
+line, and counts each in `counters.handback_unheeded`. That is a symptom, not
+proof: a model can also ignore a message it was shown.
 
 ```toml
 # llama.cpp serving Unsloth's qwen3.6 GGUF, whose template drops a late system message
@@ -792,6 +796,17 @@ said on stderr, and gets none for the rest of the session
 `cache_read_input_tokens` as well as `cached_tokens`, with the cache writes as
 `cache_write_tokens`. Prefixes shorter than the model's minimum (up to 4096
 tokens on Haiku 4.5) are not cached, with no error.
+
+**Prefix-cache misses.** When an endpoint reports 0 cached prompt tokens on a
+request that only appended messages to the one before it (same endpoint, model
+and tools), the whole prompt was prefilled again by its own count: on a local
+server at 40k tokens that is half a minute behind a reply that looks normal.
+gnomon says so on stderr once per turn and counts each in
+`counters.prefix_cache_misses`. It reads only what the endpoint reports: one
+that reports no cache count is never called a miss, a partial reuse is not
+counted, and a prefix gnomon itself rewrote (a trim, masking) is not compared.
+A hosted API is held to its own minimum (1024 tokens; 4096 for Claude, and
+only while `prompt_cache` is on); a local server reuses any prefix it holds.
 
 ```toml
 # Claude through a LiteLLM proxy, markers off

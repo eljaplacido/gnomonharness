@@ -21,9 +21,12 @@
  * "calibrated"` reads the running ratio kept here to size the turn's trims.
  * Under the default, "chars4", that ratio is never consulted and the request
  * bodies are byte-identical to the ones sent before this file existed
- * (mediator_record.test.ts pins them to a hash taken on master).
+ * (mediator_record.test.ts pins them to a hash taken on master). The loop
+ * also takes the prefix-cache misses found here (takeCacheMisses) to say
+ * them on stderr; that changes what is said, never what is sent.
  */
 import { isLocalEndpoint, type RouteTarget, type TokenEstimate } from "./config.js";
+import { isAnthropicTarget, promptCacheOn } from "./prompt_cache.js";
 
 /**
  * Which of gnomon's own mid-turn system messages a request carried. `nudge`:
@@ -190,6 +193,8 @@ export interface ModelCallsMeasured {
 export interface CallObservation {
   target: RouteTarget;
   messages: ReadonlyArray<{ role: string; content: string; reasoning_content?: string }>;
+  /** The tool schemas the request offered; part of the prefix a template renders */
+  tools?: readonly unknown[];
   /** gnomon's estimate of the whole request body; undefined when nothing was sent */
   bodyEst?: number;
   code: number;
@@ -294,6 +299,11 @@ export class CallLedger {
   private promptSum = 0;
   private estSum = 0;
   private readonly cap: number;
+  /** Per endpoint+model: the last answered, metered request's messages and its provider prompt_tokens */
+  private readonly lastAnswered = new Map<string, { tools: string; messages: MessageKey[]; prompt: number }>();
+  /** Prefix-cache misses not yet taken by the loop (takeCacheMisses) */
+  private missesPending = 0;
+  private lastMiss?: PrefixCacheMiss;
 
   constructor(private readonly opts: CallLedgerOptions) {
     this.cap = opts.cap ?? MAX_CALL_ENTRIES;
@@ -344,6 +354,19 @@ export class CallLedger {
     const c = this.opts.calibration?.get(calibrationKey(target));
     if (!c || c.calls === 0 || c.est <= 0) return undefined;
     return round3(Math.min(RATIO_MAX, Math.max(RATIO_MIN, c.prompt / c.est)));
+  }
+
+  /**
+   * Prefix-cache misses (prefixCacheMiss) seen since the last call, and the
+   * latest of them; undefined when there were none. The loop announces them;
+   * this record only observes.
+   */
+  takeCacheMisses(): { n: number; last: PrefixCacheMiss } | undefined {
+    if (this.missesPending === 0 || !this.lastMiss) return undefined;
+    const out = { n: this.missesPending, last: this.lastMiss };
+    this.missesPending = 0;
+    this.lastMiss = undefined;
+    return out;
   }
 
   /** What came back, for `volatile.model_calls`; undefined before any request. */
@@ -466,6 +489,21 @@ export class CallLedger {
     push(r.calls, got, this.cap);
     if (r.calls[0]!.i > 1) r.first = r.calls[0]!.i;
 
+    // A prefix-cache miss, by the endpoint's own count. Only an answered,
+    // metered request moves the reference: a failed one prefilled nothing
+    // anyone could reuse.
+    if (o.code === 0 && prompt !== undefined) {
+      const key = calibrationKey(o.target);
+      const messages = o.messages.map(messageKey);
+      const tools = o.tools && o.tools.length > 0 ? JSON.stringify(o.tools) : "";
+      const miss = prefixCacheMiss(this.lastAnswered.get(key), { tools, messages, cached: o.detail?.cached }, o.target);
+      if (miss !== undefined) {
+        this.missesPending++;
+        this.lastMiss = { i, reusable: miss };
+      }
+      this.lastAnswered.set(key, { tools, messages, prompt });
+    }
+
     // The trail's copy: one record per request, the two halves joined.
     if (this.opts.audit) {
       const { i: _sent, ...carried } = entry;
@@ -483,6 +521,75 @@ export class CallLedger {
       });
     }
   }
+}
+
+/** A message as the prefix comparison sees it: role, content, replayed reasoning. */
+export type MessageKey = readonly [string, string, string | undefined];
+
+export function messageKey(m: { role: string; content: string; reasoning_content?: string }): MessageKey {
+  return [m.role, m.content, m.reasoning_content];
+}
+
+/** A request the endpoint said reused none of a prefix it had just been sent. */
+export interface PrefixCacheMiss {
+  /** The request, as `i` in model_calls */
+  i: number;
+  /** The previous request's provider prompt_tokens: what was there to reuse */
+  reusable: number;
+}
+
+/**
+ * The smallest prefix, in provider tokens, whose re-prefill counts as a miss
+ * on this target; undefined when the target is not expected to cache at all.
+ *
+ * - An Anthropic-family target caches only up to a breakpoint gnomon sends,
+ *   and only when `prompt_cache` is on; off, a miss is what was declared.
+ *   On, prefixes below the model's minimum are not cached (up to 4096 tokens
+ *   on Haiku 4.5), with no error.
+ * - Another remote API caches by itself above a minimum (OpenAI: 1024).
+ * - A local server (llama.cpp, vLLM, SGLang) reuses any prefix it still
+ *   holds; there is no minimum to wait for.
+ */
+export function prefixCacheMinimum(target: RouteTarget): number | undefined {
+  if ((target.kind ?? "ollama") === "ollama") return undefined;
+  if (isAnthropicTarget(target)) return promptCacheOn(target) ? 4096 : undefined;
+  return isLocalEndpoint(target.url) ? 0 : 1024;
+}
+
+/**
+ * Whether a request is a prefix-cache miss, by the endpoint's own count:
+ * it reported `cached_tokens` (or a spelling of it) as exactly 0, on a
+ * request that only APPENDED messages to the previous answered request to
+ * the same endpoint and model, with the same tools, and that previous
+ * request's prompt was at least `prefixCacheMinimum` tokens. Returns the
+ * tokens there were to reuse, or undefined.
+ *
+ * Deliberately narrow. An endpoint that reports no cache count is never
+ * read as missing (absence is not zero); a rewritten prefix (a trim, a
+ * masking batch, reasoning replay switched on) is a miss gnomon caused, not
+ * one to report; and a partial reuse is not counted, because sliding-window
+ * models legitimately reuse only part of a prefix. What is left is the
+ * GB10 re-prefill (report RS5): the whole prompt prefilled again, 33-40 s at
+ * 40k tokens, behind a reply that looks normal.
+ */
+export function prefixCacheMiss(
+  prev: { tools: string; messages: readonly MessageKey[]; prompt: number } | undefined,
+  cur: { tools: string; messages: readonly MessageKey[]; cached: number | undefined },
+  target: RouteTarget
+): number | undefined {
+  if (!prev || cur.cached !== 0) return undefined;
+  const min = prefixCacheMinimum(target);
+  if (min === undefined || prev.prompt <= 0 || prev.prompt < min) return undefined;
+  // A template renders the tools ahead of the conversation: other tools (the
+  // tool-less wrap-up) is another prefix.
+  if (cur.tools !== prev.tools) return undefined;
+  if (cur.messages.length <= prev.messages.length) return undefined;
+  for (let k = 0; k < prev.messages.length; k++) {
+    const a = prev.messages[k]!;
+    const b = cur.messages[k]!;
+    if (a[0] !== b[0] || a[1] !== b[1] || a[2] !== b[2]) return undefined;
+  }
+  return prev.prompt;
 }
 
 /** What a leg checkpoint trims to: 60% of the window, at least 1024. The loop's own rule. */
