@@ -56,6 +56,7 @@ import {
   resolveShadow,
   resolveBootstrap,
   resolveExec,
+  resolveReadonlyBash,
   listRoles,
   resolveEndpoint,
   DEFAULT_ENDPOINT,
@@ -400,6 +401,8 @@ const KEYED_SIDES = ["fallback", "escalate"] as const;
  * What counts, and why each is a grant rather than a preference:
  *
  * - `approval = "never"`: nothing asks before a write or a command.
+ * - `[approval] readonly_bash = "allow"`: a bash call read as read-only runs
+ *   unasked under on_write.
  * - `sandbox.level = "off"`: tool paths may leave the repository.
  * - `network = true`, `extra_roots`: reach beyond the checkout.
  * - an MCP server: a process the surface starts before the first prompt.
@@ -425,6 +428,17 @@ export function surfaceGrants(config: GnomonConfig): Grant[] {
 
   if (effectiveGate(config) === "never") {
     add({ key: "approval:never", subject: "approval", grants: "never — nothing asks before a write or a command", default: "on_write" });
+  }
+  // `[approval] readonly_bash = "allow"`: bash calls read as read-only run
+  // unasked under on_write -- reads anywhere the user can read, unless a
+  // declared [governance] protects the path. Moot under "always".
+  if (resolveReadonlyBash(config) === "allow" && effectiveGate(config) !== "always") {
+    add({
+      key: "approval:readonly_bash",
+      subject: "approval",
+      grants: "readonly_bash — a bash call read as read-only (ls, cat, rg, git log) runs without asking",
+      default: "every bash call asks",
+    });
   }
   if (effectiveSandbox(config) === "off") {
     add({ key: "sandbox:off", subject: "sandbox", grants: "off — tool paths may leave the repository", default: "confined" });
@@ -579,6 +593,9 @@ export function clampToDefaults(config: GnomonConfig, floor?: ExecFloor): Gnomon
   if (effectiveGate(c) === "never") {
     policy.approval = { ...(policy.approval ?? {}), gate: SCAFFOLD_POLICY.approval };
     if (defaults.approval === "never") defaults.approval = SCAFFOLD_POLICY.approval;
+  }
+  if (policy.approval && typeof policy.approval === "object" && "readonly_bash" in policy.approval) {
+    delete policy.approval.readonly_bash;
   }
   if (effectiveSandbox(c) === "off") {
     policy.sandbox = { ...(policy.sandbox ?? {}), level: SCAFFOLD_POLICY.sandbox };

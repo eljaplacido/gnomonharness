@@ -738,7 +738,7 @@ allow changes nothing. One JSON object per call on stdout.
 
 | Decision | Exit | Means |
 |---|---|---|
-| `allow` | 0 | No rule refuses the call and the `[approval]` gate would not ask. Not a permission: the adapters print nothing on allow, so the host harness's own prompt still applies. |
+| `allow` | 0 | No rule refuses the call and the `[approval]` gate would not ask (under `on_write`, a bash call `[approval] readonly_bash = "allow"` reads as read-only is not asked: `exempt: "readonly_bash"`). Not a permission: the adapters print nothing on allow, so the host harness's own prompt still applies. |
 | `deny` | 2 | A rule refuses it — the same refusal gnomon's own tool would return, `rule` names which. |
 | `ask` | 3 | The `[approval]` gate would ask a person first (`rule: "approval"`), or `[approval] repo_code = true` asks before a call that runs repository-defined code (`rule: "repo_code"`). |
 
@@ -862,10 +862,49 @@ merged). Running a repository file by name
 (`python x.py`, `./x.sh`) and test runners (`pytest`, `go test`) also run the
 repository's code and are not listed: the call names the code it runs.
 
+**Read-only bash — `[approval] readonly_bash`** (opt-in; `"ask"` | `"allow"`,
+default `"ask"`). `gate = "on_write"` counts every bash call as mutating,
+because a command can write anything: replayed through this guard, 1,954 real
+Claude Code calls from 7 projects were 70% `ask`, nearly all rule `approval`
+on bash calls such as `ls` and `git status` (2026-11-19). Under
+`readonly_bash = "allow"`, a bash call the reader in `readonly_bash.ts` proves
+read-only is not asked under `on_write`: decision `allow`, `rule` null,
+`exempt: "readonly_bash"`, and a `reason` that starts `[approval]
+readonly_bash = "allow"` and names the programs it was read as. gnomon's own
+loop does the same: no approval prompt, and its `tool_call` record carries
+`exempt: "readonly_bash"` beside `gated: false`.
+
+The reader is conservative: read-only means every command on the line is one
+of `ls`, `cat`, `head`, `tail`, `wc`, `grep`, `rg`, `find`, `stat`, `file`,
+`pwd`, `which`, `du`, `df`, `echo`, `printf`, `cd`, `cut`, `tr`, `sort`,
+`uniq`, `true`, and `git` `status`/`log`/`diff`/`show`/`rev-parse`/`ls-files`/
+`blame`/`branch` (branch as a listing only), named bare, joined only by `|`,
+`;`, `&&`, `||`; with no output redirection except to `/dev/null` and fd
+duplication (`2>&1`), no command or process substitution, no subshell, group,
+loop, function or background job, no `VAR=value`; none of the options that
+write or run a program (`find -exec`/`-execdir`/`-ok`/`-delete`/`-fprint*`/
+`-fls`, `rg --pre`/`--hostname-bin`, `file -C`, `sort -o`/`--compress-program`,
+a second `uniq` operand, `git -c`/`-p`/`--git-dir`/`--exec-path`, `git
+diff|log|show --output`/`--ext-diff`); and, for `find`, `rg`, `git`, `file`,
+`sort` and `uniq`, no unquoted variable, glob or brace in an argument (a file
+named `-delete` matched by `*` would become that option). Anything else asks,
+exactly as before. Every rule above runs first: `bash_deny`, `bash_allow`,
+the sandbox, `network`, `surface`, `secret_path`, `outside_root` and the
+governance levels still refuse a read-only command they refuse, so `cat .env`
+under a declared `[governance]` is `deny`, `secret_path`. Without one it is
+allowed unasked: the setting judges whether a call writes, not what it reads.
+`always` still asks before every call, and an escalated call (§25) is asked.
+The key is in `policy.toml`, so turning it on moves the surface hash; trust
+(`gnomon launch` on a cloned repository) lists it as a grant
+(`approval:readonly_bash`) and the clamp removes it. Fixture:
+`conformance/guard_cases.json` `readonly_bash`, put to the loop, the guard
+and the real binary.
+
 Keys: `schema`, `decision`, `rule`, `reason`, `tool`, `role`, `base` (the
 commit the rules were read from, full sha), `surface_hash` (the surface at
 `base`), `governed`, `elapsed_ms`; optionally `pattern`, `audit` (`trail`,
-`seq`, `hash`, when `[audit] enabled = true`), `error`, `base_note`.
+`seq`, `hash`, when `[audit] enabled = true`), `error`, `base_note`, `exempt`
+(`"readonly_bash"`, above).
 
 **Which revision's rules.** `--base <rev>` when given. Otherwise the session's
 recorded base, or the `--session-base` hint, or HEAD -- and then, since
@@ -3926,7 +3965,7 @@ audit.ts). `gnomon audit verify <trail>` and the scorecard check it.
 |---|---|
 | `session_start` | `surface_hash`, `harness` (gnomon's build, §3b), `cwd`, `mode: "guard"`, `role`, `agent`?, `via`? |
 | `session_resume` | `resumed` (the trail id), `surface_hash` |
-| `guard` | `tool` (what the call was decided as, a `guard_tool` or the host tool's own name, §10), `target` (path, URL, command, query or description; through `[audit] redact`; empty for an MCP call), `decision`, `rule` (a `guard_rule` or null), `pattern`?, `role`, `agent`?, `via`? (`claude-code`, `opencode`, `cursor`, `generic`), `host_tool`? (the host's name for the tool, when it is not `tool`), `host_mode`? (Claude Code `permission_mode`), `base`, `surface_hash`, `exit` (0/2/3/10); under `[governance]` also `verdict`, `family`, `level`, `call_id`?, `delivered: false`? (§36) |
+| `guard` | `tool` (what the call was decided as, a `guard_tool` or the host tool's own name, §10), `target` (path, URL, command, query or description; through `[audit] redact`; empty for an MCP call), `decision`, `rule` (a `guard_rule` or null), `pattern`?, `role`, `agent`?, `via`? (`claude-code`, `opencode`, `cursor`, `generic`), `host_tool`? (the host's name for the tool, when it is not `tool`), `host_mode`? (Claude Code `permission_mode`), `base`, `surface_hash`, `exit` (0/2/3/10), `exempt`? (`"readonly_bash"`: an on_write bash call the setting let through, §10); under `[governance]` also `verdict`, `family`, `level`, `call_id`?, `delivered: false`? (§36) |
 | `session_end` | none of its own (an attested or anchored trail adds what §11/§21 say) |
 
 **Liveness** (`gnomon.guard.live/1`). A hook that does not run decides

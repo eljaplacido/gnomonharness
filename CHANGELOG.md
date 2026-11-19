@@ -68,6 +68,28 @@ valid, timely, well-formed replies are now read from their symptoms.
   to be slow against; announcing it needs a declared throughput floor, which
   no surface key provides yet. Pinned as a failing test until announced.
 
+- **New opt-in `[approval] readonly_bash = "allow"`** (default `"ask"`, no
+  behaviour change unless declared). Under `gate = "on_write"`, a bash call a
+  conservative reader (`readonly_bash.ts`) proves read-only is no longer
+  asked: `ls`, `cat`, `head`, `tail`, `wc`, `grep`, `rg`, `find`, `stat`,
+  `file`, `pwd`, `which`, `du`, `df`, `echo`, `printf`, `cd`, `cut`, `tr`,
+  `sort`, `uniq`, `true` and `git status/log/diff/show/rev-parse/ls-files/
+  blame` (and `git branch` listings), alone, piped or chained. Output
+  redirection (except to `/dev/null` and `2>&1`), `tee`, substitution,
+  subshells, assignments, interpreters, `find -exec/-delete`, `rg --pre`,
+  `sort -o`, `git -c`, `git branch -D` and anything unrecognised still ask.
+  Every rule (bash_deny, bash_allow, sandbox, network, surface, secret_path,
+  outside_root, governance levels) runs first. Reached by gnomon's own loop
+  and `gnomon guard` alike: the decision is `allow` with `exempt:
+  "readonly_bash"` and a reason naming the programs; the guard's audit record
+  and the loop's `tool_call` record carry `exempt` too. It is a trust grant
+  (`approval:readonly_bash`), clamped like the others, and moves the surface
+  hash. Why: replayed through `gnomon guard`, 1,954 real Claude Code calls
+  were 70% `ask`, nearly all bash calls such as `ls` and `git status` under
+  `on_write`. Contracts: `guard_decision.json` `verdict_keys.optional` and
+  `audit_feed_schema.json` gain `exempt`; `guard_cases.json` gains a
+  `readonly_bash` section (CONTRACTS.md §10, §44).
+
 ## [0.6.2] — 2026-11-18
 
 `gnomon eval` measures other harnesses, on your own tasks, the way it

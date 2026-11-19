@@ -14,7 +14,7 @@
  * learn what a deterministic harness does.
  */
 
-import { GnomonConfig, resolveContext, resolveRouting, resolveEndpoint, listEndpoints, endpointClass, listRoles, recomputeManifest, resolveVerify, resolveExtraRoots, resolveApprovalGate, resolveSandboxLevel, endpointKind, resolveExec } from "./config.js";
+import { GnomonConfig, resolveContext, resolveRouting, resolveEndpoint, listEndpoints, endpointClass, listRoles, recomputeManifest, resolveVerify, resolveExtraRoots, resolveApprovalGate, resolveReadonlyBash, resolveSandboxLevel, endpointKind, resolveExec } from "./config.js";
 import { resolve as resolvePath } from "node:path";
 import { resolveAudit } from "./audit.js";
 import { resolveSessionStore } from "./session_store.js";
@@ -275,6 +275,7 @@ const TOPICS: Record<ExplainTopic, Builder> = {
         `gate           ${gate}`,
         `gated for ${role}   ${gated.join(", ") || "(nothing — this role cannot mutate)"}`,
         `repo_code      ${(config.policy as { approval?: { repo_code?: unknown } } | undefined)?.approval?.repo_code === true ?"on — npm test, make, pip install -e . and the like always ask" : "off — they ask only as the gate says"}`,
+        `readonly_bash  ${resolveReadonlyBash(config) === "allow" ? "allow — under on_write, a bash call read as read-only (ls, cat, rg, git status/log/diff) does not ask" : "ask — under on_write every bash call asks"}`,
         // Only when declared: a line saying "off" on every surface would be a
         // setting nobody asked about, printed as if it mattered.
         ...(afterRefusal.mode === "ask"
@@ -292,6 +293,8 @@ const TOPICS: Record<ExplainTopic, Builder> = {
         "repo_code = true there asks before every call that runs code the",
         "repository defines (package.json scripts, a Makefile): the command line",
         "does not show that code, so no rule can judge it. A sandbox contains it.",
+        "readonly_bash = \"allow\" there stops on_write asking before a bash call a",
+        "conservative reader proves read-only; anything it cannot account for asks.",
       ],
     };
   },

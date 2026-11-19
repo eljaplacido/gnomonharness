@@ -224,6 +224,12 @@ export interface GuardVerdict {
   verdict?: GuardDecisionValue;
   family?: GovernanceFamily | null;
   level?: GovernanceLevel | null;
+  /**
+   * Present only when `[approval] readonly_bash = "allow"` is why the gate did
+   * not ask: a bash call under on_write read as read-only (readonly_bash.ts).
+   * The reason names the programs it was read as.
+   */
+  exempt?: "readonly_bash";
   /** Wall time inside the decision, for the latency budget. */
   elapsed_ms: number;
 }
@@ -793,6 +799,7 @@ export async function guardToolCall(req: GuardRequest): Promise<GuardVerdict> {
     v.rule = policy.rule;
     v.reason = policy.reason;
     if (policy.pattern) v.pattern = policy.pattern;
+    if ("exempt" in policy && policy.exempt === "readonly_bash") v.exempt = policy.exempt;
     if (policy.verdict) {
       v.verdict = policy.verdict;
       v.family = policy.family ?? null;
@@ -1244,6 +1251,8 @@ function appendDecision(
       base: v.base,
       surface_hash: v.surface_hash,
       exit: guardExit(v.decision, v.error !== undefined),
+      // `[approval] readonly_bash`: why an on_write bash call was not asked.
+      ...(v.exempt ? { exempt: v.exempt } : {}),
       // [governance] only (CONTRACTS.md §36): absent otherwise, so an
       // undeclared surface's records are what they were.
       ...(levelled

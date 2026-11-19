@@ -128,9 +128,10 @@ import {
   resolveChain,
   resolveVerify,
   resolveApprovalGate,
+  resolveReadonlyBash,
 } from "./config.js";
 import { mapBucket } from "./session.js";
-import { buildToolSet, needsApproval, ApprovalGate } from "./tools.js";
+import { buildToolSet, callNeedsApproval, needsApproval, ApprovalGate } from "./tools.js";
 import { loadSkills, selectSkills } from "./skills.js";
 import { resolveAudit, verifyTrail, AuditRecord, AuditDetail } from "./audit.js";
 import { harnessBuild } from "./build.js";
@@ -913,7 +914,24 @@ export function replay(
           scmp(e, "offered", record.code !== 4, () => offeredFor(role).has(tool),
             "recorded side inferred from the outcome code: 4 is the refusal executeTool returns for a tool the role was not offered");
           if (record.gated !== undefined) {
-            scmp(e, "gated", record.gated, () => needsApproval(tool, gateNow) && offeredFor(role).has(tool));
+            // `[approval] readonly_bash`: whether a bash call is gated depends
+            // on its command, which the record keeps as `target`. A redacted
+            // target is not the command that was read, so it is not re-read.
+            const command = tool === "bash" && typeof record.target === "string" ? record.target : null;
+            if (command !== null && command.includes("[redacted]") && resolveReadonlyBash(config) === "allow") {
+              uncheckable(
+                e,
+                "gated",
+                "trail",
+                "under [approval] readonly_bash a bash call's gating depends on its command, and this record's command was redacted",
+                record.gated
+              );
+            } else {
+              scmp(e, "gated", record.gated, () =>
+                (command !== null ? callNeedsApproval(tool, { command }, { gate: gateNow, config }) : needsApproval(tool, gateNow)) &&
+                offeredFor(role).has(tool)
+              );
+            }
           }
         }
         pendingCalls.push(record);

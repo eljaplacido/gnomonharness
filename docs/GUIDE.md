@@ -1397,6 +1397,7 @@ machine trusts (`gnomon trust grant`); it keeps no list of its own.
 | `[sandbox] network = false` | the `webfetch` tool, and `bash` commands whose purpose is the network: `curl`, `wget`, `nc`, `ssh`, `scp`/`rsync` to a remote, `/dev/tcp`, connecting one-liners, `git` to a URL, a package manager handed a registry or package URL | a script, a build tool, a package manager's configured registry, a git remote configured before the call |
 | `surface`, `record`, `git_hooks`, `host_hooks` rules (every role, every tool) | writes into `.gnomon/` (and a `git rm` of it, or a commit that would record a change to it), gnomon's records (`.gnomon-audit/`, `.gnomon-trials/`, `.gnomon-sessions/`), `.git/hooks/` and `.git/config`, and the host harnesses' hook configuration (`.claude/settings*.json`, `.claude/hooks/`, `.opencode/plugins/`, `opencode.json`, `.cursor/hooks.json`, their user-level copies); a recursive removal or `git clean -x` that would reach the records; `git config` of keys git runs (`core.hooksPath`, `core.pager`, …) | what a script file does (the record guard detects record changes afterwards) |
 | `[approval] repo_code = true` (opt-in) | asks before a call that runs repository-defined code: `npm test`/`npm install` (package.json scripts), `make`, `pip install -e .`, and kin | what that code does: only `exec = "docker"` contains it |
+| `[approval] readonly_bash = "allow"` (opt-in; default `"ask"`) | lifts the `on_write` ask for a bash call a conservative reader proves read-only (`ls`, `cat`, `rg`, `find` without `-exec`/`-delete`, `git status`/`log`/`diff`, …, piped or chained, no redirection but to `/dev/null`); every rule above still runs first | what is read: `cat ~/.ssh/id_rsa` is read-only (`[governance]` secret paths refuse it); a program's own configuration (`.git/config` drivers, `RIPGREP_CONFIG_PATH`) |
 | `[sandbox] exec = "docker"` | **where `bash` runs**: a `docker run --rm` per command, repo bind-mounted, `--user` mapped, no network unless `network = true` | anything else. And any value other than `docker` (`bwrap`, a typo) silently runs on the host, with a warning that `gnomon task` does not show. |
 
 ```toml
@@ -1418,6 +1419,7 @@ before every one of them:
 [approval]
 gate = "on_write"
 repo_code = true      # ask before npm test, make, pip install -e . — whatever the gate says
+readonly_bash = "allow"  # but not before ls, cat, rg, git status/log/diff (CONTRACTS.md §10)
 ```
 
 `exec` can be set per role, and is refused on native Windows. Nothing checks

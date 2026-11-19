@@ -2680,6 +2680,9 @@ const ENUM_KEYS: EnumSpec[] = [
   // out rather than imported, because after_refusal.ts reaches config.ts through
   // tools.ts; after_refusal.test.ts holds the two lists equal.
   { block: "approval", key: "after_refusal", values: ["off", "ask"], falls_back_to: "off" },
+  // resolveReadonlyBash: anything but "allow" asks, so a misspelling falls
+  // back to the stricter side and stays a warning.
+  { block: "approval", key: "readonly_bash", values: ["ask", "allow"], falls_back_to: "ask" },
   { block: "sandbox", key: "level", values: ["off", "confined", "strict"], falls_back_to: "confined" },
   // resolveExec: an unknown value does NOT fall back to "off" -- bash refuses
   // every command until it is fixed (ResolvedExec.invalid). An absent key is "off".
@@ -2884,7 +2887,7 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
     ],
   ],
   ["policy.toml", "sandbox", ["level", "network", "exec", "image", "extra_roots", "allow_package_index", "filesystem", "profile", "reads", "read_roots"]],
-  ["policy.toml", "approval", ["gate", "repo_code", "after_refusal", "after_refusal_calls", "modes", "default"]],
+  ["policy.toml", "approval", ["gate", "repo_code", "readonly_bash", "after_refusal", "after_refusal_calls", "modes", "default"]],
   // resolveLevels (governance.ts). A value outside the enumeration is fatal
   // (auditGovernance); an unknown key is warned here like any other.
   // `paths` is the `[governance.paths]` sub-table (secret / CI path lists),
@@ -5311,6 +5314,17 @@ function readSplit(
 /** The approval gate a turn runs under: policy.toml, then `[defaults]`, then on_write. */
 export function resolveApprovalGate(config: GnomonConfig): "never" | "on_write" | "always" {
   return readSplit(config, SPLIT_SETTINGS[0]).used as "never" | "on_write" | "always";
+}
+
+/**
+ * `[approval] readonly_bash`: "allow" lets `gate = "on_write"` run a bash call
+ * that readonly_bash.ts proves read-only without asking. Anything but "allow"
+ * -- absent, "ask", a misspelling -- is "ask": the gate as it always was.
+ * Read from policy.toml only, like `repo_code`.
+ */
+export function resolveReadonlyBash(config: GnomonConfig | undefined): "ask" | "allow" {
+  const v = (config?.policy as { approval?: { readonly_bash?: unknown } } | undefined)?.approval?.readonly_bash;
+  return v === "allow" ? "allow" : "ask";
 }
 
 /** The sandbox level a turn runs under: policy.toml, then `[defaults]`, then confined. */

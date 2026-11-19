@@ -1434,6 +1434,7 @@ moved, the model is told and the transcript says so:
 ```toml
 [approval]
 gate = "on_write"                  # never | on_write | always
+# readonly_bash = "allow"          # opt-in: on_write does not ask before a provably read-only bash call
 
 [sandbox]
 level = "confined"                 # off | confined | strict
@@ -1683,6 +1684,29 @@ because it was not always true: `always` used to be consulted only by `bash`,
 `write`, `edit` and `skill` — which are exactly the `on_write` stops — so the
 two settings behaved identically and `always` was a dial that turned nothing.
 Every tool consults the gate now, and a test asserts the two are distinguishable.
+
+**Read-only shell commands: `[approval] readonly_bash`** (opt-in). `on_write`
+counts every `bash` call as mutating, `ls` and `git status` included, because a
+command can write anything. Replayed through `gnomon guard`, 1,954 real Claude
+Code calls from 7 projects were 70% `ask`, almost all of them that. Set
+`readonly_bash = "allow"` and a bash call a conservative reader proves
+read-only runs without asking under `on_write`:
+
+| `[approval]` setting | Values | Default | Effect |
+|---|---|---|---|
+| `gate` | `never` \| `on_write` \| `always` | `on_write` | the autonomy dial above |
+| `readonly_bash` | `ask` \| `allow` | `ask` | `allow`: under `on_write`, a bash call read as read-only (`ls`, `cat`, `head`, `tail`, `wc`, `grep`, `rg`, `find`, `stat`, `file`, `pwd`, `which`, `du`, `df`, `echo`, `printf`, `cd`, `cut`, `tr`, `sort`, `uniq`, `true`, `git status/log/diff/show/rev-parse/ls-files/blame`, `git branch` listings, piped or chained) is not asked |
+| `repo_code` | `true` \| `false` | `false` | `true`: a call that runs repository-defined code always asks |
+
+Anything the reader cannot account for asks as before: an output redirection
+other than to `/dev/null`, `tee`, `$( )`, a subshell, `VAR=value`, an
+interpreter, `find -exec`/`-delete`, `rg --pre`, `git branch -D`, a glob that
+could become an option. Every rule still runs first, so `bash_deny`, the
+sandbox, `network = false` and `[governance]` secret paths refuse what they
+refused (`cat .env` under `[governance]` is denied). It judges whether a
+command writes, not what it reads. The key moves the surface hash, the trust
+prompt lists it as a grant, and the decision says `exempt: "readonly_bash"`
+([CONTRACTS.md §10](docs/CONTRACTS.md)).
 
 In a non-interactive run (`gnomon task`) there is nobody to ask, so a gated
 call is **refused** rather than assumed. `--yes` is what stands in for a
@@ -2342,6 +2366,7 @@ and "looser" is measured, not guessed:
 | Grant | Default |
 |---|---|
 | `approval` gate `never` | `on_write` |
+| `[approval] readonly_bash = "allow"` (read-only bash calls run unasked) | every bash call asks |
 | `sandbox.level = "off"`, `network = true`, any `extra_roots` | `confined`, off, none |
 | an MCP server (a process started when a session opens) | none |
 | a `[verify]` command that is not the project's own check (`npm test`, `pnpm run verify`, `cargo test`, …), an `[audit.attest]` signer, and a `[context] bootstrap` — commands that run unasked | none |
