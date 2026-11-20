@@ -38,6 +38,22 @@
   `CLAUDE_PROJECT_DIR`, the Cursor workspace root the call is in, opencode's
   `directory`, or `"project"` in the generic document. A working directory in
   another governed project is still judged by that project (CONTRACTS §10).
+- **`gnomon eval` and `gnomon skill trial` cells no longer hold the trial
+  specs.** Every cell's clone had `.gnomon/trials/`, so the agent under test
+  could read each task's `setup` and `check`: a canary token a setup seeded
+  into a protected file was found by grep in the spec instead, by both arms
+  of a real-model eval. Each cell now removes `.gnomon/trials/` and commits
+  that, for every arm, gnomon's or a `command:` harness's. Setup and check run
+  from the operator's checkout. Each arm reports `cell_surface_hash` (no
+  `trials/`) beside the project's `surface_hash`, and cells are checked
+  against it. The clone keeps history, so a spec should still hold no answer
+  or secret in plain text. Loading one whose check repeats a literal from the
+  task's prompt or setup now warns (docs/CONTRACTS.md §13, §47).
+- Schemas `gnomon.eval/3` and `gnomon.trial/2`: cells no longer hold the
+  specs, so a cell's surface hash is no longer the project's, and arms gain
+  `cell_surface_hash`. `gnomon skill accept --evidence` refuses a
+  `gnomon.trial/1` report, whose cells held the specs, and says to trial
+  again (CONTRACTS.md §11, §13, §47).
 - **`gnomon security test` from the npm package runs the guard** (#202). It
   started the guard as `../gnomon.js` beside its own module, which only a
   checkout has: the published package ships `bin/gnomon.mjs`. Every case of

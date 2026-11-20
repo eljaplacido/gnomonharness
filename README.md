@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3889 TypeScript tests (3221 core, 643 cli, 18
-> natives, 7 tui) and 120 Rust tests — **4009 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3895 TypeScript tests (3227 core, 643 cli, 18
+> natives, 7 tui) and 120 Rust tests — **4015 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1526,6 +1526,9 @@ gnomon skill trial cargo-suite --yes   # tasks from .gnomon/trials/default.toml
 
 Each task runs several times **without** the skill and **with** it,
 interleaved, each run in a private clone of HEAD (no remote, its own refs).
+No clone holds `.gnomon/trials/`: setup and check run from your checkout, so
+the agent cannot read the answer key. The clone keeps history, though, so
+keep answers and secrets out of a spec in plain text (docs/CONTRACTS.md §13).
 The task's own `check` command judges every run. A run counts only if it made a metered
 model request. The report compares pass rate (exact McNemar) and output tokens
 (sign test) against thresholds the spec declared before the run. It exits 0
@@ -2704,7 +2707,8 @@ gnomon eval --base command:claude --against command:opencode --yes-spend   # two
 ```
 
 With `--against`, each task × attempt runs once per arm, base then
-candidate, interleaved, each cell a `gnomon task` in a fresh private clone.
+candidate, interleaved, each cell a `gnomon task` in a fresh private clone
+that holds no trial spec, whichever harness runs in it.
 The two arms differ in one thing, checked before anything runs: a profile arm
 has the same surface hash under another profile; a surface arm has HEAD's
 code with `.gnomon/` from the ref, and the report lists the paths that differ.

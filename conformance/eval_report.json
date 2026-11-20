@@ -1,13 +1,13 @@
 {
   "contract": "gnomon eval — docs/CONTRACTS.md section 47",
   "_comment": [
-    "The `gnomon eval --json` report, schema gnomon.eval/2, and its eval_run audit record.",
+    "The `gnomon eval --json` report, schema gnomon.eval/3, and its eval_run audit record.",
     "A skill trial's cells (section 13) for a profile, a surface or another harness's CLI instead of a skill:",
     "same spec (.gnomon/trials/<name>.toml), same clones, same validity rule, same statistics.",
     "A mode, arm kind, key or exit added, renamed or moved is a contract change:",
     "packages/gnomon-core/src/eval.test.ts asserts these lists against the code and real reports."
   ],
-  "schema": "gnomon.eval/2",
+  "schema": "gnomon.eval/3",
   "modes": ["single", "paired"],
   "arm_kinds": ["head", "profile", "surface", "command"],
   "against_forms": ["profile:<name>", "surface:<git ref>", "command:<harness>"],
@@ -20,7 +20,7 @@
     "optional": []
   },
   "arm_keys": {
-    "required": ["kind", "label", "profile", "surface_commit", "surface_hash", "model", "endpoint"],
+    "required": ["kind", "label", "profile", "surface_commit", "surface_hash", "cell_surface_hash", "model", "endpoint"],
     "optional": ["command"]
   },
   "audit_kind": "eval_run",
@@ -41,7 +41,10 @@
     "unmetered": "gnomon does not meter another harness: that arm's output_tokens and requests are null, and the token and request sign tests are null; the verdict rests on pass",
     "spend": "a harness not declared local = true is refused without --yes-spend: [budget] max_requests cannot bound requests gnomon does not see",
     "base": "--base command:<name> replaces the HEAD arm: alone it measures that harness (single mode); with --against only command:<other>. No gnomon arm runs, so no trust is settled and no model endpoint is checked",
-    "arm": "kind command, label command:<name>, command (argv as declared), profile, model and endpoint null, surface_commit and surface_hash HEAD's (the clone)"
+    "arm": "kind command, label command:<name>, command (argv as declared), profile, model and endpoint null, surface_commit, surface_hash and cell_surface_hash HEAD's (the clone)"
   },
-  "trust_settled_on": "each arm's configuration as its cells load it; a surface arm from another commit is admitted only by --trust or a scaffold-only surface"
+  "trust_settled_on": "each arm's configuration as its cells load it; a surface arm from another commit is admitted only by --trust or a scaffold-only surface",
+  "cell_withheld": [".gnomon/trials/"],
+  "cell_tree": "every cell of every arm (head, profile, surface, command) starts in a clean committed tree with .gnomon/trials/ removed: the removal is committed in the clone (\"cell: trial specs withheld\"), and a surface arm's .gnomon/ from the ref is committed with its specs removed again. The spec, setup, check and [harness.<name>] are read from the operator's checkout",
+  "surface_hashes": "an arm's surface_hash is the project's surface for it, trials/ included; cell_surface_hash is the same manifest without trials/, hashed the same way. Each cell's surface_hash must equal its arm's cell_surface_hash; the checkout's surface must equal the base arm's surface_hash. arms.differ lists the paths the arms' cells differ in, so never a path under trials/"
 }

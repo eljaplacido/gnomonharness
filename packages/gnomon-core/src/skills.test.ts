@@ -27,6 +27,7 @@ import {
 import { recomputeManifest } from "./config.js";
 import { setDecisionContextProbe } from "./agent_context.js";
 import { verifyTrail, AuditTrail, resolveAudit, recordHash, type AuditRecord } from "./audit.js";
+import { TRIAL_SCHEMA } from "./skill_trial.js";
 
 let root: string;
 const cfg = (audit: Record<string, unknown> = {}, policy: Record<string, unknown> = {}): any => ({
@@ -527,11 +528,13 @@ describe("accept --evidence and require_trial", () => {
       unsealed?: boolean;
       /** Sign the trail's head, as a surface with [audit.attest] does. */
       signed?: boolean;
+      /** The report's schema, if not the current one. */
+      schema?: string;
     } = {}
   ): string => {
     const content = readFileSync(join(root, ".gnomon", "skills", "proposed", "fix-it.md"));
     const fields = {
-      schema: "gnomon.trial/1",
+      schema: over.schema ?? "gnomon.trial/2",
       skill: "fix-it",
       content_sha256: over.content ?? sha(content),
       arms: {
@@ -703,6 +706,16 @@ describe("accept --evidence and require_trial", () => {
     );
     expect(Object.keys(ev).sort()).toEqual([...fixture.evidence_keys].sort());
     expect(Object.keys(ev.trial_record as object).sort()).toEqual([...fixture.trial_record_keys].sort());
+    // skills.ts names the schema as a literal (skill_trial.ts imports skills.ts).
+    expect(fixture.evidence_report_schema).toBe(TRIAL_SCHEMA);
+  });
+
+  it("a gnomon.trial/1 report is refused: its cells held the trial specs", () => {
+    // Fails before the bump: a trial/1 report was the current evidence.
+    propose();
+    const rel = report({ schema: "gnomon.trial/1" });
+    expect(() => acceptSkill(cfg(), "fix-it", { evidence: rel })).toThrow(/gnomon\.trial\/1 report: its cells held the trial specs/);
+    stillProposed();
   });
 
   it("require_trial without a signer refuses, and says how to declare one", () => {

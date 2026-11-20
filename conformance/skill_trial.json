@@ -1,6 +1,6 @@
 {
   "contract": "skill trials — docs/CONTRACTS.md section 13",
-  "schema": "gnomon.trial/1",
+  "schema": "gnomon.trial/2",
   "meets_thresholds": [true, false, "undetermined"],
   "statuses": ["complete", "budget_exhausted", "apparatus_failure"],
   "exit_codes": { "true": 0, "false": 2, "undetermined": 10, "could_not_start": 10 },
@@ -18,7 +18,10 @@
   "spec_identity": "the surface hash (trials/ is hashed), and spec.sha256 on the report and the skill_trial record",
   "spec_bounds": { "alpha": "(0, 0.2]", "max_pass_drop": ">= 0", "min_pass_gain": ">= 0", "min_output_token_gain": "[0, 1]", "at_least_one_gain_above_zero": true },
   "trust_settled_on": "this checkout under the spec's model_profile",
-  "cell_checkout": "a private clone (git clone --shared, no remote) at the commit HEAD named when the trial began",
+  "cell_checkout": "a private clone (git clone --shared, no remote) at the commit HEAD named when the trial began, with .gnomon/trials/ removed and the removal committed; the skill arm's install is committed too, so every cell starts in a clean committed tree",
+  "cell_withheld": [".gnomon/trials/"],
+  "arm_keys": ["surface_hash", "cell_surface_hash"],
+  "surface_hashes": "arms.<arm>.surface_hash is the project's surface for the arm, trials/ included (what accept --evidence compares); cell_surface_hash is the same manifest without trials/, which every cell of the arm must hold. The skill_trial record's surface_hash_base and surface_hash_skill are the project's",
   "budget_checked": "before every cell; only max_requests is enforced",
   "token_gain_requires": "aggregate gain >= min_output_token_gain AND skill_lower > skill_higher AND sign p < alpha",
   "exit_bucket_convention": "0 result, 2 refusal (the skill is declined), 10 apparatus_failure, as gnomon task (section 1)"
