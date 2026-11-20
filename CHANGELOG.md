@@ -28,6 +28,21 @@
 
 ### Fixed
 
+- **A `[verify]` run that never ran to an exit is no longer recorded as a
+  failed check** (#231). Four cases, all of them `failed` and handed back as
+  "your answer is not accepted" until now:
+  - **declined by the person asked** (`[approval] gate = "always"`): now
+    `declined`, the trail's `verify` record says `declined: true`, nothing is
+    handed back;
+  - **refused by a rule** (`bash_deny`, `sudo`, network), **timed out and
+    killed**, or **refused by the sandbox** (Windows `exec = "os"`): no exit
+    was read and the tool ran nothing, so it is `unrunnable` -- what
+    `gnomon check` already called it -- with the reason on the trail, and
+    nothing is handed back. A rule's refusal is never recorded as an
+    operator's decline. The 2026-11-20 matrix had every 120 s timeout and all
+    11 Windows `exec = "os"` arms recorded as failed.
+  A run killed by a signal, or a non-zero exit, is still `failed` and handed
+  back: an OOM-killed suite is not green.
 - **A multi-line string written on one line is read as TOML reads it.**
   `'''x'''` and `"""x"""` are valid TOML 1.0, and gnomon's parser read them as
   a one-quote string with two quotes of content at each end, silently. A trial

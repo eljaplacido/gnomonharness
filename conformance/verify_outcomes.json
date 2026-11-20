@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "_comment": [
+    "How the loop reads a [verify] run that did or did not run to an exit (docs/CONTRACTS.md §1, #231).",
+    "Each case is the bash tool's result for the declared check; `outcome` is the record's `verify`, and",
+    "`handed_back` whether the turn is sent back to the model. `unrunnable` is what `gnomon check` calls",
+    "the same result (§6): the check never ran to an exit. Asserted by",
+    "packages/gnomon-core/src/verify_declined.test.ts, which runs the real loop against a scripted model",
+    "for every case here."
+  ],
+  "cases": [
+    { "name": "declined by the person asked", "code": 2, "content": "Refused: the user declined to run this command.", "summary": "bash — denied", "outcome": "declined", "handed_back": false },
+    { "name": "refused by a rule", "code": 2, "content": "Refused: bash_deny matched `curl`.", "summary": "bash — refused (bash_deny)", "outcome": "unrunnable", "handed_back": false },
+    { "name": "timed out and killed", "code": 1, "content": "Command timed out and was killed.", "summary": "bash — timeout", "outcome": "unrunnable", "handed_back": false },
+    { "name": "refused by the sandbox", "code": 1, "content": "Refused: [sandbox] exec = \"os\" is declared, and Windows has no OS sandbox.", "summary": "bash — refused (exec = \"os\")", "outcome": "unrunnable", "handed_back": false },
+    { "name": "refused as a re-run after a timeout", "code": 1, "content": "Refused: this command already timed out this turn.", "summary": "bash — refused (already timed out this turn)", "outcome": "unrunnable", "handed_back": false },
+    { "name": "not found", "code": 0, "content": "exit: 127", "summary": "bash — exit 127", "outcome": "unrunnable", "handed_back": false },
+    { "name": "killed by a signal", "code": 0, "content": "tests ran", "summary": "bash — killed by SIGKILL", "outcome": "failed", "handed_back": true },
+    { "name": "a non-zero exit", "code": 0, "content": "tests ran", "summary": "bash — exit 1", "outcome": "failed", "handed_back": true },
+    { "name": "passed", "code": 0, "content": "tests ran", "summary": "bash — exit 0", "outcome": "passed", "handed_back": false }
+  ]
+}
