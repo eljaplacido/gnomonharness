@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join, dirname, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { CHECK_IDS, CHECK_STATUSES, CHECK_SCHEMA, checkSessionFile, type CheckVerdict, type ResolvedUi } from "gnomon-core";
+import { CHECK_IDS, CHECK_STATUSES, CHECK_SCHEMA, checkExit, checkSessionFile, type CheckVerdict, type ResolvedUi } from "gnomon-core";
 import { cmdCheck, renderVerdict } from "./check.js";
 import { parseArgs } from "./index.js";
 
@@ -132,6 +132,8 @@ describe("gnomon check — through the real binary", () => {
     verdict_keys: { required: string[]; optional: string[] };
     entry_keys: { required: string[]; optional: string[] };
     audit_keys: { required: string[]; optional: string[] };
+    statuses_by_check: Record<string, string[] | string>;
+    no_verify_exit: number;
   };
 
   it("check ids and statuses agree across the code, CONTRACTS.md §6 and the fixture", () => {
@@ -148,6 +150,9 @@ describe("gnomon check — through the real binary", () => {
     for (const m of rows) {
       for (const s of m[2]!.split(",").map((x) => x.trim())) expect(fixture.statuses).toContain(s);
     }
+    // The per-check statuses, row by row, are the fixture's (verify gained skipped in 0.6.4).
+    for (const m of rows) expect(m[2]!.split(",").map((x) => x.trim()), m[1]).toEqual(fixture.statuses_by_check[m[1]!]);
+    expect(checkExit([{ id: "surface", status: "pass" }, { id: "verify", status: "skipped" }])).toBe(fixture.no_verify_exit);
   });
 
   it("a document the real binary printed fits the fixture's key lists", () => {
