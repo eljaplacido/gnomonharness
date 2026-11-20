@@ -344,7 +344,13 @@ describe("readOnlyBash — git only in the project's own repository (a foreign r
       return; // Windows without symlink privilege: the rest needs the link.
     }
     try {
-      expect(readOnlyBash("git -C link/.. status", where)).toMatchObject({ readonly: false, why: expect.stringMatching(/-C/) });
+      // Where git itself lands decides the expectation: POSIX chdir() follows
+      // the link and then `..` (evil); Win32 removes `..` from the text first
+      // (proj). The reader must agree with git on each platform.
+      const top = spawnSync("git", ["-C", "link/..", "rev-parse", "--show-toplevel"], { cwd: proj, encoding: "utf-8" }).stdout.trim();
+      const landsInProj = realpathSync.native(resolve(top)) === realpathSync.native(proj);
+      if (landsInProj) expect(readOnlyBash("git -C link/.. status", where).readonly).toBe(true);
+      else expect(readOnlyBash("git -C link/.. status", where)).toMatchObject({ readonly: false, why: expect.stringMatching(/-C/) });
     } finally {
       rmSync(join(proj, "link"), { force: true });
     }
