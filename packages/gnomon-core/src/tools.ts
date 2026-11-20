@@ -82,6 +82,7 @@ import {
   shellWriteTargets,
   MODE_CHANGERS,
   type GitClean,
+  type ReadFilters,
   type RepoCodeRun,
   type WriteTarget,
 } from "./shell.js";
@@ -4269,7 +4270,7 @@ function patternMatches(pattern: string, at: string, root: string, home: string)
  * recursive read starting at `abs` reaches (`rm -rf .github`, `grep -r key
  * ~`). Only patterns that name a place (`~/.ssh/**`, `.github/workflows/**`)
  * can be found below a directory; a name pattern (`.env`) is judged where the
- * command names it.
+ * command names it, and, for a recursive reader, by secretFileBelow's walk.
  */
 function protectedBelow(ctx: ToolContext, abs: string, rule: "ci_path" | "secret_path"): string | null {
   const list = rule === "ci_path" ? ctx.protectedPaths?.ci : ctx.protectedPaths?.secrets;
@@ -4335,9 +4336,11 @@ function ciRefusal(tool: string, path: string, how?: string): Precheck {
  * Words resolve from the root: a path after a `cd` gnomon does not follow is
  * judged as if from the root, and a name pattern (`.env`) matches wherever it
  * lands. A literal prefix before a wildcard is judged as a directory, and a
- * wildcard in the last name is matched against what is there (`cat *.pem`).
- * Like the network filter this reads intent, not effects: a script FILE, or a
- * path code builds at run time, is not judged.
+ * glob is matched against what is there, as sh would expand it (`cat *.pem`,
+ * `cat *\/.env`, `cat .env.matri[x]`). A recursive reader is judged by what
+ * its walk would open (secretFileBelow). Like the network filter this reads
+ * intent, not effects: a script FILE, or a path code builds at run time, is
+ * not judged.
  */
 function secretWordRefusal(command: string, ctx: ToolContext): Precheck | null {
   if (!ctx.protectedPaths) return null;
@@ -4359,29 +4362,222 @@ function secretWordRefusal(command: string, ctx: ToolContext): Precheck | null {
     } else {
       const dir = resolve(ctx.root, homePath(dirPart || "."));
       if (dirPart) candidates.push(dir);
-      // `cat *.pem`, `cat ~/.ssh/id_*`: what the shell would expand the last name to.
-      if (!word.slice(slash + 1).includes("/")) {
-        try {
-          const nameGlob = word.slice(slash + 1);
-          const re = globToRegExp(nameGlob);
-          for (const e of readdirSync(dir).slice(0, 2000)) {
-            if (e.startsWith(".") && !nameGlob.startsWith(".")) continue;
-            if (re.test(e)) candidates.push(join(dir, e));
-          }
-        } catch {
-          /* not a directory gnomon can list: the literal part was judged */
-        }
-      }
+      // `cat *.pem`, `cat ~/.ssh/id_*`, `cat */.env`: what the shell would expand it to.
+      candidates.push(...shellExpand(dir, word.slice(slash + 1)));
     }
     for (const at of candidates) {
-      const hit = protectedPath(ctx, at, ["secret_path"]) ? at : w.recursive ? protectedBelow(ctx, at, "secret_path") : null;
+      let walked = false;
+      let hit = protectedPath(ctx, at, ["secret_path"]) ? at : w.recursive ? protectedBelow(ctx, at, "secret_path") : null;
+      if (!hit && w.recursive) {
+        hit = secretFileBelow(ctx, at, w.filters);
+        walked = hit !== null;
+      }
       if (!hit) continue;
-      const how = hit === at ? `${w.prog}` : `${w.prog} reaches ${hit}`;
+      const how = hit === at ? `${w.prog}` : `${w.prog} reaches ${walked ? shownPath(ctx, hit) : hit}`;
       const r = secretRefusal("bash", w.word, how);
+      if (walked) r.content += `\n\n${WALK_HINT}`;
       if (applies(ctx, "bash", r)) return r;
     }
   }
   return null;
+}
+
+const WALK_HINT =
+  `To search past it: name a directory that holds none, leave it out (\`grep --exclude=NAME\`, ` +
+  `\`--exclude-dir=DIR\`, \`rg -g '!NAME'\`), or use the grep tool, which skips protected files ` +
+  `and says how many.`;
+
+/** A path inside the root as written relative to it; anything else as it is. */
+function shownPath(ctx: ToolContext, abs: string): string {
+  const rel = relative(ctx.root, abs);
+  return escapesBase(rel) ? abs : rel.split(sep).join("/");
+}
+
+/** POSIX bracket classes as JavaScript class bodies; an unknown one matches any character. */
+const POSIX_CLASSES: Record<string, string> = {
+  alpha: "a-zA-Z",
+  digit: "0-9",
+  alnum: "a-zA-Z0-9",
+  upper: "A-Z",
+  lower: "a-z",
+  xdigit: "0-9A-Fa-f",
+  space: "\\s",
+  punct: "!-\\/:-@\\[-`{-~",
+  word: "\\w",
+};
+
+/**
+ * One shell glob as sh matches it (fnmatch): `*`, `?`, `[...]` and `[!...]`
+ * with ranges and POSIX classes, `\x` as a literal x. Unlike globToRegExp,
+ * which reads gnomon's own path lists, `[` opens a class here. `deep` reads
+ * `**` as any run of characters, `/` included (rg's globs).
+ */
+function shellGlobRe(glob: string, deep = false): RegExp {
+  const lit = (c: string) => c.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&");
+  let out = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i]!;
+    if (c === "*") {
+      if (deep && glob[i + 1] === "*") {
+        out += ".*";
+        i++;
+      } else {
+        out += "[^/]*";
+      }
+    } else if (c === "?") {
+      out += "[^/]";
+    } else if (c === "\\" && i + 1 < glob.length) {
+      out += lit(glob[++i]!);
+    } else if (c === "[") {
+      let j = i + 1;
+      const neg = glob[j] === "!" || glob[j] === "^";
+      if (neg) j++;
+      const start = j;
+      if (glob[j] === "]") j++;
+      let body = start < j ? "\\]" : "";
+      for (; j < glob.length && glob[j] !== "]"; j++) {
+        const cls = /^\[:([a-z]+):\]/.exec(glob.slice(j));
+        if (cls) {
+          body += POSIX_CLASSES[cls[1]!] ?? "\\s\\S";
+          j += cls[0].length - 1;
+        } else {
+          body += /[\\\]^[]/.test(glob[j]!) ? `\\${glob[j]}` : glob[j];
+        }
+      }
+      if (j >= glob.length) {
+        out += "\\["; // unclosed: a literal bracket, as sh reads it
+        continue;
+      }
+      out += `[${neg ? "^" : ""}${body}]`;
+      i = j;
+    } else {
+      out += lit(c);
+    }
+  }
+  return new RegExp(`^${out}$`);
+}
+
+/** Entries read per directory and paths kept per component: a word cannot make a precheck walk a disk. */
+const GLOB_DIR_ENTRIES = 2000;
+const GLOB_FRONTIER = 256;
+
+/**
+ * What sh expands `rest` to below `base`: any component may hold `*`, `?` or
+ * `[...]`, matched against what is there (`*\/.env`, `pkg/*\/.env.local`,
+ * `.env.matri[x]`). A name starting with a dot is matched only by a component
+ * starting with one, as sh does, so `cat *.matrix` does not open
+ * `.env.matrix`. A component holding `$` or a backquote is built at run time
+ * and is not expanded. With no wildcard, `rest` is the one path it names.
+ */
+function shellExpand(base: string, rest: string): string[] {
+  let frontier = [base];
+  let globbed = false;
+  for (const part of rest.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (/[$`]/.test(part)) return [];
+    if (part === ".." || !/[*?[]/.test(part)) {
+      frontier = frontier.map((p) => join(p, part));
+      continue;
+    }
+    globbed = true;
+    const re = shellGlobRe(part);
+    const next: string[] = [];
+    for (const dir of frontier) {
+      let names: string[];
+      try {
+        names = readdirSync(dir).sort().slice(0, GLOB_DIR_ENTRIES);
+      } catch {
+        continue; // not a directory gnomon can list: the literal part was judged
+      }
+      for (const n of names) {
+        if (n.startsWith(".") && !part.startsWith(".")) continue;
+        if (re.test(n)) next.push(join(dir, n));
+        if (next.length >= GLOB_FRONTIER) break;
+      }
+      if (next.length >= GLOB_FRONTIER) break;
+    }
+    if (next.length === 0) return [];
+    frontier = next;
+  }
+  return globbed ? frontier.filter((p) => existsSync(p)) : frontier;
+}
+
+/**
+ * The first protected secret FILE a recursive reader starting at `abs` would
+ * open (`grep -r KEY .`, `rg KEY`, `tar cf - .`, `find . -exec cat {} +`).
+ * protectedBelow finds a listed place (`~/.ssh`); this finds a listed name
+ * (`.env`, `*.pem`) wherever it is below. The walk is gnomon's own grep's
+ * (walkFiles: its cap, its never-walked directories, no symlinks), less what
+ * the reader was told to leave out (shell.ts ReadFilters), so `grep -r KEY
+ * --exclude='.env*' .` passes where `grep -r KEY .` does not.
+ */
+function secretFileBelow(ctx: ToolContext, abs: string, filters?: ReadFilters): string | null {
+  const list = ctx.protectedPaths?.secrets;
+  if (!list || list.length === 0) return null;
+  try {
+    if (!statSync(abs).isDirectory()) return null;
+  } catch {
+    return null;
+  }
+  const re = (g: string) => shellGlobRe(g.replace(/^\/+/, "").replace(/^(\*\*\/)+/, ""), true);
+  const include = (filters?.include ?? []).map(re);
+  const exclude = (filters?.exclude ?? []).map(re);
+  const excludeDir = (filters?.excludeDir ?? []).map(re);
+  // A lexical first look, so the exact predicate (real paths, exceptions, in
+  // order) runs only on files a listed pattern could name: it costs a realpath
+  // per file, which over a tree was most of the precheck's time.
+  const could = couldBeListed(list, ctx.root, abs);
+  for (const rel of walkFiles(abs, abs)) {
+    const parts = rel.split("/");
+    const base = parts[parts.length - 1]!;
+    if (filters) {
+      if (!filters.hidden && parts.some((p) => p.startsWith("."))) continue;
+      if (excludeDir.length > 0 && parts.slice(0, -1).some((p) => excludeDir.some((r) => r.test(p)))) continue;
+      if (exclude.some((r) => r.test(base) || r.test(rel))) continue;
+      if (include.length > 0 && !include.some((r) => r.test(base) || r.test(rel))) continue;
+    }
+    if (!could(rel, base)) continue;
+    const at = join(abs, rel);
+    if (protectedPath(ctx, at, ["secret_path"])) return at;
+  }
+  return null;
+}
+
+/**
+ * Could a file at `rel` below `dir` be on `list`? A superset of pathListed's
+ * answer, read from the path as written: every positive pattern in its form
+ * (a name, a path from the root, from HOME, an absolute path), and
+ * `/proc/<pid>/environ`. Exceptions and real paths are pathListed's to judge.
+ */
+function couldBeListed(list: readonly string[], root: string, dir: string): (rel: string, base: string) => boolean {
+  const slash = (p: string) => p.split(sep).join("/");
+  const under = (base: string): string | null => {
+    const r = relative(base, dir);
+    return escapesBase(r) ? null : slash(r);
+  };
+  const fromRoot = under(resolve(root));
+  const fromHome = under(homedir());
+  const names: RegExp[] = [];
+  const rooted: RegExp[] = [];
+  const homed: RegExp[] = [];
+  const absolute: RegExp[] = [];
+  for (const p of list) {
+    if (p.startsWith("!")) continue;
+    if (p === "~" || p.startsWith("~/")) homed.push(listRe(p.slice(2)));
+    else if (p.startsWith("/") || isAbsolute(p)) absolute.push(listRe(slash(p)));
+    else if (p.includes("/")) rooted.push(listRe(p.replace(/^\.\//, "")));
+    else names.push(listRe(p));
+  }
+  const join2 = (base: string | null, rel: string) => (base === null ? null : base ? `${base}/${rel}` : rel);
+  return (rel, base) => {
+    if (names.some((r) => r.test(base))) return true;
+    const r = join2(fromRoot, rel);
+    if (r !== null && rooted.some((x) => x.test(r) || x.test(`${r}/`))) return true;
+    const h = join2(fromHome, rel);
+    if (h !== null && homed.some((x) => x.test(h) || x.test(`${h}/`))) return true;
+    const a = `${slash(dir)}/${rel}`;
+    return absolute.some((x) => x.test(a) || x.test(`${a}/`)) || ENV_DUMP_PATH.test(a);
+  };
 }
 
 /**

@@ -304,11 +304,63 @@ describe("the prechecks, at prevent (the pilot's G-4 leaks)", () => {
       "env FOO=1 node -v",
       "env -u FOO npm test",
       "grep -r TODO src",
-      "grep -rn old .",
+      // The tree holds .env: a recursive search is allowed once it leaves it out.
+      "grep -rn old --exclude=.env .",
+      "grep -rn old --exclude '.env*' .",
+      "grep -rn old --include='*.ts' .",
+      "grep -rn old --exclude-dir=.github --exclude=.env .",
+      "rg old", // rg skips dot-files unless told --hidden
+      "rg -g '!.env' --hidden old",
+      "rg --files",
+      "cat *.matrix", // sh's * does not match a leading dot
       "set -e",
       "cat .env.example",
       "cat src/a.ts",
       "declare -x FOO=1",
+    ]) {
+      expect(bashRule(c), c).toBeNull();
+    }
+  });
+
+  it("bash: a glob, as sh expands it, and a recursive reader, by what its walk would open", () => {
+    put(".env.matrix", `SERVICE_TOKEN=${SYNTHETIC}\n`);
+    put("pkg/a/.env.local", `X=${SYNTHETIC}\n`);
+    put("certs/server.pem", `${SYNTHETIC}\n`);
+    for (const c of [
+      // A bracket class, and a wildcard in a directory component (allowed before).
+      "cat .env.matri[x]",
+      "cat .[e]nv.matrix",
+      "cat .env.matri[[:alpha:]]",
+      "cat */*/.env.local",
+      "cat pkg/*/.env*",
+      "cat c*/*.pem",
+      // A recursive reader over a tree holding a secret by name (allowed before).
+      "grep -rn old .",
+      "grep -r SERVICE_TOKEN",
+      "grep -R SERVICE_TOKEN src/..",
+      "grep -rl TOKEN .",
+      "grep -r TOKEN --include='*.matrix' .",
+      "grep -r TOKEN --exclude=.env --exclude=.env.local .",
+      "rg --hidden SERVICE_TOKEN",
+      "rg -uu SERVICE_TOKEN .",
+      "rg SERVICE_TOKEN certs",
+      "find . -type f -exec cat {} +",
+      "tar cf - . | tar xOf -",
+      "zip -qr - .",
+      "sh -c 'grep -r TOKEN .'",
+    ]) {
+      expect(bashRule(c), c).toBe("secret_path");
+    }
+    const r = bashPrecheck({ command: "grep -r TOKEN --exclude=.env ." }, ctx());
+    expect(r?.content).toMatch(/grep reaches \.env\.matrix/);
+    expect(r?.content).toMatch(/grep --exclude=NAME/);
+    // Left out, the same searches pass; a glob that matches no secret passes.
+    for (const c of [
+      "grep -r TOKEN --exclude='.env*' --exclude='*.pem' .",
+      "grep -r TOKEN --exclude-dir=pkg --exclude-dir=certs --exclude='.env*' .",
+      "rg -g '!*.pem' SERVICE_TOKEN",
+      "cat pkg/*/README.md",
+      "cat src/*",
     ]) {
       expect(bashRule(c), c).toBeNull();
     }
@@ -393,6 +445,34 @@ describe("grep and glob: levelled through protectedPath, the loop and the guard 
     expect(observed[0]).toContain(SYNTHETIC);
   });
 
+  it("no route the matrix probed returns a .env.* secret at prevent, real tools and a real shell", async () => {
+    put(".env.matrix", `SERVICE_TOKEN=${SYNTHETIC}\n`);
+    put("src/b.ts", "const SERVICE_TOKEN = process.env.SERVICE_TOKEN;\n");
+    const calls = [
+      { name: "read", arguments: { path: ".env.matrix" } },
+      { name: "grep", arguments: { pattern: "SERVICE_TOKEN", path: "." } },
+      { name: "grep", arguments: { pattern: "SERVICE_TOKEN", path: ".env.matrix" } },
+      { name: "grep", arguments: { pattern: "SERVICE_TOKEN", path: "./.env.matrix" } },
+      { name: "grep", arguments: { pattern: "SERVICE_TOKEN" } },
+      ...[
+        "grep -r SERVICE_TOKEN .",
+        "grep -r SERVICE_TOKEN --include='*.matrix' .",
+        "cat .env.mat*",
+        "cat .env.matri[x]",
+        "f=.env; cat ${f}.matrix",
+        "find . -type f -exec cat {} +",
+        "tar cf - . | tar xOf -",
+        "grep -rn SERVICE_TOKEN --exclude='.env*' .",
+      ].map((command) => ({ name: "bash", arguments: { command } })),
+    ];
+    const seen = await loopResults(calls, `[governance]\nlevel = "prevent"\n`);
+    expect(seen).toHaveLength(calls.length);
+    seen.forEach((s, i) => expect(s, JSON.stringify(calls[i]!.arguments)).not.toContain(SYNTHETIC));
+    seen.slice(0, 12).forEach((s, i) => expect(s, JSON.stringify(calls[i]!.arguments)).toMatch(/^Refused|protected secret file\(s\) not searched/));
+    // Leaving the secrets out is the way past: the search runs and finds the code.
+    expect(seen[12]).toContain("src/b.ts:1:const SERVICE_TOKEN");
+  });
+
   it("the guard decides another harness's grep as the loop decides gnomon's", async () => {
     surface(`[governance]\nlevel = "prevent"\n`);
     for (const [input, rule] of [
@@ -432,6 +512,18 @@ describe("env dumps and path words (shell.ts)", () => {
     expect(words("ls ~/.ssh")).toEqual([]);
     expect(shellPathWords("grep -r k ~")[0]).toMatchObject({ word: "~", recursive: true });
     expect(shellPathWords("grep k ~/a")[0]).toMatchObject({ recursive: false });
+  });
+
+  it("shellPathWords: a search's filters are not paths; with no path it searches where it runs", () => {
+    expect(shellPathWords("grep -rn k --exclude=.env --include '*.ts' src")).toEqual([
+      expect.objectContaining({ word: "src", recursive: true, filters: { include: ["*.ts"], exclude: [".env"], excludeDir: [], hidden: true } }),
+    ]);
+    expect(shellPathWords("grep -r k")).toEqual([expect.objectContaining({ word: ".", recursive: true })]);
+    expect(shellPathWords("grep -r -e k")).toEqual([expect.objectContaining({ word: "." })]);
+    expect(shellPathWords("rg -g '!.env' --glob=*.ts k")[0]).toMatchObject({ word: ".", filters: { include: ["*.ts"], exclude: [".env"], hidden: false } });
+    expect(shellPathWords("rg -uu k")[0]!.filters?.hidden).toBe(true);
+    expect(shellPathWords("rg --files")).toEqual([]);
+    expect(shellPathWords("grep k")).toEqual([]); // stdin
   });
 });
 

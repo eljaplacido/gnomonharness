@@ -771,7 +771,7 @@ decision gnomon could not make is never an allow.
 | `host_hooks` | a write, edit or shell write target in a host harness's hook configuration — what `gnomon guard install` writes and what can switch it off: `.claude/settings.json`, `.claude/settings.local.json`, `.claude/hooks/`, `.opencode/plugins/` (and `plugin/`), `opencode.json[c]`, `.cursor/hooks.json` in the root and the git toplevel; the user-level copies (`$CLAUDE_CONFIG_DIR` or `~/.claude`, `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`, `$OPENCODE_CONFIG`, `~/.cursor/hooks.json`); and gnomon's per-repository state (the guard's session bases and rules cache). A recursive removal, `mv`, `git rm` or `git clean` that would reach one counts. For every role, under every gate: removing the hook detaches the layer from every later session (GBS-LAYER pilot, 2026-11-06) |
 | `write_allow` | a path outside the role's `write_allow`; or a relative shell write after a `cd` gnomon cannot follow (`cd "$X"`), which it cannot place |
 | `outside_root` | only under a declared governance (§38), and not under `[sandbox] level = "off"`: a shell write or removal target outside the root and every granted `extra_roots` — redirections, `rm`/`mv`/`cp`/`tee`/`dd`/`install`/`ln`/`truncate`/`sed -i`/`chmod`/`chown`/… operands, `find -delete`/`-exec rm`, literal paths in inline python/node/perl code — after `cd` sequences gnomon can follow, `~` and `$HOME`, globs by their literal part. Temp space is scratch, except the project's own neighbours when it lives there. The bash half of what `sandbox` refuses for write and edit |
-| `secret_path` | only under a declared governance (§37): a read, write or edit of a protected secret path (`[governance.paths] secrets`, or its default: `.env`, keys, `~/.ssh`, `~/.aws`, …), a shell command with a word or redirection naming one or a recursive reader (`grep -r`, `rg`, `tar`, `cp -r`, `find -exec`) reaching one, a command that prints the environment (`printenv`, `env` with no command, a bare `export`, `/proc/<pid>/environ`), or a grep/glob whose scope is one or holds one |
+| `secret_path` | only under a declared governance (§37): a read, write or edit of a protected secret path (`[governance.paths] secrets`, or its default: `.env`, keys, `~/.ssh`, `~/.aws`, …), a shell command with a word or redirection naming one (a glob by what it expands to) or a recursive reader (`grep -r`, `rg`, `tar`, `cp -r`, `find -exec`) whose walk reaches one, a command that prints the environment (`printenv`, `env` with no command, a bare `export`, `/proc/<pid>/environ`), or a grep/glob whose scope is one or holds one |
 | `ci_path` | only under a declared governance (§37): a write, edit or shell write target in a CI definition (`[governance.paths] ci`, or its default: `.github/workflows/`, `.gitlab-ci.yml`, `.circleci/`, `Jenkinsfile`, …), or a recursive removal reaching one |
 | `network` | `[sandbox] network = false`, and the call names a network client, a remote `scp`/`rsync` target, `/dev/tcp`, interpreter code that opens a connection, a git remote by URL (`push`, `fetch`, `pull`, `ls-remote`, `clone`, `remote add\|set-url`, `submodule add`, `archive --remote`, a `-c` value, `git config remote.*.url`), or a package manager's registry or package URL (`--registry`, `--index-url`, `-i`, a URL operand) |
 | `url` | a scheme other than http(s), or a private, loopback or link-local address |
@@ -3443,7 +3443,7 @@ the predicate to their old answers), then the two families this section adds:
 
 | Rule | Family | Binds | Default list (published: `conformance/protected_paths.json`) |
 |---|---|---|---|
-| `secret_path` | `secrets` | `read`; `write`/`edit`; a bash word naming one (operands, `--opt=value`, `@file`, redirections; through wrappers, `sh -c` and `$( )`), or a directory a recursive reader walks into one; an environment dump; a grep/glob scope that is one or holds one | `.env`, `.env.*` (but not `.env.example`/`.sample`/`.template`/`.dist`), `.envrc`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `.netrc`, `_netrc`, `.git-credentials`, `.pgpass`, `~/.ssh/**`, `~/.aws/**`, `~/.azure/**`, `~/.config/gcloud/**`, `~/.gnupg/**`, `~/.config/gh/hosts.yml`, `~/.docker/config.json`, `~/.kube/config`, `~/.npmrc`, `~/.pypirc` |
+| `secret_path` | `secrets` | `read`; `write`/`edit`; a bash word naming one (operands, `--opt=value`, `@file`, redirections; through wrappers, `sh -c` and `$( )`; a glob by what sh expands it to), or a directory a recursive reader walks into one; an environment dump; a grep/glob scope that is one or holds one | `.env`, `.env.*` (but not `.env.example`/`.sample`/`.template`/`.dist`), `.envrc`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa`, `id_dsa`, `id_ecdsa`, `id_ed25519`, `.netrc`, `_netrc`, `.git-credentials`, `.pgpass`, `~/.ssh/**`, `~/.aws/**`, `~/.azure/**`, `~/.config/gcloud/**`, `~/.gnupg/**`, `~/.config/gh/hosts.yml`, `~/.docker/config.json`, `~/.kube/config`, `~/.npmrc`, `~/.pypirc` |
 | `ci_path` | `ci` | `write`/`edit`; a bash write target (redirections, `rm`, `mv`, `cp`, `sed -i`, …), a recursive removal reaching one. Reads stay allowed | `.github/workflows/**`, `.github/actions/**`, `.gitlab-ci.yml`, `.circleci/**`, `Jenkinsfile`, `azure-pipelines.yml`, `.azure-pipelines/**`, `.buildkite/**`, `.travis.yml`, `bitbucket-pipelines.yml`, `.drone.yml`, `.woodpecker.yml`, `.woodpecker/**` |
 
 **Environment dumps** are in `secret_path` too, as a fixed list beside the
@@ -3490,15 +3490,37 @@ unknown key in `[governance.paths]` is warned with did-you-mean.
 searches protected files too. At `prevent` and above it skips them and says
 how many it did not search.
 
-**What it does not see.** Like the network filter it reads intent from the
-text of a call: a path built at run time, a script file's contents, code an
-interpreter runs (`python3 -c "open('.env')"`), a word after a `cd` gnomon
-does not follow (judged as if from the root), and a host grep's walk over a
-tree that holds a `.env` (the guard decides the scope, not the files the host
-then opens) are not refused by it. Containment is `[sandbox] exec`.
-Programs that read only a name or metadata (`echo`, `ls`, `test`, `stat`, …)
-and the pattern a grep, sed or awk takes first are not path words, so `echo
-.env >> .gitignore` and `grep -q .env .gitignore` stay allowed. `cp
+**Globs and recursive readers.** A glob word is matched against what is
+there, as sh expands it: `*`, `?` and `[...]` in any component, a leading dot
+only by a leading dot (`cat .env.matri[x]` and `cat */.env` name the secret;
+`cat *.matrix` does not open `.env.matrix`). A recursive reader (`grep -r`,
+`rg`, `ag`, `tar`, `cp -r`, `zip -r`, `find -exec`; `grep -r` and `rg` with
+no path search `.`) is refused when its walk would open a protected file. The
+walk is gnomon's own grep's (its 20,000-file cap, the directories it never
+walks such as `node_modules`, no symlinks), less what the command leaves out:
+grep's `--include`, `--exclude` and `--exclude-dir`, rg's `-g`, and the
+dot-files rg and ag skip without `--hidden`/`-uu`/`-u`. So `grep -r KEY .`
+over a tree holding `.env` is refused, and `grep -r KEY --exclude='.env*' .`
+runs.
+
+**What it does not see.** The bash half is a word check: it reads the text
+of a call, not what the call does. Not refused: code an interpreter runs
+(`python3 -c "print(open('.env'+'.matrix').read())"`), a path built at run
+time (`cat $(ls -A | grep env)`, `cat "$PWD/.env"`), a script file's
+contents, git's object store when a secret is committed (`git show
+HEAD:.env`, `git log -p`, `git grep`), shell options that change globbing
+(`extglob`, `globstar`), a secret below a directory the walk skips or past
+its cap, a word after a `cd` gnomon does not follow (judged as if from the
+root), and a host grep's walk over a tree that holds a `.env` (the guard
+decides the scope, not the files the host then opens). `[sandbox] exec` with
+`reads = "scoped"` contains reads outside the root; a secret inside the
+working tree is readable by any shell command at every exec level, so the
+only containment for it is keeping it out of the tree (the environment, a
+secret manager, a file outside the root).
+Programs that read only a name or metadata (`echo`, `ls`, `test`, `stat`, …),
+the pattern a grep, sed or awk takes first, and a search's filters
+(`--exclude=.env`) are not path words, so `echo .env >> .gitignore` and
+`grep -q .env .gitignore` stay allowed. `cp
 .env.example .env` names `.env` and is refused at `prevent`: writing a secret
 file is the person's.
 
