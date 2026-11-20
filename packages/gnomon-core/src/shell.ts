@@ -2439,8 +2439,68 @@ export interface PathWord {
   prog: string;
   /** The program walks a directory it is given (`grep -r`, `rg`, `tar`, `cp -r`, `find … -exec`). */
   recursive: boolean;
+  /** What a recursive grep, rg or ag was told to leave out of its walk (readFilters). */
+  filters?: ReadFilters;
   /** The command, for a refusal. */
   command: string;
+}
+
+/**
+ * What a search leaves out, as its command line says: grep's `--include`,
+ * `--exclude` and `--exclude-dir`, rg's `-g`/`--glob` (a leading `!`
+ * excludes), and whether it opens dot-files at all (rg and ag skip them unless
+ * told `--hidden`, `-uu` or `-u`). Globs are matched against a file's base
+ * name and its path below where the search starts.
+ */
+export interface ReadFilters {
+  include: string[];
+  exclude: string[];
+  excludeDir: string[];
+  hidden: boolean;
+}
+
+const GREP_FILTERS: Record<string, "include" | "exclude" | "excludeDir"> = {
+  "--include": "include",
+  "--exclude": "exclude",
+  "--exclude-dir": "excludeDir",
+};
+
+/** A search's filters, and which of its words are filter options or their values: never paths. */
+function readFilters(prog: string, rest: string[]): { filters: ReadFilters; skip: Set<number> } | null {
+  const grep = prog === "grep" || prog === "egrep" || prog === "fgrep";
+  if (!grep && prog !== "rg" && prog !== "ag") return null;
+  const f: ReadFilters = { include: [], exclude: [], excludeDir: [], hidden: grep };
+  const skip = new Set<number>();
+  let unrestricted = 0;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i]!;
+    if (a === "--") break;
+    const eq = a.startsWith("--") ? a.indexOf("=") : -1;
+    const name = eq > 0 ? a.slice(0, eq) : a;
+    const value = (): string | undefined => {
+      skip.add(i);
+      if (eq > 0) return a.slice(eq + 1);
+      if (i + 1 >= rest.length) return undefined;
+      skip.add(i + 1);
+      return rest[++i];
+    };
+    if (grep && GREP_FILTERS[name]) {
+      const v = value();
+      if (v) f[GREP_FILTERS[name]].push(v);
+    } else if (prog === "rg" && (name === "--glob" || name === "--iglob" || a.startsWith("-g"))) {
+      const v = /^-g./.test(a) ? (skip.add(i), a.slice(2)) : value();
+      if (v) (v.startsWith("!") ? f.exclude : f.include).push(v.slice(v.startsWith("!") ? 1 : 0));
+    } else if (a === "--hidden" || (prog === "rg" && /^-[a-zA-Z]*\.[a-zA-Z.]*$/.test(a))) {
+      f.hidden = true;
+    } else if (a === "--unrestricted") {
+      unrestricted++;
+    } else if (!grep && /^-[a-zA-Z]+$/.test(a)) {
+      unrestricted += (a.match(/u/g) ?? []).length;
+    }
+  }
+  // rg reads dot-files from -uu on, ag from one -u.
+  if (!grep && unrestricted >= (prog === "rg" ? 2 : 1)) f.hidden = true;
+  return { filters: f, skip };
 }
 
 /** Programs that read nothing of a path they are given: its name, or its metadata. */
@@ -2504,9 +2564,14 @@ export function shellPathWords(command: string): PathWord[] {
     const rest = inv.argv.slice(1);
     const recursive = walksDirs(prog, rest);
     const pf = PATTERN_FIRST[prog];
-    let skipPattern = pf !== undefined && !rest.some((a) => pf.given.test(a));
+    const searched = readFilters(prog, rest);
+    const filters = recursive && searched ? { filters: searched.filters } : {};
+    const given = pf !== undefined && rest.some((a) => pf.given.test(a));
+    let skipPattern = pf !== undefined && !given;
     let endOfOptions = false;
+    let operands = 0;
     for (let i = 0; i < rest.length; i++) {
+      if (searched?.skip.has(i)) continue;
       let w = rest[i]!;
       if (!endOfOptions && w === "--") {
         endOfOptions = true;
@@ -2527,7 +2592,12 @@ export function shellPathWords(command: string): PathWord[] {
       }
       if (w.startsWith("@")) w = w.slice(1);
       if (!w || /^[a-z][a-z0-9+.-]*:\/\//i.test(w)) continue;
-      add({ word: w, prog, recursive, command: shown });
+      operands++;
+      add({ word: w, prog, recursive, ...filters, command: shown });
+    }
+    // `grep -r KEY` and `rg KEY` with no path search the directory they run in.
+    if (recursive && searched && operands === 0 && (given || (pf !== undefined && !skipPattern))) {
+      add({ word: ".", prog, recursive, ...filters, command: shown });
     }
   }
   return out;

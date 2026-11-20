@@ -85,6 +85,18 @@ valid, timely, well-formed replies are now read from their symptoms.
   messages did not: a user editing the policy on a branch was refused by
   main's rules with no hint why. The reason now ends `Which rules: <the
   note>.` (CONTRACTS.md §10).
+- **`secret_path`: a recursive reader is judged by what its walk would open,
+  and a glob by what sh expands it to.** Under `[governance]` at `prevent`,
+  `grep -r KEY .`, `rg --hidden KEY`, `find . -type f -exec cat {} +` and
+  `tar cf - . | tar xOf -` printed a `.env.*` or `*.pem` in the tree (only a
+  listed place such as `~/.ssh` was found below a directory), and `cat
+  .env.matri[x]`, `cat */.env` and `cat c*/*.pem` slipped past the glob check.
+  The walk is gnomon's own grep's, less the reader's `--include`/`--exclude`/
+  `--exclude-dir`, rg's `-g` and dot-file default, so `grep -r KEY
+  --exclude='.env*' .` runs (and a filter value is no longer read as naming
+  the secret). `grep -rn old .` over a tree holding `.env` is now refused.
+  CONTRACTS §37 says what the word check still does not see: interpreter
+  code, paths built at run time, git's object store.
 
 ### Added
 
