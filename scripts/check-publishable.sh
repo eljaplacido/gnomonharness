@@ -106,6 +106,14 @@ mkdir -p "$TMP/proj/scratch"
 [ -f "$TMP/proj/scratch/.gnomon/config.toml" ] \
     || { echo "FAIL: init wrote no surface"; exit 1; }
 
+# `gnomon security test` starts the guard as a child of the installed package.
+# 0.6.1 and 0.6.2 looked for a gnomon.js the package does not ship, and scored
+# the failed launch as Claude Code's allow: 1/24 on this very scaffold (#202).
+SEC=$( cd "$TMP/proj/scratch" && "$BIN" security test --host claude-code 2>&1 ) \
+    || { echo "FAIL: gnomon security test from an installed package did not hold 24/24"; echo "$SEC" | tail -15; exit 1; }
+grep -q "Summary: 24/24 cases held" <<<"$SEC" \
+    || { echo "FAIL: gnomon security test from an installed package:"; echo "$SEC" | tail -5; exit 1; }
+
 VER=$(grep -oE 'gnomon/[0-9.]+\+[A-Za-z0-9._-]+' <<<"$OUT" | head -1)
 
 # The installed-copy provenance rules, end to end from a real install

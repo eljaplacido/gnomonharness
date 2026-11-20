@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3544 TypeScript tests (2891 core, 628 cli, 18
-> natives, 7 tui) and 120 Rust tests — **3664 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3549 TypeScript tests (2891 core, 633 cli, 18
+> natives, 7 tui) and 120 Rust tests — **3669 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2504,8 +2504,11 @@ id. A fresh `gnomon init` surface holds every case on every host. A surface with
 outside-root rules come with it. The report names each case that does not
 hold, with the decision and the rule. It tests the policy layer's decisions,
 not a host. A call a host runs without asking its hook is outside it, and
-`gnomon guard status` checks the hooks. Exit 0 every case held, 2 one did
-not, 10 could not run. The contract is [CONTRACTS.md §50](docs/CONTRACTS.md).
+`gnomon guard status` checks the hooks. A case the guard gave no decision
+for (it could not be launched, crashed or timed out) is reported as not
+measured, never as the host's decision. Exit 0 every case held, 2 one did
+not, 10 could not run, including a run in which a case was not measured and
+none failed. The contract is [CONTRACTS.md §50](docs/CONTRACTS.md).
 
 ### Compliance evidence — `gnomon compliance`
 

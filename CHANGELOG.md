@@ -26,6 +26,27 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`gnomon security test` from the npm package runs the guard** (#202). It
+  started the guard as `../gnomon.js` beside its own module, which only a
+  checkout has: the published package ships `bin/gnomon.mjs`. Every case of
+  an installed release spawned a missing file, and Claude Code's reading of
+  an empty answer scored that failed launch as allow. A fresh scaffold held
+  1/24 for Claude Code and 1/61 across hosts instead of 24/24 and 61/61. The
+  guard is now run as the node running the test plus the launcher of the
+  gnomon running it (`self_launcher.ts`): `gnomon.js` in a checkout or a pnpm
+  link, `bin/gnomon.mjs` in the package. There is no shim and no shell, on
+  Windows too.
+- **A guard that gives no decision is no longer a decision.** A failed
+  launch, a signal or timeout, an exit the guard does not answer with, or an
+  answer with no decision in it leaves the case `decision: null` with a
+  `detail`, counted in a new `errors` (report and per host), never in
+  `passed`. With no case failed, any such case makes the run exit 10. A guard
+  that cannot be found, or answers no case at all, is exit 10 with the
+  reason. `scripts/check-publishable.sh` now runs the security test from the
+  packed tarballs and requires 24/24.
+
 ## [0.6.2] — 2026-11-18
 
 `gnomon eval` measures other harnesses, on your own tasks, the way it
