@@ -477,6 +477,51 @@ describe("[approval] readonly_bash — gnomon guard and the loop decide alike (c
     expect(readonlyBashExempt("bash", { command: "ls" }, { gate: "always", config })).toBeNull();
     expect(readonlyBashExempt("bash", { command: "ls" }, { gate: "never", config })).toBeNull();
   });
+
+  it("git outside the project's repository is never lifted: -C elsewhere, after a cd, a payload cwd in a bare repository (the repro)", async () => {
+    readonlySurface("on_write");
+    // The repro: a repository whose config runs a program on a plain `git status`.
+    const evil = newRepo();
+    try {
+      sh(["config", "core.fsmonitor", "touch PWNED; false"], evil);
+      const decided: Array<[string, string, string | null, string | undefined]> = [];
+      for (const command of [`git -C ${evil} status`, `cd ${evil} && git status`, `git -C ${evil} diff`, `git -C ${evil} log -p`]) {
+        const v = await guardToolCall({ cwd: repo, call: { tool: "bash", input: { command } }, role: "implement" });
+        decided.push([command, v.decision, v.rule, v.exempt]);
+      }
+      // A bare repository inside the project: the project's .gnomon governs
+      // it, and git there reads the bare repository's config.
+      const bare = join(repo, "vendor", "x.git");
+      sh(["init", "-q", "--bare", bare], repo);
+      const inBare = await guardToolCall({ cwd: bare, call: { tool: "bash", input: { command: "git log -p" } }, role: "implement" });
+      decided.push(["(cwd: bare) git log -p", inBare.decision, inBare.rule, inBare.exempt]);
+      for (const [, decision, , exempt] of decided) {
+        expect(exempt).toBeUndefined();
+        expect(decision).not.toBe("allow");
+      }
+      expect(decided.map(([c, d, r]) => [c, d, r])).toEqual(decided.map(([c]) => [c, "ask", "approval"]));
+      // The project's own repository, from its root or a subdirectory, is lifted.
+      for (const cwd of [repo, join(repo, "src")]) {
+        const v = await guardToolCall({ cwd, call: { tool: "bash", input: { command: "git status" } }, role: "implement" });
+        expect([cwd, v.decision, v.exempt]).toEqual([cwd, "allow", "readonly_bash"]);
+      }
+      expect(existsSync(join(evil, "PWNED"))).toBe(false);
+    } finally {
+      rmSync(evil, { recursive: true, force: true });
+    }
+  });
+
+  it("redirections from /dev/tcp and /dev/udp and ${x@P} are not lifted where the network is not refused", async () => {
+    readonlySurface("on_write");
+    // The cases' policy sets network = false, which refuses /dev/tcp first;
+    // without it the gate is what stands, and it must ask.
+    put(".gnomon/policy.toml", readFileSync(join(repo, ".gnomon/policy.toml"), "utf-8").replace("network = false\n", ""));
+    commit("network not refused");
+    for (const command of ["cat < /dev/tcp/example.com/80", "head -c1 </dev/udp/1.2.3.4/53", "cd /dev && cat < tcp/example.com/80", "echo ${x@P}"]) {
+      const v = await guardToolCall({ cwd: repo, call: { tool: "bash", input: { command } }, role: "implement" });
+      expect([command, v.decision, v.exempt]).toEqual([command, "ask", undefined]);
+    }
+  });
 });
 
 describe("gnomon guard — the rules are committed ones", () => {

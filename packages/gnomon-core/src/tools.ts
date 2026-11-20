@@ -776,19 +776,25 @@ export function needsApproval(tool: string, gate: ApprovalGate): boolean {
 export function readonlyBashExempt(
   tool: string,
   args: Record<string, unknown>,
-  ctx: Pick<ToolContext, "gate" | "config">
+  ctx: ReadonlyBashContext
 ): ReadOnlyReading | null {
   if (tool !== "bash" || ctx.gate !== "on_write") return null;
   if (resolveReadonlyBash(ctx.config) !== "allow") return null;
-  const reading = readOnlyBash(args.command);
+  // git is read-only only in the project's own repository, so the reader is
+  // told where the line runs. Without a root, git is not read-only.
+  const where = ctx.root ? { root: ctx.root, cwd: ctx.bashCwd === undefined ? ctx.root : ctx.bashCwd } : undefined;
+  const reading = readOnlyBash(args.command, where);
   return reading.readonly ? reading : null;
 }
+
+/** What readonlyBashExempt reads: the gate and config, and where the line runs (ToolContext.root, .bashCwd). */
+export type ReadonlyBashContext = Pick<ToolContext, "gate" | "config"> & Partial<Pick<ToolContext, "root" | "bashCwd">>;
 
 /** Whether this call asks under the gate: needsApproval, less a read-only bash call `readonly_bash` lifts. */
 export function callNeedsApproval(
   tool: string,
   args: Record<string, unknown>,
-  ctx: Pick<ToolContext, "gate" | "config">
+  ctx: ReadonlyBashContext
 ): boolean {
   return needsApproval(tool, ctx.gate) && readonlyBashExempt(tool, args, ctx) === null;
 }
@@ -1177,6 +1183,14 @@ export interface ToolContext {
    */
   writeAllow?: string[];
   root: string;
+  /**
+   * Where a bash call's line starts, for `[approval] readonly_bash`'s git
+   * check (readonly_bash.ts gitRepoWhy). Unset: `root`, where bashTool
+   * spawns every call. `gnomon guard` sets the host's payload cwd, which an
+   * earlier `cd` in the host's shell may have moved; null there means not
+   * known, and git is then never read as read-only.
+   */
+  bashCwd?: string | null;
   sandbox: SandboxLevel;
   /**
    * Additional absolute roots the SURFACE has granted, from

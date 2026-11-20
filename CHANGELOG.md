@@ -68,6 +68,8 @@ valid, timely, well-formed replies are now read from their symptoms.
   to be slow against; announcing it needs a declared throughput floor, which
   no surface key provides yet. Pinned as a failing test until announced.
 
+### Added
+
 - **New opt-in `[approval] readonly_bash = "allow"`** (default `"ask"`, no
   behaviour change unless declared). Under `gate = "on_write"`, a bash call a
   conservative reader (`readonly_bash.ts`) proves read-only is no longer
@@ -75,9 +77,16 @@ valid, timely, well-formed replies are now read from their symptoms.
   `file`, `pwd`, `which`, `du`, `df`, `echo`, `printf`, `cd`, `cut`, `tr`,
   `sort`, `uniq`, `true` and `git status/log/diff/show/rev-parse/ls-files/
   blame` (and `git branch` listings), alone, piped or chained. Output
-  redirection (except to `/dev/null` and `2>&1`), `tee`, substitution,
-  subshells, assignments, interpreters, `find -exec/-delete`, `rg --pre`,
-  `sort -o`, `git -c`, `git branch -D` and anything unrecognised still ask.
+  redirection (except to `/dev/null` and `2>&1`), any redirection from or to
+  `/dev/tcp` or `/dev/udp`, `tee`, substitution, `${x@P}`-style
+  transformations, subshells, assignments, interpreters, `find
+  -exec/-delete`, `rg --pre`, `sort -o`, `git -c`, `git branch -D` and
+  anything unrecognised still ask. `git` is read-only only in the project's
+  own repository (no `-C` but `.` or the root, no `git` after a `cd`, and
+  `gnomon guard`'s payload `cwd` the root or inside it, with no nested or
+  bare repository on the way), since another repository's config can name a
+  program git runs on `status`, `diff` or `log -p` (`core.fsmonitor`,
+  `diff.external`, textconv).
   Every rule (bash_deny, bash_allow, sandbox, network, surface, secret_path,
   outside_root, governance levels) runs first. Reached by gnomon's own loop
   and `gnomon guard` alike: the decision is `allow` with `exempt:

@@ -880,15 +880,37 @@ of `ls`, `cat`, `head`, `tail`, `wc`, `grep`, `rg`, `find`, `stat`, `file`,
 `uniq`, `true`, and `git` `status`/`log`/`diff`/`show`/`rev-parse`/`ls-files`/
 `blame`/`branch` (branch as a listing only), named bare, joined only by `|`,
 `;`, `&&`, `||`; with no output redirection except to `/dev/null` and fd
-duplication (`2>&1`), no command or process substitution, no subshell, group,
-loop, function or background job, no `VAR=value`; none of the options that
-write or run a program (`find -exec`/`-execdir`/`-ok`/`-delete`/`-fprint*`/
-`-fls`, `rg --pre`/`--hostname-bin`, `file -C`, `sort -o`/`--compress-program`,
-a second `uniq` operand, `git -c`/`-p`/`--git-dir`/`--exec-path`, `git
+duplication (`2>&1`), no redirection to or from `/dev/tcp/…` or `/dev/udp/…`
+(bash opens a socket for those, input included: `cat < /dev/tcp/host/80` is
+network egress), also after a `cd` that makes a relative path one, and a file
+redirection's target a literal (no `$x`, no `~`); no command or process
+substitution, no `${…@…}` parameter transformation (`@P` and `@E` evaluate
+the value), no subshell, group, loop, function or background job, no
+`VAR=value`; none of the options that write or run a program (`find
+-exec`/`-execdir`/`-ok`/`-delete`/`-fprint*`/`-fls`, `rg
+--pre`/`--hostname-bin`, `file -C`, `sort -o`/`--compress-program`, a second
+`uniq` operand, `git -c`/`-p`/`--git-dir`/`--exec-path`, `git
 diff|log|show --output`/`--ext-diff`); and, for `find`, `rg`, `git`, `file`,
 `sort` and `uniq`, no unquoted variable, glob or brace in an argument (a file
-named `-delete` matched by `*` would become that option). Anything else asks,
-exactly as before. Every rule above runs first: `bash_deny`, `bash_allow`,
+named `-delete` matched by `*` would become that option).
+
+`git` is read-only only in the project's own repository, because git runs
+programs its repository's configuration names on these very subcommands
+(`core.fsmonitor` on `status` and `diff`, `diff.external` and textconv
+drivers on `diff`, `log -p` and `show`, `gpg.program` on
+`--show-signature`), and the `git_hooks` rule protects only the project's
+`.git/config`. So: no `-C` unless it is `.` or resolves (as `chdir()` does,
+symlinks first) to the project root, and at most one; no `git` after a `cd`
+on the same line; and the directory the line starts in is the project root,
+or inside it when the root is the repository's top level, with no nested
+repository (a `.git`) and no directory holding a `HEAD` (a possible bare
+repository) between it and the project's `.git`. gnomon's own loop starts
+every bash call at the root; `gnomon guard` takes the host payload's `cwd`
+(a host shell's earlier `cd` moves it). Where the directory is not known,
+`git` is not read-only.
+
+Anything else asks, exactly as before. Every rule above runs first:
+`bash_deny`, `bash_allow`,
 the sandbox, `network`, `surface`, `secret_path`, `outside_root` and the
 governance levels still refuse a read-only command they refuse, so `cat .env`
 under a declared `[governance]` is `deny`, `secret_path`. Without one it is

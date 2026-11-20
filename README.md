@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3566 TypeScript tests (2908 core, 633 cli, 18
-> natives, 7 tui) and 120 Rust tests — **3686 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3865 TypeScript tests (3203 core, 637 cli, 18
+> natives, 7 tui) and 120 Rust tests — **3985 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1699,11 +1699,14 @@ read-only runs without asking under `on_write`:
 | `repo_code` | `true` \| `false` | `false` | `true`: a call that runs repository-defined code always asks |
 
 Anything the reader cannot account for asks as before: an output redirection
-other than to `/dev/null`, `tee`, `$( )`, a subshell, `VAR=value`, an
-interpreter, `find -exec`/`-delete`, `rg --pre`, `git branch -D`, a glob that
-could become an option. Every rule still runs first, so `bash_deny`, the
-sandbox, `network = false` and `[governance]` secret paths refuse what they
-refused (`cat .env` under `[governance]` is denied). It judges whether a
+other than to `/dev/null`, a redirection from `/dev/tcp` or `/dev/udp`, `tee`,
+`$( )`, `${x@P}`, a subshell, `VAR=value`, an interpreter, `find
+-exec`/`-delete`, `rg --pre`, `git branch -D`, a glob that could become an
+option, and `git` anywhere but the project's own repository (`git -C
+elsewhere`, `cd x && git …`: another repository's config can name a program
+git runs, such as `core.fsmonitor`). Every rule still runs first, so
+`bash_deny`, the sandbox, `network = false` and `[governance]` secret paths
+refuse what they refused (`cat .env` under `[governance]` is denied). It judges whether a
 command writes, not what it reads. The key moves the surface hash, the trust
 prompt lists it as a grant, and the decision says `exempt: "readonly_bash"`
 ([CONTRACTS.md §10](docs/CONTRACTS.md)).

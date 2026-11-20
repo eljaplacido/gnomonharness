@@ -129,6 +129,7 @@ import {
   resolveVerify,
   resolveApprovalGate,
   resolveReadonlyBash,
+  workRootOf,
 } from "./config.js";
 import { mapBucket } from "./session.js";
 import { buildToolSet, callNeedsApproval, needsApproval, ApprovalGate } from "./tools.js";
@@ -928,7 +929,10 @@ export function replay(
               );
             } else {
               scmp(e, "gated", record.gated, () =>
-                (command !== null ? callNeedsApproval(tool, { command }, { gate: gateNow, config }) : needsApproval(tool, gateNow)) &&
+                (command !== null
+                  ? // The loop ran the line at its root, so git is judged there too.
+                    callNeedsApproval(tool, { command }, { gate: gateNow, config, root: workRootOf(config) })
+                  : needsApproval(tool, gateNow)) &&
                 offeredFor(role).has(tool)
               );
             }
