@@ -1607,10 +1607,19 @@ async function cmdAudit(args: CliArgs): Promise<void> {
   let anchorReport: ReturnType<typeof verifyAgainstAnchors> | null = null;
   let anchorFailed = false;
   const offline = args.flags.offline === "true";
+  // --offline exits on the chain, the seal and the signature, and on what this
+  // machine's copy of the witness shows (a re-chain, an invalid or missing
+  // anchor, a rollback). An anchor it cannot check here -- the block untrusted
+  // or unworkable on this machine, no local copy yet -- is reported and does
+  // not fail it: a loop guard on it must tell tamper from a fresh checkout
+  // (#207, CONTRACTS.md §14).
+  const offlineNote = "(--offline: reported, not counted against the exit)";
   if (anchor?.declared) {
     for (const p of anchor.problems) console.error(p);
-    if (!anchor.enabled) anchorFailed = true;
-    else {
+    if (!anchor.enabled) {
+      if (offline) console.log(`external anchor: NOT CHECKED here — the [audit.anchor] block cannot work on this machine ${offlineNote}`);
+      else anchorFailed = true;
+    } else {
       const scope = typeof args.flags.scope === "string" && args.flags.scope !== "true" ? args.flags.scope : undefined;
       const log = await collectAnchors(anchor, { offline });
       const cpDir = join(settings.dir, CHECKPOINT_DIR);
@@ -1618,10 +1627,14 @@ async function cmdAudit(args: CliArgs): Promise<void> {
         ? readdirSync(cpDir).filter((f: string) => /^checkpoint-.*\.jsonl$/.test(f)).map((f: string) => join(cpDir, f))
         : [];
       const paths = [...targets.map((n) => join(settings.dir, n)).filter((p) => existsSync(p)), ...checkpoints];
-      anchorReport = verifyAgainstAnchors(anchor, log, paths, { ...(scope ? { scope } : {}), acceptUnchecked: offline });
+      anchorReport = verifyAgainstAnchors(anchor, log, paths, {
+        ...(scope ? { scope } : {}),
+        acceptUnchecked: offline,
+        acceptUnreadable: offline,
+      });
       const from = log.source === "remote" ? "read from the remote" : log.source === "local-copy" ? "read from THIS MACHINE'S COPY" : "read from the receipts";
       console.log(`external anchor: ${anchorLabel(anchor)} — ${from}, scope ${anchorReport.scope}`);
-      for (const p of anchorReport.problems) console.error(`  ${p}`);
+      for (const p of anchorReport.problems) console.error(`  ${p}${offline ? ` ${offlineNote}` : ""}`);
     }
   }
   const anchorOf = (path: string) =>
@@ -3008,7 +3021,9 @@ Commands:
     and checks the chain, so a trail altered after the fact is detectable.
     With [audit.anchor] declared it also checks every sealed head against
     the external witness and names when a re-chain happened (--offline reads
-    this machine's copy; --scope <id> checks another checkout's anchors).
+    this machine's copy, and exits on what it can check there: an anchor
+    it cannot check, on a fresh checkout or an untrusted surface, is
+    reported, not failed; --scope <id> checks another checkout's anchors).
     'anchor' delivers queued heads to the witness now.
     'tamper' lists record_tamper events: changes to gnomon's own records
     that gnomon did not make (exit 3 while any is unresolved). 'resolve'

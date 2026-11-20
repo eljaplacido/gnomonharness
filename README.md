@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3900 TypeScript tests (3229 core, 646 cli, 18
-> natives, 7 tui) and 120 Rust tests — **4020 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3902 TypeScript tests (3230 core, 647 cli, 18
+> natives, 7 tui) and 120 Rust tests — **4022 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -3069,7 +3069,10 @@ rolled-back checkpoint. Both used to be documented as undetectable.
 Measured in [auditability-2026-11-03](benchmarks/results/auditability-2026-11-03/):
 **9/9 with a git witness**, against an attacker who also wipes the local anchor
 state, tries a forced push, and anchors the forgery. Off, it is **8/9**,
-unchanged. Contract, statuses and limits: [docs/CONTRACTS.md §21](docs/CONTRACTS.md).
+unchanged. `--offline` reads this machine's copy of the witness and exits on
+what it can check there: an anchor it cannot check (no local copy yet on a
+fresh checkout, or a surface not trusted here) is printed, not failed, so a
+loop guard on it alarms on tamper rather than on setup. Contract, statuses and limits: [docs/CONTRACTS.md §21](docs/CONTRACTS.md).
 
 ## Governing other harnesses
 

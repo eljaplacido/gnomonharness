@@ -1633,6 +1633,13 @@ export function verifyAgainstAnchors(
      * for the local copy (`--offline`) and knows what it is reading.
      */
     acceptUnchecked?: boolean;
+    /**
+     * Do not count `problems` reading the witness against `ok` either: on
+     * this machine's copy (`--offline`) there is none yet on a fresh
+     * checkout, which is setup state, not tamper (#207). They are still
+     * returned in `problems`; what the witness does show still counts.
+     */
+    acceptUnreadable?: boolean;
   } = {}
 ): AnchorReport {
   const scope = opts.scope ?? settings.scope;
@@ -1789,6 +1796,6 @@ export function verifyAgainstAnchors(
     other_scopes,
     problems: log.problems,
     findings,
-    ok: !bad && findings.length === 0 && log.problems.length === 0,
+    ok: !bad && findings.length === 0 && (opts.acceptUnreadable === true || log.problems.length === 0),
   };
 }

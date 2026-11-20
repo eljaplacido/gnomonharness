@@ -55,6 +55,20 @@
   change. `conformance/toml_looser.toml` gains the case and its golden the
   report (CONTRACTS.md §5.4).
 
+- **`gnomon audit verify --offline` no longer fails a fresh checkout**
+  (#207). With `[audit.anchor]` declared it exited 1 when the block was not
+  trusted on this machine, or when this machine had no copy of the anchors
+  yet, though the chain verified -- so a loop guard on it (`act_when =
+  "exit_nonzero"`) alarmed on every fresh checkout. `--offline` now exits on
+  the chain, the seal, the signature and what this machine's copy shows
+  (re-chained, invalid, unanchored, a missing anchored trail, a rollback).
+  What it cannot check here is printed and not failed: a problem reading the
+  copy, marked `(--offline: reported, not counted against the exit)`, and a
+  block that cannot work here, as `external anchor: NOT CHECKED here`.
+  Without `--offline` nothing changes. `verifyAgainstAnchors` gains
+  `acceptUnreadable`; `conformance/audit_anchor.json` gains `offline_exit`
+  (CONTRACTS.md §21).
+
 ## [0.6.3] — 2026-11-20
 
 Fixes from a multi-machine shadow test of gnomon across real projects on
