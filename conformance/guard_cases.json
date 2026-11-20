@@ -146,6 +146,45 @@
       {"name": "a read inside the repository: nothing to level", "role": "implement", "tool": "read", "input": {"path": "src/a.ts"}, "verdict": "allow", "rule": null, "family": null, "expect": {"observe": "allow", "advise": "allow", "prevent": "allow", "enforce": "allow"}}
     ]
   },
+  "readonly_bash": {
+    "_comment": [
+      "`[approval] readonly_bash = \"allow\"` (CONTRACTS.md §10, \"Read-only bash\"): a bash call the conservative",
+      "reader in readonly_bash.ts proves read-only is not asked under gate = \"on_write\". Put to BOTH gnomon's own",
+      "loop and `gnomon guard` (packages/gnomon-core/src/guard.test.ts) and to the real binary",
+      "(packages/gnomon-cli/src/guard.test.ts). The surface is `surface` above with policy.toml replaced by",
+      "`policy` below: `{{gate}}` is the gate, `{{governance}}` is empty, or `[governance] level = \"prevent\"`",
+      "for the `prevent` column (gate on_write).",
+      "",
+      "`expect` is [decision, rule] per column. `readonly` is what the reader answers for the command",
+      "(readonly_bash.test.ts asserts it); a decision `allow` with `readonly` true carries `exempt:",
+      "\"readonly_bash\"`, except under `always`, which asks for every call. Every rule that refuses runs",
+      "before the setting is consulted. Every allowed command here only reads the scratch repository or",
+      "names an absent file, so it is safe to RUN."
+    ],
+    "policy": "[approval]\ngate = \"{{gate}}\"\nreadonly_bash = \"allow\"\n\n[sandbox]\nlevel = \"confined\"\nnetwork = false\n{{governance}}",
+    "cases": [
+      {"name": "ls is read-only: not asked under on_write", "role": "implement", "tool": "bash", "input": {"command": "ls -la"}, "readonly": true, "expect": {"on_write": ["allow", null], "always": ["ask", "approval"], "prevent": ["allow", null]}},
+      {"name": "git status is read-only", "role": "implement", "tool": "bash", "input": {"command": "git status --short"}, "readonly": true, "expect": {"on_write": ["allow", null], "always": ["ask", "approval"], "prevent": ["allow", null]}},
+      {"name": "a pipeline of readers, stderr to /dev/null", "role": "implement", "tool": "bash", "input": {"command": "git log --oneline -n 3 2>/dev/null | head -2"}, "readonly": true, "expect": {"on_write": ["allow", null], "always": ["ask", "approval"], "prevent": ["allow", null]}},
+      {"name": "readers chained with && and ;", "role": "implement", "tool": "bash", "input": {"command": "cat src/a.ts | wc -l && grep -rn old src; git branch --show-current"}, "readonly": true, "expect": {"on_write": ["allow", null], "always": ["ask", "approval"], "prevent": ["allow", null]}},
+      {"name": "find without an action that writes", "role": "implement", "tool": "bash", "input": {"command": "find src -name '*.ts' -type f"}, "readonly": true, "expect": {"on_write": ["allow", null], "always": ["ask", "approval"], "prevent": ["allow", null]}},
+      {"name": "an output redirection is a write: asked", "role": "implement", "tool": "bash", "input": {"command": "ls > src/listing.txt"}, "readonly": false, "expect": {"on_write": ["ask", "approval"], "always": ["ask", "approval"], "prevent": ["ask", "approval"]}},
+      {"name": "tee is a write: asked", "role": "implement", "tool": "bash", "input": {"command": "cat src/a.ts | tee src/b.ts"}, "readonly": false, "expect": {"on_write": ["ask", "approval"], "always": ["ask", "approval"], "prevent": ["ask", "approval"]}},
+      {"name": "git branch -D is not a listing: asked", "role": "implement", "tool": "bash", "input": {"command": "git branch -D feature"}, "readonly": false, "expect": {"on_write": ["ask", "approval"], "always": ["ask", "approval"], "prevent": ["ask", "approval"]}},
+      {"name": "find -delete is a write: asked", "role": "implement", "tool": "bash", "input": {"command": "find src -name '*.tmp' -delete"}, "readonly": false, "expect": {"on_write": ["ask", "approval"], "always": ["ask", "approval"], "prevent": ["ask", "approval"]}},
+      {"name": "a command substitution runs a command: asked", "role": "implement", "tool": "bash", "input": {"command": "grep x $(rm -f src/y.ts)"}, "readonly": false, "expect": {"on_write": ["ask", "approval"], "always": ["ask", "approval"], "prevent": ["ask", "approval"]}},
+      {"name": "a writer after a reader: asked", "role": "implement", "tool": "bash", "input": {"command": "git log -n 1; rm src/x.ts"}, "readonly": false, "expect": {"on_write": ["ask", "approval"], "always": ["ask", "approval"], "prevent": ["ask", "approval"]}},
+      {"name": "an interpreter is not read: asked", "role": "implement", "tool": "bash", "input": {"command": "python3 -c 'print(1)'"}, "readonly": false, "expect": {"on_write": ["ask", "approval"], "always": ["ask", "approval"], "prevent": ["ask", "approval"]}},
+      {"name": "sh -c is not read: asked", "role": "implement", "tool": "bash", "input": {"command": "sh -c 'ls'"}, "readonly": false, "expect": {"on_write": ["ask", "approval"], "always": ["ask", "approval"], "prevent": ["ask", "approval"]}},
+      {"name": "git in another repository reads that repository's config (core.fsmonitor, diff.external): asked", "role": "implement", "tool": "bash", "input": {"command": "git -C .. status"}, "readonly": false, "expect": {"on_write": ["ask", "approval"], "always": ["ask", "approval"], "prevent": ["ask", "approval"]}},
+      {"name": "git after a cd on the same line: asked", "role": "implement", "tool": "bash", "input": {"command": "cd src && git status"}, "readonly": false, "expect": {"on_write": ["ask", "approval"], "always": ["ask", "approval"], "prevent": ["ask", "approval"]}},
+      {"name": "a ${x@P} transformation evaluates the value: asked", "role": "implement", "tool": "bash", "input": {"command": "echo ${HOME@P}"}, "readonly": false, "expect": {"on_write": ["ask", "approval"], "always": ["ask", "approval"], "prevent": ["ask", "approval"]}},
+      {"name": "a redirection from /dev/tcp is a network connection: network = false refuses it first", "role": "implement", "tool": "bash", "input": {"command": "cat < /dev/tcp/example.invalid/80"}, "readonly": false, "expect": {"on_write": ["deny", "network"], "always": ["deny", "network"], "prevent": ["deny", "network"]}},
+      {"name": "a redirect into the surface is refused first, whatever the setting", "role": "implement", "tool": "bash", "input": {"command": "echo hi > .gnomon/policy.toml"}, "readonly": false, "expect": {"on_write": ["deny", "surface"], "always": ["deny", "surface"], "prevent": ["deny", "surface"]}},
+      {"name": "a read-only cat of .env: allowed without [governance], refused by secret_path under it", "role": "implement", "tool": "bash", "input": {"command": "cat .env"}, "readonly": true, "expect": {"on_write": ["allow", null], "always": ["ask", "approval"], "prevent": ["deny", "secret_path"]}},
+      {"name": "a read-only cat under ~/.aws is refused under [governance] (an absent file, safe to run)", "role": "implement", "tool": "bash", "input": {"command": "cat ~/.aws/gnomon-conformance-absent"}, "readonly": true, "expect": {"on_write": ["allow", null], "always": ["ask", "approval"], "prevent": ["deny", "secret_path"]}}
+    ]
+  },
   "host_tools": {
     "_comment": [
       "Host tools that are not gnomon tool kinds (CONTRACTS.md §10 \"Other host tools\"), as Claude Code's",

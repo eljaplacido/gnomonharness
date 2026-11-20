@@ -169,6 +169,16 @@ describe("what counts as looser than the defaults", () => {
     expect(k.some((x) => x.startsWith("mcp:helper:"))).toBe(true);
   });
 
+  it("[approval] readonly_bash = \"allow\" is a grant under on_write, and the clamp takes it back", () => {
+    const policy = (extra: string) => `[approval]\ngate = "on_write"\n${extra}\n[sandbox]\nlevel = "confined"\nnetwork = false\n`;
+    const on = loadConfig(project({ policy: policy(`readonly_bash = "allow"\n`) }));
+    expect(surfaceGrants(on).map((g) => g.key)).toEqual(["approval:readonly_bash"]);
+    expect(surfaceGrants(clampToDefaults(on))).toEqual([]);
+    expect(keys(project({ policy: policy(`readonly_bash = "ask"\n`) }))).toEqual([]);
+    // Under "always" every call asks, read-only or not: nothing is granted.
+    expect(keys(project({ policy: `[approval]\ngate = "always"\nreadonly_bash = "allow"\n` }))).toEqual([]);
+  });
+
   it("stricter than the defaults is not a grant", () => {
     const root = project({
       policy: `[approval]\ngate = "always"\n\n[sandbox]\nlevel = "strict"\nnetwork = false\nexec = "docker"\n`,

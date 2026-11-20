@@ -62,6 +62,17 @@ const CASES = JSON.parse(readFileSync(resolve(here, "../../../conformance/guard_
       levels: { verdict: GuardDecisionValue; rule: string | null; family: string | null; expect: Record<string, GuardDecisionValue> };
     }>;
   };
+  readonly_bash: {
+    policy: string;
+    cases: Array<{
+      name: string;
+      role: string;
+      tool: string;
+      input: { command: string };
+      readonly: boolean;
+      expect: Record<"on_write" | "always" | "prevent", [GuardDecisionValue, string | null]>;
+    }>;
+  };
   levels: {
     levels: Array<"observe" | "advise" | "prevent" | "enforce">;
     policy: string;
@@ -132,7 +143,7 @@ async function loopDecides(
   role: string,
   tool: string,
   input: Record<string, unknown>,
-  seen?: { governance?: Record<string, unknown>; result?: string }
+  seen?: { governance?: Record<string, unknown>; result?: string; record?: Record<string, unknown> }
 ): Promise<GuardDecisionValue> {
   const state: any = { config: loadConfig(repo), exchanges: [], currentRole: role };
   let asked = false;
@@ -169,6 +180,7 @@ async function loopDecides(
             if (kind === "tool_call") {
               codes.push(fields.code as number);
               if (seen && fields.governance) seen.governance = fields.governance as Record<string, unknown>;
+              if (seen) seen.record = fields;
             }
           },
           text: () => undefined,
@@ -370,6 +382,147 @@ describe("governance levels — gnomon guard and the loop decide alike (conforma
 // ---------------------------------------------------------------------------
 // Where the rules come from
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// [approval] readonly_bash: the same table, both callers
+// ---------------------------------------------------------------------------
+
+/** The cases' surface with readonly_bash's policy.toml for one column, committed. */
+function readonlySurface(column: "on_write" | "always" | "prevent" | "off", config = ""): string {
+  const gate = column === "always" ? "always" : "on_write";
+  const governance = column === "prevent" ? `\n[governance]\nlevel = "prevent"\n` : "";
+  for (const [file, text] of Object.entries(CASES.surface)) {
+    const body =
+      file === "policy.toml"
+        ? column === "off"
+          ? CASES.readonly_bash.policy.replace("{{gate}}", "on_write").replace(`readonly_bash = "allow"\n`, "").replace("{{governance}}", "")
+          : CASES.readonly_bash.policy.replace("{{gate}}", gate).replace("{{governance}}", governance)
+        : file === "config.toml"
+          ? text + config
+          : text;
+    put(`.gnomon/${file}`, body);
+  }
+  put("src/a.ts", "old\n");
+  return commit(`surface (readonly_bash, ${column})`);
+}
+
+describe("[approval] readonly_bash — gnomon guard and the loop decide alike (conformance/guard_cases.json readonly_bash)", () => {
+  for (const column of ["on_write", "always", "prevent"] as const) {
+    describe(`${column === "prevent" ? 'gate = "on_write" under [governance] level = "prevent"' : `gate = "${column}"`}`, () => {
+      for (const c of CASES.readonly_bash.cases) {
+        const [decision, rule] = c.expect[column];
+        it(`${c.name}: ${decision}`, async () => {
+          readonlySurface(column);
+          const v = await guardToolCall({ cwd: repo, call: { tool: c.tool, input: c.input }, role: c.role });
+          expect(v.error).toBeUndefined();
+          const seen: { record?: Record<string, unknown> } = {};
+          const loop = await loopDecides(c.role, c.tool, c.input, seen);
+          expect({ guard: v.decision, loop, rule: v.rule }).toEqual({ guard: decision, loop: decision, rule });
+          // Lifted by the setting: the guard says so on a decision that reached
+          // the gate, with the reason; the loop's record says so beside
+          // `gated`, which is the gate's view of the call whatever a rule did.
+          const exempt = c.readonly && column !== "always";
+          const lifted = decision === "allow" && exempt;
+          expect(v.exempt).toBe(lifted ? "readonly_bash" : undefined);
+          expect(seen.record?.exempt).toBe(exempt ? "readonly_bash" : undefined);
+          expect(seen.record?.gated).toBe(!exempt);
+          if (lifted) expect(v.reason).toMatch(/^\[approval\] readonly_bash = "allow"/);
+        });
+      }
+    });
+  }
+
+  it("without the setting, every bash call still asks under on_write (the default is unchanged)", async () => {
+    readonlySurface("off");
+    for (const c of CASES.readonly_bash.cases) {
+      const v = await guardToolCall({ cwd: repo, call: { tool: c.tool, input: c.input }, role: c.role });
+      const [decision, rule] = c.expect.on_write;
+      const expected = decision === "allow" ? ["ask", "approval"] : [decision, rule];
+      expect([c.name, v.decision, v.rule, v.exempt]).toEqual([c.name, ...expected, undefined]);
+    }
+  });
+
+  it("the setting moves the surface hash: turning it on is a visible change to the rules", async () => {
+    readonlySurface("off");
+    const off = await guardToolCall({ cwd: repo, call: { tool: "bash", input: { command: "ls" } }, role: "implement" });
+    readonlySurface("on_write");
+    const on = await guardToolCall({ cwd: repo, call: { tool: "bash", input: { command: "ls" } }, role: "implement" });
+    expect(off.surface_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(on.surface_hash).not.toBe(off.surface_hash);
+    expect([off.decision, on.decision]).toEqual(["ask", "allow"]);
+  });
+
+  it("the guard's audit record says which decisions the setting lifted", async () => {
+    readonlySurface("on_write", `[audit]\nenabled = true\n`);
+    const a = await guardToolCall({ cwd: repo, call: { tool: "bash", input: { command: "git status" } }, role: "implement", session: "ro" });
+    const b = await guardToolCall({ cwd: repo, call: { tool: "bash", input: { command: "ls > src/x.txt" } }, role: "implement", session: "ro" });
+    expect(verifyTrail(a.audit!.trail)).toMatchObject({ ok: true, sealed: true });
+    const guards = readFileSync(a.audit!.trail, "utf-8").trim().split("\n").map((l) => JSON.parse(l) as AuditRecord).filter((r) => r.kind === "guard");
+    expect(guards.map((r) => [r.decision, r.rule, r.exempt])).toEqual([
+      ["allow", null, "readonly_bash"],
+      ["ask", "approval", undefined],
+    ]);
+    expect(b.exempt).toBeUndefined();
+  });
+
+  it("an escalated call (after_refusal) is asked even when it reads only", async () => {
+    readonlySurface("on_write");
+    const policy = readFileSync(join(repo, ".gnomon/policy.toml"), "utf-8").replace(`readonly_bash = "allow"\n`, `readonly_bash = "allow"\nafter_refusal = "ask"\n`);
+    put(".gnomon/policy.toml", policy);
+    commit("after_refusal");
+    // The loop alone: escalation is a loop state, not a rule the guard reads.
+    const config = loadConfig(repo);
+    const { readonlyBashExempt } = await import("./tools.js");
+    expect(readonlyBashExempt("bash", { command: "ls" }, { gate: "on_write", config })).not.toBeNull();
+    expect(readonlyBashExempt("bash", { command: "ls" }, { gate: "always", config })).toBeNull();
+    expect(readonlyBashExempt("bash", { command: "ls" }, { gate: "never", config })).toBeNull();
+  });
+
+  it("git outside the project's repository is never lifted: -C elsewhere, after a cd, a payload cwd in a bare repository (the repro)", async () => {
+    readonlySurface("on_write");
+    // The repro: a repository whose config runs a program on a plain `git status`.
+    const evil = newRepo();
+    try {
+      sh(["config", "core.fsmonitor", "touch PWNED; false"], evil);
+      const decided: Array<[string, string, string | null, string | undefined]> = [];
+      for (const command of [`git -C ${evil} status`, `cd ${evil} && git status`, `git -C ${evil} diff`, `git -C ${evil} log -p`]) {
+        const v = await guardToolCall({ cwd: repo, call: { tool: "bash", input: { command } }, role: "implement" });
+        decided.push([command, v.decision, v.rule, v.exempt]);
+      }
+      // A bare repository inside the project: the project's .gnomon governs
+      // it, and git there reads the bare repository's config.
+      const bare = join(repo, "vendor", "x.git");
+      sh(["init", "-q", "--bare", bare], repo);
+      const inBare = await guardToolCall({ cwd: bare, call: { tool: "bash", input: { command: "git log -p" } }, role: "implement" });
+      decided.push(["(cwd: bare) git log -p", inBare.decision, inBare.rule, inBare.exempt]);
+      for (const [, decision, , exempt] of decided) {
+        expect(exempt).toBeUndefined();
+        expect(decision).not.toBe("allow");
+      }
+      expect(decided.map(([c, d, r]) => [c, d, r])).toEqual(decided.map(([c]) => [c, "ask", "approval"]));
+      // The project's own repository, from its root or a subdirectory, is lifted.
+      for (const cwd of [repo, join(repo, "src")]) {
+        const v = await guardToolCall({ cwd, call: { tool: "bash", input: { command: "git status" } }, role: "implement" });
+        expect([cwd, v.decision, v.exempt]).toEqual([cwd, "allow", "readonly_bash"]);
+      }
+      expect(existsSync(join(evil, "PWNED"))).toBe(false);
+    } finally {
+      rmSync(evil, { recursive: true, force: true });
+    }
+  });
+
+  it("redirections from /dev/tcp and /dev/udp and ${x@P} are not lifted where the network is not refused", async () => {
+    readonlySurface("on_write");
+    // The cases' policy sets network = false, which refuses /dev/tcp first;
+    // without it the gate is what stands, and it must ask.
+    put(".gnomon/policy.toml", readFileSync(join(repo, ".gnomon/policy.toml"), "utf-8").replace("network = false\n", ""));
+    commit("network not refused");
+    for (const command of ["cat < /dev/tcp/example.com/80", "head -c1 </dev/udp/1.2.3.4/53", "cd /dev && cat < tcp/example.com/80", "echo ${x@P}"]) {
+      const v = await guardToolCall({ cwd: repo, call: { tool: "bash", input: { command } }, role: "implement" });
+      expect([command, v.decision, v.exempt]).toEqual([command, "ask", undefined]);
+    }
+  });
+});
 
 describe("gnomon guard — the rules are committed ones", () => {
   const forcePush = { tool: "bash", input: { command: "git push --force origin main" } };

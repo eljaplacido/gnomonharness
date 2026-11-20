@@ -49,7 +49,9 @@ import {
   recomputeManifest,
   toolMaxLines,
   isValidImageRef,
+  resolveReadonlyBash,
 } from "./config.js";
+import { readOnlyBash, type ReadOnlyReading } from "./readonly_bash.js";
 import { suppliedByStore } from "./credentials.js";
 import { noteKeyVars, sessionKeyVars } from "./credential_pin.js";
 import { proposeSkill, ProposalRefused, renderSkill, SkillProposal } from "./skills.js";
@@ -760,6 +762,52 @@ export function needsApproval(tool: string, gate: ApprovalGate): boolean {
 }
 
 /**
+ * `[approval] readonly_bash = "allow"` (opt-in; default "ask"): under `gate =
+ * "on_write"`, a bash call readonly_bash.ts proves read-only -- `ls`, `cat x`,
+ * `rg foo`, `git status`, `git log | head` -- is not a mutating call, so the
+ * gate does not ask. Returns the reading when the gate is lifted, else null.
+ *
+ * It only ever lifts the GATE. Every precheck (bash_deny, bash_allow, the
+ * sandbox, network, secret paths, governance levels) runs before this is
+ * consulted, so a read-only `cat .env` under [governance] is still refused.
+ * `always` asks for every call, read-only or not, and an escalated call
+ * (`after_refusal`, which runs it under "always") is asked as before.
+ */
+export function readonlyBashExempt(
+  tool: string,
+  args: Record<string, unknown>,
+  ctx: ReadonlyBashContext
+): ReadOnlyReading | null {
+  if (tool !== "bash" || ctx.gate !== "on_write") return null;
+  if (resolveReadonlyBash(ctx.config) !== "allow") return null;
+  // git is read-only only in the project's own repository, so the reader is
+  // told where the line runs. Without a root, git is not read-only.
+  const where = ctx.root ? { root: ctx.root, cwd: ctx.bashCwd === undefined ? ctx.root : ctx.bashCwd } : undefined;
+  const reading = readOnlyBash(args.command, where);
+  return reading.readonly ? reading : null;
+}
+
+/** What readonlyBashExempt reads: the gate and config, and where the line runs (ToolContext.root, .bashCwd). */
+export type ReadonlyBashContext = Pick<ToolContext, "gate" | "config"> & Partial<Pick<ToolContext, "root" | "bashCwd">>;
+
+/** Whether this call asks under the gate: needsApproval, less a read-only bash call `readonly_bash` lifts. */
+export function callNeedsApproval(
+  tool: string,
+  args: Record<string, unknown>,
+  ctx: ReadonlyBashContext
+): boolean {
+  return needsApproval(tool, ctx.gate) && readonlyBashExempt(tool, args, ctx) === null;
+}
+
+/** What a decision the setting lifted says, in its reason. */
+export function readonlyBashReason(reading: ReadOnlyReading): string {
+  return (
+    `[approval] readonly_bash = "allow": gate = "on_write" does not ask before a bash call read as read-only ` +
+    `(${reading.programs.join(", ")}); no rule refuses it`
+  );
+}
+
+/**
  * `[approval] repo_code = true`: a bash call that runs repository-defined code
  * -- package.json scripts through `npm test`, `npm install`'s lifecycle
  * scripts, a Makefile, `pip install -e .` (shell.ts, repoCodeRuns) -- asks a
@@ -1135,6 +1183,14 @@ export interface ToolContext {
    */
   writeAllow?: string[];
   root: string;
+  /**
+   * Where a bash call's line starts, for `[approval] readonly_bash`'s git
+   * check (readonly_bash.ts gitRepoWhy). Unset: `root`, where bashTool
+   * spawns every call. `gnomon guard` sets the host's payload cwd, which an
+   * earlier `cd` in the host's shell may have moved; null there means not
+   * known, and git is then never read as read-only.
+   */
+  bashCwd?: string | null;
   sandbox: SandboxLevel;
   /**
    * Additional absolute roots the SURFACE has granted, from
@@ -4491,7 +4547,9 @@ async function bashTool(
   // preview, and asked about whatever the gate says under repo_code = true.
   const runs = repoCodeRuns(command);
   const askRepo = runs.length > 0 && repoCodeAsks(ctx);
-  if (needsApproval("bash", ctx.gate) || askRepo) {
+  // `[approval] readonly_bash = "allow"`: a call read as read-only is not
+  // asked under on_write (readonlyBashExempt). The prechecks above ran first.
+  if (callNeedsApproval("bash", args, ctx) || askRepo) {
     const ok = await ctx.approve({
       tool: "bash",
       summary: askRepo ? `bash (runs repository code): ${command}` : `bash: ${command}`,
@@ -8255,6 +8313,11 @@ export interface PolicyDecision {
   level?: GovernanceLevel | null;
   /** Verdicts recorded and not applied, because their family sits below prevent, in the order they were found. */
   levelled?: LevelledHit[];
+  /**
+   * Present only when `[approval] readonly_bash = "allow"` is why the gate did
+   * not ask: a bash call under on_write read as read-only (readonly_bash.ts).
+   */
+  exempt?: "readonly_bash";
 }
 
 /**
@@ -8330,6 +8393,7 @@ function applyLevels(
     verdict,
     family: first.family,
     level: first.level,
+    ...(said.exempt ? { exempt: said.exempt } : {}),
     ...extra,
   };
 }
@@ -8391,6 +8455,12 @@ async function rulesDecide(
       rule: "repo_code",
       reason: `[approval] repo_code = true asks a person before a call that runs code the repository defines.${note}`,
     };
+  }
+  // `[approval] readonly_bash = "allow"`: a read-only bash call is not one the
+  // on_write gate asks about. Every rule above has already had its say.
+  const readonly = readonlyBashExempt(name, args, ctx);
+  if (readonly) {
+    return { decision: "allow", rule: null, reason: readonlyBashReason(readonly), exempt: "readonly_bash" };
   }
   if (needsApproval(name, ctx.gate)) {
     return {

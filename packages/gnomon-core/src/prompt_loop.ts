@@ -86,6 +86,7 @@ import {
   packageIndexOf,
   type SurfaceDrift,
   needsApproval,
+  readonlyBashExempt,
   ToolContext,
   ToolOutcome,
   ApprovalRequest,
@@ -8384,7 +8385,11 @@ async function agenticTurn(
       // though the gate or a standing approval would have let it run. Null --
       // always, unless a surface opted in -- changes nothing below.
       const escalated = offered.has(call.name) ? afterRefusal.check(call.name, call.args) : null;
-      const gated = (escalated !== null || needsApproval(call.name, gate)) && offered.has(call.name);
+      // `[approval] readonly_bash = "allow"`: a bash call read as read-only is
+      // not gated under on_write (tools.ts readonlyBashExempt), and the record
+      // says so. Never for an escalated call: that one asks.
+      const exempt = escalated === null && offered.has(call.name) && readonlyBashExempt(call.name, call.args, ctx) !== null;
+      const gated = (escalated !== null || (needsApproval(call.name, gate) && !exempt)) && offered.has(call.name);
       // A call the operator has to answer for is one they are watching, and
       // its prompt is written straight to the console rather than through
       // `say` — so anything held back has to land before it.
@@ -8599,6 +8604,7 @@ async function agenticTurn(
         tool: call.name,
         target: callTarget,
         gated,
+        ...(exempt ? { exempt: "readonly_bash" } : {}),
         code: outcome.code,
         bucket: mapBucket(outcome.code),
         summary: outcome.summary,

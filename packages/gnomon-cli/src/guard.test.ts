@@ -197,6 +197,49 @@ describe("gnomon guard — governance levels, put to the real binary (guard_case
   }
 });
 
+describe("gnomon guard — [approval] readonly_bash, put to the real binary (guard_cases.json readonly_bash)", () => {
+  for (const column of ["on_write", "always", "prevent"] as const) {
+    it(`every readonly_bash case in the "${column}" column gets its decision, rule, exit and exempt`, () => {
+      governedRepo("on_write");
+      const policy = (CASES.readonly_bash.policy as string)
+        .replace("{{gate}}", column === "always" ? "always" : "on_write")
+        .replace("{{governance}}", column === "prevent" ? `\n[governance]\nlevel = "prevent"\n` : "");
+      writeFileSync(join(repo, ".gnomon", "policy.toml"), policy);
+      git("add", "-A");
+      git("commit", "-q", "-m", `readonly_bash ${column}`);
+      for (const c of CASES.readonly_bash.cases) {
+        const [decision, rule] = c.expect[column];
+        const r = guardBin(["--role", c.role], JSON.stringify({ tool: c.tool, input: c.input }));
+        const v = JSON.parse(r.stdout) as GuardVerdict;
+        for (const k of Object.keys(v)) expect([...fixture.verdict_keys.required, ...fixture.verdict_keys.optional]).toContain(k);
+        const lifted = decision === "allow" && c.readonly && column !== "always";
+        expect({ name: c.name, decision: v.decision, rule: v.rule, exit: r.code, exempt: v.exempt }).toEqual({
+          name: c.name,
+          decision,
+          rule,
+          exit: guardExit(decision),
+          exempt: lifted ? "readonly_bash" : undefined,
+        });
+      }
+      rmSync(repo, { recursive: true, force: true });
+    }, 180_000);
+  }
+
+  it("Claude Code gets nothing on a lifted call, and the ask it always got without the setting", () => {
+    governedRepo("on_write");
+    const payload = JSON.stringify({ session_id: "ro", cwd: repo, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "git status --short" } });
+    const before = guardBin(["--from", "claude-code", "--role", "implement"], payload);
+    expect(JSON.parse(before.stdout).hookSpecificOutput.permissionDecision).toBe("ask");
+    writeFileSync(join(repo, ".gnomon", "policy.toml"), (CASES.readonly_bash.policy as string).replace("{{gate}}", "on_write").replace("{{governance}}", ""));
+    git("add", "-A");
+    git("commit", "-q", "-m", "readonly_bash");
+    // A new session: "ro" is decided by the rules it started under, which is the point of a session base.
+    const after = guardBin(["--from", "claude-code", "--role", "implement"], payload.replace('"session_id":"ro"', '"session_id":"ro2"'));
+    expect({ code: after.code, stdout: after.stdout.trim() }).toEqual({ code: 0, stdout: "" });
+    rmSync(repo, { recursive: true, force: true });
+  });
+});
+
 describe("gnomon guard — host tools gnomon has no tool kind for, put to the real binary (guard_cases.json host_tools)", () => {
   const decisionOf = (stdout: string) => (stdout.trim() ? JSON.parse(stdout).hookSpecificOutput.permissionDecision : "allow");
   const ask = (c: any, session: string) =>
