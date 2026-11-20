@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3902 TypeScript tests (3230 core, 647 cli, 18
-> natives, 7 tui) and 120 Rust tests — **4022 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3904 TypeScript tests (3232 core, 647 cli, 18
+> natives, 7 tui) and 120 Rust tests — **4024 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2163,7 +2163,11 @@ The repository is bind-mounted at the same absolute path it has outside, the
 caller is mapped with `--user` so files come back owned by you rather than
 root, and the container gets no network unless `[sandbox] network` is true.
 The toolchain is the image's, not the host's, and each command pays a
-`docker run`.
+`docker run`. **Declare an image that carries the project's toolchain.** The
+default, `debian:stable-slim`, has no git, no curl and no language toolchain,
+so a command that needs one exits 127; set `[sandbox] image` in
+`.gnomon/policy.toml`, or `image` per role in `roles.toml`. Until one is
+declared, the surface audit says so at session start and in `gnomon security`.
 
 **This is a containment answer**, as `exec = "os"` is for writes outside the
 root and egress, and `bash_deny`, `bash_allow` and `network = false` on the

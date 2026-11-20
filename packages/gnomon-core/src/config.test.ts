@@ -26,6 +26,7 @@ import {
   resolveContext,
   auditSurface,
   tomlControlCharacters,
+  DEFAULT_SANDBOX_IMAGE,
   BLOCK_KEYS,
   recomputeManifest,
   PROBE_TIMEOUT_MS,
@@ -919,6 +920,45 @@ describe("auditSurface", () => {
         roles: { verifier: { bash_deny: ["rm\\s+-rf"], bash_allow: ["^ls\\s"] } },
       } as any)
     ).toHaveLength(0);
+  });
+});
+
+// #208 (2026-11-20 shadow test): under exec = "docker" with the default image a
+// project's toolchain probe exited 127 -- debian:stable-slim has no git, curl
+// or language toolchain -- and nothing said a project needs [sandbox] image.
+describe("exec = docker on the default image: the surface audit says the image carries no toolchain (#208)", () => {
+  const surface = (policy: string, roles = `[roles.implement]\ntools = ["bash", "read"]\n`) => {
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-docker-image-"));
+    mkdirSync(join(dir, ".gnomon"), { recursive: true });
+    writeFileSync(join(dir, ".gnomon", "policy.toml"), policy);
+    writeFileSync(join(dir, ".gnomon", "roles.toml"), roles);
+    writeFileSync(join(dir, ".gnomon", "tools.toml"), `[[tools]]\nname = "bash"\nenabled = true\n\n[[tools]]\nname = "read"\nenabled = true\n`);
+    const hits = auditSurface(loadConfig(dir)).filter((p) => /default image/.test(p.problem));
+    rmSync(dir, { recursive: true, force: true });
+    return hits;
+  };
+
+  it("warns, naming the roles, the image and [sandbox] image, when no image is declared", () => {
+    expect(DEFAULT_SANDBOX_IMAGE).toBe("debian:stable-slim");
+    const hits = surface(`[sandbox]\nexec = "docker"\n`, `[roles.implement]\ntools = ["bash"]\n\n[roles.plan]\ntools = ["read"]\n\n[roles.verifier]\ntools = ["bash"]\n`);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.fatal).toBe(false);
+    expect(hits[0]!.where).toBe(".gnomon/policy.toml [sandbox] image");
+    expect(hits[0]!.problem).toMatch(/^implement, verifier run bash under exec = "docker" in the default image, debian:stable-slim/);
+    expect(hits[0]!.problem).toMatch(/no git, no curl and no language toolchain/);
+    expect(hits[0]!.problem).toMatch(/exits 127/);
+    expect(hits[0]!.fix).toMatch(/\[sandbox\] image = /);
+    expect(hits[0]!.fix).toMatch(/per role in roles\.toml/);
+    // A role's own exec = "docker" counts too.
+    expect(surface("", `[roles.implement]\ntools = ["bash"]\nexec = "docker"\n`)).toHaveLength(1);
+  });
+
+  it("says nothing once an image is declared, for a role without bash, or off docker", () => {
+    expect(surface(`[sandbox]\nexec = "docker"\nimage = "node:22-bookworm"\n`)).toEqual([]);
+    expect(surface(`[sandbox]\nexec = "docker"\n`, `[roles.implement]\ntools = ["bash"]\nimage = "python:3.12"\n`)).toEqual([]);
+    expect(surface(`[sandbox]\nexec = "docker"\n`, `[roles.plan]\ntools = ["read"]\n`)).toEqual([]);
+    expect(surface(`[sandbox]\nexec = "os"\n`)).toEqual([]);
+    expect(surface("")).toEqual([]);
   });
 });
 

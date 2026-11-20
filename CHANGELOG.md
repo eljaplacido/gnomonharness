@@ -69,6 +69,19 @@
   `acceptUnreadable`; `conformance/audit_anchor.json` gains `offline_exit`
   (CONTRACTS.md §21).
 
+- **`exec = "docker"` on the default image says the image has no toolchain**
+  (#208). `debian:stable-slim` has no git, no curl and no language
+  toolchain, so a project's toolchain probe exited 127 under it, and nothing
+  said a project has to declare `[sandbox] image` until its commands failed.
+  When a role holding bash runs under `exec = "docker"` and neither the role
+  nor `[sandbox]` declares an image, the surface audit now warns, naming the
+  roles and the image, with `[sandbox] image` (or per role `image`) as the
+  fix -- at session start and in `gnomon security` (`surface_warning`). A
+  declared image, even the same one, is left alone. The `gnomon init`
+  scaffold's comment beside `exec = "docker"` says the same, and README's
+  docker section. `DEFAULT_SANDBOX_IMAGE` is exported. Containment is
+  unchanged.
+
 ## [0.6.3] — 2026-11-20
 
 Fixes from a multi-machine shadow test of gnomon across real projects on
