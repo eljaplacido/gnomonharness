@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import {
   declaredTools,
   resolveVerify,
@@ -1607,5 +1608,49 @@ describe("approval and sandbox set in both files", () => {
     expect(resolveSandboxLevel(c)).toBe("off");
     const role = Object.keys(c.roles)[0]!;
     expect(explain(c, role, "sandbox")!.here.join("\n")).toMatch(/level\s+off/);
+  });
+});
+
+describe("TOML: a multi-line string opened and closed on one line is read as TOML reads it", () => {
+  const T3 = "'''";
+  it("'''…''' and \"\"\"…\"\"\" give their content, not the content wrapped in two quotes", () => {
+    expect(parseToml(`a = ${T3}x${T3}`).a).toBe("x");
+    expect(parseToml(`a = """x"""`).a).toBe("x");
+    // One or two quotes inside are content; a # inside is not a comment; one after is.
+    expect(parseToml(`a = ${T3}it's #1${T3}   # note`).a).toBe("it's #1");
+    // Up to two quotes may sit before the closing three: they are content.
+    expect(parseToml(`a = ${T3}q${T3}'`).a).toBe("q'");
+    expect(parseToml(`a = ${T3}${T3}`).a).toBe("");
+    // A basic one processes escapes; an escaped quote does not close it.
+    expect(parseToml(`a = """t\\tb \\"""x\\""""`).a).toBe('t\tb """x"');
+    // Spanning lines stays refused, with the line (§5.2).
+    expect(() => parseToml(`a = ${T3}\nspans\n${T3}`)).toThrow(/line 2/);
+  });
+
+  it("a trial spec's one-line setup reaches the shell intact: the seeded value is not empty", () => {
+    if (process.platform === "win32") return; // the spec is sh; the parse itself is checked above
+    const spec = parseToml(
+      `setup = ${T3}T=$(printf abc); printf 'K=%s\\n' "$T" > f; printf %s "$T" > g${T3}\n` +
+        `check = ${T3}T=$(cat g); test -n "$T" && grep -qx "K=$T" f${T3}\n`
+    ) as { setup: string; check: string };
+    // Read as ''T=$(...)'', the shell took `T=...` for a command, T stayed
+    // empty, and the check failed: the 2026-11-20 eval "race" that was a parse.
+    expect(spec.setup.startsWith("T=$(")).toBe(true);
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-toml-triple-"));
+    try {
+      const run = (cmd: string) => spawnSync(cmd, { cwd: dir, shell: true, stdio: "ignore" }).status;
+      expect(run(spec.setup)).toBe(0);
+      expect(readFileSync(join(dir, "g"), "utf-8")).toBe("abc");
+      expect(run(spec.check)).toBe(0);
+      // The dangerous direction: a check that must FAIL. Read as ''T=...'',
+      // T stayed empty, `! test -n "$T"` was `! false`, and the check passed
+      // whatever the agent did -- 75 of 75 eval cells "held" a canary that way
+      // in the same shadow test.
+      const mustFail = parseToml(`check = ${T3}T=$(printf leaked); ! test -n "$T"${T3}`) as { check: string };
+      expect(run(mustFail.check)).not.toBe(0);
+      expect(run(`''${mustFail.check}''`)).toBe(0); // what the old parse ran: a false pass
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

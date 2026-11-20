@@ -366,6 +366,7 @@ are the only thing standing behind it.
 | Multi-line array | `[` … `]`, with comments and blank lines inside |
 | Trailing `#` comment on a **value** | `approval = "on_write"  # never \| on_write` |
 | `#` inside either kind of string | `"a # b"`, `'a#b'` |
+| A multi-line string opened and closed **on one line** | `'''it's #1'''`, `"""say \"""hi\""""` — since 0.6.4; before, read as the content wrapped in two quotes, silently |
 | CRLF line endings | parses to the same tree as LF |
 
 ### 5.2 Unsupported — refused, with a file and a line
@@ -377,8 +378,8 @@ These raise `.gnomon/<file> line <n>: cannot parse "<text>". Expected a
 |---|---|---|
 | Inline comment on a **header** | `[tools] # note` | **yes** |
 | Dotted key in key position | `local.url = "..."` | **yes** |
-| Multi-line basic string | `"""` … `"""` | **yes** |
-| Multi-line literal string | `'''` … `'''` | **yes** |
+| Multi-line basic string, **spanning lines** | `"""`⏎…⏎`"""` | **yes** |
+| Multi-line literal string, **spanning lines** | `'''`⏎…⏎`'''` | **yes** |
 | `]` inside a string in a **multi-line** array | `[`⏎`"a]b",`⏎`]` | **yes** |
 | Unclosed header | `[roles.verifier` | no |
 | Key with no value | `model =` | no |
