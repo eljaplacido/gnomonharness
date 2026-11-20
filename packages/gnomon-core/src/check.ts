@@ -446,6 +446,9 @@ export function checkExit(checks: Array<Pick<CheckEntry, "id" | "status">>): 0 |
   // "no verdict", which is what an error with nothing failing is.
   if (checks.some((c) => c.status === "fail")) return 2;
   if (checks.some((c) => c.status === "error")) return 10;
+  // No [verify] declared: the rules may all have held, but the change was
+  // never run. Fail-closed: "held, unverified" is not a verdict a gate passes.
+  if (checks.some((c) => c.id === "verify" && c.status === "skipped")) return 10;
   // A run where nothing passed inspected nothing. The audit append is not an
   // inspection of the work, so it cannot be the pass that makes a verdict.
   if (!checks.some((c) => c.status === "pass" && c.id !== "audit")) return 10;
@@ -735,11 +738,18 @@ async function judge(
     const verify = resolveVerify(config);
     let verifyPassed = false;
     if (!verify) {
+      // Skipped, not an error: nothing broke, there is simply no check
+      // declared. The exit stays 10 (checkExit): a gate built on `gnomon
+      // check` never passes work nobody ran. Reported as an error, a verdict
+      // whose rules all held read the same as a check that crashed, on every
+      // commit of a project with no [verify] (the 2026-11-20 shadow test: 10
+      // of 15 projects).
       verdict.checks.push({
         id: "verify",
-        status: "error",
-        reason: "the base surface declares no [verify] command — there is no check to run. Declare one in .gnomon/policy.toml.",
+        status: "skipped",
+        reason: "the base surface declares no [verify] command, so the change was not run. Declare one in .gnomon/policy.toml.",
       });
+      verdict.checks.push({ id: "must_fail_first", status: "skipped", reason: "no [verify] declared" });
       return;
     }
     const run = (command: string) => executeTool("bash", { command }, ctx, new Set(["bash"]));

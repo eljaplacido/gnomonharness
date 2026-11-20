@@ -458,6 +458,8 @@ export function renderVerdict(v: CheckVerdict, ui: ResolvedUi): string[] {
   const failed = v.checks.filter((c) => c.status === "fail").length;
   if (v.exit === 0) out.push(`  ${paint(ui, "green", "HELD")} — every check that applied passed (exit 0)`);
   else if (v.exit === 2) out.push(`  ${paint(ui, "red", "FAILED")} — ${failed} check(s) failed (exit 2)`);
+  else if (v.checks.some((c) => c.id === "verify" && c.status === "skipped") && !v.checks.some((c) => c.status === "error"))
+    out.push(`  ${paint(ui, "yellow", "HELD, UNVERIFIED")} — every rule that applied held, but no [verify] is declared, so the change was not run (exit 10)`);
   else out.push(`  ${paint(ui, "yellow", "NO VERDICT")} — the check could not run, or inspected nothing (exit 10)`);
   out.push("");
   return out;

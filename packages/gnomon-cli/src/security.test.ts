@@ -188,6 +188,9 @@ describe("gnomon security: the contract", () => {
     expect(win.exit).toBe(0);
     const linux = buildSecurityReport(dir, {}, "linux");
     expect(linux.findings.find((f) => f.id === "exec_os_windows")!.message).toMatch(/on a Windows machine that runs this surface/);
+    // What else stops there: [verify] and gnomon check (finding M of the 2026-11-20 shadow test).
+    expect(w.message).toMatch(/\[verify\] and gnomon check cannot run/);
+    expect(linux.findings.find((f) => f.id === "exec_os_windows")!.message).toMatch(/no \[verify\] or gnomon check verdict/);
     expect(formatSecurity(win).join("\n")).toMatch(/exec_os_windows|no OS sandbox/);
   });
 
