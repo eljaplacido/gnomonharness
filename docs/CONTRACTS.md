@@ -2063,6 +2063,19 @@ It prints an `external anchor:` line under each trail, and checks the
 | `NOT ANCHORED` | sealed after anchoring began here, with nothing anchored and nothing queued | yes |
 | `NOT ANCHORED` | sealed before this checkout began anchoring, or never sealed | no |
 
+**`--offline` exits on what can be checked here** (#207). That is the chain,
+the seal, the signature, and what this machine's copy of the witness shows:
+`RE-CHAINED`, `INVALID`, `NOT ANCHORED` after anchoring began, an anchored
+trail missing, a rollback. What it cannot check here is printed and does not
+fail it: `UNCHECKED`, a problem reading the copy (`there is no local copy of
+the anchors` on a fresh checkout, marked `(--offline: reported, not counted
+against the exit)`), and a declared block that cannot work on this machine
+(a grant not accepted here, `gnomon trust`, or a misdeclared block), printed as
+`external anchor: NOT CHECKED here — …`. A loop guard on `audit verify
+--offline` (`act_when = "exit_nonzero"`) then alarms on tamper, not on every
+fresh checkout. Without `--offline` each of these still exits 1
+(`verify_exit_1` and `offline_exit` in `conformance/audit_anchor.json`).
+
 **The seal itself, anchored or not.** `session_end` seals a trail. After it,
 gnomon writes to that trail only to resume it (`session_resume`, as `gnomon
 guard` does on every call), and a resumed trail ends sealed again. A chained

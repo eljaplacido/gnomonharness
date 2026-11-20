@@ -352,6 +352,59 @@ describe("first-contact output", () => {
     }
   });
 
+  // #207 (2026-11-20 shadow test): with [audit.anchor] declared, `audit verify
+  // --offline` exited 1 on every fresh checkout -- the block untrusted on this
+  // machine, or no local copy of the anchors yet -- so a loop guard on it
+  // (act_when = exit_nonzero) alarmed although the chain verified.
+  it("audit verify --offline exits on chain, seal and signature: an anchor it cannot check here is reported, not failed (#207)", () => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-offline-verify-"));
+    try {
+      mkdirSync(join(root, ".gnomon"), { recursive: true });
+      const witness = `${root}-no-such-witness.git`.replace(/\\/g, "/");
+      writeFileSync(
+        join(root, ".gnomon", "config.toml"),
+        `[defaults]\n\n[audit]\nenabled = true\n\n[audit.anchor]\nbackend = "git"\nremote = "${witness}"\n`
+      );
+      writeFileSync(join(root, ".gnomon", "roles.toml"), `[roles.smol]\nmodel = "m"\n`);
+      writeFileSync(join(root, ".gnomon", "system.md"), "x\n");
+      const s = { enabled: true, dir: join(root, ".gnomon-audit"), record: "metadata" as const, redact: [], chain: true, invalid_redact: [] };
+      const sealed = new AuditTrail(s as never, "sealed");
+      sealed.write("session_start", {});
+      const end = sealed.write("session_end", {})!;
+      const verify = (extra: string[]) => run(["audit", "verify", "--dir", root, ...extra]);
+
+      // Untrusted on this machine: the block cannot work here.
+      let r = verify([]);
+      expect(r.code).toBe(1); // online, unchanged: a declared block that cannot work fails
+      r = verify(["--offline"]);
+      expect(r.out).toMatch(/sealed\.jsonl: 2 records — chain intact, sealed/);
+      expect(r.out).toMatch(/has not accepted \(`gnomon trust`\)/);
+      expect(r.out).toMatch(/external anchor: NOT CHECKED here .*--offline/);
+      expect(r.code).toBe(0);
+
+      // Trusted, a fresh checkout: no local copy of the anchors yet.
+      r = verify(["--offline", "--trust"]);
+      expect(r.out).toMatch(/there is no local copy of the anchors/);
+      expect(r.out).toMatch(/NOT ANCHORED — sealed before this checkout began anchoring/);
+      expect(r.code).toBe(0);
+
+      // Tamper still fails under --offline.
+      const forged = { seq: end.seq + 1, ts: new Date().toISOString(), kind: "tool_call", prev: end.hash, tool: "bash" } as AuditRecord;
+      forged.hash = recordHash(forged);
+      appendFileSync(sealed.path!, `${JSON.stringify(forged)}\n`);
+      expect(verify(["--offline"]).code).toBe(1);
+      expect(verify(["--offline", "--trust"]).code).toBe(1);
+
+      // The fixture says the same.
+      const fx = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "../../../conformance/audit_anchor.json"), "utf-8"));
+      expect(fx.verify_exit_1).toContain("a declared block that cannot work (unless --offline)");
+      expect(fx.verify_exit_1).toContain("a problem reading the witness (unless --offline)");
+      expect(fx.offline_exit).toMatch(/NOT CHECKED here/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("skill accept inside an agent session is refused with exit 3, and the proposal stays", () => {
     const root = mkdtempSync(join(tmpdir(), "gnomon-agentaccept-"));
     try {
