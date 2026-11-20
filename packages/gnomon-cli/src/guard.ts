@@ -33,6 +33,7 @@ import {
   sessionsWithoutGuard,
   guardHarnessRequest,
   readHarness,
+  resolveCheckRole,
   toClaudeCode,
   toCursor,
   type GovernanceGaps,
@@ -293,6 +294,64 @@ export function cursorHooks(bin: string[] = ["gnomon"]): { version: number; hook
       beforeReadFile: [{ command, timeout: 30 }],
     },
   };
+}
+
+/**
+ * The agent name each host's hook passes as `--agent`
+ * (conformance/guard_decision.json `hook_agents`; the opencode plugin's
+ * default, which `$GNOMON_GUARD_AGENT` overrides). The guard maps it to a role
+ * through `[check.roles]`. With no entry there it has no role to decide as,
+ * and answers every call `ask` (rule `error`, "no role", CONTRACTS.md §10).
+ */
+export const HOOK_AGENTS: Readonly<Record<"claude-code" | "opencode" | "cursor", string>> = {
+  "claude-code": "claude-code",
+  opencode: "opencode",
+  cursor: "cursor",
+};
+
+/**
+ * Why the hook for `host` would put every call to a person: `[check.roles]`
+ * in the working tree's `.gnomon/policy.toml` maps its agent name to no
+ * declared role (#205). Null when it maps one, when no `.gnomon/` governs
+ * `dir`, or when the surface does not load (the guard and `gnomon doctor` say
+ * why then). The guard reads the rules at the session's base, so a mapping
+ * added here is in force once it is committed.
+ */
+export function hookWithoutRole(
+  dir: string,
+  host: keyof typeof HOOK_AGENTS
+): { why: string; fix: string; roles: string[] } | null {
+  const repo = guardRepo(dir);
+  if (!repo) return null;
+  let config: ReturnType<typeof loadConfig>;
+  try {
+    config = loadConfig(repo.project);
+  } catch {
+    return null;
+  }
+  const agent = HOOK_AGENTS[host];
+  if (!("error" in resolveCheckRole(config, { agent }))) return null;
+  const roles = listRoles(config).sort();
+  return {
+    why: `it passes --agent ${agent}, and [check.roles] in .gnomon/policy.toml maps that to no declared role, so every call it sees is answered "ask"`,
+    fix: `[check.roles] ${agent} = "<role>" in .gnomon/policy.toml (declared: ${roles.join(", ") || "none"}), committed`,
+    roles,
+  };
+}
+
+/** install's warning for a hook with no role: what happens, and the lines to add. */
+function warnNoRole(dir: string, host: keyof typeof HOOK_AGENTS): void {
+  const nr = hookWithoutRole(dir, host);
+  if (!nr) return;
+  console.error(
+    [
+      `gnomon guard: warning: no role for this hook: ${nr.why}.`,
+      "  It protects only by asking about everything. Add to .gnomon/policy.toml, and commit it (the",
+      "  guard reads the rules as committed at the session's start):",
+      "    [check.roles]",
+      `    ${HOOK_AGENTS[host]} = "<role>"${nr.roles.length ? `    # one of: ${nr.roles.join(", ")}` : ""}`,
+    ].join("\n")
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -688,6 +747,7 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
           console.error(`gnomon guard: warning: ${shared} also runs gnomon's guard; Claude Code runs both. Remove the hooks there.`);
         }
         travel(file);
+        warnNoRole(project, target);
         return 0;
       }
       out(JSON.stringify(fragment, null, 2));
@@ -711,6 +771,7 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
           "The role comes from [check.roles] in .gnomon/policy.toml: claude-code = \"implement\".",
         ].join("\n")
       );
+      warnNoRole(project, target);
       return 0;
     }
     case "opencode": {
@@ -724,6 +785,7 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
         recordInstall(project, "opencode", file, bin);
         console.error(`gnomon guard: wrote ${file}`);
         travel(file);
+        warnNoRole(project, target);
         return 0;
       }
       out(opencodePlugin(bin));
@@ -735,6 +797,7 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
           ".gnomon/policy.toml: [check.roles] opencode = \"implement\".",
         ].join("\n")
       );
+      warnNoRole(project, target);
       return 0;
     }
     case "cursor": {
@@ -745,6 +808,7 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
         recordInstall(project, "cursor", file, bin);
         console.error(added.length ? `gnomon guard: added ${added.join(", ")} to ${file}` : `gnomon guard: ${file} already has these hooks`);
         travel(file);
+        warnNoRole(project, target);
         return 0;
       }
       out(JSON.stringify(fragment, null, 2));
@@ -757,6 +821,7 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
           "Map the agent to a role: [check.roles] cursor = \"implement\".",
         ].join("\n")
       );
+      warnNoRole(project, target);
       return 0;
     }
   }
@@ -1052,6 +1117,13 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
     const line = `${h.host}: ${h.state} — ${relative(repo.project, h.file) || h.file}: ${h.detail}`;
     if (h.state === "missing" || h.state === "modified" || h.state === "disabled") status.findings.push(line);
     else if (h.state === "outdated") status.warnings.push(line);
+  }
+  // A hook in place whose agent [check.roles] maps to no role asks about
+  // every call (#205): a warning, as `outdated` is; the hook still decides.
+  for (const h of status.hosts) {
+    if (h.state !== "ok" && h.state !== "outdated") continue;
+    const nr = hookWithoutRole(repo.project, h.host as keyof typeof HOOK_AGENTS);
+    if (nr) status.warnings.push(`${h.host}: no role — ${nr.why}. fix: ${nr.fix}`);
   }
   // Liveness (CONTRACTS.md §44): which host sessions reached the guard.
   const live = guardLiveSessions(repo.project);

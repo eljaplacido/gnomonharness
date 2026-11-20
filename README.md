@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3895 TypeScript tests (3227 core, 643 cli, 18
-> natives, 7 tui) and 120 Rust tests — **4015 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3898 TypeScript tests (3227 core, 646 cli, 18
+> natives, 7 tui) and 120 Rust tests — **4018 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -3237,7 +3237,11 @@ session that `gnomon audit verify` reads.
 `--write` adds it to this project's own config (never a user-wide one). Each
 hook names a checked absolute path to gnomon, so commit the hook files only if
 every machine has gnomon at the same path (`--bin`); otherwise install with
-`--write --local` on each machine, which keeps the hook out of git:
+`--write --local` on each machine, which keeps the hook out of git. Each hook
+passes `--agent claude-code` (`opencode`, `cursor`); map it to a role under
+`[check.roles]` in `.gnomon/policy.toml` and commit that. Without an entry the
+guard has no role and answers every call "ask", so `install` warns with the
+line to add and `gnomon guard status` lists the hook as a warning:
 
 | Harness | What is installed | deny | ask | allow |
 |---|---|---|---|---|
