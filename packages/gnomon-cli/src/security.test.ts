@@ -68,6 +68,14 @@ describe("gnomon security: the contract", () => {
     expect(verifier).toMatchObject({ exec: "off", bash: true, writes: false, bash_allowlist: true });
   });
 
+  it("host_exec's fix names the file [sandbox] lives in, policy.toml, on every platform", async () => {
+    for (const platform of ["linux", "darwin", "win32"] as const) {
+      const fix = buildSecurityReport(await project(), {}, platform).findings.find((f) => f.id === "host_exec")!.fix;
+      expect(fix).toMatch(/\.gnomon\/policy\.toml/);
+      expect(fix).not.toMatch(/config\.toml/);
+    }
+  });
+
   it("off Linux, the advice names docker, not the Landlock sandbox", async () => {
     const r = buildSecurityReport(await project(), {}, "darwin");
     expect(r.findings.find((f) => f.id === "host_exec")!.fix).not.toMatch(/exec = "os" \(/);

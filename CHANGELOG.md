@@ -96,6 +96,10 @@
   README say it too. `conformance/security_posture.json` and CONTRACTS.md
   §45 (the id) and §15 (the note).
 
+- **`host_exec` names the right file.** Its fix said to set `[sandbox] exec`
+  in `.gnomon/config.toml`; `[sandbox]` lives in `.gnomon/policy.toml`, which
+  the fix now names on every platform.
+
 ## [0.6.3] — 2026-11-20
 
 Fixes from a multi-machine shadow test of gnomon across real projects on
