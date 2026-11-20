@@ -4272,6 +4272,47 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
     }
   }
 
+  // ── exec = "docker" on the default image (#208) ──────────────────────────
+  //
+  // The container contains; it does not carry the project. debian:stable-slim
+  // has no git, no curl and no language toolchain, so under it a project's own
+  // commands exit 127 (a toolchain probe went 0/3 in the 2026-11-20 shadow
+  // test), and nothing said an image has to be declared until they failed. A
+  // declared image is the operator's choice and is left alone.
+  {
+    const sandboxImage = (config.policy?.sandbox as { image?: unknown } | undefined)?.image;
+    const holdsBash = (tools: unknown): boolean => {
+      if (Array.isArray(tools)) return tools.includes("bash");
+      try {
+        return isToolEnabled(config, "bash");
+      } catch {
+        return false; // a hand-built config with no tools
+      }
+    };
+    const onDefault = Object.keys(config.roles ?? {})
+      .sort()
+      .filter((r) => {
+        const def = (config.roles[r] ?? {}) as RoleDef;
+        if (!holdsBash(def.tools)) return false;
+        if (typeof def.image === "string" && def.image) return false;
+        if (typeof sandboxImage === "string" && sandboxImage) return false;
+        return resolveExec(config, r).mode === "docker";
+      });
+    if (onDefault.length > 0) {
+      problems.push({
+        where: ".gnomon/policy.toml [sandbox] image",
+        problem:
+          `${onDefault.join(", ")} run${onDefault.length === 1 ? "s" : ""} bash under exec = "docker" in the default image, ` +
+          `${DEFAULT_SANDBOX_IMAGE}, which has no git, no curl and no language toolchain: a command that needs one ` +
+          `exits 127. The container contains; it does not carry this project's tools.`,
+        fix:
+          `Declare an image that carries them: [sandbox] image = "<image>" in .gnomon/policy.toml ` +
+          `(e.g. "node:22-bookworm", "python:3.12"), or image = "<image>" per role in roles.toml.`,
+        fatal: false,
+      });
+    }
+  }
+
   // ── Control characters in the surface TOML (#206) ────────────────────────
   //
   // TOML 1.0 refuses a control character other than tab anywhere in a file.
@@ -5552,6 +5593,13 @@ export function isValidImageRef(image: unknown): image is string {
   return typeof image === "string" && image.length > 0 && image.length <= 255 && !image.startsWith("-") && IMAGE_REF.test(image);
 }
 
+/**
+ * The image `exec = "docker"` runs bash in when neither the role nor
+ * `[sandbox]` declares one. It has no git, no curl and no language toolchain,
+ * so a project's own tools are the declared image's to carry (#208).
+ */
+export const DEFAULT_SANDBOX_IMAGE = "debian:stable-slim";
+
 export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
   const sandbox = (config.policy?.sandbox ?? {}) as {
     exec?: unknown;
@@ -5571,7 +5619,7 @@ export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
   const image =
     (typeof roleDef?.image === "string" && roleDef.image) ||
     (typeof sandbox.image === "string" && sandbox.image) ||
-    "debian:stable-slim";
+    DEFAULT_SANDBOX_IMAGE;
   const readOnly = roleDef?.source === "read_only";
   const readsRaw = (config.policy?.sandbox as { reads?: unknown } | undefined)?.reads;
   const reads = readsRaw === undefined ? "all" : typeof readsRaw === "string" ? readsRaw : JSON.stringify(readsRaw);

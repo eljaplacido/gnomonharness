@@ -93,6 +93,13 @@ describe("gnomon security: the contract", () => {
     expect(v).toMatchObject({ exec: "docker", read_only_source: true, network: false });
     expect(r.findings.find((f) => f.id === "host_exec")!.message).not.toMatch(/verifier/);
     expect(r.findings.find((f) => f.id === "judge_can_write")?.message ?? "").not.toMatch(/verifier/);
+    // #208: the default image carries no toolchain, and the report says so until one is declared.
+    const image = r.findings.find((f) => f.id === "surface_warning" && /default image/.test(f.message))!;
+    expect(image).toMatchObject({ severity: "advice" });
+    expect(image.message).toMatch(/^\.gnomon\/policy\.toml \[sandbox\] image: verifier runs bash under exec = "docker" in the default image, debian:stable-slim/);
+    expect(image.fix).toMatch(/\[sandbox\] image = /);
+    writeFileSync(join(dir, ".gnomon/roles.toml"), roles.replace('exec = "docker"\n', 'exec = "docker"\nimage = "node:22-bookworm"\n'));
+    expect(buildSecurityReport(dir, {}, "linux").findings.some((f) => /default image/.test(f.message))).toBe(false);
   });
 
   // Measured 2026-11-20 (gnomon 0.6.2): a surface with no [governance] had
