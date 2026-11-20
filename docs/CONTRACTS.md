@@ -933,7 +933,9 @@ recorded base, or the `--session-base` hint, or HEAD -- and then, since
 v0.5.1, the default branch decides when the branch differs from it in
 `.gnomon/`: when that revision's `.gnomon/` is not the one at its merge-base
 with the default branch (origin's HEAD, else a local `main` or `master`), the
-rules are the merge-base's and `base_note` says so on every call. A branch
+rules are the merge-base's and `base_note` says so on every call (in the
+generic document, the trail, and at the end of the reason Claude Code and
+Cursor are shown: `Which rules: …`). A branch
 cannot loosen the rules that govern the agent working on it; the change
 governs once it is merged. A branch that introduces `.gnomon/` keeps its own.
 `--base HEAD` decides by the branch's own rules.
