@@ -697,7 +697,9 @@ const SIGNER_HOWTO =
  * Refused, whatever `require_trial` says, when the report is evidence about
  * something else -- that would put a hash on the record that proves nothing
  * about this decision:
- *   - not a `gnomon.trial/1` report;
+ *   - not a `gnomon.trial/2` report (TRIAL_SCHEMA; a literal here, since
+ *     skill_trial.ts imports this module). A `gnomon.trial/1` report, through
+ *     0.6.2, came from cells that held the trial specs;
  *   - a different skill content (`content_sha256`);
  *   - a different base surface (`arms.base.surface_hash`): the trial measured
  *     the skill against a surface that is not the one it is joining;
@@ -735,7 +737,13 @@ export function checkEvidence(
   } catch {
     return refuse(`${want.report} is not JSON.`);
   }
-  if (report.schema !== "gnomon.trial/1") refuse(`${want.report} is not a gnomon skill trial report.`);
+  if (report.schema === "gnomon.trial/1") {
+    refuse(
+      `${want.report} is a gnomon.trial/1 report: its cells held the trial specs, so the agent could ` +
+        `read each task's check. Trial the proposal again.`
+    );
+  }
+  if (report.schema !== "gnomon.trial/2") refuse(`${want.report} is not a gnomon skill trial report.`);
   if (report.content_sha256 !== want.content) {
     refuse(
       `the report is for different skill content (${String(report.content_sha256).slice(0, 12)}); ` +

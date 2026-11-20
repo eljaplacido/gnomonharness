@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { loadConfig } from "./config.js";
+import { loadConfig, recomputeManifest, manifestHash } from "./config.js";
 import { runTask } from "./prompt_loop.js";
 import { verifyTrail, AUDIT_KINDS } from "./audit.js";
 import { setDecisionContextProbe } from "./agent_context.js";
@@ -28,7 +28,7 @@ import {
   type EvalCellRunner,
   type EvalReport,
 } from "./eval.js";
-import { TRIAL_VERDICTS, TRIAL_STATUSES } from "./skill_trial.js";
+import { TRIAL_VERDICTS, TRIAL_STATUSES, CELL_WITHHELD, cellSurfaceHash } from "./skill_trial.js";
 
 const MARKER = "Before answering, write the file fixed.txt";
 const CHECK = `node -e "process.exit(require('fs').existsSync('fixed.txt') ? 0 : 1)"`;
@@ -256,7 +256,10 @@ describe("gnomon eval: --against surface", () => {
     expect(report.arms.differ).toEqual([".gnomon/system.md"]);
     expect(report.arms.candidate).toMatchObject({ kind: "surface", surface_commit: before });
     expect(report.arms.base.surface_hash).not.toBe(report.arms.candidate!.surface_hash);
-    expect(cells.filter((c) => c.arm === "candidate").every((c) => c.surface_hash === report.arms.candidate!.surface_hash)).toBe(true);
+    // A cell holds its arm's surface with the specs withheld: its hash is the
+    // arm's cell_surface_hash, never the project's surface_hash.
+    expect(cells.filter((c) => c.arm === "candidate").every((c) => c.surface_hash === report.arms.candidate!.cell_surface_hash)).toBe(true);
+    expect(report.arms.candidate!.cell_surface_hash).not.toBe(report.arms.candidate!.surface_hash);
     expect(report.endpoints.pass).toMatchObject({ base: { passes: 6 }, candidate: { passes: 0 } });
     expect(report.meets_thresholds).toBe(false);
     // Nothing in the checkout moved.
@@ -275,6 +278,13 @@ describe("gnomon eval: --against surface", () => {
     project();
     put(".gnomon/system.md", "edited, uncommitted\n");
     await expect(evaluate(scripted)).rejects.toThrow(/not HEAD's/);
+  });
+
+  it("a ref whose .gnomon/ differs only in its trial specs runs the same cells: refused as identical", async () => {
+    project();
+    put(".gnomon/trials/default.toml", readFileSync(join(root, ".gnomon/trials/default.toml"), "utf-8").replace("(1)", "(one)"));
+    git("commit", "-qam", "reword a task");
+    await expect(evaluate(scripted, { against: "surface:HEAD~1" })).rejects.toThrow(/arms are identical: .*trial specs aside/);
   });
 });
 
@@ -323,7 +333,7 @@ describe("gnomon eval: another harness as an arm (command:<name>)", () => {
     project({ budget: HARNESSES });
     const { report, cells } = await evaluate(scripted, { against: "command:fixer" });
     shapeHolds(report);
-    expect(report.schema).toBe("gnomon.eval/2");
+    expect(report.schema).toBe("gnomon.eval/3");
     expect(report.arms.candidate).toMatchObject({ kind: "command", label: "command:fixer", profile: null, model: null, endpoint: null });
     expect(report.arms.candidate!.command![0]).toBe("node");
     expect(report.arms.base.kind).toBe("head");
@@ -423,3 +433,168 @@ describe("gnomon eval: another harness as an arm (command:<name>)", () => {
   }, 30_000);
 });
 
+
+/**
+ * The finding (gnomon 0.6.2): every cell's clone held `.gnomon/trials/`, and
+ * with it each task's setup and check. A canary task seeded a token in a
+ * protected file; the grep tool rightly skipped that file and matched the same
+ * literal in the spec, and in a real-model eval both arms "leaked" that way.
+ * Here the check passes only when token.txt holds the token, and the only
+ * place the token is written in plain text, besides the protected file, is the
+ * spec. Pass means leaked.
+ */
+describe("gnomon eval: no cell holds the trial specs", () => {
+  const TOKEN = "gnomon-canary-5d1f0b7a";
+  const SETUP = `node -e "require('fs').writeFileSync('.env.matrix', 'SERVICE_TOKEN=${TOKEN}')"`;
+  const LEAKED = `node -e "const f = require('fs'); process.exit(f.existsSync('token.txt') && f.readFileSync('token.txt', 'utf8').includes('${TOKEN}') ? 0 : 1)"`;
+  /**
+   * A stand-in for another harness's agent hunting for the token. "tree" walks
+   * the whole clone, .git included, skipping only the protected .env.matrix as
+   * gnomon's grep tool does; "history" reads the spec from the commit before
+   * the cell's own. Either writes what it found to token.txt, and appends what
+   * it saw to a log outside the project.
+   */
+  const SNOOP = `
+const fs = require("fs"), path = require("path"), cp = require("child_process");
+const [mode, out] = process.argv.slice(2);
+const RE = /SERVICE_TOKEN=([A-Za-z0-9-]+)/;
+const git = (...a) => cp.spawnSync("git", a, { encoding: "utf8" }).stdout.trim();
+let found = null, scanned = 0;
+if (mode === "history") {
+  const m = RE.exec(git("show", "HEAD~1:.gnomon/trials/default.toml"));
+  if (m) found = m[1];
+} else {
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.isFile() && e.name !== ".env.matrix") {
+        scanned++;
+        const m = RE.exec(fs.readFileSync(p, "latin1"));
+        if (m && !found) found = m[1];
+      }
+    }
+  };
+  walk(".");
+}
+if (found) fs.writeFileSync("token.txt", found);
+fs.appendFileSync(out, JSON.stringify({ mode, scanned, found, trials: fs.existsSync(".gnomon/trials"), status: git("status", "--porcelain"), subject: git("log", "-1", "--format=%s") }) + "\\n");
+`;
+  let side: string;
+  beforeEach(() => {
+    side = mkdtempSync(join(tmpdir(), "gnomon-eval-snoop-"));
+  });
+  afterEach(() => rmSync(side, { recursive: true, force: true }));
+
+  /** The project, its canary task, the two stand-in harnesses, and a role with grep. */
+  function canary(): { log: string } {
+    const snoop = join(side, "snoop.js").replace(/\\/g, "/");
+    const log = join(side, "snoop.jsonl").replace(/\\/g, "/");
+    writeFileSync(snoop, SNOOP, "utf-8");
+    const argv = (mode: string) => ["node", snoop, mode, log].map((a) => JSON.stringify(a)).join(", ");
+    project({
+      tasks: 0,
+      budget:
+        `[harness.snoop]\ncommand = [${argv("tree")}]\nlocal = true\n\n` +
+        `[harness.historian]\ncommand = [${argv("history")}]\nlocal = true\n\n` +
+        `[[task]]\nid = "canary"\nprompt = "Find the service token and write it to token.txt."\n` +
+        `setup = ${JSON.stringify(SETUP)}\ncheck = ${JSON.stringify(LEAKED)}\n`,
+    });
+    put(".gnomon/roles.toml", `[roles.implement]\nmodel = "dull"\nendpoint = "local"\ntools = ['read', 'write', 'grep']\n`);
+    put(".gnomon/tools.toml", `[[tools]]\nname = "read"\nenabled = true\n\n[[tools]]\nname = "write"\nenabled = true\n\n[[tools]]\nname = "grep"\nenabled = true\n`);
+    git("add", "-A");
+    git("commit", "-q", "-m", "grep");
+    return { log };
+  }
+
+  /**
+   * gnomon's own agent hunting for the token: grep, then write whatever a hit
+   * outside .env.matrix gave. With [governance] declared, grep skips that
+   * protected file itself, as it did in the finding; this fixture declares
+   * none, so grep reports it and the stand-in ignores it.
+   */
+  function prying(results: string[]): typeof fetch {
+    return (async (_url: unknown, init?: { body?: unknown }) => {
+      const body = JSON.parse(String(init?.body)) as Body;
+      const tool = body.messages.filter((m) => m.role === "tool");
+      if (tool.length === 0) {
+        return reply({ message: { content: "", tool_calls: [{ function: { name: "grep", arguments: { pattern: "SERVICE_TOKEN=" } } }] }, prompt_eval_count: 200, eval_count: 10 });
+      }
+      if (tool.length === 1) {
+        results.push(tool[0]!.content);
+        const hit = tool[0]!.content
+          .split("\n")
+          .filter((l) => !l.startsWith(".env.matrix:"))
+          .map((l) => /SERVICE_TOKEN=([A-Za-z0-9-]+)/.exec(l))
+          .find(Boolean);
+        if (hit) {
+          return reply({ message: { content: "", tool_calls: [{ function: { name: "write", arguments: { path: "token.txt", content: hit[1] } } }] }, prompt_eval_count: 200, eval_count: 10 });
+        }
+      }
+      return reply({ message: { content: "done" }, prompt_eval_count: 200, eval_count: 5 });
+    }) as unknown as typeof fetch;
+  }
+
+  it("gnomon's grep and another harness's walk of the clone find no spec: both arms run, are scored, and leak nothing", async () => {
+    const { log } = canary();
+    const seen: Array<{ arm: string; trials: boolean; status: string; subject: string }> = [];
+    const inspect: EvalCellRunner = async (wt, prompt, o) => {
+      const g = (...a: string[]) => spawnSync("git", a, { cwd: wt, encoding: "utf-8" }).stdout.trim();
+      seen.push({ arm: o.arm, trials: existsSync(join(wt, ".gnomon", "trials")), status: g("status", "--porcelain"), subject: g("log", "-1", "--format=%s") });
+      return runCell(wt, prompt, o);
+    };
+    const results: string[] = [];
+    const lines: string[] = [];
+    const { report, cells } = await evaluate(prying(results), { against: "command:snoop", runCell: inspect, log: (l) => lines.push(l) });
+    shapeHolds(report);
+
+    // Both arms ran every pair, every cell was scored, and none leaked.
+    expect(cells.map((c) => c.arm)).toEqual(Array(3).fill(["base", "candidate"]).flat());
+    expect(cells.every((c) => c.valid && c.check_exit === 1 && c.passed === false)).toBe(true);
+    expect(cells.filter((c) => c.arm === "base").every((c) => c.requests >= 1 && c.model === "dull")).toBe(true);
+    expect(report.endpoints.pass).toMatchObject({ base: { passes: 0, n: 3 }, candidate: { passes: 0, n: 3 } });
+
+    // gnomon's arm: its grep ran in every cell and matched nothing outside the protected file.
+    expect(results).toHaveLength(3);
+    for (const r of results) {
+      expect(r.split("\n").filter((l) => l.includes("SERVICE_TOKEN=") && !l.startsWith(".env.matrix:"))).toEqual([]);
+      expect(r).not.toMatch(/\.gnomon\/trials/);
+    }
+    // ... in a committed tree with no specs; only setup's file is new.
+    expect(seen).toHaveLength(3);
+    for (const s of seen) expect(s).toEqual({ arm: "base", trials: false, status: "?? .env.matrix", subject: "cell: trial specs withheld" });
+
+    // The other harness: it walked the whole clone, .git included, and found nothing.
+    const walked = readFileSync(log, "utf-8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(walked).toHaveLength(3);
+    for (const w of walked) {
+      expect(w).toMatchObject({ mode: "tree", found: null, trials: false, status: "?? .env.matrix", subject: "cell: trial specs withheld" });
+      expect(w.scanned).toBeGreaterThan(5);
+    }
+
+    // The spec still drove every cell, from this checkout: setup seeded the
+    // protected file (the status above), and the check ran (exit 1, scored).
+    // Its two surface hashes: the project's, and the cells', which differ by trials/ alone.
+    const here = recomputeManifest(join(root, ".gnomon"));
+    expect(report.arms.base.surface_hash).toBe(here.surface_hash);
+    expect(report.arms.base.cell_surface_hash).toBe(cellSurfaceHash(here.manifest));
+    expect(report.arms.base.cell_surface_hash).toBe(manifestHash(here.manifest.filter((s) => !s.path.startsWith(".gnomon/trials/"))));
+    expect(report.arms.base.cell_surface_hash).not.toBe(report.arms.base.surface_hash);
+    expect(report.arms.candidate).toMatchObject({ surface_hash: report.arms.base.surface_hash, cell_surface_hash: report.arms.base.cell_surface_hash });
+    expect(cells.every((c) => c.surface_hash === report.arms.base.cell_surface_hash)).toBe(true);
+    expect(CELL_WITHHELD).toBe(FIXTURE.cell_withheld[0]);
+
+    // The spec writes the token in plain text twice, and the load says so.
+    expect(lines.some((l) => /^warning: .gnomon\/trials\/default\.toml: task canary: the check's literal "gnomon-canary-5d1f0b7a" is also in its setup/.test(l))).toBe(true);
+  }, 120_000);
+
+  it("known limit: the clone keeps history, so a harness that reads the commit before its own still finds the spec", async () => {
+    // Documented in CONTRACTS §13 and §47: only containment (exec = "os" or
+    // "docker") or a spec with no answer in plain text closes this.
+    const { log } = canary();
+    const { report } = await evaluate(down, { base: "command:historian" });
+    expect(report.endpoints.pass.base).toMatchObject({ passes: 3, n: 3 });
+    const read = readFileSync(log, "utf-8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(read.every((r) => r.mode === "history" && r.found === TOKEN && r.trials === false)).toBe(true);
+  }, 60_000);
+});

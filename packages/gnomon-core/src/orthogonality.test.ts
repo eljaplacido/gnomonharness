@@ -97,7 +97,7 @@ const CONTENT: Record<string, string> = {
   ".gnomon/trials/probe.toml": `alpha = 0.05\nmin_pass_gain = 0.1\n`,
   ".gnomon/keys/audit.pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIStubKeyForTheOrthogonalitySuite test\n",
   ".gnomon-audit/session-1.jsonl": `{"seq":0,"kind":"session_start"}\n{"seq":1,"kind":"session_end"}\n`,
-  ".gnomon-trials/s/report.json": `{"schema":"gnomon.trial/1","meets_thresholds":false}\n`,
+  ".gnomon-trials/s/report.json": `{"schema":"gnomon.trial/2","meets_thresholds":false}\n`,
 };
 
 function makeRoot(): string {

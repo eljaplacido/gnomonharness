@@ -1105,7 +1105,7 @@ cases:
 
 | Refused when | Whatever `require_trial` says? |
 |---|---|
-| the file is not a `gnomon.trial/1` report | yes |
+| the file is not a `gnomon.trial/2` report (a `gnomon.trial/1` report, through 0.6.2, came from cells that held the specs, and is refused with that reason) | yes |
 | its `content_sha256` is not this proposal's | yes |
 | its `arms.base.surface_hash` is not the current surface hash | yes |
 | no `skill_trial` record **vouches** for it (below) | yes |
@@ -1215,7 +1215,7 @@ session yield none. Every precheck that refuses with a rule is driven there,
 and the rule read back off its summary must be the one it refused with, for
 each value in `rules`.
 
-## 13. Skill trials — `gnomon skill trial`, schema `gnomon.trial/1`
+## 13. Skill trials — `gnomon skill trial`, schema `gnomon.trial/2`
 
 Does the surface **with** a proposed skill do better than the surface
 **without** it, on this project's tasks and with this model?
@@ -1240,6 +1240,57 @@ reversed that choice after review: the agent's shell could then loosen a spec
 effect passed `require_trial`. With specs hashed, an uncommitted edit makes this
 checkout's surface differ from HEAD's, and the trial refuses to start.
 
+**No cell holds the specs.** A spec's `setup` and `check` are the task's
+answer key, and through 0.6.2 every cell's clone held `.gnomon/trials/`. A
+canary task that seeded `SERVICE_TOKEN=<literal>` into a protected file
+showed the cost: the grep tool skipped the protected file and matched the
+same literal in the spec, and in a real-model eval both arms read it. Telling
+the agent "do not read `.gnomon/`" is advice, and an eval's `command:` arm
+(§47) never hears it. So each cell's clone removes `.gnomon/trials/` and
+commits the removal (`cell: trial specs withheld`). The skill arm's install is
+committed on top (`cell: skill <id> installed`), so every cell of every arm
+starts in a clean committed tree with no specs. The spec is loaded from this
+checkout, and `setup` and `check` run from that copy. This is why the report
+is `gnomon.trial/2`: a `gnomon.trial/1` report (through 0.6.2) came from cells
+that held the specs and has no `cell_surface_hash`, and `accept --evidence`
+refuses it (§11).
+
+Each arm therefore has two surface hashes, computed from one manifest by the
+same `manifestHash`:
+- `surface_hash`: the project's surface for the arm, `trials/` included.
+  `accept --evidence` compares the base arm's with this checkout's, and the
+  `skill_trial` record's `surface_hash_base` and `surface_hash_skill` are these.
+- `cell_surface_hash`: the same manifest without `trials/`. Every cell's own
+  hash must equal its arm's, or the cell is `apparatus_failure`. So a cell
+  differs from the project in `trials/` and nothing else.
+
+This checkout is compared with the base arm's `surface_hash` (project with
+project), and each cell with its arm's `cell_surface_hash` (cell with cell).
+Nothing compares one kind with the other.
+
+**Known limits.**
+- The clone is `--shared`: it borrows the operator's object store and keeps
+  history. `git show HEAD~1:.gnomon/trials/<name>.toml` in a cell still prints
+  the spec, and so does an absolute path into the operator's checkout. Only
+  containment closes those: `[sandbox] exec = "os"` or `"docker"` for gnomon's
+  arms. A `command:` arm runs on the host.
+- So write specs that give nothing away even when read. Put no answer and no
+  secret in plain text: compare an answer by its hash, and generate a canary
+  per cell, with a check that reads it back from the file:
+
+  ```toml
+  setup = "printf 'TOKEN=%s' \"$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \\n')\" > .env.x"
+  check = 't="$(cut -d= -f2- .env.x)" && test -n "$t" && ! grep -rqF "$t" --exclude=.env.x --exclude-dir=.git .'
+  ```
+
+  When a check's quoted string of 8 or more characters also appears in its
+  task's `prompt` or `setup`, loading the spec warns (`warning: <spec>: task
+  <id>: ...`, among the progress lines on stderr, which `--json` leaves out).
+  It does not refuse: a file name that both the prompt and the check use is a
+  literal in two places too.
+- A check cannot use files under `.gnomon/trials/` in the cell: they are
+  withheld with the spec.
+
 **Bounds**, refused when the spec is loaded (exit 10):
 - `alpha` must be in (0, 0.2];
 - `max_pass_drop` and `min_pass_gain` must be at least 0;
@@ -1251,7 +1302,8 @@ checkout's surface differ from HEAD's, and the trial refuses to start.
 no remote) at the commit HEAD named when the trial began. A clone, not a
 worktree, so a cell's branches, stash and repository config never reach the
 operator's repository. The skill arm has `.gnomon/skills/proposed/<id>.md`
-copied into `.gnomon/skills/`. Before any cell runs, the two manifests must
+copied into `.gnomon/skills/`. Neither arm's cells hold `.gnomon/trials/`
+(above). Before any cell runs, the two manifests must
 differ in exactly that path, and this checkout's surface hash must be HEAD's.
 Pairs are task × attempt, and each pair runs its base cell and then its skill
 cell. A clone that cannot be removed is listed in `leftovers` and never
@@ -1272,8 +1324,9 @@ exist is refused.
 **Validity.** A cell is scored only if its run made at least one metered model
 request (`volatile.requests` on the task record) and its check ran. A run
 ending in `apparatus_failure`, a cell on a different model or endpoint, a
-failed `setup`, or a drifted surface makes the cell `apparatus_failure`, and
-its pair is excluded. Pass is the check's exit 0.
+failed `setup`, or a cell whose surface hash is not its arm's
+`cell_surface_hash` makes the cell `apparatus_failure`, and its pair is
+excluded. Pass is the check's exit 0.
 
 **Statistics.** Pass uses exact McNemar on the pairs, plus a Wilson interval
 per arm. Output tokens, requests and wall time use an exact sign test. `mde`
@@ -1309,7 +1362,9 @@ gnomon reads no prices, and it does not count as a cap for a billed endpoint.
 `cells.jsonl`, one line per cell. The report's keys are `schema`, `skill`,
 `content_sha256`, `spec`, `harness`, `role`, `profile`, `model`, `endpoint`,
 `arms`, `pairs`, `cells`, `endpoints`, `mde`, `thresholds`, `budget`, `trust`,
-`leftovers`, `status`, `meets_thresholds` and `reasons`. A `skill_trial`
+`leftovers`, `status`, `meets_thresholds` and `reasons`. `arms` holds `base`
+and `skill`, each with `surface_hash` and `cell_surface_hash`, and `differ`;
+each line of `cells.jsonl` has the cell's own `surface_hash`. A `skill_trial`
 audit record is written in a sealed trail of its own, even when `[audit]` is
 off. It carries `content_sha256`, `report`, `report_sha256`, `spec`,
 `surface_hash_base`, `surface_hash_skill`, `role`, `model`, `endpoint`,
@@ -1324,7 +1379,10 @@ cover:
 - a pass gain (exit 0), the negative control with that text removed (exit 2),
   and the endpoint down (exit 10);
 - the per-cell budget stop, the billed and fallback refusals, clamped trust,
-  clone isolation, leftovers, SIGINT cleanup, token direction, and the record.
+  clone isolation, leftovers, SIGINT cleanup, token direction, and the record;
+- cells with no specs, in a clean committed tree, with setup and check run
+  from this checkout and both hashes per arm; and the literal-in-two-places
+  warning.
 
 ## 14. Record tamper — audit kinds `record_tamper`, `record_tamper_resolved`, `record_notice`
 
@@ -4191,7 +4249,7 @@ catalog entry is data and moves with releases.
 that every fact's `ref` names an existing file and heading, and validates real
 reports against the key lists.
 
-## 47. `gnomon eval` — schema `gnomon.eval/2`, audit kind `eval_run`, `v: 2`
+## 47. `gnomon eval` — schema `gnomon.eval/3`, audit kind `eval_run`, `v: 3`
 
 A skill trial (§13) asks whether one proposed skill helps. `gnomon eval` asks
 the same question about a profile, a surface or another harness, and without
@@ -4205,7 +4263,7 @@ same code (`skill_trial.ts`, used by `eval.ts`).
 |---|---|---|
 | (none) | none: mode `single` | — |
 | `profile:<name>` | this checkout under profile `<name>` | the same surface hash; the profile is not the base's |
-| `surface:<git ref>` | HEAD's code, `.gnomon/` exactly as the ref has it, the base's profile | `arms.differ` lists the manifest paths that differ, and must not be empty |
+| `surface:<git ref>` | HEAD's code, `.gnomon/` exactly as the ref has it, the base's profile | `arms.differ` lists the manifest paths the arms' cells differ in, and must not be empty; `trials/` is never one (no cell holds it), so a ref that differs only in its specs is refused as identical |
 | `command:<harness>` | another harness's CLI, as `[harness.<harness>]` in the spec declares it, in the same clones | the harness; `arms.differ` is empty |
 
 **Command arms** (version 2). The spec declares each harness:
@@ -4243,8 +4301,26 @@ local = false            # default; true = it reaches no paid provider
   checked and the checkout's surface need not be HEAD's.
 - A command arm has `kind` `command`, `label` `command:<harness>`, `command`
   (the argv as declared), `profile`, `model` and `endpoint` null, and HEAD's
-  `surface_commit` and `surface_hash` (the clone's). Its cells' `model` is
-  `command:<harness>`.
+  `surface_commit`, `surface_hash` and `cell_surface_hash` (the clone's). Its
+  cells' `model` is `command:<harness>`.
+
+**No cell holds the specs** (§13). Every cell, whether its arm is `head`,
+`profile`, `surface` or `command`, starts in a clean committed tree with
+`.gnomon/trials/` removed (`cell: trial specs withheld`). A surface arm's
+`.gnomon/` from the ref brings the ref's specs back, so they are removed
+again and the result committed (`cell: .gnomon/ from <sha>, trial specs
+withheld`). This is version 3, `gnomon.eval/3`: through 0.6.2, version 2's
+cells held `.gnomon/trials/`, its arms had no `cell_surface_hash`, and a
+cell's surface hash was the project's. This is not a check gnomon runs before its own tools, which
+another harness would never pass through: the files are not in the tree. The
+spec, `setup`, `check`, `[harness.<name>]` and `min_pass_rate` are all read
+from this checkout. Each arm reports `surface_hash` (the project's, `trials/`
+included) and `cell_surface_hash` (the same manifest without `trials/`). Each
+cell's own `surface_hash` must equal its arm's `cell_surface_hash`, and this
+checkout must equal the base arm's `surface_hash`. The known limits are
+§13's: the clone keeps history (`git show HEAD~1:.gnomon/trials/<name>.toml`),
+and an absolute path reaches the operator's checkout. A `command:` arm runs on
+the host, so for it only a spec that gives nothing away in plain text holds.
 
 The base arm is HEAD under the spec's `model_profile`, else `--profile`, else
 the surface default. The checkout's surface hash must be HEAD's. Trust is
@@ -4270,7 +4346,8 @@ is no valid cell or the budget is spent.
 **Report keys:** `schema`, `mode`, `spec`, `harness`, `role`, `arms`
 (`base`, `candidate` or null, `differ`; each arm has `kind` (`head`,
 `profile`, `surface`, `command`), `label`, `profile`, `surface_commit`,
-`surface_hash`, `model`, `endpoint`, and `command`? on a command arm),
+`surface_hash`, `cell_surface_hash`, `model`, `endpoint`, and `command`? on a
+command arm),
 `pairs`, `cells`, `endpoints` (`pass`, `output_tokens`, `requests`,
 `wall_ms`, with the candidate's fields null in `single` mode and a command
 arm's tokens and requests null),
@@ -4295,7 +4372,11 @@ only for one model name or one system prompt. The tests cover:
 - command arms, with stand-in CLIs: gnomon against one, two against each
   other with no model contacted, one alone, one that cannot start, one that
   follows `PWD`, one that writes into the project checkout, the spend and
-  declaration refusals, `{prompt}` against stdin, and the timeout.
+  declaration refusals, `{prompt}` against stdin, and the timeout;
+- the withheld specs: a canary task whose token is in plain text in the spec.
+  Neither gnomon's grep nor a stand-in CLI that walks the whole clone finds
+  it, both arms are scored, and a stand-in that reads `HEAD~1` does find it
+  (the known limit). A ref that differs only in its specs is refused.
 
 ## 48. Data flows and residency — `gnomon compliance dataflow`, `gnomon.dataflow/2`, `[compliance] allowed_regions`, `v: 2`
 

@@ -51,11 +51,16 @@ import {
   trialShell,
   trialGit,
   trialSandbox,
+  trialProbe,
+  trialSealCell,
+  armSurface,
+  cellDiffer,
   trialProcessSignals,
   signSummary,
   trialFreeze,
   TRIAL_RUNS_DIR,
   TRIALS_DIR,
+  type ArmSurface,
   type CellBucket,
   type Sandbox,
   type TrialSignals,
@@ -65,7 +70,12 @@ import {
   type TrialStatus,
 } from "./skill_trial.js";
 
-export const EVAL_SCHEMA = "gnomon.eval/2";
+/**
+ * Version 3: no cell holds `.gnomon/trials/`, and each arm reports
+ * `cell_surface_hash` (CONTRACTS.md §47). Through 0.6.2 (version 2) every cell
+ * held the specs, and a cell's surface hash was the project's.
+ */
+export const EVAL_SCHEMA = "gnomon.eval/3";
 /** Reports go beside skill trials', so the record guard and `guard` protect them alike. */
 export const EVAL_RUNS_SUBDIR = "_eval";
 export const EVAL_MODES = ["single", "paired"] as const;
@@ -223,7 +233,10 @@ export interface EvalArm {
   profile: string | null;
   /** The commit `.gnomon/` was taken from (HEAD for the base arm). */
   surface_commit: string;
+  /** The project's surface for this arm, trials/ included. */
   surface_hash: string;
+  /** The same surface as its cells hold it, trials/ withheld (cellSurfaceHash). */
+  cell_surface_hash: string;
   model: string | null;
   endpoint: string | null;
 }
@@ -243,6 +256,7 @@ export interface EvalCell {
   stop_reason: string;
   model: string;
   endpoint?: string;
+  /** The cell's own surface hash: no trials/, so its arm's `cell_surface_hash`. */
   surface_hash: string;
   requests: number;
   tokens_out?: number;
@@ -356,10 +370,13 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
   const root = resolve(config.gnomonDir, "..");
   let spec: TrialSpec;
   try {
+    // From this checkout, never a cell's: no cell holds the spec
+    // (CELL_WITHHELD, skill_trial.ts). Setup, check and [harness.*] run from it.
     spec = loadTrialSpec(config, opts.spec ?? "default");
   } catch (err) {
     throw new EvalAbort(err instanceof Error ? err.message : String(err));
   }
+  for (const w of spec.warnings) log(`warning: ${spec.path}: ${w}`);
   const min_pass_rate = minPassRate(spec, config.gnomonDir);
   const against = opts.against ? parseAgainst(opts.against) : null;
   const baseCmd = opts.base ? parseBase(opts.base) : null;
@@ -423,30 +440,32 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
   signals.on("SIGTERM", onTerm);
   try {
     const surfaceOf = (dir: string) => recomputeManifest(join(dir, ".gnomon"));
-    /** The candidate surface in a clone: `.gnomon/` exactly as REF has it. */
+    /** The candidate surface in a clone: `.gnomon/` exactly as REF has it (its specs too, until sealed). */
     const install = (dir: string) => {
       if (candCommit === head) return;
       rmSync(join(dir, ".gnomon"), { recursive: true, force: true });
       trialGit(dir, ["checkout", "--quiet", candCommit, "--", ".gnomon"]);
     };
 
-    // The arms, built once and compared before anything runs.
-    const probeBase = trialSandbox(root, head, live);
-    const probeCand = trialSandbox(root, head, live);
-    let baseHash: string;
-    let candHash: string;
+    // The arms, built once and compared before anything runs. A probe holds
+    // the project's tree for its arm, specs included: `surface_hash` is the
+    // project's, `cell_surface_hash` the same manifest without trials/, which
+    // every cell of the arm must hold. The two are never compared.
+    const probeBase = trialProbe(root, head, live);
+    const probeCand = trialProbe(root, head, live);
+    let base: ArmSurface;
+    let cand: ArmSurface;
     let differ: string[];
     let candTrust: TrustOutcome | undefined;
     try {
       install(probeCand.dir);
-      const a = surfaceOf(probeBase.dir);
-      const b = surfaceOf(probeCand.dir);
-      baseHash = a.surface_hash;
-      candHash = b.surface_hash;
-      const shaOf = (m: typeof a.manifest) => new Map(m.map((s) => [s.path, s.sha256]));
-      const ma = shaOf(a.manifest);
-      const mb = shaOf(b.manifest);
-      differ = [...new Set([...ma.keys(), ...mb.keys()])].filter((p) => ma.get(p) !== mb.get(p)).sort();
+      const { manifest: a, ...baseArm } = armSurface(probeBase.dir);
+      const { manifest: b, ...candArm } = armSurface(probeCand.dir);
+      base = baseArm;
+      cand = candArm;
+      // What the cells differ in. A ref whose .gnomon/ differs from HEAD's
+      // only in its specs runs the same cells, so it is refused as identical.
+      differ = cellDiffer(a, b);
       if (against && against.kind !== "command") {
         // The candidate's configuration as its cells will load it: trust and
         // the billed check below are settled on exactly that.
@@ -474,15 +493,16 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
       done(probeCand);
     }
     if (against?.kind === "surface" && differ.length === 0) {
-      throw new EvalAbort(`The arms are identical: ${against.ref}'s .gnomon/ is HEAD's.`);
+      throw new EvalAbort(`The arms are identical: ${against.ref}'s .gnomon/ is HEAD's, trial specs aside (no cell holds them).`);
     }
     if (against?.kind === "profile" && differ.length > 0) {
       throw new EvalAbort(`The arms differ in ${differ.join(", ")} as well as the profile.`);
     }
+    // Project against project, specs included.
     const checkout = recomputeManifest(config.gnomonDir).surface_hash;
-    if (gnomonBase && checkout !== baseHash) {
+    if (gnomonBase && checkout !== base.surface_hash) {
       throw new EvalAbort(
-        `This checkout's surface (${checkout.slice(0, 12)}) is not HEAD's (${baseHash.slice(0, 12)}). ` +
+        `This checkout's surface (${checkout.slice(0, 12)}) is not HEAD's (${base.surface_hash.slice(0, 12)}). ` +
           `Commit or discard the changes under .gnomon/, then run the eval again.`
       );
     }
@@ -536,12 +556,18 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
             duration_ms: 0,
           };
           try {
-            if (arm === "candidate") install(wt.dir);
+            if (arm === "candidate" && candCommit !== head) {
+              install(wt.dir);
+              // REF's .gnomon/ brought its specs back: withhold them again.
+              trialSealCell(wt.dir, `cell: .gnomon/ from ${candCommit.slice(0, 12)}, trial specs withheld`);
+            }
+            // Cell against cell: the tree the agent (or the harness) gets must
+            // be its arm's surface with the specs withheld, and only that.
             cell.surface_hash = surfaceOf(wt.dir).surface_hash;
-            const want = arm === "candidate" ? candHash : baseHash;
+            const want = arm === "candidate" ? cand.cell_surface_hash : base.cell_surface_hash;
             const timeout = spec.check_timeout_seconds * 1000;
             if (cell.surface_hash !== want) {
-              cell.invalid_reason = `surface ${cell.surface_hash.slice(0, 12)} is not the ${arm} arm's ${want.slice(0, 12)}`;
+              cell.invalid_reason = `surface ${cell.surface_hash.slice(0, 12)} is not the ${arm} arm's cell surface ${want.slice(0, 12)}`;
             } else if (task.setup && trialShell(task.setup, wt.dir, timeout).code !== 0) {
               cell.invalid_reason = "setup did not exit 0";
             } else if (cmdOf[arm]) {
@@ -623,27 +649,31 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
     }
 
     const armOf = (name: EvalArmName): EvalArm => {
-      const cand = name === "candidate";
+      const isCand = name === "candidate";
       const def = cmdOf[name];
       if (def) {
+        // HEAD's clone, as the base arm's: a command arm's cells are HEAD's.
         return {
           kind: "command",
           command: [...def.command],
           label: `command:${def.name}`,
           profile: null,
           surface_commit: head,
-          surface_hash: baseHash,
+          surface_hash: base.surface_hash,
+          cell_surface_hash: base.cell_surface_hash,
           model: null,
           endpoint: null,
         };
       }
-      const profile = (cand ? candProfile : baseProfile) ?? null;
+      const profile = (isCand ? candProfile : baseProfile) ?? null;
+      const surface = isCand ? cand : base;
       return {
-        kind: !cand ? "head" : against!.kind,
-        label: !cand ? "HEAD" : opts.against!,
+        kind: !isCand ? "head" : against!.kind,
+        label: !isCand ? "HEAD" : opts.against!,
         profile,
-        surface_commit: cand ? candCommit : head,
-        surface_hash: cand ? candHash : baseHash,
+        surface_commit: isCand ? candCommit : head,
+        surface_hash: surface.surface_hash,
+        cell_surface_hash: surface.cell_surface_hash,
         model: pinned[name]?.model ?? null,
         endpoint: pinned[name]?.endpoint ?? null,
       };

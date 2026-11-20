@@ -14,6 +14,10 @@
  *     HEAD; the skill arm has the proposal copied into `.gnomon/skills/`. The
  *     two manifests are compared before anything runs, and must differ in
  *     exactly that one path.
+ *   - The tasks stay with the operator. No cell holds `.gnomon/trials/`: a
+ *     spec's `setup` and `check` can carry the expected answer or a seeded
+ *     secret, and an agent that could read them would be graded on reading.
+ *     The spec is loaded from this checkout, and setup and check run from it.
  *   - Paired and interleaved. A pair is task x attempt; the base cell runs,
  *     then its skill cell. Never one arm's block and then the other's, so
  *     endpoint drift lands on both arms alike.
@@ -39,10 +43,12 @@ import {
   loadConfig,
   parseToml,
   recomputeManifest,
+  manifestHash,
   resolveRouting,
   routeRole,
   isLocalEndpoint,
 } from "./config.js";
+import type { SourceEntry } from "./session.js";
 import { AuditTrail, resolveAudit, type AuditRecord } from "./audit.js";
 import { harnessBuild } from "./build.js";
 import { PROPOSED_DIR, SKILLS_DIR, skillContentHash } from "./skills.js";
@@ -56,7 +62,12 @@ import { appendFileIn, writeFileIn } from "./root_fs.js";
 
 export const TRIALS_DIR = "trials";
 export const TRIAL_RUNS_DIR = ".gnomon-trials";
-export const TRIAL_SCHEMA = "gnomon.trial/1";
+/**
+ * Version 2: no cell holds `.gnomon/trials/`, and each arm reports
+ * `cell_surface_hash` beside `surface_hash` (CONTRACTS.md §13). Through 0.6.2
+ * (version 1) every cell held the specs, so the agent could read each check.
+ */
+export const TRIAL_SCHEMA = "gnomon.trial/2";
 
 /** `meets_thresholds`, published (Rule 6). */
 export const TRIAL_VERDICTS = [true, false, "undetermined"] as const;
@@ -100,6 +111,8 @@ export interface TrialSpec {
   thresholds: TrialThresholds;
   budget: { declared: boolean; max_requests?: number; max_cost_usd?: number };
   tasks: TrialTask[];
+  /** Authoring problems that do not stop a run (specLeaks); logged before the first cell. */
+  warnings: string[];
 }
 
 const num = (v: unknown, d: number): number => (typeof v === "number" && isFinite(v) ? v : d);
@@ -175,7 +188,40 @@ export function loadTrialSpec(config: GnomonConfig, name = "default"): TrialSpec
       max_cost_usd: typeof b?.max_cost_usd === "number" ? b.max_cost_usd : undefined,
     },
     tasks,
+    warnings: specLeaks(tasks),
   };
+}
+
+/** A quoted string in a check at least this long is compared with the task's prompt and setup. */
+const LEAK_MIN_LENGTH = 8;
+
+/**
+ * A check's quoted strings that its own task's prompt or setup also spells
+ * out. Cells no longer hold the spec, but the spec is still in the clone's
+ * history and on the operator's disk, and a prompt is read by the agent
+ * whole. A literal in two places is how a seeded secret was written in the
+ * finding that withheld the specs (`printf 'SERVICE_TOKEN=<literal>'` in setup,
+ * the same literal in the check). A warning, not a refusal: a file name the
+ * prompt names and the check opens is a literal in two places too.
+ */
+export function specLeaks(tasks: TrialTask[]): string[] {
+  const out: string[] = [];
+  for (const t of tasks) {
+    const literals = new Set<string>();
+    for (const m of t.check.matchAll(/'([^']*)'/g)) literals.add(m[1]!);
+    for (const m of t.check.matchAll(/"((?:[^"\\]|\\.)*)"/g)) literals.add(m[1]!);
+    for (const lit of [...literals].sort()) {
+      if (lit.length < LEAK_MIN_LENGTH) continue;
+      const where = [t.prompt.includes(lit) ? "prompt" : "", t.setup?.includes(lit) ? "setup" : ""].filter(Boolean);
+      if (where.length === 0) continue;
+      out.push(
+        `task ${t.id}: the check's literal ${JSON.stringify(lit)} is also in its ${where.join(" and ")}. ` +
+          `If it is an expected answer or a secret, the spec gives it away: compare by hash, or ` +
+          `generate it per cell in setup and have the check read it back (docs/CONTRACTS.md §13).`
+      );
+    }
+  }
+  return out;
 }
 
 /**
@@ -290,6 +336,7 @@ export interface TrialCell {
   stop_reason: string;
   model: string;
   endpoint?: string;
+  /** The cell's own surface hash: no trials/ (cellSurfaceHash), so its arm's `cell_surface_hash`. */
   surface_hash: string;
   requests: number;
   tokens_out?: number;
@@ -334,7 +381,99 @@ export interface Sandbox {
   dispose: () => string | null;
 }
 
+/**
+ * What no cell's checkout holds: the trial specs. A spec's `setup` and
+ * `check` are the task's answer key -- the expected output, a seeded secret --
+ * and the spec sat in every cell, so the agent under test could read it. In a
+ * real-model eval both arms did: the grep tool rightly skipped the protected
+ * `.env.matrix` a setup had seeded, and matched the same token in
+ * `.gnomon/trials/guardrails.toml`. The system prompt's "do not read .gnomon/"
+ * is advice, and a `command:` arm (eval.ts) never sees gnomon's prompt or
+ * tools at all, so the specs are removed from the tree instead, for every arm.
+ *
+ * What this does not do: the clone keeps history and borrows the operator's
+ * object store, so `git show HEAD~1:.gnomon/trials/<name>.toml`, or an
+ * absolute path into the operator's checkout, still reaches a spec. Only
+ * containment (`[sandbox] exec = "os"` or `"docker"`) closes those; a spec
+ * that holds no answer in plain text needs nothing closed (CONTRACTS §13).
+ */
+export const CELL_WITHHELD = `.gnomon/${TRIALS_DIR}/`;
+
+/**
+ * A surface hash as a cell holds the surface: the manifest without
+ * `.gnomon/trials/`, hashed by `manifestHash` like every surface hash. From
+ * the project's manifest it is the hash that surface's cells must have; a
+ * cell's own `recomputeManifest` hash equals it exactly when the cell differs
+ * from the project in trials/ and nothing else.
+ */
+export function cellSurfaceHash(manifest: SourceEntry[]): string {
+  return manifestHash(manifest.filter((s) => !s.path.startsWith(CELL_WITHHELD)));
+}
+
+/**
+ * The manifest paths two arms' cells differ in, sorted. trials/ is in no
+ * cell, so it is never one: two surfaces that differ only in their specs run
+ * identical cells.
+ */
+export function cellDiffer(a: SourceEntry[], b: SourceEntry[]): string[] {
+  const shaOf = (m: SourceEntry[]) => new Map(m.filter((s) => !s.path.startsWith(CELL_WITHHELD)).map((s) => [s.path, s.sha256]));
+  const ma = shaOf(a);
+  const mb = shaOf(b);
+  return [...new Set([...ma.keys(), ...mb.keys()])].filter((p) => ma.get(p) !== mb.get(p)).sort();
+}
+
+/** An arm's surface: the project's hash, and the hash its cells hold. */
+export interface ArmSurface {
+  /** The project's surface for this arm, trials/ included: what `accept --evidence` compares. */
+  surface_hash: string;
+  /** The same surface with trials/ withheld (cellSurfaceHash): what every cell of the arm must hash to. */
+  cell_surface_hash: string;
+}
+
+/** An arm's surface, read from a probe holding the project's tree for it. */
+export function armSurface(dir: string): ArmSurface & { manifest: SourceEntry[] } {
+  const m = recomputeManifest(join(dir, ".gnomon"));
+  return { surface_hash: m.surface_hash, cell_surface_hash: cellSurfaceHash(m.manifest), manifest: m.manifest };
+}
+
+/**
+ * Withhold the specs and commit, so the cell starts from a clean committed
+ * tree that holds none: a staged deletion would still show the spec's text
+ * in `git diff --cached`, and an uncommitted one in `git status`. Called once
+ * the cell's tree is what its arm runs (after a skill or another commit's
+ * `.gnomon/` is put in place). Hooks and signing are off (git_safe.ts); the
+ * identity is gnomon's own, so no git config of the user's is needed.
+ */
+function sealCell(dir: string, message: string): void {
+  rmSync(join(dir, ".gnomon", TRIALS_DIR), { recursive: true, force: true });
+  git(dir, ["add", "--all", "--force"]);
+  if (git(dir, ["status", "--porcelain", "--untracked-files=all"]) === "") return;
+  git(dir, ["-c", "user.name=gnomon", "-c", "user.email=gnomon@cell.invalid", "commit", "--quiet", "--no-verify", "-m", message]);
+}
+
+/**
+ * A cell: a private clone at `commit` (cloneAt) with the trial specs withheld
+ * and that removal committed ("cell: trial specs withheld"). Every cell of
+ * every arm, a trial's or an eval's, gnomon's or another harness's, starts
+ * here.
+ */
 function freshSandbox(root: string, commit: string, live: Set<Sandbox>): Sandbox {
+  const sandbox = cloneAt(root, commit, live);
+  try {
+    sealCell(sandbox.dir, "cell: trial specs withheld");
+  } catch (err) {
+    sandbox.dispose();
+    throw err;
+  }
+  return sandbox;
+}
+
+/**
+ * A private clone at `commit`, the project's tree as it is, specs included.
+ * The arms' probes, which read the project's surface hash; no agent runs in
+ * one. A cell is freshSandbox.
+ */
+function cloneAt(root: string, commit: string, live: Set<Sandbox>): Sandbox {
   const holder = mkdtempSync(join(tmpdir(), "gnomon-trial-"));
   const dir = join(holder, "repo");
   let disposed = false;
@@ -427,9 +566,9 @@ export interface TrialReport {
   model: string | null;
   endpoint: string | null;
   arms: {
-    base: { surface_hash: string };
-    skill: { surface_hash: string };
-    /** Manifest paths that differ between the arms: exactly the skill file. */
+    base: ArmSurface;
+    skill: ArmSurface;
+    /** Manifest paths that differ between the arms' cells: exactly the skill file. */
     differ: string[];
   };
   pairs: { planned: number; run: number; valid: number };
@@ -486,7 +625,10 @@ export async function runTrial(
 ): Promise<{ report: TrialReport; cells: TrialCell[] }> {
   const log = opts.log ?? (() => {});
   const root = resolve(config.gnomonDir, "..");
+  // From this checkout, never a cell's: no cell holds the spec (CELL_WITHHELD).
+  // Setup and check run from this copy.
   const spec = loadTrialSpec(config, opts.spec ?? "default");
+  for (const w of spec.warnings) log(`warning: ${spec.path}: ${w}`);
   const proposal = join(config.gnomonDir, PROPOSED_DIR, `${opts.skill}.md`);
   if (!existsSync(proposal)) {
     throw new TrialAbort(`No proposed skill "${opts.skill}" in .gnomon/skills/proposed/.`);
@@ -555,29 +697,28 @@ export async function runTrial(
   signals.on("SIGTERM", onTerm);
   try {
 
-    // The two arms, built once and compared before anything runs.
+    // The two arms, built once and compared before anything runs. A probe is
+    // the project's tree for its arm, specs included: its hash is the
+    // project's (`surface_hash`, which accept --evidence compares), and the
+    // same manifest without trials/ is the hash every cell of the arm must
+    // hold (`cell_surface_hash`). The two are never compared with each other.
     const surfaceOf = (dir: string) => recomputeManifest(join(dir, ".gnomon"));
     const install = (dir: string) => {
       mkdirSync(join(dir, ".gnomon", SKILLS_DIR), { recursive: true });
       copyFileSync(proposal, join(dir, ".gnomon", SKILLS_DIR, `${opts.skill}.md`));
     };
-    const probeBase = freshSandbox(root, commit, live);
-    const probeSkill = freshSandbox(root, commit, live);
-    let baseHash: string;
-    let skillHash: string;
+    const probeBase = cloneAt(root, commit, live);
+    const probeSkill = cloneAt(root, commit, live);
+    let base: ArmSurface;
+    let skill: ArmSurface;
     let differ: string[];
     try {
       install(probeSkill.dir);
-      const a = surfaceOf(probeBase.dir);
-      const b = surfaceOf(probeSkill.dir);
-      baseHash = a.surface_hash;
-      skillHash = b.surface_hash;
-      const shaOf = (m: typeof a.manifest) => new Map(m.map((s) => [s.path, s.sha256]));
-      const ma = shaOf(a.manifest);
-      const mb = shaOf(b.manifest);
-      differ = [...new Set([...ma.keys(), ...mb.keys()])]
-        .filter((p) => ma.get(p) !== mb.get(p))
-        .sort();
+      const { manifest: a, ...baseArm } = armSurface(probeBase.dir);
+      const { manifest: b, ...skillArm } = armSurface(probeSkill.dir);
+      base = baseArm;
+      skill = skillArm;
+      differ = cellDiffer(a, b);
     } finally {
       done(probeBase);
       done(probeSkill);
@@ -597,10 +738,12 @@ export async function runTrial(
     // uncommitted edits under .gnomon/, and a checkout that rewrote line endings
     // (core.autocrlf on Windows, with no `.gnomon/** text eol=lf` in
     // .gitattributes, which `gnomon init` writes).
+    // Project against project: the specs count here, so an uncommitted edit to
+    // one stops the trial as an edit to any other surface file does.
     const checkout = recomputeManifest(config.gnomonDir).surface_hash;
-    if (checkout !== baseHash) {
+    if (checkout !== base.surface_hash) {
       throw new TrialAbort(
-        `This checkout's surface (${checkout.slice(0, 12)}) is not HEAD's (${baseHash.slice(0, 12)}). ` +
+        `This checkout's surface (${checkout.slice(0, 12)}) is not HEAD's (${base.surface_hash.slice(0, 12)}). ` +
           `Commit or discard the changes under .gnomon/ (proposals excepted), and if git rewrites ` +
           `line endings here, add ".gnomon/** text eol=lf" to .gitattributes, then run the trial again.`
       );
@@ -650,11 +793,16 @@ export async function runTrial(
             duration_ms: 0,
           };
           try {
-            if (arm === "skill") install(wt.dir);
+            if (arm === "skill") {
+              install(wt.dir);
+              sealCell(wt.dir, `cell: skill ${opts.skill} installed`);
+            }
+            // Cell against cell: the hash of the tree the agent gets, which
+            // must be its arm's surface with the specs withheld, and only that.
             cell.surface_hash = surfaceOf(wt.dir).surface_hash;
-            const want = arm === "skill" ? skillHash : baseHash;
+            const want = arm === "skill" ? skill.cell_surface_hash : base.cell_surface_hash;
             if (cell.surface_hash !== want) {
-              cell.invalid_reason = `surface ${cell.surface_hash.slice(0, 12)} is not the ${arm} arm's ${want.slice(0, 12)}`;
+              cell.invalid_reason = `surface ${cell.surface_hash.slice(0, 12)} is not the ${arm} arm's cell surface ${want.slice(0, 12)}`;
             } else if (task.setup && sh(task.setup, wt.dir, spec.check_timeout_seconds * 1000).code !== 0) {
               cell.invalid_reason = "setup did not exit 0";
             } else {
@@ -700,7 +848,7 @@ export async function runTrial(
       }
     }
 
-    const report = { ...summarise(spec, opts.skill, content, role, baseHash, skillHash, differ, cells, planned, pair, requestsUsed, status, pinned), profile };
+    const report = { ...summarise(spec, opts.skill, content, role, base, skill, differ, cells, planned, pair, requestsUsed, status, pinned), profile };
     // Frozen, and remembered: recordTrial signs only a report this process's
     // runTrial produced, exactly as it produced it.
     const final = deepFreeze({ ...report, trust: trust?.decision ?? null, leftovers }) as TrialReport;
@@ -719,8 +867,8 @@ function summarise(
   skill: string,
   content: Buffer,
   role: string,
-  baseHash: string,
-  skillHash: string,
+  baseArm: ArmSurface,
+  skillArm: ArmSurface,
   differ: string[],
   cells: TrialCell[],
   planned: number,
@@ -827,7 +975,7 @@ function summarise(
     profile: spec.model_profile,
     model: pinned?.model ?? null,
     endpoint: pinned?.endpoint ?? null,
-    arms: { base: { surface_hash: baseHash }, skill: { surface_hash: skillHash }, differ },
+    arms: { base: baseArm, skill: skillArm, differ },
     pairs: { planned, run, valid: n },
     cells: { total: cells.length, ...buckets },
     endpoints: {
@@ -881,7 +1029,8 @@ export function listTrialSpecs(config: GnomonConfig): string[] {
 export function verdictOf(spec: TrialSpec, cells: TrialCell[]): TrialVerdict {
   const pairs = new Set(cells.map((c) => c.pair)).size;
   const status: TrialStatus = "complete";
-  const r = summarise(spec, "", Buffer.alloc(0), "", "", "", [], cells, pairs, pairs, 0, status, null);
+  const none: ArmSurface = { surface_hash: "", cell_surface_hash: "" };
+  const r = summarise(spec, "", Buffer.alloc(0), "", none, none, [], cells, pairs, pairs, 0, status, null);
   return r.meets_thresholds;
 }
 
@@ -977,12 +1126,15 @@ export function recordTrial(
 /**
  * The cell machinery, shared with `gnomon eval` (eval.ts): the same private
  * clones, shell, git, sign test and freezing, so an eval's cells are a
- * trial's cells and not a second implementation of them.
+ * trial's cells and not a second implementation of them. A cell is a
+ * trialSandbox; a trialProbe (specs included) only reads an arm's surface.
  */
 export {
   sh as trialShell,
   git as trialGit,
   freshSandbox as trialSandbox,
+  cloneAt as trialProbe,
+  sealCell as trialSealCell,
   processSignals as trialProcessSignals,
   sign as signSummary,
   deepFreeze as trialFreeze,
