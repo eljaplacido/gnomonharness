@@ -160,6 +160,29 @@ describe("gnomon security: the contract", () => {
     expect(r.exit).toBe(0);
   });
 
+  // #216 (2026-11-20, Windows 11): Windows has no OS sandbox, so there
+  // exec = "os" refuses every shell command (fail closed, and it stays so).
+  // A surface committed with it and shared with Windows machines has no
+  // shell on them, and nothing said so before the first refusal.
+  it('exec = "os" is said plainly: no bash on Windows, here or on a Windows clone; advice, no exit change (#216)', async () => {
+    const dir = await project();
+    const p = join(dir, ".gnomon/policy.toml");
+    const plain = readFileSync(p, "utf-8");
+    expect(buildSecurityReport(dir, {}, "win32").findings.map((f) => f.id)).not.toContain("exec_os_windows");
+    writeFileSync(p, plain.replace(/^\[sandbox\]\n/m, '[sandbox]\nexec = "os"\n'));
+    const win = buildSecurityReport(dir, {}, "win32");
+    shapeHolds(win);
+    const w = win.findings.find((f) => f.id === "exec_os_windows")!;
+    expect(w.severity).toBe("advice");
+    expect(w.message).toMatch(/Windows has no OS sandbox: on this machine every shell command is refused/);
+    expect(w.fix).toMatch(/exec = "docker"/);
+    expect(w.fix).toMatch(/WSL2/);
+    expect(win.exit).toBe(0);
+    const linux = buildSecurityReport(dir, {}, "linux");
+    expect(linux.findings.find((f) => f.id === "exec_os_windows")!.message).toMatch(/on a Windows machine that runs this surface/);
+    expect(formatSecurity(win).join("\n")).toMatch(/exec_os_windows|no OS sandbox/);
+  });
+
   it("a trail whose chain does not hold is a risk: exit 2", async () => {
     const dir = await project();
     const auditDir = resolveAudit(loadConfig(dir)).dir;

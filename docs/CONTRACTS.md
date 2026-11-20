@@ -1552,7 +1552,7 @@ optionally `fix`.
 
 | Finding `kind` | What it says |
 |---|---|
-| `surface` | no `.gnomon/`, or one that does not load |
+| `surface` | no `.gnomon/`, or one that does not load; on Windows, an `info` note when a role holding bash runs under `exec = "os"`, which refuses every shell command there (#216) |
 | `readiness` | a role's model does not answer its listing |
 | `memory` | the memory that bounds a model differs from what setup saw by more than 5% |
 | `gpu` | the GPUs differ from what setup saw |
@@ -4231,8 +4231,18 @@ governance levels (§36), `gnomon guard status` (§44) and the audit trails
 
 Risk ids: `surface_fatal`, `chain_broken`, `record_tamper`, `host_hook`.
 Advice ids: `audit_off`, `governance_off`, `host_exec`, `judge_can_write`,
-`approval_never_on_host`, `sandbox_network`, `surface_warning`. An id's
-severity is fixed; adding an id is a minor change with a fixture update.
+`approval_never_on_host`, `sandbox_network`, `exec_os_windows`,
+`surface_warning`. An id's severity is fixed; adding an id is a minor change
+with a fixture update.
+
+`exec_os_windows` (#216) names the roles holding bash under `exec = "os"`.
+Windows has no OS sandbox, so there `bash` refuses every command (fail closed,
+and it stays so): a surface committed with `exec = "os"` and shared with
+Windows machines has no shell on them. On Windows the message says there is
+no bash on this machine; elsewhere, none on a Windows machine that runs the
+surface. The fix is `exec = "docker"` (per role, or in `[sandbox]`) or gnomon
+inside WSL2. Advice on every platform, because the person committing the
+surface is the one who can choose.
 
 `governance_off` is one finding for the whole surface. It names the roles that
 have no governance layer (neither `[governance]` nor
