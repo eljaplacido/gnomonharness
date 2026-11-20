@@ -106,6 +106,10 @@ valid, timely, well-formed replies are now read from their symptoms.
   `on_write`. Contracts: `guard_decision.json` `verdict_keys.optional` and
   `audit_feed_schema.json` gain `exempt`; `guard_cases.json` gains a
   `readonly_bash` section (CONTRACTS.md §10, §44).
+- Docs: CONTRACTS.md §1 and GUIDE §7.2 now say what a `gnomon task` returns
+  when its declared `[verify]` check still fails after the last round: exit 0,
+  bucket `result`, `verify: "failed"`. Behaviour is unchanged, and a test pins
+  it on the task record.
 
 ## [0.6.2] — 2026-11-18
 
