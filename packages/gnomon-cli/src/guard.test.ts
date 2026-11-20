@@ -83,8 +83,8 @@ function governedRepo(gate: string, extraPolicy = ""): string {
  * Through node explicitly: Windows cannot execute a script by its shebang, and
  * spawning it directly failed there before gnomon ran at all (status null).
  */
-function guardBin(args: string[], input: string, cwd = repo): { code: number; stdout: string } {
-  const r = spawnSync(process.execPath, [LAUNCHER, "guard", ...args], { cwd, input, encoding: "utf-8" });
+function guardBin(args: string[], input: string, cwd = repo, env?: NodeJS.ProcessEnv): { code: number; stdout: string } {
+  const r = spawnSync(process.execPath, [LAUNCHER, "guard", ...args], { cwd, input, encoding: "utf-8", ...(env ? { env } : {}) });
   return { code: r.status ?? -1, stdout: r.stdout };
 }
 
@@ -155,6 +155,43 @@ describe("gnomon guard — the contract: code, CONTRACTS.md §10 and the fixture
 // ---------------------------------------------------------------------------
 // The shared cases, through the real binary
 // ---------------------------------------------------------------------------
+
+describe("gnomon guard — which project a moved shell answers to (guard_decision.json project_sources)", () => {
+  const sources = fixture.project_sources as Record<string, string>;
+  it("every host's project source, put to the real binary from a cwd outside the project, decides by the project's rules", () => {
+    governedRepo("on_write");
+    const outside = realpathSync.native(mkdtempSync(join(tmpdir(), "gnomon-guard-src-")));
+    try {
+      const cmd = "git push --force origin main";
+      const payloads: Record<string, { payload: Record<string, unknown>; env?: NodeJS.ProcessEnv; read: (out: string) => string }> = {
+        "claude-code": {
+          payload: { session_id: "src-cc", cwd: outside, hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: cmd } },
+          env: { ...process.env, CLAUDE_PROJECT_DIR: repo },
+          read: (o) => JSON.parse(o).hookSpecificOutput.permissionDecision,
+        },
+        cursor: {
+          payload: { conversation_id: "src-cu", hook_event_name: "beforeShellExecution", command: cmd, cwd: outside, workspace_roots: [repo] },
+          read: (o) => JSON.parse(o).permission,
+        },
+        opencode: {
+          payload: { tool: "bash", sessionID: "src-oc", directory: repo, input: { command: cmd } },
+          read: (o) => JSON.parse(o).decision,
+        },
+        generic: {
+          payload: { tool: "bash", input: { command: cmd }, cwd: outside, project: repo, session_id: "src-g" },
+          read: (o) => JSON.parse(o).decision,
+        },
+      };
+      expect(Object.keys(sources).filter((k) => k !== "_comment").sort()).toEqual(Object.keys(payloads).sort());
+      for (const [host, p] of Object.entries(payloads)) {
+        const r = guardBin(["--from", host, "--role", "implement", ...(host === "opencode" || host === "generic" ? ["--json"] : [])], JSON.stringify(p.payload), outside, p.env);
+        expect(p.read(r.stdout), host).toBe("deny");
+      }
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("gnomon guard — the shared cases, put to the real binary", () => {
   for (const gate of ["never", "on_write"] as const) {
@@ -284,6 +321,29 @@ const CLAUDE_EVENTS = ["PreToolUse", "PostToolUse", "Notification", "UserPromptS
 const CLAUDE_TOOLS = ["Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "Read", "WebFetch", "Glob", "Grep", "Task", "TodoWrite", "WebSearch", "Agent", "ExitPlanMode", "mcp__github__create_issue"];
 
 describe("gnomon guard — Claude Code", () => {
+  it("a shell an earlier cd moved out of the project is decided by CLAUDE_PROJECT_DIR's rules, not let through", () => {
+    governedRepo("on_write");
+    const outside = realpathSync.native(mkdtempSync(join(tmpdir(), "gnomon-guard-cd-")));
+    try {
+      const payload = JSON.stringify({
+        session_id: "cd-out",
+        cwd: outside,
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "git push --force origin main" },
+      });
+      // Without the project root the call is in no governed project: nothing to decide by.
+      const bare = guardBin(["--from", "claude-code", "--role", "implement"], payload, outside);
+      expect(bare.stdout.trim()).toBe("");
+      const env = { ...process.env, CLAUDE_PROJECT_DIR: repo };
+      const r = guardBin(["--from", "claude-code", "--role", "implement"], payload, outside, env);
+      expect(r.code).toBe(0);
+      expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("the emitted settings fragment is valid Claude Code hooks config", () => {
     const { hooks } = claudeCodeHooks();
     for (const [event, groups] of Object.entries(hooks)) {

@@ -1245,3 +1245,72 @@ describe("gnomon enumerations publishes the guard and audit enumerations", () =>
     expect(golden.guard_tool).toEqual([...GUARD_TOOLS]);
   });
 });
+
+describe("a host shell moved out of the project still answers to its rules (GuardRequest.project)", () => {
+  const forcePush = { tool: "bash", input: { command: "git push --force origin main" } };
+  let outside: string;
+  beforeEach(() => {
+    outside = realpathSync.native(mkdtempSync(join(tmpdir(), "gnomon-guard-outside-")));
+  });
+  afterEach(() => {
+    rmSync(outside, { recursive: true, force: true });
+  });
+
+  it("a cwd outside the project: ungoverned without the host's project, decided by its rules with it", async () => {
+    surface("on_write");
+    const before = await guardToolCall({ cwd: outside, call: forcePush, role: "implement" });
+    expect(before).toMatchObject({ decision: "allow", rule: "ungoverned", governed: false });
+    const v = await guardToolCall({ cwd: outside, project: repo, call: forcePush, role: "implement" });
+    expect(v).toMatchObject({ decision: "deny", governed: true });
+    // An absolute write into the project's surface, from outside it.
+    const w = await guardToolCall({
+      cwd: outside,
+      project: repo,
+      call: { tool: "bash", input: { command: `rm -rf ${join(repo, ".gnomon")}` } },
+      role: "implement",
+    });
+    expect(w.decision).not.toBe("allow");
+  });
+
+  it("a cwd in a repository nested in the project is decided by the project's rules", async () => {
+    surface("on_write");
+    const nested = join(repo, "vendor", "lib");
+    mkdirSync(nested, { recursive: true });
+    sh(["init", "-q"], nested);
+    const before = await guardToolCall({ cwd: nested, call: forcePush, role: "implement" });
+    expect(before).toMatchObject({ rule: "ungoverned", governed: false });
+    const v = await guardToolCall({ cwd: nested, project: repo, call: forcePush, role: "implement" });
+    expect(v).toMatchObject({ decision: "deny", governed: true });
+  });
+
+  it("a host project with no .gnomon/ leaves the call ungoverned, and the reason names both", async () => {
+    const v = await guardToolCall({ cwd: outside, project: outside + "-none", call: forcePush });
+    expect(v).toMatchObject({ decision: "allow", rule: "ungoverned", governed: false });
+    expect(v.reason).toContain("nor above the host's project");
+  });
+
+  it("each host names its project: opencode's directory, Cursor's workspace root, the generic document's project", async () => {
+    surface("on_write");
+    expect(fromOpencode({ tool: "bash", directory: repo, input: { command: "ls" } }).project).toBe(repo);
+    const other = join(outside, "w2");
+    const c = fromCursor({ hook_event_name: "beforeShellExecution", command: "ls", cwd: join(repo, "src"), workspace_roots: [other, repo] });
+    expect(c.project).toBe(repo);
+    expect(fromCursor({ hook_event_name: "beforeShellExecution", command: "ls", cwd: outside, workspace_roots: [repo, other] }).project).toBe(repo);
+    // Claude Code's payload carries no project root: the CLI reads CLAUDE_PROJECT_DIR.
+    const hr = fromClaudeCode({ tool_name: "Bash", tool_input: { command: "git push --force origin main" }, cwd: outside, session_id: "moved" });
+    expect(hr.project).toBeUndefined();
+    const v = await guardHarnessRequest(hr, { role: "implement", harness: "claude-code", project: repo });
+    expect(v).toMatchObject({ decision: "deny", governed: true });
+    const viaCursor = await guardHarnessRequest(
+      fromCursor({ hook_event_name: "beforeShellExecution", command: "git push --force origin main", cwd: outside, workspace_roots: [repo] }),
+      { role: "implement", harness: "cursor" }
+    );
+    expect(viaCursor).toMatchObject({ decision: "deny", governed: true });
+  });
+
+  it("a cwd inside a governed project is judged there, whatever the host's project", async () => {
+    surface("on_write");
+    const v = await guardToolCall({ cwd: repo, project: outside, call: forcePush, role: "implement" });
+    expect(v).toMatchObject({ decision: "deny", governed: true });
+  });
+});

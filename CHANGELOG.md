@@ -28,6 +28,16 @@
 
 ### Fixed
 
+- **A `cd` out of the project no longer turns `gnomon guard` off.** The guard
+  found `.gnomon/` by walking up from the call's working directory only. A
+  Claude Code session whose shell an earlier, approved `cd /tmp/x` had moved
+  out of the project -- or into a repository nested in it, such as a vendored
+  checkout -- found none, and every later call was `ungoverned` and allowed,
+  whatever the rules said. When the working directory is in no governed
+  project, the host's own project root now decides: Claude Code's
+  `CLAUDE_PROJECT_DIR`, the Cursor workspace root the call is in, opencode's
+  `directory`, or `"project"` in the generic document. A working directory in
+  another governed project is still judged by that project (CONTRACTS §10).
 - **`gnomon security test` from the npm package runs the guard** (#202). It
   started the guard as `../gnomon.js` beside its own module, which only a
   checkout has: the published package ships `bin/gnomon.mjs`. Every case of

@@ -254,6 +254,15 @@ export interface GuardCall {
 export interface GuardRequest {
   /** Where the other agent is working; `.gnomon/` is found from here. */
   cwd: string;
+  /**
+   * The host's project root, when it names one: Claude Code's
+   * CLAUDE_PROJECT_DIR, Cursor's workspace root, opencode's directory. Where
+   * `.gnomon/` is found when `cwd` is in no governed project: a host shell
+   * that an earlier `cd` moved out of the project, or into a repository
+   * nested in it. Without it such a call was "ungoverned" and allowed, so one
+   * approved `cd /tmp` turned the guard off for the rest of the session.
+   */
+  project?: string;
   call: GuardCall;
   /** The revision to read the rules from. Default: the session's recorded base, else HEAD. */
   base?: string;
@@ -756,13 +765,20 @@ export async function guardToolCall(req: GuardRequest): Promise<GuardVerdict> {
     return v;
   };
   try {
-    const where = locate(req.cwd);
+    // The working directory first: a session that moved into another governed
+    // project is judged by that project's rules. Only when it is in none is
+    // the host's own project root asked, so a `cd` out of the project (or into
+    // a repository nested in it) never makes a call ungoverned.
+    const where = locate(req.cwd) ?? (req.project ? locate(req.project) : null);
     if (!where) {
       Object.assign(v, {
         decision: "allow",
         rule: "ungoverned",
         governed: false,
-        reason: `no .gnomon/ between ${req.cwd} and the repository root — this project is not governed by gnomon`,
+        reason:
+          `no .gnomon/ between ${req.cwd} and the repository root` +
+          (req.project && req.project !== req.cwd ? ` (nor above the host's project ${req.project})` : "") +
+          ` — this project is not governed by gnomon`,
       });
       return done();
     }
@@ -1329,6 +1345,8 @@ export interface HarnessRequest {
   callId?: string;
   /** Claude Code's `permission_mode` (default, acceptEdits, plan, bypassPermissions, dontAsk, auto). */
   permissionMode?: string;
+  /** The host's project root, when its payload names one (GuardRequest.project). */
+  project?: string;
 }
 
 const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
@@ -1404,6 +1422,7 @@ export function fromOpencode(raw: Record<string, unknown>): HarnessRequest {
   const base = {
     harnessTool: name,
     cwd: str(raw.directory) ?? str(raw.cwd),
+    ...(str(raw.directory) ? { project: str(raw.directory) } : {}),
     session: str(raw.sessionID),
     ...(str(raw.id) ?? str(raw.callID) ? { callId: str(raw.id) ?? str(raw.callID) } : {}),
   };
@@ -1467,10 +1486,16 @@ export function fromOpencode(raw: Record<string, unknown>): HarnessRequest {
 export function fromCursor(raw: Record<string, unknown>): HarnessRequest {
   const event = str(raw.hook_event_name) ?? "";
   const roots = Array.isArray(raw.workspace_roots) ? raw.workspace_roots.filter((r) => typeof r === "string") : [];
+  const cwd = str(raw.cwd) ?? (roots[0] as string | undefined);
+  // The workspace root the call is made in, else the first: where .gnomon/ is
+  // found when the shell's cwd is in no governed project (GuardRequest.project).
+  const inside = (root: string) => cwd !== undefined && (cwd === root || cwd.startsWith(root.replace(/[\\/]+$/, "") + "/") || cwd.startsWith(root.replace(/[\\/]+$/, "") + "\\"));
+  const project = (roots as string[]).find(inside) ?? (roots[0] as string | undefined);
   const base = {
     harnessTool: event,
     event,
-    cwd: str(raw.cwd) ?? (roots[0] as string | undefined),
+    cwd,
+    ...(project ? { project } : {}),
     session: str(raw.conversation_id),
   };
   if (event === "beforeShellExecution") return { ...base, calls: [{ tool: "bash", input: { command: raw.command } }] };
@@ -1480,7 +1505,7 @@ export function fromCursor(raw: Record<string, unknown>): HarnessRequest {
 
 /**
  * The generic contract: gnomon's own names, as `gnomon guard --tool <kind>
- * --input <json>` takes them, on stdin as `{"tool", "input", "cwd"?,
+ * --input <json>` takes them, on stdin as `{"tool", "input", "cwd"?, "project"?,
  * "session_id"?}`.
  */
 export function fromGeneric(raw: Record<string, unknown>): HarnessRequest {
@@ -1488,6 +1513,7 @@ export function fromGeneric(raw: Record<string, unknown>): HarnessRequest {
   return {
     harnessTool: tool,
     cwd: str(raw.cwd),
+    ...(str(raw.project) ? { project: str(raw.project) } : {}),
     session: str(raw.session_id),
     calls: [{ tool, input: obj(raw.input) }],
   };
@@ -1521,6 +1547,8 @@ export async function guardHarnessRequest(
 ): Promise<GuardVerdict> {
   const cwd = opts.cwd ?? hr.cwd ?? process.cwd();
   const session = opts.session ?? hr.session;
+  const project = opts.project ?? hr.project;
+  if (project && !opts.project) opts = { ...opts, project };
   if (hr.harnessTool && !opts.hostTool) opts = { ...opts, hostTool: hr.harnessTool };
   if (opts.callId ?? hr.callId) opts = { ...opts, callId: opts.callId ?? hr.callId };
   if (hr.permissionMode) {
