@@ -25,6 +25,7 @@ import {
   routeInput,
   resolveContext,
   auditSurface,
+  tomlControlCharacters,
   BLOCK_KEYS,
   recomputeManifest,
   PROBE_TIMEOUT_MS,
@@ -1255,6 +1256,55 @@ describe("TOML conformance — the accepted subset is pinned, not implied", () =
       // Trailing content after a value is an error in TOML and one long string
       // here, quotes included.
       expect(golden.gnomon.looser.junk_after_string).toBe('"value" extra');
+    });
+
+    // #206. A real surface had a literal backspace inside a bash_allow entry,
+    // '^septacore check<BS>', from a generator that wrote "\b". tomllib refuses
+    // the file; gnomon read it and the entry could never match. Nothing said so.
+    it("finds each control character TOML refuses, with line, column, table and key (#206)", () => {
+      expect(tomlControlCharacters(read("toml_looser.toml"))).toEqual(golden.control_characters);
+      // Still read verbatim: the byte is in the value.
+      expect(golden.gnomon.looser.control_char).toBe("^septacore check\b");
+      // TOML allows a tab in a string and the CR of a CRLF line end; the
+      // escape "\b" is two characters in the file, and legal.
+      expect(tomlControlCharacters("a = 'x\ty'\r\nb = \"\\b\"\r\n[t]\r\nc = 1 # é\r\n")).toEqual([]);
+      // In a basic string, in a comment, DEL, a lone CR; in a multi-line
+      // array, the array's key.
+      expect(tomlControlCharacters('k = "a\x1bb"\n# x\x00\n[t.u]\nd = \'\x7f\'\nr = \'a\rb\'\nlist = [\n  \'ok\',\n  \'x\x08\',\n]\n')).toEqual([
+        { line: 1, column: 7, code: 0x1b, table: null, key: "k" },
+        { line: 2, column: 4, code: 0x00, table: null, key: null },
+        { line: 4, column: 6, code: 0x7f, table: "t.u", key: "d" },
+        { line: 5, column: 7, code: 0x0d, table: "t.u", key: "r" },
+        { line: 8, column: 5, code: 0x08, table: "t.u", key: "list" },
+      ]);
+    });
+
+    it("the surface audit warns of one in a surface file, naming file, line and key, and loads the surface (#206)", () => {
+      const dir = mkdtempSync(join(tmpdir(), "gnomon-toml-control-"));
+      mkdirSync(join(dir, ".gnomon", "profiles"), { recursive: true });
+      writeFileSync(
+        join(dir, ".gnomon", "roles.toml"),
+        "[roles.verifier]\ntools = [\"bash\"]\nbash_allow = [\n  '^git status',\n  '^septacore check\b',\n]\n"
+      );
+      writeFileSync(join(dir, ".gnomon", "profiles", "local.toml"), "# a\x1b[2J comment\n");
+      const config = loadConfig(dir);
+      expect((config.roles.verifier as { bash_allow: string[] }).bash_allow[1]).toBe("^septacore check\b");
+      const hits = auditSurface(config).filter((p) => /control character/.test(p.problem));
+      expect(hits.map((p) => p.where)).toEqual([
+        ".gnomon/roles.toml line 5 [roles.verifier] bash_allow",
+        ".gnomon/profiles/local.toml line 1",
+      ]);
+      expect(hits.every((p) => !p.fatal)).toBe(true);
+      expect(hits[0]!.problem).toMatch(/U\+0008/);
+      expect(hits[0]!.problem).toMatch(/TOML 1\.0 refuses/);
+      expect(hits[0]!.fix).toMatch(/grep -nP .* \.gnomon\/roles\.toml$/);
+      expect(hits[1]!.problem).toMatch(/U\+001B, ESC/);
+
+      // Fixed, nothing is said.
+      writeFileSync(join(dir, ".gnomon", "roles.toml"), "[roles.verifier]\nbash_allow = ['^septacore check\\b']\n");
+      rmSync(join(dir, ".gnomon", "profiles", "local.toml"));
+      expect(auditSurface(loadConfig(dir)).filter((p) => /control character/.test(p.problem))).toEqual([]);
+      rmSync(dir, { recursive: true, force: true });
     });
   });
 

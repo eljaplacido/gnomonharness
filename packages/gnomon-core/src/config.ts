@@ -945,6 +945,70 @@ export function parseToml(content: string): Record<string, unknown> {
 }
 
 /**
+ * The control characters TOML 1.0 refuses anywhere in a file, in strings and
+ * comments alike: U+0000-U+0008, U+000A-U+001F and U+007F. Tab is allowed,
+ * LF ends a line, and CR only as the first half of a CRLF line end.
+ */
+// eslint-disable-next-line no-control-regex
+const TOML_CONTROL = /[\u0000-\u0008\u000A-\u001F\u007F]/;
+
+/** One line holding a control character TOML refuses (tomlControlCharacters). */
+export interface TomlControlCharacter {
+  /** 1-based line. */
+  line: number;
+  /** 1-based column of the first such character on the line. */
+  column: number;
+  /** Its code point. */
+  code: number;
+  /** The [table] (or [[array]]) the line is in; null before any header. */
+  table: string | null;
+  /** The key whose value the line holds (a multi-line array's key on its later lines); null for a header, comment or blank line. */
+  key: string | null;
+}
+
+/**
+ * Every line of a TOML file holding a control character TOML 1.0 refuses
+ * (#206). parseToml reads such a byte verbatim, as it reads an unknown
+ * escape (CONTRACTS.md §5.4): refusing would stop a surface that loads today
+ * from loading at all. But the byte renders as nothing, so a pattern holding
+ * one reads correctly and matches nothing; auditSurface reports each line as
+ * a warning, with the file, line and key. Lines and keys are found the way
+ * parseToml finds them.
+ */
+export function tomlControlCharacters(content: string): TomlControlCharacter[] {
+  const found: TomlControlCharacter[] = [];
+  let table: string | null = null;
+  let arrayKey: string | null = null;
+  let depth = 0;
+  const brackets = (t: string) => (t.match(/\[/g) ?? []).length - (t.match(/\]/g) ?? []).length;
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]!.endsWith("\r") ? lines[i]!.slice(0, -1) : lines[i]!;
+    const text = stripComment(raw.trim());
+    let key: string | null = null;
+    if (depth > 0) {
+      key = arrayKey;
+      depth += brackets(text);
+    } else if (text) {
+      const header = /^\[\[?(.+?)\]\]?$/.exec(text);
+      const kv = /^(?:([A-Za-z0-9_-]+)|"([^"]*)"|'([^']*)')\s*=\s*([\s\S]*)$/.exec(text);
+      if (kv) {
+        key = kv[1] ?? kv[2] ?? kv[3]!;
+        if (/=\s*\[[^\]]*$/.test(text)) {
+          arrayKey = key;
+          depth = brackets(text);
+        }
+      } else if (header) {
+        table = header[1]!.trim();
+      }
+    }
+    const at = raw.search(TOML_CONTROL);
+    if (at >= 0) found.push({ line: i + 1, column: at + 1, code: raw.charCodeAt(at), table, key });
+  }
+  return found;
+}
+
+/**
  * Strip a trailing `# ...` comment from a value, honouring quoted strings.
  *
  * Every documented value in config.toml carries an inline comment listing its
@@ -4202,6 +4266,50 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
           where,
           problem: `model = "${model}" is an Ollama-style tag, but "${endpoint}" is a cloud endpoint.`,
           fix: `Run /models to see what "${endpoint}" actually serves.`,
+          fatal: false,
+        });
+      }
+    }
+  }
+
+  // ── Control characters in the surface TOML (#206) ────────────────────────
+  //
+  // TOML 1.0 refuses a control character other than tab anywhere in a file.
+  // parseToml reads one verbatim, and it renders as nothing: a bash_allow
+  // entry '^septacore check<BS>', written by a generator that meant "\b",
+  // loaded and could never match. A warning rather than a refusal, as an
+  // unknown escape is accepted (CONTRACTS.md §5.4): refusing would stop a
+  // surface that loads today from loading at all over one entry.
+  if (typeof config.gnomonDir === "string" && config.gnomonDir) {
+    const files = ["config.toml", "roles.toml", "tools.toml", "policy.toml"];
+    try {
+      const prof = join(config.gnomonDir, "profiles");
+      if (existsSync(prof)) {
+        files.push(...readdirSync(prof).filter((f) => f.endsWith(".toml")).sort().map((f) => `profiles/${f}`));
+      }
+    } catch {
+      // an unreadable profiles/ fails loadConfig, which says so
+    }
+    const NAMES: Record<number, string> = { 0x00: "NUL", 0x08: "backspace", 0x0b: "vertical tab", 0x0c: "form feed", 0x0d: "CR", 0x1b: "ESC", 0x7f: "DEL" };
+    for (const file of files) {
+      let text: string;
+      try {
+        text = readFileSync(join(config.gnomonDir, file), "utf-8");
+      } catch {
+        continue;
+      }
+      for (const c of tomlControlCharacters(text)) {
+        const name = NAMES[c.code];
+        problems.push({
+          where: `.gnomon/${file} line ${c.line}${c.table ? ` [${c.table}]` : ""}${c.key ? ` ${c.key}` : ""}`,
+          problem:
+            `a control character (U+${c.code.toString(16).toUpperCase().padStart(4, "0")}${name ? `, ${name}` : ""}) ` +
+            `at column ${c.column}. TOML 1.0 refuses the file; gnomon reads the byte verbatim, and it renders ` +
+            `as nothing, so the line looks correct in a terminal and in a diff` +
+            (c.key ? ` while the value holds a byte nobody sees: a pattern with one in it matches nothing.` : "."),
+          fix:
+            `Remove the byte. If a regex word boundary was meant, write \\b in a literal string ('^x\\b') ` +
+            `or \\\\b in a basic one ("^x\\\\b"). To find it:  grep -nP '[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]' .gnomon/${file}`,
           fatal: false,
         });
       }

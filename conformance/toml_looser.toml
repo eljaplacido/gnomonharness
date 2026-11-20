@@ -50,6 +50,14 @@ comment_only_value = #
 duplicate_key = 1
 duplicate_key = 2
 
+# TOML: a control character other than tab (U+0000-U+0008, U+000A-U+001F,
+# U+007F) in a string -- in any line -- is an error. gnomon: read verbatim, and
+# reported by the surface audit as a warning naming the file, line and key
+# (#206). The byte after "check" below is a literal backspace (0x08), put there
+# by a generator that wrote "\b" meaning the regex word boundary: it renders as
+# nothing, and a pattern holding it matches nothing.
+control_char = '^septacore check'
+
 # TOML: redefining a table is an error. gnomon: merges into it, silently. This
 # one is benign in practice and is how a surface split across sections still
 # works, but it is not TOML.
