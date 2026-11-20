@@ -596,6 +596,27 @@ describe("gnomon guard — the rules are committed ones", () => {
     expect(merged.base_note).toBeUndefined();
   });
 
+  it("Claude Code's and Cursor's reason say which rules decided, as the generic document's base_note does", async () => {
+    const start = surface("never");
+    const main = sh(["rev-parse", "--abbrev-ref", "HEAD"]);
+    sh(["checkout", "-q", "-b", "pr-edit"]);
+    put(".gnomon/roles.toml", `[roles.implement]\nmodel = "m"\ntools = ["bash"]\n`);
+    commit("change .gnomon/ on the PR branch");
+    const v = await guardToolCall({ cwd: repo, call: forcePush, role: "implement", session: "cc-note" });
+    expect(v).toMatchObject({ decision: "deny", base: start });
+    expect(v.base_note).toContain(`changes .gnomon/ from ${main}`);
+    const reason = JSON.parse(toClaudeCode(v)).hookSpecificOutput.permissionDecisionReason as string;
+    expect(reason).toContain(v.reason);
+    expect(reason).toContain(`Which rules: ${v.base_note}`);
+    const cursor = JSON.parse(toCursor(v, "beforeShellExecution")) as { user_message: string; agent_message: string };
+    expect(cursor.user_message).toContain(v.base_note!);
+    expect(cursor.agent_message).toContain(v.base_note!);
+    // No note, nothing added.
+    const own = await guardToolCall({ cwd: repo, call: forcePush, role: "implement", base: start });
+    expect(own.base_note).toBeUndefined();
+    expect(JSON.parse(toClaudeCode(own)).hookSpecificOutput.permissionDecisionReason).not.toContain("Which rules");
+  });
+
   it("a branch that does not touch .gnomon/ is decided by its own HEAD, with no note", async () => {
     surface("never");
     sh(["checkout", "-q", "-b", "feature"]);

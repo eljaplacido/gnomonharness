@@ -68,6 +68,14 @@ valid, timely, well-formed replies are now read from their symptoms.
   to be slow against; announcing it needs a declared throughput floor, which
   no surface key provides yet. Pinned as a failing test until announced.
 
+- **`gnomon guard --from claude-code` (and `--from cursor`) say which rules
+  decided.** When a branch that changes `.gnomon/` is decided by the default
+  branch's rules at its merge-base, the generic document and the trail carried
+  `base_note`, but Claude Code's `permissionDecisionReason` and Cursor's
+  messages did not: a user editing the policy on a branch was refused by
+  main's rules with no hint why. The reason now ends `Which rules: <the
+  note>.` (CONTRACTS.md §10).
+
 ### Added
 
 - **New opt-in `[approval] readonly_bash = "allow"`** (default `"ask"`, no

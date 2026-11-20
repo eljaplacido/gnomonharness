@@ -1550,10 +1550,16 @@ export async function guardHarnessRequest(
   return worst!;
 }
 
-/** The line a person or a model is shown. */
+/**
+ * The line a person or a model is shown. A `base_note` is said too: when a
+ * branch that changes `.gnomon/` is decided by the default branch's rules,
+ * the generic document and the trail say so, and without it here a Claude
+ * Code or Cursor user sees their branch's policy ignored with no hint why.
+ */
 function said(v: GuardVerdict): string {
   const what = v.rule && v.rule !== "approval" ? ` (${v.rule}${v.pattern ? ` /${v.pattern}/` : ""})` : "";
-  return `gnomon guard${what}: ${v.reason}`;
+  const which = v.base_note ? ` Which rules: ${v.base_note}.` : "";
+  return `gnomon guard${what}: ${v.reason}${which}`;
 }
 
 /**
