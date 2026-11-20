@@ -26,6 +26,20 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`gnomon guard install` says when the hook it writes has no role**
+  (#205). Each hook passes `--agent claude-code` (`opencode`, `cursor`), and
+  the guard maps that to a role through `[check.roles]`. A project with no
+  entry there -- 32 of 33 in the 2026-11-20 shadow test -- got a hook that
+  answered every call "ask" ("no role") and protected only by asking about
+  everything, and nothing said so. `install` (printing or `--write`, every
+  host) now warns on stderr with the `[check.roles]` lines to add and the
+  declared roles; it still writes the hook and exits as before. `gnomon guard
+  status` lists such a hook in `warnings` (no exit change). The agent names
+  are pinned as `hook_agents` in `conformance/guard_decision.json`
+  (CONTRACTS.md §10).
+
 ## [0.6.3] — 2026-11-20
 
 Fixes from a multi-machine shadow test of gnomon across real projects on

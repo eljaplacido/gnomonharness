@@ -994,6 +994,17 @@ Cursor's `hooks.json` are written where they always are and listed in
 directory or a versioned directory (`/v22.22.2/`), which another clone will not
 have. The exit is the same either way.
 
+Each hook passes an agent name as `--agent` (`hook_agents` in the fixture:
+`claude-code`, `opencode`, `cursor`; the opencode plugin's is a default that
+`$GNOMON_GUARD_AGENT` overrides), which the guard maps to a role through
+`[check.roles]` in `.gnomon/policy.toml`. With no entry for it, or one naming
+no declared role, the guard has **no role** and answers every call `ask`
+(rule `error`): the hook protects only by asking about everything. `install`
+then warns on stderr, with the `[check.roles]` lines to add, read from the
+working tree's surface, and still writes the hook and exits as it would
+otherwise (#205). The guard reads the rules at the session's base, so the
+entry is in force once it is committed.
+
 **`gnomon guard status`** (`--dir`, `--expect <hosts>`, `--json`, schema
 `gnomon.guard.status/1`) says, per host (`claude-code`, `opencode`,
 `cursor`), whether the hook `gnomon guard install` wrote is still there:
@@ -1008,7 +1019,9 @@ recorded), `disabled` (`disableAllHooks` in the project, local or user Claude
 Code settings) or `not_installed`. Claude Code's file is
 `.claude/settings.local.json` when `install --local` recorded it, or when only
 it holds gnomon's hook, else `.claude/settings.json`. `outdated` is listed in
-`warnings`, not `findings`, and does not change the exit. A host is expected when a hook file with
+`warnings`, not `findings`, and does not change the exit. So is a host whose
+hook is in place (`ok` or `outdated`) and has no role in the working tree's
+`[check.roles]`, as `<host>: no role — … fix: [check.roles] <agent> = "<role>" …`. A host is expected when a hook file with
 gnomon's guard in it is committed at HEAD, `install --write` recorded it, or
 `--expect` names it. It also says which host sessions reached the guard
 (§44): `sessions_seen`, `last_decision`, `sessions` and
