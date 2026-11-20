@@ -62,6 +62,8 @@ describe("gnomon security: the contract", () => {
     expect(r.findings.map((f) => f.id)).toContain("host_exec");
     expect(r.findings.find((f) => f.id === "host_exec")!.fix).toMatch(/exec = "os"/);
     expect(r.findings.map((f) => f.id)).not.toContain("audit_off");
+    // The scaffold declares [governance] level = "prevent".
+    expect(r.findings.map((f) => f.id)).not.toContain("governance_off");
     const verifier = r.roles.find((x) => x.role === "verifier")!;
     expect(verifier).toMatchObject({ exec: "off", bash: true, writes: false, bash_allowlist: true });
   });
@@ -91,6 +93,54 @@ describe("gnomon security: the contract", () => {
     expect(v).toMatchObject({ exec: "docker", read_only_source: true, network: false });
     expect(r.findings.find((f) => f.id === "host_exec")!.message).not.toMatch(/verifier/);
     expect(r.findings.find((f) => f.id === "judge_can_write")?.message ?? "").not.toMatch(/verifier/);
+  });
+
+  // Measured 2026-11-20 (gnomon 0.6.2): a surface with no [governance] had
+  // secret_path, ci_path and outside_root off, and nothing here said so.
+  const policyOf = (dir: string) => join(dir, ".gnomon/policy.toml");
+  const withoutGovernance = (dir: string, extra = ""): string => {
+    const p = policyOf(dir);
+    const text = readFileSync(p, "utf-8");
+    expect(text).toMatch(/^\[governance\]\n/m);
+    writeFileSync(p, text.replace(/^\[governance\]\n/m, "").replace(/^level = "prevent"\n/m, "") + extra);
+    return dir;
+  };
+
+  it("no [governance]: governance_off, advice, names the families that are off and the fix", async () => {
+    const r = buildSecurityReport(withoutGovernance(await project()), {}, "linux");
+    shapeHolds(r);
+    expect(r.roles.every((x) => x.governance === undefined)).toBe(true);
+    const f = r.findings.find((x) => x.id === "governance_off")!;
+    expect(f.severity).toBe("advice");
+    expect(f.message).toMatch(/^no \[governance\] is declared/);
+    expect(f.message).toMatch(/secrets and ci families are off/);
+    expect(f.message).toMatch(/secret_path, ci_path, outside_root never run/);
+    expect(f.fix).toMatch(/^\[governance\] level = "prevent"/);
+    expect(r.exit).toBe(0);
+    expect(formatSecurity(r).join("\n")).toMatch(/\[governance_off\] no \[governance\] is declared/);
+  });
+
+  it("[governance] with families below prevent names them, and only them", async () => {
+    const dir = await project();
+    const p = policyOf(dir);
+    writeFileSync(p, readFileSync(p, "utf-8").replace(/^level = "prevent"\n/m, 'level = "prevent"\nsecrets = "observe"\nci = "advise"\n'));
+    const r = buildSecurityReport(dir, {}, "linux");
+    shapeHolds(r);
+    const f = r.findings.find((x) => x.id === "governance_off")!;
+    expect(f.message).toBe("below prevent: secrets=observe, ci=advise; those families' verdicts are recorded, not applied");
+    expect(f.message).not.toMatch(/write|bash|network|rules/);
+    expect(r.exit).toBe(0);
+  });
+
+  it("a governance layer on one role only: the other roles are named", async () => {
+    const dir = withoutGovernance(await project());
+    const roles = join(dir, ".gnomon/roles.toml");
+    writeFileSync(roles, `${readFileSync(roles, "utf-8")}\n[roles.verifier.governance]\nlevel = "prevent"\n`);
+    const r = buildSecurityReport(dir, {}, "linux");
+    expect(r.roles.find((x) => x.role === "verifier")!.governance).toBeDefined();
+    const f = r.findings.find((x) => x.id === "governance_off")!;
+    const others = r.roles.filter((x) => x.role !== "verifier").map((x) => x.role);
+    expect(f.message.startsWith(`${others.join(", ")} have no governance, so`)).toBe(true);
   });
 
   it("approval never with commands on the host is advised", async () => {

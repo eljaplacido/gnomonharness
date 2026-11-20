@@ -487,6 +487,42 @@ describe("gnomon guard status — a missing, changed or switched-off hook is a f
     rmSync(r, { recursive: true, force: true });
   });
 
+  it("says where governance falls short of prevent, in --json and as a note, with no change to the exit", async () => {
+    const text = async (dir: string) => {
+      const lines: string[] = [];
+      const code = await cmdGuard(["status", "--dir", dir], (s) => lines.push(s));
+      return { code, text: lines.join("\n") };
+    };
+    // The cases' surface declares no [governance].
+    let r = governedRepo("never");
+    let s = await status(r);
+    expect(s.code).toBe(0);
+    expect(s.st.governance!.undeclared).toEqual(s.st.governance!.roles);
+    expect(s.st.governance!.roles.length).toBeGreaterThan(0);
+    let t = await text(r);
+    expect(t.code).toBe(0);
+    expect(t.text).toMatch(/^note: no \[governance\] declared: secrets and ci are off/m);
+    expect(t.text).toMatch(/fix: \[governance\] level = "prevent"/);
+    rmSync(r, { recursive: true, force: true });
+
+    r = governedRepo("never", '\n[governance]\nlevel = "prevent"\nci = "advise"\n');
+    s = await status(r);
+    expect(s.st.governance).toMatchObject({ undeclared: [], below_prevent: [{ family: "ci", level: "advise" }] });
+    t = await text(r);
+    expect(t.text).toMatch(/^note: governance below prevent: ci=advise$/m);
+    rmSync(r, { recursive: true, force: true });
+
+    r = governedRepo("never", '\n[governance]\nlevel = "prevent"\n');
+    s = await status(r);
+    expect(s.st.governance).toMatchObject({ undeclared: [], below_prevent: [] });
+    expect((await text(r)).text).not.toMatch(/^note:/m);
+    rmSync(r, { recursive: true, force: true });
+
+    const plain = realpathSync.native(mkdtempSync(join(tmpdir(), "gnomon-guard-plain-")));
+    expect((await status(plain)).st.governance).toBeNull();
+    rmSync(plain, { recursive: true, force: true });
+  });
+
   it("a hook never committed is still expected once install --write recorded it, or when --expect names it", async () => {
     const r = governedRepo("never");
     expect(await cmdGuard(["install", "opencode", "--write", "--dir", r])).toBe(0);
