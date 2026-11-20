@@ -219,8 +219,8 @@ export function buildSecurityReport(dir: string, trust: TrustOptions = {}, platf
       severity: "advice",
       message:
         platform === "win32"
-          ? `${names} run${osRoles.length === 1 ? "s" : ""} bash under exec = "os", and Windows has no OS sandbox: on this machine every shell command is refused (fail closed), so there is no bash here`
-          : `${names} run${osRoles.length === 1 ? "s" : ""} bash under exec = "os": on a Windows machine that runs this surface every shell command is refused (Windows has no OS sandbox), so a repository shared with Windows has no bash there`,
+          ? `${names} run${osRoles.length === 1 ? "s" : ""} bash under exec = "os", and Windows has no OS sandbox: on this machine every shell command is refused (fail closed), so there is no bash here, and [verify] and gnomon check cannot run either (check gives no verdict)`
+          : `${names} run${osRoles.length === 1 ? "s" : ""} bash under exec = "os": on a Windows machine that runs this surface every shell command is refused (Windows has no OS sandbox), so a repository shared with Windows has no bash there, and no [verify] or gnomon check verdict either`,
       fix: 'for Windows: exec = "docker" ([sandbox] in .gnomon/policy.toml, or per role in roles.toml), or run gnomon inside WSL2',
     });
   }

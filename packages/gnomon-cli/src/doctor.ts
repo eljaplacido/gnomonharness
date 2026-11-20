@@ -224,7 +224,7 @@ export async function runDoctor(opts: { dir: string }, deps: DoctorDeps): Promis
         add({
           kind: "surface",
           severity: "info",
-          message: `${osRoles.join(", ")} run${osRoles.length === 1 ? "s" : ""} bash under exec = "os", and Windows has no OS sandbox: on this machine every shell command is refused`,
+          message: `${osRoles.join(", ")} run${osRoles.length === 1 ? "s" : ""} bash under exec = "os", and Windows has no OS sandbox: on this machine every shell command is refused, and [verify] and gnomon check cannot run`,
           fix: 'exec = "docker" for Windows ([sandbox] in .gnomon/policy.toml, or per role in roles.toml), or run gnomon inside WSL2',
         });
       }
