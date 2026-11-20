@@ -22,8 +22,11 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
+  GOVERNANCE_FIX,
+  UNDECLARED_OFF,
   auditSurface,
   evaluateTrust,
+  governanceGaps,
   isToolEnabled,
   listRoles,
   loadConfig,
@@ -46,6 +49,7 @@ export const SECURITY_FINDING_IDS = [
   "record_tamper",
   "host_hook",
   "audit_off",
+  "governance_off",
   "host_exec",
   "judge_can_write",
   "approval_never_on_host",
@@ -232,6 +236,28 @@ export function buildSecurityReport(dir: string, trust: TrustOptions = {}, platf
       message: "the audit trail is off: nothing afterwards can show what an agent did here",
       fix: "[audit] enabled = true in .gnomon/config.toml (gnomon init turns it on)",
     });
+  }
+  // Governance: a role no layer governs has no secret_path, ci_path or
+  // outside_root rule at all, and a family below prevent records its verdicts
+  // instead of applying them. Measured 2026-11-20: a scripted hostile run held
+  // 8 of 17 steps on an undeclared surface, 16 of 17 under level = "prevent".
+  const gaps = governanceGaps(config, roles.map((r) => r.role));
+  if (gaps.undeclared.length > 0 || gaps.below_prevent.length > 0) {
+    const parts: string[] = [];
+    if (gaps.undeclared.length > 0) {
+      const all = gaps.undeclared.length === roles.length;
+      const off = UNDECLARED_OFF.map((o) => o.rule).join(", ");
+      parts.push(
+        `${all ? "no [governance] is declared" : `${gaps.undeclared.join(", ")} ha${gaps.undeclared.length === 1 ? "s" : "ve"} no governance`}, ` +
+          `so the secrets and ci families are off and the write family does not judge shell writes outside the repository (${off} never run): ` +
+          "reading .env or ~/.ssh, printenv, editing CI definitions and `>> ~/.bashrc` are not refused"
+      );
+    }
+    if (gaps.below_prevent.length > 0) {
+      const named = gaps.below_prevent.map((b) => `${b.family}=${b.level}${b.roles.length === roles.length ? "" : ` (${b.roles.join(", ")})`}`);
+      parts.push(`below prevent: ${named.join(", ")}; those families' verdicts are recorded, not applied`);
+    }
+    findings.push({ id: "governance_off", severity: "advice", message: parts.join("; "), fix: GOVERNANCE_FIX });
   }
   let tamper = 0;
   try {

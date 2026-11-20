@@ -409,6 +409,53 @@ tools = ["read"]
   }, 15000);
 });
 
+describe("startup: a surface with no [governance] says so (gnomon security governance_off)", () => {
+  // Measured 2026-11-20: with no [governance], secret_path, ci_path and
+  // outside_root never run, and neither the banner nor `gnomon task` said so.
+  const ROLES = `
+[roles.implement]
+model = "implement-model"
+tools = ["read", "bash"]
+`;
+  const GOVERNED = `[governance]\nlevel = "prevent"\n`;
+
+  it("the session names what is off, once, before the role", async () => {
+    const dir = surface({ "config.toml": BASE_CONFIG, "roles.toml": ROLES, "tools.toml": FOUR_TOOLS });
+    const r = await run(dir, []);
+    const said = r.lines.filter((l) => l.includes("no [governance] declared"));
+    expect(said).toHaveLength(1);
+    expect(said[0]).toMatch(/secrets and ci are off and shell writes outside the repository are not judged/);
+    expect(said[0]).toMatch(/\[governance\] level = "prevent"/);
+    expect(r.lines.indexOf(said[0]!)).toBeLessThan(r.lines.indexOf("Role: implement"));
+  }, 15000);
+
+  it('and says nothing under [governance] level = "prevent"', async () => {
+    const dir = surface({ "config.toml": BASE_CONFIG, "roles.toml": ROLES, "tools.toml": FOUR_TOOLS, "policy.toml": GOVERNED });
+    const r = await run(dir, []);
+    expect(r.text).not.toMatch(/no \[governance\]|no governance for/);
+    expect(r.lines).toContain("Role: implement");
+  }, 15000);
+
+  it("a task notes it on stderr when verbose, and not under --json", async () => {
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async () => ({ ok: true, json: async () => ({ message: { content: "answered" } }) })) as unknown as typeof fetch;
+    try {
+      for (const [files, verbose, expected] of [
+        [{}, true, 1],
+        [{}, false, 0],
+        [{ "policy.toml": GOVERNED }, true, 0],
+      ] as const) {
+        const dir = surface({ "config.toml": BASE_CONFIG, "roles.toml": ROLES, "tools.toml": FOUR_TOOLS, ...files });
+        const err: string[] = [];
+        await promptLoop.runTask(loadConfig(dir), "hello", { role: "implement", verbose, stderr: { write: (t: string) => (err.push(t), true) } });
+        expect(err.join("").split("\n").filter((l) => l.includes("no [governance] declared")), JSON.stringify({ files, verbose })).toHaveLength(expected);
+      }
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  }, 30000);
+});
+
 describe("runPromptLoop: the sandbox note publishes the limit of network = false", () => {
   it("says what network = false refuses in bash, and that it is not isolation", async () => {
     // The dial reads like process isolation and is not. Since #63 bash refuses

@@ -88,6 +88,16 @@ valid, timely, well-formed replies are now read from their symptoms.
 
 ### Added
 
+- **`gnomon security` finding `governance_off`** (advice). If a surface
+  declares no `[governance]`, `secret_path`, `ci_path` and `outside_root`
+  never run, and until now nothing said so. A scripted hostile run held 8 of
+  17 steps on such a surface and 16 of 17 under `level = "prevent"`. The
+  finding names the roles with no governance and any family set below
+  prevent. Interactive sessions and `gnomon task` (unless `--json`) print one
+  `Governance:` line at startup. `gnomon guard status` adds a `governance`
+  key to its JSON and a `note:` line to its text output. None of these change
+  an exit code.
+
 - **New opt-in `[approval] readonly_bash = "allow"`** (default `"ask"`, no
   behaviour change unless declared). Under `gate = "on_write"`, a bash call a
   conservative reader (`readonly_bash.ts`) proves read-only is no longer

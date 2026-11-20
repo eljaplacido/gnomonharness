@@ -40,6 +40,9 @@ import { hostSurface } from "./host_surface.js";
 import { parseSurfaceTree, readSurfaceBlobs, SurfaceTreeError, writeSurfaceTree, type SurfaceEntry } from "./surface_tree.js";
 /** For `gnomon guard install`, which writes hook files into the project. */
 export { writeFileIn } from "./root_fs.js";
+/** For `gnomon guard status`, which says where governance falls short of prevent. Already loaded here. */
+export { loadConfig, listRoles } from "./config.js";
+export { GOVERNANCE_FIX, governanceGapLine, governanceGaps, type GovernanceGaps } from "./governance.js";
 import {
   closeSync,
   existsSync,

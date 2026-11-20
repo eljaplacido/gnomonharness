@@ -19,9 +19,14 @@ import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
+  GOVERNANCE_FIX,
   GUARD_HARNESSES,
   GUARD_TOOLS,
   committedAtHead,
+  governanceGapLine,
+  governanceGaps,
+  listRoles,
+  loadConfig,
   guardExit,
   guardLiveSessions,
   guardRepo,
@@ -30,6 +35,7 @@ import {
   readHarness,
   toClaudeCode,
   toCursor,
+  type GovernanceGaps,
   type GuardHarness,
   type GuardLiveSession,
   type GuardVerdict,
@@ -825,6 +831,15 @@ export interface GuardStatus {
    * tells the two apart.
    */
   unguarded_sessions: Array<{ session: string; started: string }>;
+  /**
+   * Where the working tree's surface leaves governance below prevent, read as
+   * `gnomon security` reads it (governance_off): `undeclared` roles have no
+   * governance layer, so secret_path, ci_path and outside_root never run for
+   * them; `below_prevent` families are set to observe or advise. Not a
+   * finding: it changes no exit. Null when not governed, or the surface does
+   * not load.
+   */
+  governance: GovernanceGaps | null;
 }
 
 const readJson = (f: string): Record<string, unknown> | null => {
@@ -895,8 +910,15 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
     last_decision: null,
     sessions: [],
     unguarded_sessions: [],
+    governance: null,
   };
   if (!repo) return status;
+  try {
+    const config = loadConfig(repo.project);
+    status.governance = governanceGaps(config, listRoles(config).sort());
+  } catch {
+    // A surface that does not load: `gnomon doctor` and the guard say why.
+  }
   const installed = readJson(join(repo.stateDir, "installed.json")) ?? {};
   const recorded = (host: string) => installed[host] as { file?: string; sha256?: string; at?: string } | undefined;
   const committed = (file: string) => committedAtHead(repo.toplevel, relative(repo.toplevel, file));
@@ -1054,6 +1076,8 @@ function statusGuard(args: GuardArgs, out: (s: string) => void): number {
     for (const h of st.hosts) out(`${h.host.padEnd(12)} ${h.state.padEnd(14)} ${relative(st.project!, h.file)}${h.detail ? `  ${h.detail}` : ""}`);
     out(st.findings.length ? `\n${st.findings.length} finding(s): a host is not governed the way it was set up to be.` : "\nevery installed hook is in place.");
     for (const w of st.warnings) out(`warning: ${w}`);
+    const gaps = st.governance && governanceGapLine(st.governance);
+    if (gaps) out(`note: ${gaps}\n      fix: ${GOVERNANCE_FIX} (gnomon security says more)`);
     out(
       st.sessions_seen === 0
         ? "\nsessions: the guard has not decided a call in this repository yet."

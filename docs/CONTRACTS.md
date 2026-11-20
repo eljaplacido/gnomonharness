@@ -1012,7 +1012,12 @@ it holds gnomon's hook, else `.claude/settings.json`. `outdated` is listed in
 gnomon's guard in it is committed at HEAD, `install --write` recorded it, or
 `--expect` names it. It also says which host sessions reached the guard
 (§44): `sessions_seen`, `last_decision`, `sessions` and
-`unguarded_sessions`. Exit 0 with no finding, 2 with one, 10 when not
+`unguarded_sessions`. `governance` is the working tree's surface as
+`gnomon security` reads it (§45 `governance_off`). It has `roles`,
+`undeclared` (roles with no governance layer) and `below_prevent` (`family`,
+`level`, `roles`), and is null when the project is not governed or the surface
+does not load. The text output prints any gap as a `note:` line. A gap is not
+a finding and does not change the exit. Exit 0 with no finding, 2 with one, 10 when not
 governed; a session that never reached the guard is listed, not a finding
 (it may have made no selected call; `gnomon check` tells, §44).
 
@@ -4103,9 +4108,20 @@ governance levels (§36), `gnomon guard status` (§44) and the audit trails
 | `exit` | 0 no risk, 2 a risk, 10 could not run |
 
 Risk ids: `surface_fatal`, `chain_broken`, `record_tamper`, `host_hook`.
-Advice ids: `audit_off`, `host_exec`, `judge_can_write`,
+Advice ids: `audit_off`, `governance_off`, `host_exec`, `judge_can_write`,
 `approval_never_on_host`, `sandbox_network`, `surface_warning`. An id's
 severity is fixed; adding an id is a minor change with a fixture update.
+
+`governance_off` is one finding for the whole surface. It names the roles that
+have no governance layer (neither `[governance]` nor
+`[roles.<name>.governance]`). For those roles `secret_path`, `ci_path` and
+`outside_root` never run (§37, §38), so the `secrets` and `ci` families are off
+and shell writes outside the root are not judged. It also names every family
+(§36 `governance_family`) that a declared layer sets below prevent (`observe`
+or `advise`), with the roles when not every role is affected. `rules` is never
+named, because its floor is prevent. The fix is `[governance] level =
+"prevent"` with no family set below it. A malformed level is reported as
+`surface_fatal` and does not produce this finding.
 
 **What it is not.** A posture is configuration, not a test: it says a role's
 commands run under `exec = "os"`, not that Landlock held on this kernel

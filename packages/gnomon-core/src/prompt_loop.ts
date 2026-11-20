@@ -198,7 +198,7 @@ import {
 } from "./live_record.js";
 import { connectMcp, type McpRegistry } from "./mcp.js";
 import { AFTER_REFUSAL_REASON, AfterRefusalWindow, resolveAfterRefusal } from "./after_refusal.js";
-import { resolveLevels, resolveProtectedPaths } from "./governance.js";
+import { governanceGapLine, governanceGaps, resolveLevels, resolveProtectedPaths } from "./governance.js";
 import { settleMcpTools, toolsHash } from "./tools_hash.js";
 import {
   REASONING_EFFORT_FIELD,
@@ -3139,6 +3139,19 @@ function printBanner(): void {
   console.log("Esc cancels the turn.  /mode suggest|auto lets the harness route.");
   console.log("Type /quit or Ctrl+C to exit.");
   console.log("");
+}
+
+/**
+ * The startup line when a role has no governance layer (`gnomon security`
+ * governance_off). On such a surface secret_path, ci_path and outside_root
+ * never run -- .env, printenv, CI definitions and `>> ~/.bashrc` are not
+ * refused -- and nothing at startup said so. Null when every role in `roles`
+ * is governed: a level below prevent is a choice the surface states, so it is
+ * left to `gnomon security` and `gnomon guard status`.
+ */
+export function governanceStartupLine(config: GnomonConfig, roles: readonly string[] = listRoles(config)): string | null {
+  const line = governanceGapLine({ ...governanceGaps(config, roles), below_prevent: [] });
+  return line ? `Governance: ${line} — set [governance] level = "prevent" in .gnomon/policy.toml` : null;
 }
 
 /**
@@ -9772,6 +9785,11 @@ export async function runTask(
   // when [audit.anchor] is absent; no network on this path either way.
   announceAnchorBacklog(auditSettings.anchor, { say: warn, audit: auditForTurn });
 
+  // The roles this run uses with no governance layer: the line the
+  // interactive banner prints. A note, so --json stays as quiet as before.
+  const ungoverned = governanceStartupLine(config, chain.length >= 2 ? chain : [role]);
+  if (ungoverned) note(`  ${ungoverned}`);
+
   // The window each endpoint this run routes to will be trimmed to. A note for
   // a remote endpoint on the undeclared default (C3); "auto" read before the
   // turn, so the route the record falls back on carries what was found.
@@ -12518,6 +12536,8 @@ export async function runPromptLoop(
   if (!reportSurfaceProblems(auditSurface(config), uiOf(state))) {
     process.exit(1);
   }
+  const ungoverned = governanceStartupLine(config);
+  if (ungoverned) console.log(paint(uiOf(state), "yellow", ungoverned));
 
   console.log(`Role: ${state.currentRole}`);
   const startRoute = routeRole(config, state.currentRole);

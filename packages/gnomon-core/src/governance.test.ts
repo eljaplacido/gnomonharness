@@ -20,7 +20,10 @@ import {
   GOVERNANCE_LEVELS,
   GovernanceError,
   LEVEL_FLOOR,
+  UNDECLARED_OFF,
   composeLevels,
+  governanceGapLine,
+  governanceGaps,
   levelAtLeast,
   readGovernanceLayer,
   resolveLevels,
@@ -90,6 +93,54 @@ describe("resolveLevels: max along the layers, tighten-only", () => {
     expect(g.layers).toEqual(["repo", "role:r"]);
     expect(g.levels.write).toBe("enforce");
     expect(g.levels.bash).toBe("advise");
+  });
+});
+
+describe("governanceGaps: where a surface falls short of prevent (gnomon security governance_off)", () => {
+  const roles = ["implement", "verifier"];
+
+  it("nothing declared: every role is undeclared, and the line says the families that are off", () => {
+    const g = governanceGaps({ policy: {}, roles: { implement: {}, verifier: {} } }, roles);
+    expect(g).toEqual({ roles, undeclared: roles, below_prevent: [] });
+    expect(governanceGapLine(g)).toBe("no [governance] declared: secrets and ci are off and shell writes outside the repository are not judged");
+    // What "off" means is the rules that only a declared governance runs (tools.ts).
+    expect(UNDECLARED_OFF.map((o) => o.rule).sort()).toEqual(["ci_path", "outside_root", "secret_path"]);
+    for (const o of UNDECLARED_OFF) expect(RULE_FAMILY[o.rule as keyof typeof RULE_FAMILY]).toBe(o.family);
+  });
+
+  it('level = "prevent" (or enforce) leaves no gap and no line', () => {
+    for (const level of ["prevent", "enforce"]) {
+      const g = governanceGaps({ policy: { governance: { level } }, roles: { implement: {}, verifier: {} } }, roles);
+      expect(g).toEqual({ roles, undeclared: [], below_prevent: [] });
+      expect(governanceGapLine(g)).toBeNull();
+    }
+  });
+
+  it("families below prevent are named with their level and, when not every role, the roles; rules never is", () => {
+    const g = governanceGaps(
+      {
+        policy: { governance: { level: "observe", secrets: "advise", write: "prevent" } },
+        roles: { implement: {}, verifier: { governance: { network: "prevent" } } },
+      },
+      roles
+    );
+    expect(g.undeclared).toEqual([]);
+    expect(g.below_prevent).toEqual([
+      { family: "bash", level: "observe", roles },
+      { family: "network", level: "observe", roles: ["implement"] },
+      { family: "secrets", level: "advise", roles },
+      { family: "ci", level: "observe", roles },
+    ]);
+    expect(governanceGapLine(g)).toBe("governance below prevent: bash=observe, network=observe (implement), secrets=advise, ci=observe");
+  });
+
+  it("a role-level layer alone governs that role only; a malformed one is the surface audit's, in neither list", () => {
+    const g = governanceGaps({ policy: {}, roles: { implement: { governance: { level: "prevent" } }, verifier: {} } }, roles);
+    expect(g.undeclared).toEqual(["verifier"]);
+    expect(governanceGapLine(g)).toMatch(/^no governance for verifier: secrets and ci are off/);
+    const bad = governanceGaps({ policy: {}, roles: { implement: { governance: { level: "prevnt" } }, verifier: {} } }, roles);
+    expect(bad.undeclared).toEqual(["verifier"]);
+    expect(bad.below_prevent).toEqual([]);
   });
 });
 

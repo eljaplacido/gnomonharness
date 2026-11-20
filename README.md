@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3875 TypeScript tests (3211 core, 639 cli, 18
-> natives, 7 tui) and 120 Rust tests — **3995 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3886 TypeScript tests (3218 core, 643 cli, 18
+> natives, 7 tui) and 120 Rust tests — **4006 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2483,8 +2483,10 @@ It sorts what it finds into two kinds:
 - **Advice** names a choice that contains less than gnomon can, with the
   setting that would: roles whose commands run on the host, a judge with no
   write tool that can still write through `bash`, `approval = never` on the
-  host, a sandbox with a network, the audit trail off. A fresh `gnomon init`
-  gets two of these — the scaffold runs commands on the host — and exits 0.
+  host, a sandbox with a network, the audit trail off, no `[governance]` (so
+  nothing protects secrets or CI files) or a family below prevent. A fresh
+  `gnomon init` gets two of these — the scaffold runs commands on the host —
+  and exits 0.
 
 It runs no model, starts no container and writes nothing, so it is safe in a
 pre-commit hook or a CI step. The contract is [CONTRACTS.md

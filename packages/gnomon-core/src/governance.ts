@@ -187,6 +187,85 @@ export function resolveLevels(
 }
 
 /**
+ * What a role with NO governance layer does without. Not a level: these rules
+ * exist only under a declared governance (tools.ts protectedPath,
+ * secretWordRefusal, outsideRootRefusal), so on an undeclared surface they are
+ * never evaluated. Every other rule -- bash, network, the file tools' sandbox
+ * and write_allow, and the rules family (.gnomon/, the records, git and host
+ * hooks) -- decides as it always has, which is prevent.
+ */
+export const UNDECLARED_OFF: ReadonlyArray<{ family: GovernanceFamily; rule: string }> = [
+  { family: "secrets", rule: "secret_path" },
+  { family: "ci", rule: "ci_path" },
+  { family: "write", rule: "outside_root" },
+];
+
+/**
+ * Where a surface's governance falls short of prevent, per role (`gnomon
+ * security` governance_off, the startup line, `gnomon guard status`).
+ * `undeclared`: roles no layer governs (UNDECLARED_OFF). `below_prevent`: a
+ * family a declared layer sets to observe or advise, and the roles it holds
+ * for; `rules` never appears (its floor is prevent). A role whose governance
+ * does not parse is in neither: that is the surface audit's, and fatal.
+ */
+export interface GovernanceGaps {
+  /** Every role read. */
+  roles: string[];
+  undeclared: string[];
+  below_prevent: Array<{ family: GovernanceFamily; level: GovernanceLevel; roles: string[] }>;
+}
+
+export function governanceGaps(
+  config: { policy?: unknown; roles?: Record<string, unknown> },
+  roles: readonly string[]
+): GovernanceGaps {
+  const out: GovernanceGaps = { roles: [...roles], undeclared: [], below_prevent: [] };
+  for (const role of roles) {
+    let resolved: GovernanceLevels | undefined;
+    try {
+      resolved = resolveLevels(config, role);
+    } catch {
+      continue;
+    }
+    if (!resolved) {
+      out.undeclared.push(role);
+      continue;
+    }
+    for (const family of GOVERNANCE_FAMILIES) {
+      const level = resolved.levels[family];
+      if (levelAtLeast(level, "prevent")) continue;
+      const row = out.below_prevent.find((b) => b.family === family && b.level === level);
+      if (row) row.roles.push(role);
+      else out.below_prevent.push({ family, level, roles: [role] });
+    }
+  }
+  return out;
+}
+
+/**
+ * One line for a startup banner or `gnomon guard status`: what is off or below
+ * prevent, or null when nothing is. A gap that holds for every role read
+ * names none.
+ */
+export function governanceGapLine(g: GovernanceGaps): string | null {
+  const whom = (roles: readonly string[]) => (roles.length === g.roles.length ? "" : ` (${roles.join(", ")})`);
+  const parts: string[] = [];
+  if (g.undeclared.length > 0) {
+    parts.push(
+      `${g.undeclared.length === g.roles.length ? "no [governance] declared" : `no governance for ${g.undeclared.join(", ")}`}: ` +
+        "secrets and ci are off and shell writes outside the repository are not judged"
+    );
+  }
+  if (g.below_prevent.length > 0) {
+    parts.push(`governance below prevent: ${g.below_prevent.map((b) => `${b.family}=${b.level}${whom(b.roles)}`).join(", ")}`);
+  }
+  return parts.length ? parts.join("; ") : null;
+}
+
+/** The setting that closes every gap above. */
+export const GOVERNANCE_FIX = '[governance] level = "prevent" in .gnomon/policy.toml, with no family set below it';
+
+/**
  * The agent-facing line at advise: what would have happened under prevent.
  * Appended to the tool result in gnomon's own loop. For other harnesses the
  * delivery channel is a post-tool hook (shared-governance PR 4); until then
