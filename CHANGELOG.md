@@ -43,6 +43,16 @@
     11 Windows `exec = "os"` arms recorded as failed.
   A run killed by a signal, or a non-zero exit, is still `failed` and handed
   back: an OOM-killed suite is not green.
+- **`gnomon check` says when the rules held but nothing was run.** With no
+  `[verify]` declared, `verify` was `error`, so every commit of such a project
+  (10 of 15 in the 2026-11-20 shadow test) got a verdict that read the same as
+  a crashed check. Now `verify` is `skipped` with the reason, `must_fail_first`
+  is skipped too, and the text says `HELD, UNVERIFIED`. The exit stays 10 on
+  purpose: a gate built on `gnomon check` still never passes work nobody ran
+  (CONTRACTS.md §6).
+- **The Windows `exec = "os"` advice says what else stops** (`gnomon security`
+  `exec_os_windows`, `gnomon doctor`): with no shell there, `[verify]` and
+  `gnomon check` cannot run either, so check gives no verdict on that machine.
 - **A multi-line string written on one line is read as TOML reads it.**
   `'''x'''` and `"""x"""` are valid TOML 1.0, and gnomon's parser read them as
   a one-quote string with two quotes of content at each end, silently. A trial

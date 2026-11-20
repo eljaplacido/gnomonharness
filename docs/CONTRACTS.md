@@ -532,13 +532,21 @@ inspected. A failure beats an error: when both occur the exit is 2.
 |---|---|
 | `write_allow` | pass, fail, skipped |
 | `surface` | pass, fail |
-| `verify` | pass, fail, error |
+| `verify` | pass, fail, skipped, error |
 | `must_fail_first` | pass, fail, skipped |
 | `bash_allow` | pass, fail, skipped, error |
 | `audit` | pass, error |
 
 `skipped` always carries a `reason` and is never counted as a pass. An `audit`
 pass alone is not a verdict: it records the work, it does not inspect it.
+
+**No `[verify]` declared** (since 0.6.4): `verify` is `skipped` with the reason
+"the base surface declares no [verify] command, so the change was not run", and
+`must_fail_first` is `skipped` ("no [verify] declared"). The exit stays **10**:
+the rules that applied may all have held, but nobody ran the change, and a gate
+built on `gnomon check` must not pass that. The text output names it
+`HELD, UNVERIFIED` rather than `NO VERDICT`. Until 0.6.3 `verify` was `error`
+here, which read the same as a check that could not run.
 
 Top-level keys: `schema`, `base` (merge-base, full sha), `head` (full sha or
 `"worktree"`), `role`, `surface_hash` (the **base** surface — the rules the

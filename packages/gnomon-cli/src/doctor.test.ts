@@ -206,6 +206,7 @@ describe("gnomon doctor on Windows: exec = \"os\" means no bash here (#216)", ()
     expect(f).toMatchObject({ kind: "surface", severity: "info" });
     expect(f.message).toMatch(/Windows has no OS sandbox/);
     expect(f.message).toMatch(/every shell command/);
+    expect(f.message).toMatch(/\[verify\] and gnomon check cannot run/);
     expect(f.fix).toMatch(/exec = "docker"/);
     expect(f.fix).toMatch(/WSL2/);
     expect(report.exit).toBe(DOCTOR_EXIT.clear);
