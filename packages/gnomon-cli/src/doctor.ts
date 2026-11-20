@@ -21,7 +21,17 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { loadConfig, listRoles, routeRole, recomputeManifest, isLoopbackUrl, type GnomonConfig, type TrustOptions } from "gnomon-core";
+import {
+  isLoopbackUrl,
+  isToolEnabled,
+  listRoles,
+  loadConfig,
+  recomputeManifest,
+  resolveExec,
+  routeRole,
+  type GnomonConfig,
+  type TrustOptions,
+} from "gnomon-core";
 import { probeMachine, formatProbe, type MachineProbe, type ProbeHost, type RuntimeId } from "./probe.js";
 import {
   recommend,
@@ -198,6 +208,27 @@ export async function runDoctor(opts: { dir: string }, deps: DoctorDeps): Promis
     }
     const rolesPath = join(gnomonDir, "roles.toml");
     provenance = readProvenance(existsSync(rolesPath) ? readFileSync(rolesPath, "utf-8") : undefined);
+    if (declared && probe.hardware.os === "win32") {
+      // #216: Windows has no OS sandbox, so under exec = "os" bash refuses every
+      // command here (fail closed; that stays). A note, not a problem: the
+      // surface is right on the machines it was written for.
+      const surface = declared;
+      const osRoles = listRoles(surface)
+        .sort()
+        .filter((role) => {
+          const tools = surface.roles[role]?.tools;
+          const bash = Array.isArray(tools) ? tools.includes("bash") : isToolEnabled(surface, "bash");
+          return bash && resolveExec(surface, role).mode === "os";
+        });
+      if (osRoles.length > 0) {
+        add({
+          kind: "surface",
+          severity: "info",
+          message: `${osRoles.join(", ")} run${osRoles.length === 1 ? "s" : ""} bash under exec = "os", and Windows has no OS sandbox: on this machine every shell command is refused`,
+          fix: 'exec = "docker" for Windows ([sandbox] in .gnomon/policy.toml, or per role in roles.toml), or run gnomon inside WSL2',
+        });
+      }
+    }
     if (declared) {
       // Doctor reaches every role's endpoint with its key, and it never runs a
       // session, so nothing else would settle trust first: it checks what the

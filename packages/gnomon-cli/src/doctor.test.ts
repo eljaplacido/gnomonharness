@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, afterEach } from "vitest";
-import { mkdtempSync, rmSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -188,6 +188,29 @@ describe("gnomon doctor: no surface, and a stale catalog", () => {
     const { report } = await runDoctor({ dir }, doctorDeps(rtx4090(), () => ({ ready: true }), late));
     expect(report.findings.find((f) => f.kind === "catalog")?.message).toMatch(/newer models likely exist/);
     expect(report.exit).toBe(DOCTOR_EXIT.clear);
+  });
+});
+
+// #216 (2026-11-20 shadow test, Windows 11): a surface committed with
+// exec = "os" had no shell at all on Windows -- every command refused, fail
+// closed -- and nothing said so before the first one was.
+describe("gnomon doctor on Windows: exec = \"os\" means no bash here (#216)", () => {
+  it("says so, with docker or WSL2 as the way out, as a note that changes no exit", async () => {
+    const dir = tmpProject();
+    await setUp(dir, rtx4090());
+    const policy = join(dir, ".gnomon/policy.toml");
+    writeFileSync(policy, readFileSync(policy, "utf-8").replace(/^\[sandbox\]\n/m, '[sandbox]\nexec = "os"\n'));
+    const windows = { ...rtx4090(), platform: "win32" };
+    const { report } = await runDoctor({ dir }, doctorDeps(windows));
+    const f = report.findings.find((x) => /exec = "os"/.test(x.message))!;
+    expect(f).toMatchObject({ kind: "surface", severity: "info" });
+    expect(f.message).toMatch(/Windows has no OS sandbox/);
+    expect(f.message).toMatch(/every shell command/);
+    expect(f.fix).toMatch(/exec = "docker"/);
+    expect(f.fix).toMatch(/WSL2/);
+    expect(report.exit).toBe(DOCTOR_EXIT.clear);
+    // Not on Linux, where exec = "os" is a sandbox.
+    expect((await runDoctor({ dir }, doctorDeps(rtx4090()))).report.findings.some((x) => /exec = "os"/.test(x.message))).toBe(false);
   });
 });
 

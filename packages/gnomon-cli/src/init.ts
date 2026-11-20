@@ -747,6 +747,9 @@ network = false
 #                    repository and a per-call temp dir; with network = false
 #                    no egress, loopback still reachable. On a machine that
 #                    cannot enforce it, bash refuses rather than run unsandboxed.
+#                    Windows has none: there every command is refused, so a
+#                    surface shared with Windows machines wants exec = "docker",
+#                    or gnomon run inside WSL2 (gnomon security says so).
 #   exec = "docker"  a container (image = "..."). The default image,
 #                    debian:stable-slim, has no git, curl or language
 #                    toolchain: declare one that carries this project's

@@ -82,6 +82,20 @@
   docker section. `DEFAULT_SANDBOX_IMAGE` is exported. Containment is
   unchanged.
 
+- **`exec = "os"` says it means no shell on Windows** (#216). Windows has
+  no OS sandbox, so there `bash` refuses every command under `exec = "os"`
+  (fail closed, and that stays). A repository shared by Linux or macOS and
+  Windows machines that commits it has no shell on Windows -- a toolchain
+  probe went 0/3 on 11 of 11 arms there -- and nothing said so before the
+  first refusal. `gnomon security` gains the advice `exec_os_windows`,
+  naming the roles holding bash under `exec = "os"`, on every platform (on
+  Windows: no bash on this machine; elsewhere: none on a Windows machine
+  that runs the surface), with `exec = "docker"` or WSL2 as the fix.
+  `gnomon doctor` on Windows says the same as an `info` note (no exit
+  change). The `gnomon init` scaffold's comment beside `exec = "os"` and
+  README say it too. `conformance/security_posture.json` and CONTRACTS.md
+  §45 (the id) and §15 (the note).
+
 ## [0.6.3] — 2026-11-20
 
 Fixes from a multi-machine shadow test of gnomon across real projects on

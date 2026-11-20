@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3904 TypeScript tests (3232 core, 647 cli, 18
-> natives, 7 tui) and 120 Rust tests — **4024 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3906 TypeScript tests (3232 core, 649 cli, 18
+> natives, 7 tui) and 120 Rust tests — **4026 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2149,7 +2149,10 @@ misspelt `reads` value refuses too, rather than falling back to `"all"`.
   the point; name a config file in `read_roots` if a tool needs it.
 - **Linux only.** On macOS `reads = "scoped"` refuses rather than runs (a
   Seatbelt read allow-list has not been written or tested); Windows has no
-  `exec = "os"` at all.
+  `exec = "os"` at all: there `bash` refuses every command, so a surface
+  committed with `exec = "os"` and shared with Windows machines has no shell
+  on them. Use `exec = "docker"` for those, or run gnomon inside WSL2;
+  `gnomon security` (on any platform) and `gnomon doctor` (on Windows) say so.
 
 #### `exec = "docker"` — a container
 
@@ -2491,7 +2494,8 @@ It sorts what it finds into two kinds:
   setting that would: roles whose commands run on the host, a judge with no
   write tool that can still write through `bash`, `approval = never` on the
   host, a sandbox with a network, the audit trail off, no `[governance]` (so
-  nothing protects secrets or CI files) or a family below prevent. A fresh
+  nothing protects secrets or CI files) or a family below prevent, and
+  `exec = "os"`, which on Windows refuses every shell command. A fresh
   `gnomon init` gets two of these — the scaffold runs commands on the host —
   and exits 0.
 
