@@ -460,11 +460,27 @@ editor, no linter, no later gnomon that grows a real parser.
 | `k = #` | the empty string | error |
 | a duplicate key | last one wins | error |
 | a reopened `[table]` | merges | error |
+| a control character other than tab (U+0000–U+0008, U+000A–U+001F, U+007F; a CR only before LF), in a string or a comment: `k = '^x<U+0008>'` | the byte, verbatim — and a surface warning naming the file, line and key | error |
 
 Only the first is a considered choice — a surface that refuses to load over one
 unrecognised escape helps nobody. `True` and `"value" extra` are the two that
 bite: `True` is a **string**, which is truthy in JavaScript, so a boolean
 setting written that way is **on** and reads as though someone had checked it.
+
+A control character is the one row gnomon reports (#206). It renders as
+nothing, so a pattern holding one reads correctly in a terminal and a diff and
+matches nothing: a real `bash_allow` entry `'^septacore check<BS>'`, from a
+generator that wrote `"\b"`, loaded and never matched. `tomlControlCharacters`
+finds each line holding one (its 1-based line and column, the code point, and
+the `[table]` and key it sits in, a multi-line array's key on its later lines),
+and the surface audit lists it as a warning (`fatal: false`) for
+`config.toml`, `roles.toml`, `tools.toml`, `policy.toml` and `profiles/*.toml`:
+`where` is `.gnomon/<file> line <n> [<table>] <key>`, the fix says how to find
+the byte. It appears wherever the audit does: at session start and in
+`gnomon security` (`surface_warning`). A warning, not a refusal, for the
+escape's reason: refusing would stop a surface that loads today from loading at
+all over one entry. (A lone CR inside a value already fails to parse: §5.2's
+"cannot parse".)
 
 ### 5.5 Fixtures
 
@@ -473,7 +489,7 @@ setting written that way is **on** and reads as though someone had checked it.
 | `conformance/toml_accepted.toml` + `toml_accepted_golden.json` | §5.1 — the golden is the full parse tree |
 | `conformance/toml_rejected/` (11 files) + `toml_rejected.json` | §5.2 — the index pins the exact line each case reports |
 | `conformance/toml_misread.toml` + `toml_misread_golden.json` | §5.3 — golden holds **both** readings, `gnomon` and `toml`, side by side |
-| `conformance/toml_looser.toml` + `toml_looser_golden.json` | §5.4 — golden holds gnomon's reading and tomllib's refusal message |
+| `conformance/toml_looser.toml` + `toml_looser_golden.json` | §5.4 — golden holds gnomon's reading and tomllib's refusal message, and `control_characters`, what `tomlControlCharacters` reports for the file |
 
 **What CI checks.** `packages/gnomon-core/src/config.test.ts` runs in the
 `ts-tests` job and in `.gnomon/ci.sh`. It parses the accepted fixture and
@@ -482,7 +498,7 @@ same tree; asserts every rejected fixture throws naming the exact line from the
 index, and — through `loadConfig`, since the naming wrapper is module-private —
 that the message is prefixed with `.gnomon/roles.toml` and
 `.gnomon/profiles/local.toml`; and compares the misread and looser fixtures to
-their goldens. It also fails if a file exists in `toml_rejected/` with no case
+their goldens, the looser one's `control_characters` included. It also fails if a file exists in `toml_rejected/` with no case
 in the index, so a fixture cannot be added that asserts nothing.
 
 **What CI does not check.** The cross-check against a real TOML parser. The

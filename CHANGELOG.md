@@ -40,6 +40,21 @@
   are pinned as `hook_agents` in `conformance/guard_decision.json`
   (CONTRACTS.md §10).
 
+- **A control character in a surface TOML file is reported** (#206). A real
+  surface had a literal backspace inside a `bash_allow` entry,
+  `'^septacore check<BS>'`, from a generator that wrote `"\b"`. TOML 1.0
+  refuses the file; gnomon read the byte verbatim, the line looked correct in
+  a terminal and a diff, and the entry could never match. The surface audit
+  now lists each line of `config.toml`, `roles.toml`, `tools.toml`,
+  `policy.toml` and `profiles/*.toml` holding a control character other than
+  tab (U+0000-U+0008, U+000A-U+001F, U+007F; a CR only before LF) as a
+  warning naming the file, line, table and key, with a `grep` that finds the
+  byte -- at session start and in `gnomon security` (`surface_warning`). A
+  warning, not a refusal, as an unknown escape is accepted: refusing would
+  stop a surface that loads today from loading at all. What is read does not
+  change. `conformance/toml_looser.toml` gains the case and its golden the
+  report (CONTRACTS.md §5.4).
+
 ## [0.6.3] — 2026-11-20
 
 Fixes from a multi-machine shadow test of gnomon across real projects on
