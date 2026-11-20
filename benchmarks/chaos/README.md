@@ -91,17 +91,36 @@ order of magnitude, not a ranking.
    check's outcome and the record dropped it, so a check that failed every
    round read `answered`, exit 0.
 
+## Announced since (2026-11-19)
+
+- **`late_system_dropped`.** The loop cannot see a template drop a message,
+  but it can see the reply: after the failed check was handed back as a late
+  system message, the model gave the answer it had given before, word for
+  word. gnomon now says so on stderr, names the template and
+  `steer_role = "user"`, and counts it in `counters.handback_unheeded`. A
+  symptom, not proof: a model that ignored the message looks the same.
+- **`cache_miss`.** `cached_tokens` was read into the mediator record and
+  compared with nothing. An endpoint reporting 0 cached tokens on a request
+  that only appended to the one before is now said on stderr and counted in
+  `counters.prefix_cache_misses` (RS5).
+
+Seed 1 on the commit that made both: 19/20 faults announced, 36/37 cases,
+0 silent failures; no other case changed verdict, channel or exit.
+
 ## Still silent
 
-- **`late_system_dropped`.** The loop cannot see a template drop a message;
-  it sees a model that ignored a failed check. Announcing it needs the
-  endpoint conformance probe (report RS3).
-- **`slow_throttle`.** No throughput floor is declared, so nothing compares
-  tokens/s against one (RS3).
-- **`cache_miss`.** `cached_tokens` is not read, so a re-prefill is not
-  counted (RS5).
+- **`slow_throttle`.** The case is one streamed reply paced evenly at about
+  5 tokens/s (gnomon's record: 4 completion tokens in 1.8 s, first byte at
+  1 ms). Nothing in it differs in kind from a model that is simply that
+  slow (a large model on CPU), and a one-request task has no earlier reply to
+  compare against, so only a declared throughput floor could announce it.
+  gnomon has no surface key for one, and choosing a default floor just above
+  the injected rate would be fitting the test (RS3). The proposals are a
+  declared floor (`[resilience]`, off by default, with the suite's surface
+  declaring it as a disclosed departure), or scoring the case `not_scored`
+  for a harness that declares no throughput expectation.
 
-Each is an `it.fails` in `packages/gnomon-core/src/chaos.test.ts`. That test
+It is an `it.fails` in `packages/gnomon-core/src/chaos.test.ts`. That test
 turns red the day gnomon announces the fault, so the list can only shrink.
 
 ## Also measured
