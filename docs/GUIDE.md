@@ -1107,7 +1107,9 @@ esac
   re-asked empty reply, a repaired tool call. `gnomon chaos` measures whether
   each one is announced.
 - Switch on the **bucket** (0, 2, 10); that part of the
-  [exit contract](CONTRACTS.md) is stable.
+  [exit contract](CONTRACTS.md) is stable. A declared `[verify]` check that
+  still fails after its last round does not change it: the run is a `result`
+  (0) with `verify: "failed"`, so read `verify` as well before calling it done.
 - **`--deadline <seconds|ISO time>`** (since v0.5.0)
   (or `GNOMON_DEADLINE`) gives the run a
   wall clock, opt-in. At `[turn] deadline_notes` (default 50% and 80% of the

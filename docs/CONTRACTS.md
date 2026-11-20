@@ -139,6 +139,16 @@ on the bucket, which is the part that is stable.
 A `gnomon task` that stops itself at `--deadline` exits `2`, the refusal
 floor, with `stop_reason: "deadline"` (§31).
 
+A `gnomon task` whose declared `[verify]` check still fails after its last
+round exits by its bucket like any other: the model answered, so it is a
+`result` (`0`) with `stop_reason: "answered"` and `verify: "failed"` on the
+record. The exit does not carry the check; a refusal floor is never demoted,
+so a failed check at `2` would leave every unverified run there. Read `verify`
+beside the bucket: one of `passed`, `failed`, `unrunnable`, `declined`,
+`skipped`, absent when no check ran (§20). The command and its exit, per
+round, are the trail's `verify` records. A role that declares `escalate` on
+`verify_failed` hands the turn on instead (§42).
+
 A `gnomon task` or an interactive session that SIGINT, SIGTERM or SIGHUP ends
 mid-run exits by none of these: it flushes a `killed` record and then dies of
 the signal, as it did before it flushed anything (143 for SIGTERM in a shell).
