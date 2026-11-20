@@ -28,6 +28,21 @@
 
 ### Fixed
 
+- **A `[verify]` run that never ran to an exit is no longer recorded as a
+  failed check** (#231). Four cases, all of them `failed` and handed back as
+  "your answer is not accepted" until now:
+  - **declined by the person asked** (`[approval] gate = "always"`): now
+    `declined`, the trail's `verify` record says `declined: true`, nothing is
+    handed back;
+  - **refused by a rule** (`bash_deny`, `sudo`, network), **timed out and
+    killed**, or **refused by the sandbox** (Windows `exec = "os"`): no exit
+    was read and the tool ran nothing, so it is `unrunnable` -- what
+    `gnomon check` already called it -- with the reason on the trail, and
+    nothing is handed back. A rule's refusal is never recorded as an
+    operator's decline. The 2026-11-20 matrix had every 120 s timeout and all
+    11 Windows `exec = "os"` arms recorded as failed.
+  A run killed by a signal, or a non-zero exit, is still `failed` and handed
+  back: an OOM-killed suite is not green.
 - **`gnomon check` says when the rules held but nothing was run.** With no
   `[verify]` declared, `verify` was `error`, so every commit of such a project
   (10 of 15 in the 2026-11-20 shadow test) got a verdict that read the same as

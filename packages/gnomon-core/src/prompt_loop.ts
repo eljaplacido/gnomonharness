@@ -7364,12 +7364,22 @@ async function agenticTurn(
             { ...ctx, gate: verifyGate, allow: "strict" as SurfaceConsent },
             new Set(["bash"])
           );
-          if (check.code === TOOL_DENIED_CODE) {
+          // Declined by the person asked (approval = "always"). A rule that
+          // refused the command (bash_deny, sudo, network) returns the same code
+          // but no person saw it, so it is read below as "could not run", not
+          // as a decline: the trail must not say an operator said no.
+          if (check.code === TOOL_DENIED_CODE && /^Refused: the user declined/.test(check.content)) {
             // Declined by the operator. Not a failure of the check, and not a
             // reason to hand the turn back -- they saw it and said no.
             say(paint(deps.ui, "gray", `  ⚙ verify — declined; not run`));
             toolLog.push("verify — declined by the operator");
             verifyOutcome = "declined";
+            deps.audit?.write("verify", { role, command: verify.command, declined: true });
+            // Stop here. Without this return the denied result fell through to
+            // the exit reading below: it did not pass, so it was recorded as
+            // `failed` (and audited as passed: false) and the turn was handed
+            // back with "verify failed" -- what this branch says it is not (#231).
+            return null;
           }
           // bashTool reports TOOL_OK for any command that *ran*; the shell's own
           // exit status is in the summary, not the tool code. Reading the tool
@@ -7409,23 +7419,37 @@ async function agenticTurn(
           // found. Anything more specific would need per-tool knowledge the
           // harness does not have and should not guess at -- a pytest collection
           // error still reads as an ordinary failure, which is an honest limit.
-          const unrunnable = shellExit === 126 || shellExit === 127;
+          //
+          // A check the tool never ran to an exit is the same case: timed out
+          // and killed (`bash — timeout`), refused by the sandbox (Windows
+          // exec = "os") or by a rule, or refused as a re-run after a timeout.
+          // No exit status was read and the tool reported a failure of its own.
+          // That was 1 here, so "failed": the turn handed back as "your answer
+          // is not accepted" for a check that never finished (the 2026-11-20
+          // matrix: every 120 s timeout, all 11 Windows exec = "os" arms).
+          // `gnomon check` already reads it as could-not-run (check.ts), and the
+          // two must agree. A run killed by a signal still has an exit (1, from
+          // readVerifyExit) and stays a failure: an OOM-killed suite is not green.
+          const notRun = !passed && check.code !== 0 && verifyExit.exit === null;
+          const unrunnable = notRun || shellExit === 126 || shellExit === 127;
           if (!passed && unrunnable) {
+            const why = notRun ? check.summary.replace(/^bash — /, "") : `exit ${shellExit}`;
             say(
               paint(
                 deps.ui,
                 "yellow",
-                `  ⚙ verify — the check could not run (exit ${shellExit}). ` +
+                `  ⚙ verify — the check could not run (${why}). ` +
                   `Not counted against the work; fix [verify] command.`
               )
             );
-            toolLog.push(`verify — could not run (exit ${shellExit})`);
+            toolLog.push(`verify — could not run (${why})`);
             verifyOutcome = "unrunnable";
             deps.audit?.write("verify", {
               command: verify.command,
               ok: false,
               unrunnable: true,
-              exit: shellExit,
+              exit: notRun ? null : shellExit,
+              ...(notRun ? { reason: why } : {}),
               round: verifyRounds,
             });
             // Handing this back would spend the remaining rounds on a defect in
@@ -7473,7 +7497,7 @@ async function agenticTurn(
           deps.audit?.write("verify", {
             role,
             command: verify.command,
-            exit: shellExit,
+            exit: notRun ? null : shellExit,
             passed,
           });
 

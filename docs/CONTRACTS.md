@@ -145,8 +145,14 @@ round exits by its bucket like any other: the model answered, so it is a
 record. The exit does not carry the check; a refusal floor is never demoted,
 so a failed check at `2` would leave every unverified run there. Read `verify`
 beside the bucket: one of `passed`, `failed`, `unrunnable`, `declined`,
-`skipped`, absent when no check ran (§20). The command and its exit, per
-round, are the trail's `verify` records. A role that declares `escalate` on
+`skipped`, absent when no check ran (§20). `declined` means the person asked
+(`approval = "always"`) said no; `unrunnable` means the check never ran to an
+exit -- not found or not executable (126/127), timed out and killed, or refused
+by the sandbox or a rule -- the same reading `gnomon check` gives (§6). Neither
+hands the turn back. Since 0.6.4; before, all but 126/127 were `failed` and
+handed back (#231). A run killed by a signal, or a non-zero exit, is `failed`.
+Each case is pinned in `conformance/verify_outcomes.json`.
+The command and its exit, per round, are the trail's `verify` records. A role that declares `escalate` on
 `verify_failed` hands the turn on instead (§42).
 
 A `gnomon task` or an interactive session that SIGINT, SIGTERM or SIGHUP ends
