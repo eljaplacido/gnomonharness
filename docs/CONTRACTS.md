@@ -950,8 +950,19 @@ cannot loosen the rules that govern the agent working on it; the change
 governs once it is merged. A branch that introduces `.gnomon/` keeps its own.
 `--base HEAD` decides by the branch's own rules.
 
+**Which project.** `.gnomon/` is found by walking up from the call's working
+directory (`--dir`, else the payload's `cwd`) to the repository root. When
+that finds none -- the host's shell was moved out of the project by an earlier
+`cd`, or into a repository nested in it -- the host's own project root is
+tried next: Claude Code's `CLAUDE_PROJECT_DIR`, the Cursor workspace root the
+call is in (else the first), opencode's `directory`, the generic document's
+`"project"`. Before 0.6.3 such a call was `ungoverned` and allowed, so one
+approved `cd /tmp` turned the guard off for the rest of a Claude Code session.
+A working directory inside another governed project is judged by that
+project's rules. Paths in the call still resolve against the project root.
+
 **Input.** `--tool <kind> --input <json>`, or on stdin `{"tool", "input",
-"cwd"?, "session_id"?}`. With `--from claude-code | opencode | cursor` stdin
+"cwd"?, "project"?, "session_id"?}`. With `--from claude-code | opencode | cursor` stdin
 is that harness's own hook payload, and the answer is in its own format
 (`harness_answers` in the fixture): Claude Code gets nothing on allow and
 `hookSpecificOutput.permissionDecision` deny or ask otherwise, exit 0 — except

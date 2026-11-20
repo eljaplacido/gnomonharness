@@ -31,6 +31,12 @@ process.env.USERPROFILE = isolated;
 // (config.ts workdirStateDir): never the real one.
 process.env.XDG_STATE_HOME = join(isolated, "state");
 
+// `gnomon guard --from claude-code` finds the project from CLAUDE_PROJECT_DIR
+// when the call's cwd is in none. A suite started from a Claude Code hook or
+// session would otherwise judge its scratch repositories by the developer's
+// checkout. A test that needs it sets it on the child it spawns.
+delete process.env.CLAUDE_PROJECT_DIR;
+
 // Nothing here should reach a network. A test that tries is a test with a bug,
 // and it should fail loudly rather than depend on whether this machine happens
 // to have a key exported.

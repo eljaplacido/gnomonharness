@@ -128,6 +128,9 @@ export async function cmdGuard(
   const hr = readHarness(from, raw);
   const verdict = await guardHarnessRequest(hr, {
     cwd: args.flags.dir ? resolve(args.flags.dir) : undefined,
+    // Claude Code names its project root to every hook. A shell an earlier
+    // `cd` moved out of the project still answers to the project's rules.
+    ...(from === "claude-code" && process.env.CLAUDE_PROJECT_DIR ? { project: resolve(process.env.CLAUDE_PROJECT_DIR) } : {}),
     base: args.flags.base,
     role: args.flags.role,
     agent: args.flags.agent,
