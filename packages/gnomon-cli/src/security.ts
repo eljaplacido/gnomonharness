@@ -176,8 +176,8 @@ export function buildSecurityReport(dir: string, trust: TrustOptions = {}, platf
       message: `${onHost.map((r) => r.role).join(", ")} run${onHost.length === 1 ? "s" : ""} shell commands on this machine: bash_allow and bash_deny filter command lines, they do not contain what a program does`,
       fix:
         platform === "linux"
-          ? 'set [sandbox] exec = "os" (Landlock, about +4 ms a call) or exec = "docker" in .gnomon/config.toml, or per role in roles.toml'
-          : 'set [sandbox] exec = "docker" in .gnomon/config.toml, or per role in roles.toml (exec = "os" is Linux only)',
+          ? 'set [sandbox] exec = "os" (Landlock, about +4 ms a call) or exec = "docker" in .gnomon/policy.toml, or per role in roles.toml'
+          : 'set [sandbox] exec = "docker" in .gnomon/policy.toml, or per role in roles.toml (exec = "os" is Linux only)',
     });
   }
   const judges = roles.filter((r) => r.bash && !r.writes && !r.read_only_source);
