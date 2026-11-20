@@ -26,7 +26,16 @@
 
 ## [Unreleased]
 
-### Fixed
+## [0.6.3] — 2026-11-20
+
+Fixes from a multi-machine shadow test of gnomon across real projects on
+Linux and Windows, and one opt-in. The model-free suites hold 0.6.2's figures
+(governance 5/5, property suites 5/5, context cost unchanged; guard latency
+unchanged within noise), and `gnomon chaos` announces 19 of its 20 faults
+(was 17). Upgrade if you use `gnomon guard` with Claude Code, `gnomon
+security test` from npm, or `gnomon eval` / `gnomon skill trial`.
+
+### Security
 
 - **A `cd` out of the project no longer turns `gnomon guard` off.** The guard
   found `.gnomon/` by walking up from the call's working directory only. A
@@ -38,69 +47,7 @@
   `CLAUDE_PROJECT_DIR`, the Cursor workspace root the call is in, opencode's
   `directory`, or `"project"` in the generic document. A working directory in
   another governed project is still judged by that project (CONTRACTS §10).
-- **`gnomon eval` and `gnomon skill trial` cells no longer hold the trial
-  specs.** Every cell's clone had `.gnomon/trials/`, so the agent under test
-  could read each task's `setup` and `check`: a canary token a setup seeded
-  into a protected file was found by grep in the spec instead, by both arms
-  of a real-model eval. Each cell now removes `.gnomon/trials/` and commits
-  that, for every arm, gnomon's or a `command:` harness's. Setup and check run
-  from the operator's checkout. Each arm reports `cell_surface_hash` (no
-  `trials/`) beside the project's `surface_hash`, and cells are checked
-  against it. The clone keeps history, so a spec should still hold no answer
-  or secret in plain text. Loading one whose check repeats a literal from the
-  task's prompt or setup now warns (docs/CONTRACTS.md §13, §47).
-- Schemas `gnomon.eval/3` and `gnomon.trial/2`: cells no longer hold the
-  specs, so a cell's surface hash is no longer the project's, and arms gain
-  `cell_surface_hash`. `gnomon skill accept --evidence` refuses a
-  `gnomon.trial/1` report, whose cells held the specs, and says to trial
-  again (CONTRACTS.md §11, §13, §47).
-- **`gnomon security test` from the npm package runs the guard** (#202). It
-  started the guard as `../gnomon.js` beside its own module, which only a
-  checkout has: the published package ships `bin/gnomon.mjs`. Every case of
-  an installed release spawned a missing file, and Claude Code's reading of
-  an empty answer scored that failed launch as allow. A fresh scaffold held
-  1/24 for Claude Code and 1/61 across hosts instead of 24/24 and 61/61. The
-  guard is now run as the node running the test plus the launcher of the
-  gnomon running it (`self_launcher.ts`): `gnomon.js` in a checkout or a pnpm
-  link, `bin/gnomon.mjs` in the package. There is no shim and no shell, on
-  Windows too.
-- **A guard that gives no decision is no longer a decision.** A failed
-  launch, a signal or timeout, an exit the guard does not answer with, or an
-  answer with no decision in it leaves the case `decision: null` with a
-  `detail`, counted in a new `errors` (report and per host), never in
-  `passed`. With no case failed, any such case makes the run exit 10. A guard
-  that cannot be found, or answers no case at all, is exit 10 with the
-  reason. `scripts/check-publishable.sh` now runs the security test from the
-  packed tarballs and requires 24/24.
 
-`gnomon chaos` announces 19 of its 20 faults (was 17): two that return
-valid, timely, well-formed replies are now read from their symptoms.
-
-- **A prefix-cache miss is said and counted.** An endpoint that reports 0
-  cached prompt tokens on a request that only appended to the one before (same
-  endpoint, model and tools) prefilled the whole prompt again by its own count:
-  33-40 s at 40k tokens on GB10. Said on stderr once per turn, counted in
-  `counters.prefix_cache_misses`. Never inferred where no cache count is
-  reported, never for a partial reuse or a prefix gnomon rewrote, and a hosted
-  API is held to its own minimum (1024 tokens; 4096 for Claude, only with
-  `prompt_cache` on). `cache_miss` is announced.
-- **A hand-back that changed nothing is said.** When the reply to a
-  hand-back sent as a late system message (a failed check, a gate) is the
-  handed-back answer word for word, stderr says the chat template may have
-  dropped it and names `steer_role = "user"`, once per turn;
-  `counters.handback_unheeded` counts each. A symptom, not proof.
-  `late_system_dropped` is announced.
-- **Still silent: `slow_throttle`.** One evenly paced reply has no reference
-  to be slow against; announcing it needs a declared throughput floor, which
-  no surface key provides yet. Pinned as a failing test until announced.
-
-- **`gnomon guard --from claude-code` (and `--from cursor`) say which rules
-  decided.** When a branch that changes `.gnomon/` is decided by the default
-  branch's rules at its merge-base, the generic document and the trail carried
-  `base_note`, but Claude Code's `permissionDecisionReason` and Cursor's
-  messages did not: a user editing the policy on a branch was refused by
-  main's rules with no hint why. The reason now ends `Which rules: <the
-  note>.` (CONTRACTS.md §10).
 - **`secret_path`: a recursive reader is judged by what its walk would open,
   and a glob by what sh expands it to.** Under `[governance]` at `prevent`,
   `grep -r KEY .`, `rg --hidden KEY`, `find . -type f -exec cat {} +` and
@@ -113,6 +60,77 @@ valid, timely, well-formed replies are now read from their symptoms.
   the secret). `grep -rn old .` over a tree holding `.env` is now refused.
   CONTRACTS §37 says what the word check still does not see: interpreter
   code, paths built at run time, git's object store.
+
+- **`gnomon eval` and `gnomon skill trial` cells no longer hold the trial
+  specs.** Every cell's clone had `.gnomon/trials/`, so the agent under test
+  could read each task's `setup` and `check`: a canary token a setup seeded
+  into a protected file was found by grep in the spec instead, by both arms
+  of a real-model eval. Each cell now removes `.gnomon/trials/` and commits
+  that, for every arm, gnomon's or a `command:` harness's. Setup and check run
+  from the operator's checkout. Each arm reports `cell_surface_hash` (no
+  `trials/`) beside the project's `surface_hash`, and cells are checked
+  against it. The clone keeps history, so a spec should still hold no answer
+  or secret in plain text. Loading one whose check repeats a literal from the
+  task's prompt or setup now warns (docs/CONTRACTS.md §13, §47).
+
+- Schemas `gnomon.eval/3` and `gnomon.trial/2`: cells no longer hold the
+  specs, so a cell's surface hash is no longer the project's, and arms gain
+  `cell_surface_hash`. `gnomon skill accept --evidence` refuses a
+  `gnomon.trial/1` report, whose cells held the specs, and says to trial
+  again (CONTRACTS.md §11, §13, §47).
+
+### Fixed
+
+- **`gnomon security test` from the npm package runs the guard** (#202). It
+  started the guard as `../gnomon.js` beside its own module, which only a
+  checkout has: the published package ships `bin/gnomon.mjs`. Every case of
+  an installed release spawned a missing file, and Claude Code's reading of
+  an empty answer scored that failed launch as allow. A fresh scaffold held
+  1/24 for Claude Code and 1/61 across hosts instead of 24/24 and 61/61. The
+  guard is now run as the node running the test plus the launcher of the
+  gnomon running it (`self_launcher.ts`): `gnomon.js` in a checkout or a pnpm
+  link, `bin/gnomon.mjs` in the package. There is no shim and no shell, on
+  Windows too.
+
+- **A guard that gives no decision is no longer a decision.** A failed
+  launch, a signal or timeout, an exit the guard does not answer with, or an
+  answer with no decision in it leaves the case `decision: null` with a
+  `detail`, counted in a new `errors` (report and per host), never in
+  `passed`. With no case failed, any such case makes the run exit 10. A guard
+  that cannot be found, or answers no case at all, is exit 10 with the
+  reason. `scripts/check-publishable.sh` now runs the security test from the
+  packed tarballs and requires 24/24.
+
+- **`gnomon guard --from claude-code` (and `--from cursor`) say which rules
+  decided.** When a branch that changes `.gnomon/` is decided by the default
+  branch's rules at its merge-base, the generic document and the trail carried
+  `base_note`, but Claude Code's `permissionDecisionReason` and Cursor's
+  messages did not: a user editing the policy on a branch was refused by
+  main's rules with no hint why. The reason now ends `Which rules: <the
+  note>.` (CONTRACTS.md §10).
+
+`gnomon chaos` announces 19 of its 20 faults (was 17): two that return
+valid, timely, well-formed replies are now read from their symptoms.
+
+- **A prefix-cache miss is said and counted.** An endpoint that reports 0
+  cached prompt tokens on a request that only appended to the one before (same
+  endpoint, model and tools) prefilled the whole prompt again by its own count:
+  33-40 s at 40k tokens on GB10. Said on stderr once per turn, counted in
+  `counters.prefix_cache_misses`. Never inferred where no cache count is
+  reported, never for a partial reuse or a prefix gnomon rewrote, and a hosted
+  API is held to its own minimum (1024 tokens; 4096 for Claude, only with
+  `prompt_cache` on). `cache_miss` is announced.
+
+- **A hand-back that changed nothing is said.** When the reply to a
+  hand-back sent as a late system message (a failed check, a gate) is the
+  handed-back answer word for word, stderr says the chat template may have
+  dropped it and names `steer_role = "user"`, once per turn;
+  `counters.handback_unheeded` counts each. A symptom, not proof.
+  `late_system_dropped` is announced.
+
+- **Still silent: `slow_throttle`.** One evenly paced reply has no reference
+  to be slow against; announcing it needs a declared throughput floor, which
+  no surface key provides yet. Pinned as a failing test until announced.
 
 ### Added
 
@@ -154,6 +172,7 @@ valid, timely, well-formed replies are now read from their symptoms.
   `on_write`. Contracts: `guard_decision.json` `verdict_keys.optional` and
   `audit_feed_schema.json` gain `exempt`; `guard_cases.json` gains a
   `readonly_bash` section (CONTRACTS.md §10, §44).
+
 - Docs: CONTRACTS.md §1 and GUIDE §7.2 now say what a `gnomon task` returns
   when its declared `[verify]` check still fails after the last round: exit 0,
   bucket `result`, `verify: "failed"`. Behaviour is unchanged, and a test pins
@@ -5455,7 +5474,8 @@ was written.
 
 <!-- 0.4.4 and 0.4.5 were never published, so 0.5.0 compares against 0.4.3 and
      their links point at the tags, not at (draft) release pages. -->
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.2...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.3...HEAD
+[0.6.3]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/eljaplacido/gnomonharness/compare/v0.5.0...v0.6.0
