@@ -28,6 +28,25 @@
 
 ### Fixed
 
+- **A multi-line string written on one line is read as TOML reads it.**
+  `'''x'''` and `"""x"""` are valid TOML 1.0, and gnomon's parser read them as
+  a one-quote string with two quotes of content at each end, silently. A trial
+  spec's `setup = '''T=$(...); printf %s "$T" > f'''` reached the shell as
+  `''T=$(...) ...''`, which is not an assignment: the setup seeded an empty
+  value and the check failed with exit 2. The same misread passes checks that
+  should fail: a one-line check that starts with an assignment and then
+  negates a test (`'''T=$(...); ! test -n "$T"'''`, `! grep -q . "$E/hits"`)
+  saw an empty variable and passed whatever the agent did -- 75 of 75 eval
+  cells "held" a canary that way in the 2026-11-20 shadow test. So a
+  `gnomon eval` or `gnomon skill trial` verdict whose spec used a one-line
+  `'''` or `"""` check is not to be trusted; re-run it on this version. The
+  failures meanwhile looked like an eval race (a check run at once failed and
+  one behind `sleep 1;` passed, because the prefix moved the stray quotes onto
+  `sleep`). Both
+  forms now give their content, with `#` and one or two quotes inside kept;
+  spanning lines is still refused (CONTRACTS.md §5.1, §5.2; the accepted
+  fixture's golden regenerated from Python 3.12 `tomllib`).
+
 - **`gnomon guard install` says when the hook it writes has no role**
   (#205). Each hook passes `--agent claude-code` (`opencode`, `cursor`), and
   the guard maps that to a role through `[check.roles]`. A project with no

@@ -1019,6 +1019,17 @@ function stripComment(value: string): string {
   let quote: '"' | "'" | null = null;
   for (let i = 0; i < value.length; i++) {
     const ch = value[i];
+    // A multi-line string opened and closed on this line ('''...''' or
+    // """...""") is skipped whole: one or two quotes inside it are content, and
+    // a `#` inside it is not a comment. Tracked one quote at a time, a value
+    // like '''it's #1''' left quote state at the inner quote and lost
+    // everything from the `#` on.
+    if (!quote && (ch === "'" || ch === '"') && value.startsWith(ch.repeat(3), i)) {
+      const end = tripleClose(value, i + 3, ch);
+      if (end < 0) return value.trim(); // it spans lines: refused by the caller (CONTRACTS §5.2)
+      i = end - 1;
+      continue;
+    }
     if (quote) {
       // Literal strings have no escapes, so only a basic string honours \".
       if (ch === quote && !(quote === '"' && value[i - 1] === "\\")) quote = null;
@@ -1029,6 +1040,29 @@ function stripComment(value: string): string {
     }
   }
   return value.trim();
+}
+
+/**
+ * Where a multi-line string whose body starts at `from` closes on this line:
+ * the index just past its closing delimiter, or -1 when it does not close
+ * here. TOML lets one or two quotes sit directly before the closing three (a
+ * literal written with four closing quotes ends in one quote of content), so
+ * the run of quotes at the close is read to its end, at most five, and its
+ * last three are the delimiter. In a basic string an escaped quote is content.
+ */
+function tripleClose(value: string, from: number, q: "'" | '"'): number {
+  for (let j = from; j <= value.length - 3; j++) {
+    if (q === '"' && value[j] === "\\") {
+      j++;
+      continue;
+    }
+    if (value.startsWith(q.repeat(3), j)) {
+      let end = j + 3;
+      while (end < value.length && value[end] === q && end - j < 5) end++;
+      return end;
+    }
+  }
+  return -1;
 }
 
 /** TOML basic-string escapes. Unknown escapes are left alone rather than
@@ -1071,6 +1105,20 @@ function unescapeBasic(raw: string): string {
 }
 
 function parseValue(value: string): unknown {
+  // A multi-line string written on one line: '''no escapes''' and """escapes""".
+  // TOML 1.0 allows both to open and close on the same line. They fell into the
+  // single-quote (or double-quote) branch below and came back with two of
+  // their quotes at each end as content, silently: a trial spec's
+  // `setup = '''T=$(head -c 12 /dev/urandom ...); printf ... "$T" > f'''` read
+  // as `''T=$(...) ...''`, which a shell no longer takes as an assignment, so
+  // the setup seeded an empty value and the check failed with exit 2 (a syntax
+  // error at the trailing quotes). Spanning lines is still refused (§5.2).
+  if (value.length >= 6 && value.startsWith("'''") && tripleClose(value, 3, "'") === value.length) {
+    return value.slice(3, -3);
+  }
+  if (value.length >= 6 && value.startsWith('"""') && tripleClose(value, 3, '"') === value.length) {
+    return unescapeBasic(value.slice(3, -3));
+  }
   // Literal string: 'no escapes here'. This is the TOML idiom for regular
   // expressions, and it needs no unescaping by definition.
   if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
