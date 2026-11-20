@@ -306,6 +306,11 @@ describe("readOnlyBash — git only in the project's own repository (a foreign r
   }
   gitIn(evil, "config", "core.fsmonitor", "touch PWNED; false");
   const where: ReadOnlyWhere = { root: proj, cwd: proj };
+  // A path as a bash command line carries it. Unquoted, bash reads a
+  // backslash as an escape, so a native Windows path (C:\\Users\\...) pasted
+  // into a line is not that path to bash (Git Bash) or to this reader; the
+  // forward-slash form is.
+  const inLine = (p: string) => p.split("\\").join("/");
 
   it("the repro is real: `git -C evil status` runs evil's core.fsmonitor", () => {
     rmSync(pwned, { force: true });
@@ -315,25 +320,29 @@ describe("readOnlyBash — git only in the project's own repository (a foreign r
   });
 
   it("git -C another repository is not read-only, absolute or relative", () => {
-    expect(readOnlyBash(`git -C ${evil} status`, where)).toMatchObject({ readonly: false, why: expect.stringMatching(/-C/) });
+    expect(readOnlyBash(`git -C ${inLine(evil)} status`, where)).toMatchObject({ readonly: false, why: expect.stringMatching(/-C/) });
     expect(readOnlyBash("git -C ../evil status", where)).toMatchObject({ readonly: false, why: expect.stringMatching(/-C/) });
-    expect(readOnlyBash(`git -C ${evil} diff`, where).readonly).toBe(false);
-    expect(readOnlyBash(`git -C ${evil} log -p`, where).readonly).toBe(false);
-    expect(readOnlyBash(`git -C ${evil} show --show-signature`, where).readonly).toBe(false);
+    expect(readOnlyBash(`git -C ${inLine(evil)} diff`, where).readonly).toBe(false);
+    expect(readOnlyBash(`git -C ${inLine(evil)} log -p`, where).readonly).toBe(false);
+    expect(readOnlyBash(`git -C ${inLine(evil)} show --show-signature`, where).readonly).toBe(false);
   });
 
   it("git after a cd on the same line is not read-only", () => {
-    expect(readOnlyBash(`cd ${evil} && git status`, where)).toMatchObject({ readonly: false, why: expect.stringMatching(/after a cd/) });
-    expect(readOnlyBash(`cd ${proj} && git status`, where)).toMatchObject({ readonly: false, why: expect.stringMatching(/after a cd/) });
+    expect(readOnlyBash(`cd ${inLine(evil)} && git status`, where)).toMatchObject({ readonly: false, why: expect.stringMatching(/after a cd/) });
+    expect(readOnlyBash(`cd ${inLine(proj)} && git status`, where)).toMatchObject({ readonly: false, why: expect.stringMatching(/after a cd/) });
   });
 
   it("-C . and -C <the project root> are read-only; the root reached through a symlink and `..` is followed as chdir() does", () => {
     expect(readOnlyBash("git -C . status", where).readonly).toBe(true);
-    expect(readOnlyBash(`git -C ${proj} status`, where).readonly).toBe(true);
-    expect(readOnlyBash(`git -C ${proj}/ status`, { root: proj, cwd: evil }).readonly).toBe(true);
+    expect(readOnlyBash(`git -C ${inLine(proj)} status`, where).readonly).toBe(true);
+    expect(readOnlyBash(`git -C ${inLine(proj)}/ status`, { root: proj, cwd: evil }).readonly).toBe(true);
     // proj/link -> evil/sub, so `link/..` is evil to chdir(), though it reads as proj.
     mkdirSync(join(evil, "sub"), { recursive: true });
-    symlinkSync(join(evil, "sub"), join(proj, "link"));
+    try {
+      symlinkSync(join(evil, "sub"), join(proj, "link"), "dir");
+    } catch {
+      return; // Windows without symlink privilege: the rest needs the link.
+    }
     try {
       expect(readOnlyBash("git -C link/.. status", where)).toMatchObject({ readonly: false, why: expect.stringMatching(/-C/) });
     } finally {
@@ -375,7 +384,7 @@ describe("readOnlyBash — git only in the project's own repository (a foreign r
     expect(readOnlyBash("git -C . status", { root: proj, cwd: null }).readonly).toBe(false);
     expect(readOnlyBash("git -C sub status", { root: proj, cwd: null }).readonly).toBe(false);
     // An absolute -C naming the root needs no working directory.
-    expect(readOnlyBash(`git -C ${proj} status`, { root: proj, cwd: null }).readonly).toBe(true);
+    expect(readOnlyBash(`git -C ${inLine(proj)} status`, { root: proj, cwd: null }).readonly).toBe(true);
     expect(readOnlyBash("ls; cat a").readonly).toBe(true);
   });
 });
