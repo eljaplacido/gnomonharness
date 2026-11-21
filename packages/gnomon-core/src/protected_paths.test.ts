@@ -322,6 +322,25 @@ describe("the prechecks, at prevent (the pilot's G-4 leaks)", () => {
     }
   });
 
+  it("bash: a word that is not a valid glob class is a literal, never a guard error", () => {
+    // A JSON array inside a curl body reached the glob code; `[…r-"…]` is a
+    // reversed range, `new RegExp` threw, and the guard answered "could not
+    // decide" (capability matrix replay on v0.6.4, 2026-11-21). sh's fnmatch
+    // matches nothing there, so the word is the literal it reads as.
+    put(".env.matrix", `SERVICE_TOKEN=${SYNTHETIC}\n`);
+    for (const c of [
+      `curl -s -X POST http://127.0.0.1:49234/api/v1/session/incident -d '{"incident_id":"X","affected_services":["gnomon-verifier","llama-server","causalplatform-ci"]}'`,
+      "cat '[z-a].txt'",
+    ]) {
+      expect(() => bashRule(c), c).not.toThrow();
+      expect(bashRule(c), c).toBeNull();
+    }
+    // find's -name and git clean's -e go through fnmatch, the removal checks.
+    for (const c of ["find . -name '[z-a]*' -delete", "git clean -fdx -e '[z-a]x'"]) {
+      expect(() => bashRule(c), c).not.toThrow();
+    }
+  });
+
   it("bash: a glob, as sh expands it, and a recursive reader, by what its walk would open", () => {
     put(".env.matrix", `SERVICE_TOKEN=${SYNTHETIC}\n`);
     put("pkg/a/.env.local", `X=${SYNTHETIC}\n`);

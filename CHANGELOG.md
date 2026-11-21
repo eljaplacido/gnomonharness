@@ -26,6 +26,18 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **`gnomon guard` no longer answers "could not decide" for a word that only
+  looks like a glob.** v0.6.3 began judging a shell glob by what it would open
+  (#214), and a bracket class that is not a valid one, such as the JSON array
+  in `curl -d '{"x":["gnomon-verifier","llama-server"]}'` (a reversed range,
+  `r-"`), made `new RegExp` throw: the guard asked a person about a harmless
+  call. sh's fnmatch matches nothing there and the word stays literal; gnomon
+  now does the same, in the shell-glob and `find -name` / `git clean -e`
+  matchers. Found by the 34-project capability matrix rerun on v0.6.4, which
+  replayed 400 real Claude Code calls per project and saw 2 such errors.
+
 ## [0.6.4] — 2026-11-21
 
 A live trace you can follow, reasoning read the way every 2026 model family
