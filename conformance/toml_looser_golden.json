@@ -1,6 +1,10 @@
 {
   "note": "gnomon's reading of conformance/toml_looser.toml, which is NOT valid TOML 1.0. gnomon accepts it; a spec parser refuses the whole file. The consequence is that a .gnomon/ surface can be written which gnomon loads and no other TOML tool will open. 'toml_refusal' is what Python 3.12 tomllib said when handed this file, recorded offline on 2026-09-01; nothing in CI re-runs it. Documentation of a limit, not endorsement.",
   "toml_refusal": "Unescaped '\\' in a string (at line 23, column 22)",
+  "control_characters_note": "What the surface audit reports for this file (#206): each line holding a control character TOML refuses (U+0000-U+0008, U+000A-U+001F, U+007F; tab and the CR of a CRLF line end excepted), the first such character on it (1-based column, its code point), and the [table] and key it sits in. tomllib refuses control_char alone with: Found invalid character '\\x08' (at line 1, column 33), checked offline on 2026-11-20. Asserted by config.test.ts.",
+  "control_characters": [
+    { "line": 59, "column": 33, "code": 8, "table": "looser", "key": "control_char" }
+  ],
   "gnomon": {
     "looser": {
       "unknown_escape": "a\\qb",
@@ -10,7 +14,8 @@
       "unclosed_quote": "\"abc",
       "junk_after_string": "\"value\" extra",
       "comment_only_value": "",
-      "duplicate_key": 2
+      "duplicate_key": 2,
+      "control_char": "^septacore check\b"
     },
     "reopened": {
       "first": 1,

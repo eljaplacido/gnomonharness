@@ -68,6 +68,14 @@ describe("gnomon security: the contract", () => {
     expect(verifier).toMatchObject({ exec: "off", bash: true, writes: false, bash_allowlist: true });
   });
 
+  it("host_exec's fix names the file [sandbox] lives in, policy.toml, on every platform", async () => {
+    for (const platform of ["linux", "darwin", "win32"] as const) {
+      const fix = buildSecurityReport(await project(), {}, platform).findings.find((f) => f.id === "host_exec")!.fix;
+      expect(fix).toMatch(/\.gnomon\/policy\.toml/);
+      expect(fix).not.toMatch(/config\.toml/);
+    }
+  });
+
   it("off Linux, the advice names docker, not the Landlock sandbox", async () => {
     const r = buildSecurityReport(await project(), {}, "darwin");
     expect(r.findings.find((f) => f.id === "host_exec")!.fix).not.toMatch(/exec = "os" \(/);
@@ -93,6 +101,13 @@ describe("gnomon security: the contract", () => {
     expect(v).toMatchObject({ exec: "docker", read_only_source: true, network: false });
     expect(r.findings.find((f) => f.id === "host_exec")!.message).not.toMatch(/verifier/);
     expect(r.findings.find((f) => f.id === "judge_can_write")?.message ?? "").not.toMatch(/verifier/);
+    // #208: the default image carries no toolchain, and the report says so until one is declared.
+    const image = r.findings.find((f) => f.id === "surface_warning" && /default image/.test(f.message))!;
+    expect(image).toMatchObject({ severity: "advice" });
+    expect(image.message).toMatch(/^\.gnomon\/policy\.toml \[sandbox\] image: verifier runs bash under exec = "docker" in the default image, debian:stable-slim/);
+    expect(image.fix).toMatch(/\[sandbox\] image = /);
+    writeFileSync(join(dir, ".gnomon/roles.toml"), roles.replace('exec = "docker"\n', 'exec = "docker"\nimage = "node:22-bookworm"\n'));
+    expect(buildSecurityReport(dir, {}, "linux").findings.some((f) => /default image/.test(f.message))).toBe(false);
   });
 
   // Measured 2026-11-20 (gnomon 0.6.2): a surface with no [governance] had
@@ -151,6 +166,32 @@ describe("gnomon security: the contract", () => {
     expect(r.approval).toBe("never");
     expect(r.findings.map((f) => f.id)).toContain("approval_never_on_host");
     expect(r.exit).toBe(0);
+  });
+
+  // #216 (2026-11-20, Windows 11): Windows has no OS sandbox, so there
+  // exec = "os" refuses every shell command (fail closed, and it stays so).
+  // A surface committed with it and shared with Windows machines has no
+  // shell on them, and nothing said so before the first refusal.
+  it('exec = "os" is said plainly: no bash on Windows, here or on a Windows clone; advice, no exit change (#216)', async () => {
+    const dir = await project();
+    const p = join(dir, ".gnomon/policy.toml");
+    const plain = readFileSync(p, "utf-8");
+    expect(buildSecurityReport(dir, {}, "win32").findings.map((f) => f.id)).not.toContain("exec_os_windows");
+    writeFileSync(p, plain.replace(/^\[sandbox\]\n/m, '[sandbox]\nexec = "os"\n'));
+    const win = buildSecurityReport(dir, {}, "win32");
+    shapeHolds(win);
+    const w = win.findings.find((f) => f.id === "exec_os_windows")!;
+    expect(w.severity).toBe("advice");
+    expect(w.message).toMatch(/Windows has no OS sandbox: on this machine every shell command is refused/);
+    expect(w.fix).toMatch(/exec = "docker"/);
+    expect(w.fix).toMatch(/WSL2/);
+    expect(win.exit).toBe(0);
+    const linux = buildSecurityReport(dir, {}, "linux");
+    expect(linux.findings.find((f) => f.id === "exec_os_windows")!.message).toMatch(/on a Windows machine that runs this surface/);
+    // What else stops there: [verify] and gnomon check (finding M of the 2026-11-20 shadow test).
+    expect(w.message).toMatch(/\[verify\] and gnomon check cannot run/);
+    expect(linux.findings.find((f) => f.id === "exec_os_windows")!.message).toMatch(/no \[verify\] or gnomon check verdict/);
+    expect(formatSecurity(win).join("\n")).toMatch(/exec_os_windows|no OS sandbox/);
   });
 
   it("a trail whose chain does not hold is a risk: exit 2", async () => {

@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import {
   declaredTools,
   resolveVerify,
@@ -25,6 +26,8 @@ import {
   routeInput,
   resolveContext,
   auditSurface,
+  tomlControlCharacters,
+  DEFAULT_SANDBOX_IMAGE,
   BLOCK_KEYS,
   recomputeManifest,
   PROBE_TIMEOUT_MS,
@@ -921,6 +924,45 @@ describe("auditSurface", () => {
   });
 });
 
+// #208 (2026-11-20 shadow test): under exec = "docker" with the default image a
+// project's toolchain probe exited 127 -- debian:stable-slim has no git, curl
+// or language toolchain -- and nothing said a project needs [sandbox] image.
+describe("exec = docker on the default image: the surface audit says the image carries no toolchain (#208)", () => {
+  const surface = (policy: string, roles = `[roles.implement]\ntools = ["bash", "read"]\n`) => {
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-docker-image-"));
+    mkdirSync(join(dir, ".gnomon"), { recursive: true });
+    writeFileSync(join(dir, ".gnomon", "policy.toml"), policy);
+    writeFileSync(join(dir, ".gnomon", "roles.toml"), roles);
+    writeFileSync(join(dir, ".gnomon", "tools.toml"), `[[tools]]\nname = "bash"\nenabled = true\n\n[[tools]]\nname = "read"\nenabled = true\n`);
+    const hits = auditSurface(loadConfig(dir)).filter((p) => /default image/.test(p.problem));
+    rmSync(dir, { recursive: true, force: true });
+    return hits;
+  };
+
+  it("warns, naming the roles, the image and [sandbox] image, when no image is declared", () => {
+    expect(DEFAULT_SANDBOX_IMAGE).toBe("debian:stable-slim");
+    const hits = surface(`[sandbox]\nexec = "docker"\n`, `[roles.implement]\ntools = ["bash"]\n\n[roles.plan]\ntools = ["read"]\n\n[roles.verifier]\ntools = ["bash"]\n`);
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.fatal).toBe(false);
+    expect(hits[0]!.where).toBe(".gnomon/policy.toml [sandbox] image");
+    expect(hits[0]!.problem).toMatch(/^implement, verifier run bash under exec = "docker" in the default image, debian:stable-slim/);
+    expect(hits[0]!.problem).toMatch(/no git, no curl and no language toolchain/);
+    expect(hits[0]!.problem).toMatch(/exits 127/);
+    expect(hits[0]!.fix).toMatch(/\[sandbox\] image = /);
+    expect(hits[0]!.fix).toMatch(/per role in roles\.toml/);
+    // A role's own exec = "docker" counts too.
+    expect(surface("", `[roles.implement]\ntools = ["bash"]\nexec = "docker"\n`)).toHaveLength(1);
+  });
+
+  it("says nothing once an image is declared, for a role without bash, or off docker", () => {
+    expect(surface(`[sandbox]\nexec = "docker"\nimage = "node:22-bookworm"\n`)).toEqual([]);
+    expect(surface(`[sandbox]\nexec = "docker"\n`, `[roles.implement]\ntools = ["bash"]\nimage = "python:3.12"\n`)).toEqual([]);
+    expect(surface(`[sandbox]\nexec = "docker"\n`, `[roles.plan]\ntools = ["read"]\n`)).toEqual([]);
+    expect(surface(`[sandbox]\nexec = "os"\n`)).toEqual([]);
+    expect(surface("")).toEqual([]);
+  });
+});
+
 describe("bash_allow executor warning guards each admission on its own terms", () => {
   const write = (dir: string, file: string, body: string) => {
     mkdirSync(join(dir, ".gnomon"), { recursive: true });
@@ -1256,6 +1298,55 @@ describe("TOML conformance — the accepted subset is pinned, not implied", () =
       // here, quotes included.
       expect(golden.gnomon.looser.junk_after_string).toBe('"value" extra');
     });
+
+    // #206. A real surface had a literal backspace inside a bash_allow entry,
+    // '^septacore check<BS>', from a generator that wrote "\b". tomllib refuses
+    // the file; gnomon read it and the entry could never match. Nothing said so.
+    it("finds each control character TOML refuses, with line, column, table and key (#206)", () => {
+      expect(tomlControlCharacters(read("toml_looser.toml"))).toEqual(golden.control_characters);
+      // Still read verbatim: the byte is in the value.
+      expect(golden.gnomon.looser.control_char).toBe("^septacore check\b");
+      // TOML allows a tab in a string and the CR of a CRLF line end; the
+      // escape "\b" is two characters in the file, and legal.
+      expect(tomlControlCharacters("a = 'x\ty'\r\nb = \"\\b\"\r\n[t]\r\nc = 1 # é\r\n")).toEqual([]);
+      // In a basic string, in a comment, DEL, a lone CR; in a multi-line
+      // array, the array's key.
+      expect(tomlControlCharacters('k = "a\x1bb"\n# x\x00\n[t.u]\nd = \'\x7f\'\nr = \'a\rb\'\nlist = [\n  \'ok\',\n  \'x\x08\',\n]\n')).toEqual([
+        { line: 1, column: 7, code: 0x1b, table: null, key: "k" },
+        { line: 2, column: 4, code: 0x00, table: null, key: null },
+        { line: 4, column: 6, code: 0x7f, table: "t.u", key: "d" },
+        { line: 5, column: 7, code: 0x0d, table: "t.u", key: "r" },
+        { line: 8, column: 5, code: 0x08, table: "t.u", key: "list" },
+      ]);
+    });
+
+    it("the surface audit warns of one in a surface file, naming file, line and key, and loads the surface (#206)", () => {
+      const dir = mkdtempSync(join(tmpdir(), "gnomon-toml-control-"));
+      mkdirSync(join(dir, ".gnomon", "profiles"), { recursive: true });
+      writeFileSync(
+        join(dir, ".gnomon", "roles.toml"),
+        "[roles.verifier]\ntools = [\"bash\"]\nbash_allow = [\n  '^git status',\n  '^septacore check\b',\n]\n"
+      );
+      writeFileSync(join(dir, ".gnomon", "profiles", "local.toml"), "# a\x1b[2J comment\n");
+      const config = loadConfig(dir);
+      expect((config.roles.verifier as { bash_allow: string[] }).bash_allow[1]).toBe("^septacore check\b");
+      const hits = auditSurface(config).filter((p) => /control character/.test(p.problem));
+      expect(hits.map((p) => p.where)).toEqual([
+        ".gnomon/roles.toml line 5 [roles.verifier] bash_allow",
+        ".gnomon/profiles/local.toml line 1",
+      ]);
+      expect(hits.every((p) => !p.fatal)).toBe(true);
+      expect(hits[0]!.problem).toMatch(/U\+0008/);
+      expect(hits[0]!.problem).toMatch(/TOML 1\.0 refuses/);
+      expect(hits[0]!.fix).toMatch(/grep -nP .* \.gnomon\/roles\.toml$/);
+      expect(hits[1]!.problem).toMatch(/U\+001B, ESC/);
+
+      // Fixed, nothing is said.
+      writeFileSync(join(dir, ".gnomon", "roles.toml"), "[roles.verifier]\nbash_allow = ['^septacore check\\b']\n");
+      rmSync(join(dir, ".gnomon", "profiles", "local.toml"));
+      expect(auditSurface(loadConfig(dir)).filter((p) => /control character/.test(p.problem))).toEqual([]);
+      rmSync(dir, { recursive: true, force: true });
+    });
   });
 
   describe("limits that cannot share a fixture file", () => {
@@ -1517,5 +1608,49 @@ describe("approval and sandbox set in both files", () => {
     expect(resolveSandboxLevel(c)).toBe("off");
     const role = Object.keys(c.roles)[0]!;
     expect(explain(c, role, "sandbox")!.here.join("\n")).toMatch(/level\s+off/);
+  });
+});
+
+describe("TOML: a multi-line string opened and closed on one line is read as TOML reads it", () => {
+  const T3 = "'''";
+  it("'''…''' and \"\"\"…\"\"\" give their content, not the content wrapped in two quotes", () => {
+    expect(parseToml(`a = ${T3}x${T3}`).a).toBe("x");
+    expect(parseToml(`a = """x"""`).a).toBe("x");
+    // One or two quotes inside are content; a # inside is not a comment; one after is.
+    expect(parseToml(`a = ${T3}it's #1${T3}   # note`).a).toBe("it's #1");
+    // Up to two quotes may sit before the closing three: they are content.
+    expect(parseToml(`a = ${T3}q${T3}'`).a).toBe("q'");
+    expect(parseToml(`a = ${T3}${T3}`).a).toBe("");
+    // A basic one processes escapes; an escaped quote does not close it.
+    expect(parseToml(`a = """t\\tb \\"""x\\""""`).a).toBe('t\tb """x"');
+    // Spanning lines stays refused, with the line (§5.2).
+    expect(() => parseToml(`a = ${T3}\nspans\n${T3}`)).toThrow(/line 2/);
+  });
+
+  it("a trial spec's one-line setup reaches the shell intact: the seeded value is not empty", () => {
+    if (process.platform === "win32") return; // the spec is sh; the parse itself is checked above
+    const spec = parseToml(
+      `setup = ${T3}T=$(printf abc); printf 'K=%s\\n' "$T" > f; printf %s "$T" > g${T3}\n` +
+        `check = ${T3}T=$(cat g); test -n "$T" && grep -qx "K=$T" f${T3}\n`
+    ) as { setup: string; check: string };
+    // Read as ''T=$(...)'', the shell took `T=...` for a command, T stayed
+    // empty, and the check failed: the 2026-11-20 eval "race" that was a parse.
+    expect(spec.setup.startsWith("T=$(")).toBe(true);
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-toml-triple-"));
+    try {
+      const run = (cmd: string) => spawnSync(cmd, { cwd: dir, shell: true, stdio: "ignore" }).status;
+      expect(run(spec.setup)).toBe(0);
+      expect(readFileSync(join(dir, "g"), "utf-8")).toBe("abc");
+      expect(run(spec.check)).toBe(0);
+      // The dangerous direction: a check that must FAIL. Read as ''T=...'',
+      // T stayed empty, `! test -n "$T"` was `! false`, and the check passed
+      // whatever the agent did -- 75 of 75 eval cells "held" a canary that way
+      // in the same shadow test.
+      const mustFail = parseToml(`check = ${T3}T=$(printf leaked); ! test -n "$T"${T3}`) as { check: string };
+      expect(run(mustFail.check)).not.toBe(0);
+      expect(run(`''${mustFail.check}''`)).toBe(0); // what the old parse ran: a false pass
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

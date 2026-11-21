@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3940 TypeScript tests (3272 core, 643 cli, 18
-> natives, 7 tui) and 120 Rust tests — **4060 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3959 TypeScript tests (3284 core, 650 cli, 18
+> natives, 7 tui) and 120 Rust tests — **4079 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2150,7 +2150,10 @@ misspelt `reads` value refuses too, rather than falling back to `"all"`.
   the point; name a config file in `read_roots` if a tool needs it.
 - **Linux only.** On macOS `reads = "scoped"` refuses rather than runs (a
   Seatbelt read allow-list has not been written or tested); Windows has no
-  `exec = "os"` at all.
+  `exec = "os"` at all: there `bash` refuses every command, so a surface
+  committed with `exec = "os"` and shared with Windows machines has no shell
+  on them. Use `exec = "docker"` for those, or run gnomon inside WSL2;
+  `gnomon security` (on any platform) and `gnomon doctor` (on Windows) say so.
 
 #### `exec = "docker"` — a container
 
@@ -2164,7 +2167,11 @@ The repository is bind-mounted at the same absolute path it has outside, the
 caller is mapped with `--user` so files come back owned by you rather than
 root, and the container gets no network unless `[sandbox] network` is true.
 The toolchain is the image's, not the host's, and each command pays a
-`docker run`.
+`docker run`. **Declare an image that carries the project's toolchain.** The
+default, `debian:stable-slim`, has no git, no curl and no language toolchain,
+so a command that needs one exits 127; set `[sandbox] image` in
+`.gnomon/policy.toml`, or `image` per role in `roles.toml`. Until one is
+declared, the surface audit says so at session start and in `gnomon security`.
 
 **This is a containment answer**, as `exec = "os"` is for writes outside the
 root and egress, and `bash_deny`, `bash_allow` and `network = false` on the
@@ -2488,7 +2495,8 @@ It sorts what it finds into two kinds:
   setting that would: roles whose commands run on the host, a judge with no
   write tool that can still write through `bash`, `approval = never` on the
   host, a sandbox with a network, the audit trail off, no `[governance]` (so
-  nothing protects secrets or CI files) or a family below prevent. A fresh
+  nothing protects secrets or CI files) or a family below prevent, and
+  `exec = "os"`, which on Windows refuses every shell command. A fresh
   `gnomon init` gets two of these — the scaffold runs commands on the host —
   and exits 0.
 
@@ -3070,7 +3078,10 @@ rolled-back checkpoint. Both used to be documented as undetectable.
 Measured in [auditability-2026-11-03](benchmarks/results/auditability-2026-11-03/):
 **9/9 with a git witness**, against an attacker who also wipes the local anchor
 state, tries a forced push, and anchors the forgery. Off, it is **8/9**,
-unchanged. Contract, statuses and limits: [docs/CONTRACTS.md §21](docs/CONTRACTS.md).
+unchanged. `--offline` reads this machine's copy of the witness and exits on
+what it can check there: an anchor it cannot check (no local copy yet on a
+fresh checkout, or a surface not trusted here) is printed, not failed, so a
+loop guard on it alarms on tamper rather than on setup. Contract, statuses and limits: [docs/CONTRACTS.md §21](docs/CONTRACTS.md).
 
 ## Governing other harnesses
 
@@ -3238,7 +3249,11 @@ session that `gnomon audit verify` reads.
 `--write` adds it to this project's own config (never a user-wide one). Each
 hook names a checked absolute path to gnomon, so commit the hook files only if
 every machine has gnomon at the same path (`--bin`); otherwise install with
-`--write --local` on each machine, which keeps the hook out of git:
+`--write --local` on each machine, which keeps the hook out of git. Each hook
+passes `--agent claude-code` (`opencode`, `cursor`); map it to a role under
+`[check.roles]` in `.gnomon/policy.toml` and commit that. Without an entry the
+guard has no role and answers every call "ask", so `install` warns with the
+line to add and `gnomon guard status` lists the hook as a warning:
 
 | Harness | What is installed | deny | ask | allow |
 |---|---|---|---|---|

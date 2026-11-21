@@ -715,6 +715,29 @@ describe("git backend", () => {
     expect((await report(c, [p], { offline: true })).ok).toBe(true);
   });
 
+  it("acceptUnreadable: no local copy yet (a fresh checkout) is reported, not counted; a re-chain the copy shows still is (#207)", async () => {
+    const remote = bareRemote();
+    const c = cfg({ backend: "git", remote });
+    const p = sealTrail(c, "s1");
+    const a = anchorOf(c);
+    // Nothing delivered, so this machine has no copy of the witness.
+    let log = await collectAnchors(a, { offline: true });
+    expect(log.problems.join(" ")).toMatch(/no local copy of the anchors/);
+    expect(verifyAgainstAnchors(a, log, [p], { acceptUnchecked: true }).ok).toBe(false);
+    const fresh = verifyAgainstAnchors(a, log, [p], { acceptUnchecked: true, acceptUnreadable: true });
+    expect(fresh.ok).toBe(true);
+    expect(fresh.problems).toEqual(log.problems);
+
+    await flushAnchors(a);
+    rechain(p, (rs) => {
+      (rs[1] as Record<string, unknown>).target = "forged.ts";
+    });
+    log = await collectAnchors(a, { offline: true });
+    const rep = verifyAgainstAnchors(a, log, [p], { acceptUnchecked: true, acceptUnreadable: true });
+    expect(rep.trails[0]!.status).toBe("rechained");
+    expect(rep.ok).toBe(false);
+  });
+
   it("anchors from another checkout sharing the witness are counted, not judged", async () => {
     const remote = bareRemote();
     const c = cfg({ backend: "git", remote });

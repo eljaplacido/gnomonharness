@@ -54,6 +54,7 @@ export const SECURITY_FINDING_IDS = [
   "judge_can_write",
   "approval_never_on_host",
   "sandbox_network",
+  "exec_os_windows",
   "surface_warning",
 ] as const;
 export type SecurityFindingId = (typeof SECURITY_FINDING_IDS)[number];
@@ -175,8 +176,8 @@ export function buildSecurityReport(dir: string, trust: TrustOptions = {}, platf
       message: `${onHost.map((r) => r.role).join(", ")} run${onHost.length === 1 ? "s" : ""} shell commands on this machine: bash_allow and bash_deny filter command lines, they do not contain what a program does`,
       fix:
         platform === "linux"
-          ? 'set [sandbox] exec = "os" (Landlock, about +4 ms a call) or exec = "docker" in .gnomon/config.toml, or per role in roles.toml'
-          : 'set [sandbox] exec = "docker" in .gnomon/config.toml, or per role in roles.toml (exec = "os" is Linux only)',
+          ? 'set [sandbox] exec = "os" (Landlock, about +4 ms a call) or exec = "docker" in .gnomon/policy.toml, or per role in roles.toml'
+          : 'set [sandbox] exec = "docker" in .gnomon/policy.toml, or per role in roles.toml (exec = "os" is Linux only)',
     });
   }
   const judges = roles.filter((r) => r.bash && !r.writes && !r.read_only_source);
@@ -203,6 +204,24 @@ export function buildSecurityReport(dir: string, trust: TrustOptions = {}, platf
       severity: "advice",
       message: `the sandbox of ${networked.map((r) => r.role).join(", ")} has a network: contained commands can still reach the internet`,
       fix: "[sandbox] network = false unless the task needs it",
+    });
+  }
+  // exec = "os" on Windows (#216): there is no OS sandbox there, so bash
+  // refuses every command (fail closed; that stays). A surface committed with
+  // it (Rule 1: no per-machine configuration) has no shell on a Windows
+  // machine, which nothing said before the first refusal. Said on every
+  // platform: whoever commits it on Linux is the one who can choose.
+  const osRoles = roles.filter((r) => r.bash && r.exec === "os");
+  if (osRoles.length > 0) {
+    const names = osRoles.map((r) => r.role).join(", ");
+    findings.push({
+      id: "exec_os_windows",
+      severity: "advice",
+      message:
+        platform === "win32"
+          ? `${names} run${osRoles.length === 1 ? "s" : ""} bash under exec = "os", and Windows has no OS sandbox: on this machine every shell command is refused (fail closed), so there is no bash here, and [verify] and gnomon check cannot run either (check gives no verdict)`
+          : `${names} run${osRoles.length === 1 ? "s" : ""} bash under exec = "os": on a Windows machine that runs this surface every shell command is refused (Windows has no OS sandbox), so a repository shared with Windows has no bash there, and no [verify] or gnomon check verdict either`,
+      fix: 'for Windows: exec = "docker" ([sandbox] in .gnomon/policy.toml, or per role in roles.toml), or run gnomon inside WSL2',
     });
   }
 

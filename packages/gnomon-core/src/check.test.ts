@@ -172,13 +172,19 @@ describe("gnomon check — no verdict (exit 10)", () => {
     expect(v.checks).toEqual([]);
   });
 
-  it("no [verify] declared is could-not-run, not a pass", async () => {
+  it("no [verify] declared is skipped and named, and still no verdict: held, unverified is not a pass", async () => {
     surface({ verify: null });
     const base = commit("base");
     put("src/pay.txt", "2\n");
     const v = await runCheck({ dir: repo, base, role: "implement" });
-    expect(byId(v, "verify")?.status).toBe("error");
+    expect(byId(v, "verify")).toMatchObject({ status: "skipped", reason: expect.stringMatching(/declares no \[verify\].*not run/) });
+    expect(byId(v, "must_fail_first")).toMatchObject({ status: "skipped", reason: "no [verify] declared" });
+    // Nothing errored, so it is not "could not run" -- and still exit 10:
+    // a gate on `gnomon check` must not pass work nobody ran.
+    expect(v.checks.some((c) => c.status === "error")).toBe(false);
     expect(v.exit).toBe(10);
+    expect(checkExit([{ id: "surface", status: "pass" }, { id: "verify", status: "skipped" }])).toBe(10);
+    expect(checkExit([{ id: "surface", status: "fail" }, { id: "verify", status: "skipped" }])).toBe(2);
   });
 
   it("a verify command that is not found is could-not-run", async () => {

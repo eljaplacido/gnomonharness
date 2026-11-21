@@ -26,6 +26,124 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `[verify]` run that never ran to an exit is no longer recorded as a
+  failed check** (#231). Four cases, all of them `failed` and handed back as
+  "your answer is not accepted" until now:
+  - **declined by the person asked** (`[approval] gate = "always"`): now
+    `declined`, the trail's `verify` record says `declined: true`, nothing is
+    handed back;
+  - **refused by a rule** (`bash_deny`, `sudo`, network), **timed out and
+    killed**, or **refused by the sandbox** (Windows `exec = "os"`): no exit
+    was read and the tool ran nothing, so it is `unrunnable` -- what
+    `gnomon check` already called it -- with the reason on the trail, and
+    nothing is handed back. A rule's refusal is never recorded as an
+    operator's decline. The 2026-11-20 matrix had every 120 s timeout and all
+    11 Windows `exec = "os"` arms recorded as failed.
+  A run killed by a signal, or a non-zero exit, is still `failed` and handed
+  back: an OOM-killed suite is not green.
+- **`gnomon check` says when the rules held but nothing was run.** With no
+  `[verify]` declared, `verify` was `error`, so every commit of such a project
+  (10 of 15 in the 2026-11-20 shadow test) got a verdict that read the same as
+  a crashed check. Now `verify` is `skipped` with the reason, `must_fail_first`
+  is skipped too, and the text says `HELD, UNVERIFIED`. The exit stays 10 on
+  purpose: a gate built on `gnomon check` still never passes work nobody ran
+  (CONTRACTS.md §6).
+- **The Windows `exec = "os"` advice says what else stops** (`gnomon security`
+  `exec_os_windows`, `gnomon doctor`): with no shell there, `[verify]` and
+  `gnomon check` cannot run either, so check gives no verdict on that machine.
+- **A multi-line string written on one line is read as TOML reads it.**
+  `'''x'''` and `"""x"""` are valid TOML 1.0, and gnomon's parser read them as
+  a one-quote string with two quotes of content at each end, silently. A trial
+  spec's `setup = '''T=$(...); printf %s "$T" > f'''` reached the shell as
+  `''T=$(...) ...''`, which is not an assignment: the setup seeded an empty
+  value and the check failed with exit 2. The same misread passes checks that
+  should fail: a one-line check that starts with an assignment and then
+  negates a test (`'''T=$(...); ! test -n "$T"'''`, `! grep -q . "$E/hits"`)
+  saw an empty variable and passed whatever the agent did -- 75 of 75 eval
+  cells "held" a canary that way in the 2026-11-20 shadow test. So a
+  `gnomon eval` or `gnomon skill trial` verdict whose spec used a one-line
+  `'''` or `"""` check is not to be trusted; re-run it on this version. The
+  failures meanwhile looked like an eval race (a check run at once failed and
+  one behind `sleep 1;` passed, because the prefix moved the stray quotes onto
+  `sleep`). Both
+  forms now give their content, with `#` and one or two quotes inside kept;
+  spanning lines is still refused (CONTRACTS.md §5.1, §5.2; the accepted
+  fixture's golden regenerated from Python 3.12 `tomllib`).
+
+- **`gnomon guard install` says when the hook it writes has no role**
+  (#205). Each hook passes `--agent claude-code` (`opencode`, `cursor`), and
+  the guard maps that to a role through `[check.roles]`. A project with no
+  entry there -- 32 of 33 in the 2026-11-20 shadow test -- got a hook that
+  answered every call "ask" ("no role") and protected only by asking about
+  everything, and nothing said so. `install` (printing or `--write`, every
+  host) now warns on stderr with the `[check.roles]` lines to add and the
+  declared roles; it still writes the hook and exits as before. `gnomon guard
+  status` lists such a hook in `warnings` (no exit change). The agent names
+  are pinned as `hook_agents` in `conformance/guard_decision.json`
+  (CONTRACTS.md §10).
+
+- **A control character in a surface TOML file is reported** (#206). A real
+  surface had a literal backspace inside a `bash_allow` entry,
+  `'^septacore check<BS>'`, from a generator that wrote `"\b"`. TOML 1.0
+  refuses the file; gnomon read the byte verbatim, the line looked correct in
+  a terminal and a diff, and the entry could never match. The surface audit
+  now lists each line of `config.toml`, `roles.toml`, `tools.toml`,
+  `policy.toml` and `profiles/*.toml` holding a control character other than
+  tab (U+0000-U+0008, U+000A-U+001F, U+007F; a CR only before LF) as a
+  warning naming the file, line, table and key, with a `grep` that finds the
+  byte -- at session start and in `gnomon security` (`surface_warning`). A
+  warning, not a refusal, as an unknown escape is accepted: refusing would
+  stop a surface that loads today from loading at all. What is read does not
+  change. `conformance/toml_looser.toml` gains the case and its golden the
+  report (CONTRACTS.md §5.4).
+
+- **`gnomon audit verify --offline` no longer fails a fresh checkout**
+  (#207). With `[audit.anchor]` declared it exited 1 when the block was not
+  trusted on this machine, or when this machine had no copy of the anchors
+  yet, though the chain verified -- so a loop guard on it (`act_when =
+  "exit_nonzero"`) alarmed on every fresh checkout. `--offline` now exits on
+  the chain, the seal, the signature and what this machine's copy shows
+  (re-chained, invalid, unanchored, a missing anchored trail, a rollback).
+  What it cannot check here is printed and not failed: a problem reading the
+  copy, marked `(--offline: reported, not counted against the exit)`, and a
+  block that cannot work here, as `external anchor: NOT CHECKED here`.
+  Without `--offline` nothing changes. `verifyAgainstAnchors` gains
+  `acceptUnreadable`; `conformance/audit_anchor.json` gains `offline_exit`
+  (CONTRACTS.md §21).
+
+- **`exec = "docker"` on the default image says the image has no toolchain**
+  (#208). `debian:stable-slim` has no git, no curl and no language
+  toolchain, so a project's toolchain probe exited 127 under it, and nothing
+  said a project has to declare `[sandbox] image` until its commands failed.
+  When a role holding bash runs under `exec = "docker"` and neither the role
+  nor `[sandbox]` declares an image, the surface audit now warns, naming the
+  roles and the image, with `[sandbox] image` (or per role `image`) as the
+  fix -- at session start and in `gnomon security` (`surface_warning`). A
+  declared image, even the same one, is left alone. The `gnomon init`
+  scaffold's comment beside `exec = "docker"` says the same, and README's
+  docker section. `DEFAULT_SANDBOX_IMAGE` is exported. Containment is
+  unchanged.
+
+- **`exec = "os"` says it means no shell on Windows** (#216). Windows has
+  no OS sandbox, so there `bash` refuses every command under `exec = "os"`
+  (fail closed, and that stays). A repository shared by Linux or macOS and
+  Windows machines that commits it has no shell on Windows -- a toolchain
+  probe went 0/3 on 11 of 11 arms there -- and nothing said so before the
+  first refusal. `gnomon security` gains the advice `exec_os_windows`,
+  naming the roles holding bash under `exec = "os"`, on every platform (on
+  Windows: no bash on this machine; elsewhere: none on a Windows machine
+  that runs the surface), with `exec = "docker"` or WSL2 as the fix.
+  `gnomon doctor` on Windows says the same as an `info` note (no exit
+  change). The `gnomon init` scaffold's comment beside `exec = "os"` and
+  README say it too. `conformance/security_posture.json` and CONTRACTS.md
+  §45 (the id) and §15 (the note).
+
+- **`host_exec` names the right file.** Its fix said to set `[sandbox] exec`
+  in `.gnomon/config.toml`; `[sandbox]` lives in `.gnomon/policy.toml`, which
+  the fix now names on every platform.
+
 ## [0.6.3] — 2026-11-20
 
 Fixes from a multi-machine shadow test of gnomon across real projects on

@@ -13,7 +13,7 @@
  * and says so.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -32,6 +32,7 @@ import {
   shellCommand,
   CLAUDE_CODE_MATCHER,
   CLAUDE_CODE_MATCHED_TOOLS,
+  HOOK_AGENTS,
   type GuardStatus,
 } from "./guard.js";
 
@@ -535,6 +536,97 @@ describe("gnomon guard status — a missing, changed or switched-off hook is a f
     const expected = await status(r, ["--expect", "cursor"]);
     expect(stateOf(expected.st, "cursor")).toBe("missing");
     expect(expected.code).toBe(2);
+    rmSync(r, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A hook with no role (#205)
+// ---------------------------------------------------------------------------
+
+// The 2026-11-20 shadow test: 32 of 33 projects had no [check.roles], so the
+// hook `install --write` put in answered every call "ask" ("no role") and
+// protected only by asking about everything. Nothing said so.
+describe("gnomon guard install / status — a hook whose agent [check.roles] maps to no role (#205)", () => {
+  const HOSTS = ["claude-code", "opencode", "cursor"] as const;
+  const stderrOf = async (argv: string[]) => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const code = await cmdGuard(argv, () => {});
+      return { code, err: spy.mock.calls.map((c) => c.join(" ")).join("\n") };
+    } finally {
+      spy.mockRestore();
+    }
+  };
+  const status = async (dir: string) => {
+    const lines: string[] = [];
+    const code = await cmdGuard(["status", "--dir", dir, "--json"], (s) => lines.push(s));
+    return { code, st: JSON.parse(lines.join("")) as GuardStatus };
+  };
+
+  it("the fixture's hook_agents are the --agent each installed hook passes, and §10 names them", () => {
+    expect(fixture.hook_agents).toBeDefined();
+    const { _comment, ...agents } = fixture.hook_agents as Record<string, string>;
+    expect(_comment).toBeDefined();
+    expect(agents).toEqual({ ...HOOK_AGENTS });
+    const cc = JSON.stringify(claudeCodeHooks(BIN).hooks.PreToolUse);
+    expect(cc).toContain(`--agent ${agents["claude-code"]}`);
+    for (const e of Object.values(cursorHooks(BIN).hooks)) expect(JSON.stringify(e)).toContain(`--agent ${agents.cursor}`);
+    expect(opencodePlugin(BIN)).toContain(`process.env.GNOMON_GUARD_AGENT || "${agents.opencode}"`);
+    const doc = readFileSync(join(ROOT, "docs/CONTRACTS.md"), "utf-8");
+    const section = doc.slice(doc.indexOf("## 10. `gnomon guard`"), doc.indexOf("## 11. "));
+    expect(section).toMatch(/hook_agents/);
+    expect(section).toMatch(/no role/);
+  });
+
+  it("install warns, with the [check.roles] line to add, and writes the hook and exits 0 all the same", async () => {
+    const r = governedRepo("on_write");
+    for (const host of HOSTS) {
+      const w = await stderrOf(["install", host, "--write", "--dir", r]);
+      expect(w.code, host).toBe(0);
+      expect(w.err, host).toMatch(new RegExp(`warning: no role for this hook: it passes --agent ${host}`));
+      expect(w.err, host).toMatch(/every call it sees is answered "ask"/);
+      expect(w.err, host).toMatch(new RegExp(`^\\s+\\[check\\.roles\\]\\n\\s+${host} = "<role>"`, "m"));
+      // Printing (no --write) says the same.
+      expect((await stderrOf(["install", host, "--dir", r])).err, host).toMatch(/no role for this hook/);
+    }
+    expect(existsSync(join(r, ".claude/settings.json"))).toBe(true);
+    // What the warning is about: the hook, as installed, asks about a plain read.
+    const read = JSON.stringify({ session_id: "no-role", cwd: r, hook_event_name: "PreToolUse", tool_name: "Read", tool_input: { file_path: join(r, "src/a.ts") } });
+    const ask = JSON.parse(guardBin(["--from", "claude-code", "--agent", "claude-code"], read).stdout).hookSpecificOutput;
+    expect(ask.permissionDecision).toBe("ask");
+    expect(ask.permissionDecisionReason).toMatch(/\[check\.roles\]/);
+
+    // Mapped to a role that is not declared: still no role.
+    writeFileSync(join(r, ".gnomon/policy.toml"), `${readFileSync(join(r, ".gnomon/policy.toml"), "utf-8")}\n[check.roles]\nclaude-code = "nosuchrole"\n`);
+    expect((await stderrOf(["install", "claude-code", "--write", "--dir", r])).err).toMatch(/no role for this hook/);
+    // Mapped: no warning.
+    writeFileSync(
+      join(r, ".gnomon/policy.toml"),
+      readFileSync(join(r, ".gnomon/policy.toml"), "utf-8").replace('claude-code = "nosuchrole"', 'claude-code = "implement"\nopencode = "implement"\ncursor = "implement"')
+    );
+    for (const host of HOSTS) expect((await stderrOf(["install", host, "--write", "--dir", r])).err, host).not.toMatch(/no role/);
+    rmSync(r, { recursive: true, force: true });
+  });
+
+  it("status lists an installed hook with no role as a warning: not a finding, no change to the exit", async () => {
+    const r = governedRepo("on_write");
+    let s = await status(r);
+    expect(s.st.warnings.filter((w) => /no role/.test(w))).toEqual([]); // nothing installed, nothing to warn of
+    for (const host of HOSTS) await stderrOf(["install", host, "--write", "--dir", r]);
+    s = await status(r);
+    expect(s.code).toBe(0);
+    expect(s.st.findings).toEqual([]);
+    const noRole = s.st.warnings.filter((w) => /no role/.test(w));
+    expect(noRole.map((w) => w.split(":")[0])).toEqual([...HOSTS]);
+    expect(noRole[0]).toMatch(/fix: \[check\.roles\] claude-code = "<role>"/);
+    const lines: string[] = [];
+    expect(await cmdGuard(["status", "--dir", r], (l) => lines.push(l))).toBe(0);
+    expect(lines.join("\n")).toMatch(/^warning: claude-code: no role/m);
+
+    writeFileSync(join(r, ".gnomon/policy.toml"), `${readFileSync(join(r, ".gnomon/policy.toml"), "utf-8")}\n[check.roles]\nclaude-code = "implement"\nopencode = "implement"\ncursor = "implement"\n`);
+    s = await status(r);
+    expect(s.st.warnings.filter((w) => /no role/.test(w))).toEqual([]);
     rmSync(r, { recursive: true, force: true });
   });
 });

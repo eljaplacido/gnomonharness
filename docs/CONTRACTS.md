@@ -145,8 +145,14 @@ round exits by its bucket like any other: the model answered, so it is a
 record. The exit does not carry the check; a refusal floor is never demoted,
 so a failed check at `2` would leave every unverified run there. Read `verify`
 beside the bucket: one of `passed`, `failed`, `unrunnable`, `declined`,
-`skipped`, absent when no check ran (§20). The command and its exit, per
-round, are the trail's `verify` records. A role that declares `escalate` on
+`skipped`, absent when no check ran (§20). `declined` means the person asked
+(`approval = "always"`) said no; `unrunnable` means the check never ran to an
+exit -- not found or not executable (126/127), timed out and killed, or refused
+by the sandbox or a rule -- the same reading `gnomon check` gives (§6). Neither
+hands the turn back. Since 0.6.4; before, all but 126/127 were `failed` and
+handed back (#231). A run killed by a signal, or a non-zero exit, is `failed`.
+Each case is pinned in `conformance/verify_outcomes.json`.
+The command and its exit, per round, are the trail's `verify` records. A role that declares `escalate` on
 `verify_failed` hands the turn on instead (§42).
 
 A `gnomon task` or an interactive session that SIGINT, SIGTERM or SIGHUP ends
@@ -366,6 +372,7 @@ are the only thing standing behind it.
 | Multi-line array | `[` … `]`, with comments and blank lines inside |
 | Trailing `#` comment on a **value** | `approval = "on_write"  # never \| on_write` |
 | `#` inside either kind of string | `"a # b"`, `'a#b'` |
+| A multi-line string opened and closed **on one line** | `'''it's #1'''`, `"""say \"""hi\""""` — since 0.6.4; before, read as the content wrapped in two quotes, silently |
 | CRLF line endings | parses to the same tree as LF |
 
 ### 5.2 Unsupported — refused, with a file and a line
@@ -377,8 +384,8 @@ These raise `.gnomon/<file> line <n>: cannot parse "<text>". Expected a
 |---|---|---|
 | Inline comment on a **header** | `[tools] # note` | **yes** |
 | Dotted key in key position | `local.url = "..."` | **yes** |
-| Multi-line basic string | `"""` … `"""` | **yes** |
-| Multi-line literal string | `'''` … `'''` | **yes** |
+| Multi-line basic string, **spanning lines** | `"""`⏎…⏎`"""` | **yes** |
+| Multi-line literal string, **spanning lines** | `'''`⏎…⏎`'''` | **yes** |
 | `]` inside a string in a **multi-line** array | `[`⏎`"a]b",`⏎`]` | **yes** |
 | Unclosed header | `[roles.verifier` | no |
 | Key with no value | `model =` | no |
@@ -460,11 +467,27 @@ editor, no linter, no later gnomon that grows a real parser.
 | `k = #` | the empty string | error |
 | a duplicate key | last one wins | error |
 | a reopened `[table]` | merges | error |
+| a control character other than tab (U+0000–U+0008, U+000A–U+001F, U+007F; a CR only before LF), in a string or a comment: `k = '^x<U+0008>'` | the byte, verbatim — and a surface warning naming the file, line and key | error |
 
 Only the first is a considered choice — a surface that refuses to load over one
 unrecognised escape helps nobody. `True` and `"value" extra` are the two that
 bite: `True` is a **string**, which is truthy in JavaScript, so a boolean
 setting written that way is **on** and reads as though someone had checked it.
+
+A control character is the one row gnomon reports (#206). It renders as
+nothing, so a pattern holding one reads correctly in a terminal and a diff and
+matches nothing: a real `bash_allow` entry `'^septacore check<BS>'`, from a
+generator that wrote `"\b"`, loaded and never matched. `tomlControlCharacters`
+finds each line holding one (its 1-based line and column, the code point, and
+the `[table]` and key it sits in, a multi-line array's key on its later lines),
+and the surface audit lists it as a warning (`fatal: false`) for
+`config.toml`, `roles.toml`, `tools.toml`, `policy.toml` and `profiles/*.toml`:
+`where` is `.gnomon/<file> line <n> [<table>] <key>`, the fix says how to find
+the byte. It appears wherever the audit does: at session start and in
+`gnomon security` (`surface_warning`). A warning, not a refusal, for the
+escape's reason: refusing would stop a surface that loads today from loading at
+all over one entry. (A lone CR inside a value already fails to parse: §5.2's
+"cannot parse".)
 
 ### 5.5 Fixtures
 
@@ -473,7 +496,7 @@ setting written that way is **on** and reads as though someone had checked it.
 | `conformance/toml_accepted.toml` + `toml_accepted_golden.json` | §5.1 — the golden is the full parse tree |
 | `conformance/toml_rejected/` (11 files) + `toml_rejected.json` | §5.2 — the index pins the exact line each case reports |
 | `conformance/toml_misread.toml` + `toml_misread_golden.json` | §5.3 — golden holds **both** readings, `gnomon` and `toml`, side by side |
-| `conformance/toml_looser.toml` + `toml_looser_golden.json` | §5.4 — golden holds gnomon's reading and tomllib's refusal message |
+| `conformance/toml_looser.toml` + `toml_looser_golden.json` | §5.4 — golden holds gnomon's reading and tomllib's refusal message, and `control_characters`, what `tomlControlCharacters` reports for the file |
 
 **What CI checks.** `packages/gnomon-core/src/config.test.ts` runs in the
 `ts-tests` job and in `.gnomon/ci.sh`. It parses the accepted fixture and
@@ -482,7 +505,7 @@ same tree; asserts every rejected fixture throws naming the exact line from the
 index, and — through `loadConfig`, since the naming wrapper is module-private —
 that the message is prefixed with `.gnomon/roles.toml` and
 `.gnomon/profiles/local.toml`; and compares the misread and looser fixtures to
-their goldens. It also fails if a file exists in `toml_rejected/` with no case
+their goldens, the looser one's `control_characters` included. It also fails if a file exists in `toml_rejected/` with no case
 in the index, so a fixture cannot be added that asserts nothing.
 
 **What CI does not check.** The cross-check against a real TOML parser. The
@@ -509,13 +532,21 @@ inspected. A failure beats an error: when both occur the exit is 2.
 |---|---|
 | `write_allow` | pass, fail, skipped |
 | `surface` | pass, fail |
-| `verify` | pass, fail, error |
+| `verify` | pass, fail, skipped, error |
 | `must_fail_first` | pass, fail, skipped |
 | `bash_allow` | pass, fail, skipped, error |
 | `audit` | pass, error |
 
 `skipped` always carries a `reason` and is never counted as a pass. An `audit`
 pass alone is not a verdict: it records the work, it does not inspect it.
+
+**No `[verify]` declared** (since 0.6.4): `verify` is `skipped` with the reason
+"the base surface declares no [verify] command, so the change was not run", and
+`must_fail_first` is `skipped` ("no [verify] declared"). The exit stays **10**:
+the rules that applied may all have held, but nobody ran the change, and a gate
+built on `gnomon check` must not pass that. The text output names it
+`HELD, UNVERIFIED` rather than `NO VERDICT`. Until 0.6.3 `verify` was `error`
+here, which read the same as a check that could not run.
 
 Top-level keys: `schema`, `base` (merge-base, full sha), `head` (full sha or
 `"worktree"`), `role`, `surface_hash` (the **base** surface — the rules the
@@ -994,6 +1025,17 @@ Cursor's `hooks.json` are written where they always are and listed in
 directory or a versioned directory (`/v22.22.2/`), which another clone will not
 have. The exit is the same either way.
 
+Each hook passes an agent name as `--agent` (`hook_agents` in the fixture:
+`claude-code`, `opencode`, `cursor`; the opencode plugin's is a default that
+`$GNOMON_GUARD_AGENT` overrides), which the guard maps to a role through
+`[check.roles]` in `.gnomon/policy.toml`. With no entry for it, or one naming
+no declared role, the guard has **no role** and answers every call `ask`
+(rule `error`): the hook protects only by asking about everything. `install`
+then warns on stderr, with the `[check.roles]` lines to add, read from the
+working tree's surface, and still writes the hook and exits as it would
+otherwise (#205). The guard reads the rules at the session's base, so the
+entry is in force once it is committed.
+
 **`gnomon guard status`** (`--dir`, `--expect <hosts>`, `--json`, schema
 `gnomon.guard.status/1`) says, per host (`claude-code`, `opencode`,
 `cursor`), whether the hook `gnomon guard install` wrote is still there:
@@ -1008,7 +1050,9 @@ recorded), `disabled` (`disableAllHooks` in the project, local or user Claude
 Code settings) or `not_installed`. Claude Code's file is
 `.claude/settings.local.json` when `install --local` recorded it, or when only
 it holds gnomon's hook, else `.claude/settings.json`. `outdated` is listed in
-`warnings`, not `findings`, and does not change the exit. A host is expected when a hook file with
+`warnings`, not `findings`, and does not change the exit. So is a host whose
+hook is in place (`ok` or `outdated`) and has no role in the working tree's
+`[check.roles]`, as `<host>: no role — … fix: [check.roles] <agent> = "<role>" …`. A host is expected when a hook file with
 gnomon's guard in it is committed at HEAD, `install --write` recorded it, or
 `--expect` names it. It also says which host sessions reached the guard
 (§44): `sessions_seen`, `last_decision`, `sessions` and
@@ -1523,7 +1567,7 @@ optionally `fix`.
 
 | Finding `kind` | What it says |
 |---|---|
-| `surface` | no `.gnomon/`, or one that does not load |
+| `surface` | no `.gnomon/`, or one that does not load; on Windows, an `info` note when a role holding bash runs under `exec = "os"`, which refuses every shell command there (#216) |
 | `readiness` | a role's model does not answer its listing |
 | `memory` | the memory that bounds a model differs from what setup saw by more than 5% |
 | `gpu` | the GPUs differ from what setup saw |
@@ -2033,6 +2077,19 @@ It prints an `external anchor:` line under each trail, and checks the
 | `PENDING` | queued, not delivered | no (the degradation above) |
 | `NOT ANCHORED` | sealed after anchoring began here, with nothing anchored and nothing queued | yes |
 | `NOT ANCHORED` | sealed before this checkout began anchoring, or never sealed | no |
+
+**`--offline` exits on what can be checked here** (#207). That is the chain,
+the seal, the signature, and what this machine's copy of the witness shows:
+`RE-CHAINED`, `INVALID`, `NOT ANCHORED` after anchoring began, an anchored
+trail missing, a rollback. What it cannot check here is printed and does not
+fail it: `UNCHECKED`, a problem reading the copy (`there is no local copy of
+the anchors` on a fresh checkout, marked `(--offline: reported, not counted
+against the exit)`), and a declared block that cannot work on this machine
+(a grant not accepted here, `gnomon trust`, or a misdeclared block), printed as
+`external anchor: NOT CHECKED here — …`. A loop guard on `audit verify
+--offline` (`act_when = "exit_nonzero"`) then alarms on tamper, not on every
+fresh checkout. Without `--offline` each of these still exits 1
+(`verify_exit_1` and `offline_exit` in `conformance/audit_anchor.json`).
 
 **The seal itself, anchored or not.** `session_end` seals a trail. After it,
 gnomon writes to that trail only to resume it (`session_resume`, as `gnomon
@@ -4189,8 +4246,18 @@ governance levels (§36), `gnomon guard status` (§44) and the audit trails
 
 Risk ids: `surface_fatal`, `chain_broken`, `record_tamper`, `host_hook`.
 Advice ids: `audit_off`, `governance_off`, `host_exec`, `judge_can_write`,
-`approval_never_on_host`, `sandbox_network`, `surface_warning`. An id's
-severity is fixed; adding an id is a minor change with a fixture update.
+`approval_never_on_host`, `sandbox_network`, `exec_os_windows`,
+`surface_warning`. An id's severity is fixed; adding an id is a minor change
+with a fixture update.
+
+`exec_os_windows` (#216) names the roles holding bash under `exec = "os"`.
+Windows has no OS sandbox, so there `bash` refuses every command (fail closed,
+and it stays so): a surface committed with `exec = "os"` and shared with
+Windows machines has no shell on them. On Windows the message says there is
+no bash on this machine; elsewhere, none on a Windows machine that runs the
+surface. The fix is `exec = "docker"` (per role, or in `[sandbox]`) or gnomon
+inside WSL2. Advice on every platform, because the person committing the
+surface is the one who can choose.
 
 `governance_off` is one finding for the whole surface. It names the roles that
 have no governance layer (neither `[governance]` nor

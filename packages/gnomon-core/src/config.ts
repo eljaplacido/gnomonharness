@@ -945,6 +945,70 @@ export function parseToml(content: string): Record<string, unknown> {
 }
 
 /**
+ * The control characters TOML 1.0 refuses anywhere in a file, in strings and
+ * comments alike: U+0000-U+0008, U+000A-U+001F and U+007F. Tab is allowed,
+ * LF ends a line, and CR only as the first half of a CRLF line end.
+ */
+// eslint-disable-next-line no-control-regex
+const TOML_CONTROL = /[\u0000-\u0008\u000A-\u001F\u007F]/;
+
+/** One line holding a control character TOML refuses (tomlControlCharacters). */
+export interface TomlControlCharacter {
+  /** 1-based line. */
+  line: number;
+  /** 1-based column of the first such character on the line. */
+  column: number;
+  /** Its code point. */
+  code: number;
+  /** The [table] (or [[array]]) the line is in; null before any header. */
+  table: string | null;
+  /** The key whose value the line holds (a multi-line array's key on its later lines); null for a header, comment or blank line. */
+  key: string | null;
+}
+
+/**
+ * Every line of a TOML file holding a control character TOML 1.0 refuses
+ * (#206). parseToml reads such a byte verbatim, as it reads an unknown
+ * escape (CONTRACTS.md §5.4): refusing would stop a surface that loads today
+ * from loading at all. But the byte renders as nothing, so a pattern holding
+ * one reads correctly and matches nothing; auditSurface reports each line as
+ * a warning, with the file, line and key. Lines and keys are found the way
+ * parseToml finds them.
+ */
+export function tomlControlCharacters(content: string): TomlControlCharacter[] {
+  const found: TomlControlCharacter[] = [];
+  let table: string | null = null;
+  let arrayKey: string | null = null;
+  let depth = 0;
+  const brackets = (t: string) => (t.match(/\[/g) ?? []).length - (t.match(/\]/g) ?? []).length;
+  const lines = content.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]!.endsWith("\r") ? lines[i]!.slice(0, -1) : lines[i]!;
+    const text = stripComment(raw.trim());
+    let key: string | null = null;
+    if (depth > 0) {
+      key = arrayKey;
+      depth += brackets(text);
+    } else if (text) {
+      const header = /^\[\[?(.+?)\]\]?$/.exec(text);
+      const kv = /^(?:([A-Za-z0-9_-]+)|"([^"]*)"|'([^']*)')\s*=\s*([\s\S]*)$/.exec(text);
+      if (kv) {
+        key = kv[1] ?? kv[2] ?? kv[3]!;
+        if (/=\s*\[[^\]]*$/.test(text)) {
+          arrayKey = key;
+          depth = brackets(text);
+        }
+      } else if (header) {
+        table = header[1]!.trim();
+      }
+    }
+    const at = raw.search(TOML_CONTROL);
+    if (at >= 0) found.push({ line: i + 1, column: at + 1, code: raw.charCodeAt(at), table, key });
+  }
+  return found;
+}
+
+/**
  * Strip a trailing `# ...` comment from a value, honouring quoted strings.
  *
  * Every documented value in config.toml carries an inline comment listing its
@@ -955,6 +1019,17 @@ function stripComment(value: string): string {
   let quote: '"' | "'" | null = null;
   for (let i = 0; i < value.length; i++) {
     const ch = value[i];
+    // A multi-line string opened and closed on this line ('''...''' or
+    // """...""") is skipped whole: one or two quotes inside it are content, and
+    // a `#` inside it is not a comment. Tracked one quote at a time, a value
+    // like '''it's #1''' left quote state at the inner quote and lost
+    // everything from the `#` on.
+    if (!quote && (ch === "'" || ch === '"') && value.startsWith(ch.repeat(3), i)) {
+      const end = tripleClose(value, i + 3, ch);
+      if (end < 0) return value.trim(); // it spans lines: refused by the caller (CONTRACTS §5.2)
+      i = end - 1;
+      continue;
+    }
     if (quote) {
       // Literal strings have no escapes, so only a basic string honours \".
       if (ch === quote && !(quote === '"' && value[i - 1] === "\\")) quote = null;
@@ -965,6 +1040,29 @@ function stripComment(value: string): string {
     }
   }
   return value.trim();
+}
+
+/**
+ * Where a multi-line string whose body starts at `from` closes on this line:
+ * the index just past its closing delimiter, or -1 when it does not close
+ * here. TOML lets one or two quotes sit directly before the closing three (a
+ * literal written with four closing quotes ends in one quote of content), so
+ * the run of quotes at the close is read to its end, at most five, and its
+ * last three are the delimiter. In a basic string an escaped quote is content.
+ */
+function tripleClose(value: string, from: number, q: "'" | '"'): number {
+  for (let j = from; j <= value.length - 3; j++) {
+    if (q === '"' && value[j] === "\\") {
+      j++;
+      continue;
+    }
+    if (value.startsWith(q.repeat(3), j)) {
+      let end = j + 3;
+      while (end < value.length && value[end] === q && end - j < 5) end++;
+      return end;
+    }
+  }
+  return -1;
 }
 
 /** TOML basic-string escapes. Unknown escapes are left alone rather than
@@ -1007,6 +1105,20 @@ function unescapeBasic(raw: string): string {
 }
 
 function parseValue(value: string): unknown {
+  // A multi-line string written on one line: '''no escapes''' and """escapes""".
+  // TOML 1.0 allows both to open and close on the same line. They fell into the
+  // single-quote (or double-quote) branch below and came back with two of
+  // their quotes at each end as content, silently: a trial spec's
+  // `setup = '''T=$(head -c 12 /dev/urandom ...); printf ... "$T" > f'''` read
+  // as `''T=$(...) ...''`, which a shell no longer takes as an assignment, so
+  // the setup seeded an empty value and the check failed with exit 2 (a syntax
+  // error at the trailing quotes). Spanning lines is still refused (§5.2).
+  if (value.length >= 6 && value.startsWith("'''") && tripleClose(value, 3, "'") === value.length) {
+    return value.slice(3, -3);
+  }
+  if (value.length >= 6 && value.startsWith('"""') && tripleClose(value, 3, '"') === value.length) {
+    return unescapeBasic(value.slice(3, -3));
+  }
   // Literal string: 'no escapes here'. This is the TOML idiom for regular
   // expressions, and it needs no unescaping by definition.
   if (value.length >= 2 && value.startsWith("'") && value.endsWith("'")) {
@@ -4220,6 +4332,91 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
     }
   }
 
+  // ── exec = "docker" on the default image (#208) ──────────────────────────
+  //
+  // The container contains; it does not carry the project. debian:stable-slim
+  // has no git, no curl and no language toolchain, so under it a project's own
+  // commands exit 127 (a toolchain probe went 0/3 in the 2026-11-20 shadow
+  // test), and nothing said an image has to be declared until they failed. A
+  // declared image is the operator's choice and is left alone.
+  {
+    const sandboxImage = (config.policy?.sandbox as { image?: unknown } | undefined)?.image;
+    const holdsBash = (tools: unknown): boolean => {
+      if (Array.isArray(tools)) return tools.includes("bash");
+      try {
+        return isToolEnabled(config, "bash");
+      } catch {
+        return false; // a hand-built config with no tools
+      }
+    };
+    const onDefault = Object.keys(config.roles ?? {})
+      .sort()
+      .filter((r) => {
+        const def = (config.roles[r] ?? {}) as RoleDef;
+        if (!holdsBash(def.tools)) return false;
+        if (typeof def.image === "string" && def.image) return false;
+        if (typeof sandboxImage === "string" && sandboxImage) return false;
+        return resolveExec(config, r).mode === "docker";
+      });
+    if (onDefault.length > 0) {
+      problems.push({
+        where: ".gnomon/policy.toml [sandbox] image",
+        problem:
+          `${onDefault.join(", ")} run${onDefault.length === 1 ? "s" : ""} bash under exec = "docker" in the default image, ` +
+          `${DEFAULT_SANDBOX_IMAGE}, which has no git, no curl and no language toolchain: a command that needs one ` +
+          `exits 127. The container contains; it does not carry this project's tools.`,
+        fix:
+          `Declare an image that carries them: [sandbox] image = "<image>" in .gnomon/policy.toml ` +
+          `(e.g. "node:22-bookworm", "python:3.12"), or image = "<image>" per role in roles.toml.`,
+        fatal: false,
+      });
+    }
+  }
+
+  // ── Control characters in the surface TOML (#206) ────────────────────────
+  //
+  // TOML 1.0 refuses a control character other than tab anywhere in a file.
+  // parseToml reads one verbatim, and it renders as nothing: a bash_allow
+  // entry '^septacore check<BS>', written by a generator that meant "\b",
+  // loaded and could never match. A warning rather than a refusal, as an
+  // unknown escape is accepted (CONTRACTS.md §5.4): refusing would stop a
+  // surface that loads today from loading at all over one entry.
+  if (typeof config.gnomonDir === "string" && config.gnomonDir) {
+    const files = ["config.toml", "roles.toml", "tools.toml", "policy.toml"];
+    try {
+      const prof = join(config.gnomonDir, "profiles");
+      if (existsSync(prof)) {
+        files.push(...readdirSync(prof).filter((f) => f.endsWith(".toml")).sort().map((f) => `profiles/${f}`));
+      }
+    } catch {
+      // an unreadable profiles/ fails loadConfig, which says so
+    }
+    const NAMES: Record<number, string> = { 0x00: "NUL", 0x08: "backspace", 0x0b: "vertical tab", 0x0c: "form feed", 0x0d: "CR", 0x1b: "ESC", 0x7f: "DEL" };
+    for (const file of files) {
+      let text: string;
+      try {
+        text = readFileSync(join(config.gnomonDir, file), "utf-8");
+      } catch {
+        continue;
+      }
+      for (const c of tomlControlCharacters(text)) {
+        const name = NAMES[c.code];
+        problems.push({
+          where: `.gnomon/${file} line ${c.line}${c.table ? ` [${c.table}]` : ""}${c.key ? ` ${c.key}` : ""}`,
+          problem:
+            `a control character (U+${c.code.toString(16).toUpperCase().padStart(4, "0")}${name ? `, ${name}` : ""}) ` +
+            `at column ${c.column}. TOML 1.0 refuses the file; gnomon reads the byte verbatim, and it renders ` +
+            `as nothing, so the line looks correct in a terminal and in a diff` +
+            (c.key ? ` while the value holds a byte nobody sees: a pattern with one in it matches nothing.` : "."),
+          fix:
+            `Remove the byte. If a regex word boundary was meant, write \\b in a literal string ('^x\\b') ` +
+            `or \\\\b in a basic one ("^x\\\\b"). To find it:  grep -nP '[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f]' .gnomon/${file}`,
+          fatal: false,
+        });
+      }
+    }
+  }
+
   // ── Skills ───────────────────────────────────────────────────────────────
   //
   // A skill file is surface: it is hashed, and its body goes into the system
@@ -5459,6 +5656,13 @@ export function isValidImageRef(image: unknown): image is string {
   return typeof image === "string" && image.length > 0 && image.length <= 255 && !image.startsWith("-") && IMAGE_REF.test(image);
 }
 
+/**
+ * The image `exec = "docker"` runs bash in when neither the role nor
+ * `[sandbox]` declares one. It has no git, no curl and no language toolchain,
+ * so a project's own tools are the declared image's to carry (#208).
+ */
+export const DEFAULT_SANDBOX_IMAGE = "debian:stable-slim";
+
 export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
   const sandbox = (config.policy?.sandbox ?? {}) as {
     exec?: unknown;
@@ -5478,7 +5682,7 @@ export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
   const image =
     (typeof roleDef?.image === "string" && roleDef.image) ||
     (typeof sandbox.image === "string" && sandbox.image) ||
-    "debian:stable-slim";
+    DEFAULT_SANDBOX_IMAGE;
   const readOnly = roleDef?.source === "read_only";
   const readsRaw = (config.policy?.sandbox as { reads?: unknown } | undefined)?.reads;
   const reads = readsRaw === undefined ? "all" : typeof readsRaw === "string" ? readsRaw : JSON.stringify(readsRaw);

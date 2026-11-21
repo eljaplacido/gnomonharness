@@ -747,7 +747,14 @@ network = false
 #                    repository and a per-call temp dir; with network = false
 #                    no egress, loopback still reachable. On a machine that
 #                    cannot enforce it, bash refuses rather than run unsandboxed.
-#   exec = "docker"  a container (image = "...")
+#                    Windows has none: there every command is refused, so a
+#                    surface shared with Windows machines wants exec = "docker",
+#                    or gnomon run inside WSL2 (gnomon security says so).
+#   exec = "docker"  a container (image = "..."). The default image,
+#                    debian:stable-slim, has no git, curl or language
+#                    toolchain: declare one that carries this project's
+#                    (image = "node:22-bookworm", or per role in roles.toml),
+#                    or the commands that need them exit 127.
 #
 # With exec = "os" on Linux, reads can be confined too:
 #   reads = "scoped"   bash may read only this repository, the temp dir, system
