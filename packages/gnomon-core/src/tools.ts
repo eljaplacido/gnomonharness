@@ -3809,6 +3809,26 @@ function surfaceDir(ctx: ToolContext): string {
   return ctx.config?.gnomonDir ? resolve(ctx.config.gnomonDir) : resolve(ctx.root, ".gnomon");
 }
 
+/** A pattern that matches nothing: what fnmatch does with an invalid class. */
+const MATCHES_NOTHING = /(?!)/;
+
+/**
+ * A glob's RegExp, or one that matches nothing when the bracket class it names
+ * is not a valid one (a reversed range, `[z-a]`). sh's fnmatch matches nothing
+ * there, so the word stays the literal it is. Both callers build from words a
+ * model chose: a `curl -d '{"x":["gnomon-verifier","llama-server"]}'` body
+ * reached the class code as a glob, `new RegExp` threw "Range out of order",
+ * and `gnomon guard` answered "could not decide" for a harmless call (capability
+ * matrix replay, 2026-11-21; 0.6.2 had no glob expansion and so no error).
+ */
+function compileGlob(source: string, flags = ""): RegExp {
+  try {
+    return new RegExp(source, flags);
+  } catch {
+    return MATCHES_NOTHING;
+  }
+}
+
 /** find's -name / -path pattern as a RegExp (fnmatch: `*` `?` `[…]`). */
 function fnmatch(glob: string, flags = ""): RegExp {
   let re = "";
@@ -3826,7 +3846,7 @@ function fnmatch(glob: string, flags = ""): RegExp {
     } else if (c === "\\" && i + 1 < glob.length) re += "\\" + glob[++i];
     else re += c.replace(/[.+^${}()|\]\\/]/g, "\\$&");
   }
-  return new RegExp(`^${re}$`, flags);
+  return compileGlob(`^${re}$`, flags);
 }
 
 /**
@@ -4461,7 +4481,7 @@ function shellGlobRe(glob: string, deep = false): RegExp {
       out += lit(c);
     }
   }
-  return new RegExp(`^${out}$`);
+  return compileGlob(`^${out}$`);
 }
 
 /** Entries read per directory and paths kept per component: a word cannot make a precheck walk a disk. */
