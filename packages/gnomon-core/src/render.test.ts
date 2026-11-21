@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { splitThinking, renderMeta, renderExchange, Progress, paint, THEMES, terminalThemeSequence, safeForPrompt, traceLines } from "./render.js";
+import { splitThinking, renderMeta, renderExchange, Progress, paint, THEMES, terminalThemeSequence, safeForPrompt, traceLines, summaryResult, outputGlimpse, fitRow } from "./render.js";
 import { ResolvedUi, parseMetaFields, META_FIELDS } from "./config.js";
 import { PromptExchange } from "./prompt_loop.js";
 
@@ -491,5 +491,83 @@ describe("traceLines", () => {
     const [line] = traceLines("cannot edit.\rI should", "collapse", 80);
     expect(line).not.toContain("\r");
     expect(line).toContain("\\x0d");
+  });
+});
+
+describe("the live step trace", () => {
+  it("summaryResult drops the tool and subject the call row already named", () => {
+    expect(summaryResult("glob **/*.py — 16 file(s)")).toBe("16 file(s)");
+    expect(summaryResult("bash — exit 1")).toBe("exit 1");
+    expect(summaryResult("bash — sandbox-kill 42 — signalled")).toBe("sandbox-kill 42 — signalled");
+    expect(summaryResult("compute 2+2 = 4"), "no dash: whole").toBe("compute 2+2 = 4");
+  });
+
+  it("outputGlimpse: the first line on success, the verdict line on failure", () => {
+    expect(outputGlimpse("total 48\nfile-a\n", "", false)).toBe("2 lines · total 48");
+    expect(outputGlimpse("one\n", "", false)).toBe("1 line · one");
+    expect(outputGlimpse("", "", false)).toBe("no output");
+    expect(outputGlimpse("", "warning: x\n", false)).toBe("no stdout · warning: x");
+    expect(outputGlimpse("ran\n", "Traceback\n  line 3\nKeyError: 'a'\n", true)).toBe("KeyError: 'a'");
+    expect(outputGlimpse("1 failed\n", "", true), "no stderr: last stdout line").toBe("1 failed");
+  });
+
+  it("outputGlimpse drops a program's colours and escapes what could rewrite the screen", () => {
+    expect(outputGlimpse("\x1b[32mPASSED\x1b[0m 3 tests\n", "", false)).toBe("1 line · PASSED 3 tests");
+    expect(outputGlimpse("ok\rFAKE\n", "", false)).toBe("1 line · ok\\x0dFAKE");
+  });
+
+  it("fitRow keeps a row to the terminal so the spinner can erase it", () => {
+    expect(fitRow("short", 80)).toBe("short");
+    const row = fitRow("x".repeat(200), 40);
+    expect(row.length).toBe(39);
+    expect(row.endsWith("…")).toBe(true);
+  });
+});
+
+describe("splitThinking reads every inline reasoning markup in the 2026-11 survey", () => {
+  const cases: Array<[string, string, string, string]> = [
+    ["Qwen / DeepSeek / GLM <think>", "<think>weigh it</think>The answer.", "weigh it", "The answer."],
+    ["<thinking> spelling", "<thinking>weigh it</thinking>The answer.", "weigh it", "The answer."],
+    ["opener in the prompt (Qwen3-2507, R1-0528)", "weigh it\nstill weighing</think>\n\nThe answer.", "weigh it\nstill weighing", "The answer."],
+    ["Seed-OSS", "<seed:think>weigh it</seed:think>The answer.", "weigh it", "The answer."],
+    ["Gemini OpenAI-compat", "<thought>weigh it</thought>The answer.", "weigh it", "The answer."],
+    ["Magistral raw", "[THINK]weigh it[/THINK]The answer.", "weigh it", "The answer."],
+    ["Gemma 4", "<|channel>thought\nweigh it<channel|>The answer.", "weigh it", "The answer."],
+    ["Gemma 4, thinking off (empty channel)", "<|channel>thought<channel|>The answer.", "", "The answer."],
+    ["Kimi-VL", "◁think▷weigh it◁/think▷The answer.", "weigh it", "The answer."],
+    [
+      "gpt-oss Harmony, raw",
+      "<|channel|>analysis<|message|>weigh it<|end|><|start|>assistant<|channel|>final<|message|>The answer.<|return|>",
+      "weigh it",
+      "The answer.",
+    ],
+    ["Granite <response>", "<think>weigh it</think><response>The answer.</response>", "weigh it", "The answer."],
+    ["Hunyuan <answer>", "<think>weigh it</think>\n<answer>\nThe answer.\n</answer>", "weigh it", "The answer."],
+    [
+      "Apriel final-response markers",
+      "weigh it\n[BEGIN FINAL RESPONSE]The answer.[END FINAL RESPONSE]<|end|>",
+      "weigh it",
+      "The answer.",
+    ],
+  ];
+  for (const [family, raw, think, answer] of cases) {
+    it(family, () => {
+      expect(splitThinking(raw)).toEqual({ think, answer });
+    });
+  }
+
+  it("a reply cut off mid-thought is reasoning to the end, in every markup", () => {
+    for (const open of ["<think>", "<seed:think>", "[THINK]", "<|channel>thought"]) {
+      expect(splitThinking(`${open}still going`)).toEqual({ think: "still going", answer: "" });
+    }
+  });
+
+  it("an answer that only mentions a tag is left alone", () => {
+    const plain = "Wrap the reply in an <answer> tag, then close </answer>.";
+    expect(splitThinking(plain)).toEqual({ think: "", answer: plain });
+    expect(splitThinking("No reasoning here.")).toEqual({ think: "", answer: "No reasoning here." });
+    // An answer about the tags themselves, as this repository's own work produces.
+    const aboutTags = "splitThinking now reads a lone `</think>` and an opener like `<think>` in code.";
+    expect(splitThinking(aboutTags)).toEqual({ think: "", answer: aboutTags });
   });
 });

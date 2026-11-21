@@ -335,8 +335,8 @@ Ask it something. Nothing is written until you approve:
 
 ```
 implement ▸ read src/lib.ts and tell me what add() does
-  ⚙ read src/lib.ts
-    ✓ read src/lib.ts — 4 lines
+  ⚙ read  src/lib.ts
+    ⎿ 4 lines
 
 add() returns a - b, which looks like a bug.
 ```

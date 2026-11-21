@@ -748,7 +748,42 @@ even when it returns reasoning (llama.cpp with a thinking model, vLLM with a
 reasoning parser, Ollama's `/v1`), and so does a relay on a private address in
 front of a hosted model. Declare `replay_reasoning = true` there to turn it on;
 a fallback is judged by its own URL. `session_start.resolved` records what
-each route resolved to and why ([CONTRACTS §39](CONTRACTS.md)).
+each route resolved to and why ([CONTRACTS §39](CONTRACTS.md)). On Ollama's
+`/api/chat`, a declared replay goes out as the message's `thinking` field,
+the one that API reads.
+
+**A provider's own reasoning objects** go back to it in its own shape,
+whatever `reasoning_content` replay is doing: OpenRouter's (and MiniMax's)
+`reasoning_details` unmodified and in order, which carries Anthropic's
+signatures and Gemini's encrypted reasoning (sent instead of the
+`reasoning_content` string, since OpenRouter takes one or the other);
+Mistral's thinking parts inside the assistant message's `content`, as its
+reasoning guide requires ("always replay the full assistant message"); and a
+Gemini tool call's `extra_content` (its thought signature), streamed or not.
+They go only to the endpoint and model that produced them: a fallback or an
+escalation target is sent the plain text. `replay_reasoning = false` sends none
+of them, and a server that refuses one by name is resent the call without it,
+once, as for `reasoning_content`.
+
+**Reasoning formats.** gnomon reads a model's reasoning in every shape the
+2026 families send it (survey read 2026-11-21), shows it in the live trace
+(`✻`), and keeps it out of the answer, the gates and the history replayed on
+later turns. Fields, first non-empty wins: `reasoning_content` (DeepSeek,
+Kimi, GLM, DashScope Qwen, llama.cpp, SGLang), `reasoning` (vLLM, OpenRouter,
+Ollama's `/v1`), `thinking` (Ollama's `/api/chat`) and `reasoning_details`
+(OpenRouter, MiniMax; encrypted parts are skipped). Content parts of type
+`thinking` or `reasoning` (Mistral Magistral, Cohere, Anthropic-shaped relays)
+are read as reasoning, never as answer, and do not turn replay on: those
+providers take their parts back inside `content`. Inline markup, when no
+parser split it out: `<think>`/`<thinking>` (including a reply that starts
+mid-thought with only `</think>`, as Qwen3 *-Thinking-2507 and DeepSeek-R1-0528
+templates produce), `<seed:think>` (Seed-OSS), `<thought>` (Gemini's
+OpenAI-compatible endpoint), `[THINK]` (Magistral raw), `<|channel>thought`
+(Gemma 4), `◁think▷` (Kimi-VL), gpt-oss Harmony channels, and the answer
+wrappers `<response>` (Granite), `<answer>` (Hunyuan) and
+`[BEGIN FINAL RESPONSE]` (Apriel). A tag quoted in backticks is an answer
+talking about the tag and is left alone. OpenAI's Chat Completions API
+returns no reasoning text for its reasoning models, so there is none to show.
 
 **Steering role.** gnomon steers a turn with messages of its own: the idle
 nudge, the convergence push, a failed verification, the tool-less wrap-up,
@@ -807,8 +842,8 @@ tokens on Haiku 4.5) are not cached, with no error.
 request that only appended messages to the one before it (same endpoint, model
 and tools), the whole prompt was prefilled again by its own count: on a local
 server at 40k tokens that is half a minute behind a reply that looks normal.
-gnomon says so on stderr once per turn and counts each in
-`counters.prefix_cache_misses`. It reads only what the endpoint reports: one
+gnomon says so on stderr once per session for each model and counts every
+one in `counters.prefix_cache_misses`. It reads only what the endpoint reports: one
 that reports no cache count is never called a miss, a partial reuse is not
 counted, and a prefix gnomon itself rewrote (a trim, masking) is not compared.
 A hosted API is held to its own minimum (1024 tokens; 4096 for Claude, and
@@ -1008,6 +1043,9 @@ api_key_env = "OPENAI_API_KEY"   # the NAME of the variable, never the key
 ## 6. The commands that matter
 
 ### 6.1 CLI
+
+`gnomon <command> --help` prints that command's part of the help and runs
+nothing; `gnomon --help` prints all of it.
 
 | Command | What it does | When to use it |
 |---|---|---|

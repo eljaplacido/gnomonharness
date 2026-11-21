@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3914 TypeScript tests (3239 core, 650 cli, 18
-> natives, 7 tui) and 120 Rust tests — **4034 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 3963 TypeScript tests (3284 core, 654 cli, 18
+> natives, 7 tui) and 120 Rust tests — **4083 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -678,8 +678,8 @@ A first exchange:
 
 ```
 implement ▸ read src/lib.ts and tell me what add() does
-  ⚙ read src/lib.ts
-    ✓ read src/lib.ts — 4 lines
+  ⚙ read  src/lib.ts
+    ⎿ 4 lines
 
 add() takes two numbers and returns a - b, which looks like a bug.
 
@@ -690,8 +690,8 @@ add() takes two numbers and returns a - b, which looks like a bug.
 Ask it to fix that, and nothing is written until you say so:
 
 ```
-  │ The subtraction is the defect; I will change it to addition.
-  ⚙ edit src/lib.ts
+  ✻ add() subtracts; the name and the call sites both expect a sum.
+  ● The subtraction is the defect; I will change it to addition.
 
   ┌ approve: edit src/lib.ts (+1 −1)
   │ - return a - b;
@@ -1426,7 +1426,8 @@ way a process can touch a file, the hash is re-read after the command. If it
 moved, the model is told and the transcript says so:
 
 ```
-  bash — exit 0 · surface changed
+  ⚙ bash  ./scripts/regen.sh
+    ⎿ exit 0 · surface changed · no output
 ```
 
 ### `policy.toml`
@@ -3583,6 +3584,34 @@ undiscoverable.
 | `/expand` | List the steps inside the last folded run. |
 | `/theme [name]` | Colour theme; `tokyonight`/`catppuccin` recolour the whole terminal |
 | `/clear` `/help` `/quit` | |
+
+**Reading the live trace.** Each model response prints as one block:
+
+```
+  ◆ skills  writing tests ("test")                                skills this turn loaded, and why
+  ✻ The last turn was cancelled, so check what landed first.     reasoning
+  ● Let me look at what is on disk.                               what it told you
+  ◆ skill  secrets                                                a skill it opened on its own
+  ⚙ bash  ls experiments/                                         a step: the tool, what it was called on
+    ⎿ exit 0 · 3 lines · stack_bench.py                           what came back, and a line of output
+  ⚙ task  verifier: run the bench files
+  ┊  ↳ verifier on qwen3.6:35b                                    a delegated turn, behind a gutter
+  ┊  ⚙ bash  python3 experiments/stack_bench.py
+  ┊    ⎿ ✗ exit 1 · ModuleNotFoundError: No module named 'numpy'
+  ┊  ↲ verifier 1 step(s) · stack_bench.py fails: numpy is missing
+    ⎿ 1 tool call(s)
+```
+
+Reasoning is shown whichever way the model sends it: a reasoning field
+(`reasoning_content`, `reasoning`, Ollama's `thinking`, OpenRouter's
+`reasoning_details`), thinking content parts (Mistral, Anthropic-shaped
+relays), or inline markup (`<think>`, Seed's `<seed:think>`, Gemma 4's
+thought channel, gpt-oss Harmony, and the rest listed in
+[GUIDE §5](docs/GUIDE.md#5-model-setup-recipes)). `/think show` prints all of it; the default
+`collapse` shows three rows. Skills a turn loads print as `◆ skills`, with
+the word that fired each; a skill the model opens itself prints as
+`◆ skill`, and a delegated turn shows its own. A role switch prints
+`⇢ auto: implement → plan`, and an escalation `[escalate]`.
 
 **You can type while a turn is running.** Anything you enter is queued and runs
 when the turn finishes, and the progress line gets out of the way as soon as

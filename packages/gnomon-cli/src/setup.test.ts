@@ -220,6 +220,19 @@ describe("gnomon endpoint add --preset ollama", () => {
     expect(readFileSync(join(gnomon, "roles.toml"), "utf-8")).toMatch(/\[roles\.implement\]\nmodel = "qwen3\.6:35b"/);
   }, 60_000);
 
+  it("takes a bare word after `add` as the endpoint's name", async () => {
+    // `gnomon endpoint add thinker --url …` wrote [endpoints.custom] and said
+    // nothing about the word it ignored (end-to-end audit, 2026-11-21).
+    const url = await fakeOllama();
+    const root = project(url, "placeholder:1b");
+    const { code, out } = await runCli([
+      "endpoint", "add", "thinker", "--preset", "ollama", "--url", `${url}/api/chat`, "--dir", root,
+    ]);
+    expect(code, out).toBe(0);
+    const config = readFileSync(join(root, ".gnomon", "config.toml"), "utf-8");
+    expect(config).toContain("[endpoints.thinker]");
+  }, 60_000);
+
   it("says plainly that nothing is listening, and how to start it", async () => {
     const url = await deadPort();
     const root = project(url, "placeholder:1b");

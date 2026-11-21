@@ -53,7 +53,7 @@ afterEach(async () => {
 });
 
 /** A fake endpoint: the first request gets a tool call with reasoning, the rest "done". */
-async function serve(streamed: boolean) {
+async function serve(streamed: boolean, shape: "field" | "parts" = "field") {
   const bodies: Record<string, any>[] = [];
   const server = createServer((req, res: ServerResponse) => {
     let raw = "";
@@ -71,8 +71,9 @@ async function serve(streamed: boolean) {
                     {
                       message: {
                         role: "assistant",
-                        content: "",
-                        reasoning_content: "I should read x.txt first.",
+                        ...(shape === "parts"
+                          ? { content: [{ type: "thinking", thinking: [{ type: "text", text: "I should read x.txt first." }] }] }
+                          : { content: "", reasoning_content: "I should read x.txt first." }),
                         tool_calls: [{ id: "c1", type: "function", function: { name: "read", arguments: '{"path":"x.txt"}' } }],
                       },
                       finish_reason: "tool_calls",
@@ -192,6 +193,17 @@ describe("on by default when the endpoint reasons (v0.4.3)", () => {
     const wire = turnRecord(root).wire;
     expect(wire.replay_reasoning).toBe(true);
     expect(wire.replay_reasoning_source).toBe("default");
+  });
+
+  it("reasoning read from content parts (Mistral) is shown but never learned as a replay signal", async () => {
+    // Those providers take their parts back inside `content`; a strict one
+    // answers 422 to a `reasoning_content` field it never asked for.
+    const { url, bodies } = await serve(false, "parts");
+    const root = audited(asHosted(url), "stream = false");
+    const rec = await runTask(loadConfig(root), "read x.txt", { role: "smol", yes: true });
+    expect(rec.output).toContain("done");
+    expect(assistants(bodies[1]!)[0]!.reasoning_content).toBeUndefined();
+    expect(turnRecord(root).wire.replay_reasoning).not.toBe(true);
   });
 
   it("the same for a streamed reply", async () => {

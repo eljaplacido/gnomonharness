@@ -763,12 +763,13 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
           "                Agent/Task and MCP call: deny or ask is handed to Claude Code; allow says",
           "                nothing, so Claude Code's own permission prompt still applies. MCP tools",
           "                are recorded as ungoverned, and asked under a declared [governance]",
+          "  Stop          `gnomon check` on everything the session changed",
+          "",
           `Every hook runs ${bin.join(" ")}: an absolute path, so a host that starts with`,
           "another gnomon (or none) on its PATH still runs this one. It is this machine's path:",
           "`--write --local` writes .claude/settings.local.json instead, which stays out of git.",
-          "  Stop          `gnomon check` on everything the session changed",
           "",
-          "The role comes from [check.roles] in .gnomon/policy.toml: claude-code = \"implement\".",
+          "Map the agent to a role in .gnomon/policy.toml: [check.roles] claude-code = \"implement\".",
         ].join("\n")
       );
       warnNoRole(project, target);

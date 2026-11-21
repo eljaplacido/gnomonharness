@@ -2137,6 +2137,13 @@ export interface RouteTarget {
    */
   replayReasoningAuto?: true;
   /**
+   * `replay_reasoning = false` was declared, or the endpoint refused replayed
+   * reasoning this session. Either way it is sent none of it: neither gnomon's
+   * `reasoning_content` nor the provider's own reasoning objects
+   * (prompt_loop.ts replayFields). Absent otherwise.
+   */
+  replayReasoningDeclined?: true;
+  /**
    * Send gnomon's mid-conversation messages as user messages. Set only when
    * it is `user`, declared or learned from a refusal; absent means `system`,
    * so a target that never asked for it is the object it always was.
@@ -2499,6 +2506,11 @@ export function resolveReplayReasoning(endpoint: {
  * move. `replay_reasoning = true` turns it on anywhere; `false` turns it off.
  * An endpoint that never sends reasoning is never sent any.
  */
+/** `{ replayReasoningDeclined: true }` for an endpoint that declares `replay_reasoning = false`. */
+export function replayDeclinedOf(endpoint: { replay_reasoning?: unknown } | undefined): { replayReasoningDeclined?: true } {
+  return endpoint?.replay_reasoning === false ? { replayReasoningDeclined: true } : {};
+}
+
 export function replayFieldsOf(
   endpoint: { url?: string; kind?: EndpointKind; replay_reasoning?: unknown },
   unclear: EndpointKind = "ollama"
@@ -5181,6 +5193,7 @@ export function routeRole(
     maxTokens: resolveMaxTokens(config, roleDef, endpoint),
     ...contextWindowOf(config, endpoint.max_context_tokens, { url, kind, model }),
     ...replayFieldsOf(endpoint),
+    ...replayDeclinedOf(endpoint),
     ...steerFieldsOf(endpoint),
     ...promptCacheFieldsOf(endpoint),
     // The sweep knobs (sweep_knobs.ts): each absent unless declared, so an
@@ -5217,6 +5230,7 @@ export function routeRole(
       ...contextWindowOf(config, fbEndpoint?.max_context_tokens, { url: fbUrl, kind: fbKind, model: fb.model }),
       // By its own URL: the one the fallback is actually sent to.
       ...replayFieldsOf({ ...(fbEndpoint ?? {}), url: fbUrl }, "openai"),
+      ...replayDeclinedOf(fbEndpoint),
       ...steerFieldsOf(fbEndpoint),
       ...promptCacheFieldsOf(fbEndpoint),
       ...knobsOf(roleDef, fbEndpoint, fbKind),
@@ -5253,6 +5267,7 @@ export function routeRole(
       maxTokens: resolveMaxTokens(config, roleDef, escEndpoint),
       ...contextWindowOf(config, escEndpoint?.max_context_tokens, { url: escUrl, kind: escKind, model: esc.model }),
       ...replayFieldsOf({ ...(escEndpoint ?? {}), url: escUrl }, "openai"),
+      ...replayDeclinedOf(escEndpoint),
       ...steerFieldsOf(escEndpoint),
       ...promptCacheFieldsOf(escEndpoint),
       ...knobsOf(roleDef, escEndpoint, escKind),
