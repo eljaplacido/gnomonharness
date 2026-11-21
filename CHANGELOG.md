@@ -26,6 +26,15 @@
 
 ## [Unreleased]
 
+## [0.6.5] — 2026-11-21
+
+One fix, found by rerunning the 34-project capability matrix on v0.6.4: the
+guard no longer errors on a word that only looks like a glob. The rerun on gx10
+(33 of the 34 projects) showed no runtime regressions against 0.6.2 (0 probes held before and not held now;
+3,421 → 3,456 held of 3,822), chaos faults announced 19 of 20 (was 17), and
+the shadow-test fixes visible in the data. `.gnomon/ci.sh` passes on the
+release commit and the property suites hold their published figures (5/5).
+
 ### Fixed
 
 - **`gnomon guard` no longer answers "could not decide" for a word that only
@@ -5668,7 +5677,8 @@ was written.
 
 <!-- 0.4.4 and 0.4.5 were never published, so 0.5.0 compares against 0.4.3 and
      their links point at the tags, not at (draft) release pages. -->
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.4...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.5...HEAD
+[0.6.5]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.1...v0.6.2
