@@ -1041,6 +1041,9 @@ api_key_env = "OPENAI_API_KEY"   # the NAME of the variable, never the key
 
 ### 6.1 CLI
 
+`gnomon <command> --help` prints that command's part of the help and runs
+nothing; `gnomon --help` prints all of it.
+
 | Command | What it does | When to use it |
 |---|---|---|
 | `gnomon launch [--dir P]` | Creates `.gnomon/` if missing, offers model setup if nothing answers, opens the loop | Daily start. The one to remember. |

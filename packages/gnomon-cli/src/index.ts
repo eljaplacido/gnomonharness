@@ -957,8 +957,15 @@ async function endpointAdd(
 
   // ── 2. Name, URL, shape ──────────────────────────────────────────────────
   const defaultName = preset?.name ?? "custom";
+  // `gnomon endpoint add thinker --url …`: a bare word after `add` is the name.
+  // It was ignored, and the endpoint was written as "custom" without a word.
+  const positionalName =
+    (args.command === "endpoint" || args.command === "endpoints") && args.subcommand === "add"
+      ? args.positional[0]
+      : undefined;
   const name =
     args.flags.name ??
+    positionalName ??
     (interactive && !opts.quick ? await ask(`Endpoint name [${defaultName}]: `, defaultName) : defaultName);
 
   const existing = config.config.endpoints?.[name];
@@ -2924,7 +2931,45 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "eval" },
 ];
 
+/**
+ * One command's part of the help: its block under "Commands:", from the line
+ * that names it to the next command's. Null for a name the help does not list.
+ */
+export function commandHelp(name: string): string | null {
+  const entry = CLI_COMMANDS.find((c) => c.name === name || c.aliases?.includes(name));
+  if (!entry) return null;
+  const names = [entry.name, ...(entry.aliases ?? [])];
+  const lines = helpText().split("\n");
+  const commandLine = (l: string): string | null => {
+    const m = /^ {2}([a-z][a-z-]*)\b/.exec(l);
+    return m && CLI_COMMANDS.some((c) => c.name === m[1] || c.aliases?.includes(m[1]!)) ? m[1]! : null;
+  };
+  const start = lines.findIndex((l) => names.includes(commandLine(l) ?? ""));
+  if (start < 0) return null;
+  let end = start + 1;
+  while (end < lines.length && commandLine(lines[end]!) === null && !/^\S/.test(lines[end]!)) end++;
+  return lines.slice(start, end).join("\n").replace(/\s+$/, "");
+}
+
+/**
+ * Whether this command line asks for a command's help rather than its work:
+ * `--help` or `-h` before any `--`. `session` takes a command line of its own
+ * (`gnomon session ls -h`), so only a flag straight after it counts there.
+ * guard, dashboard and chaos answer their own --help with fuller usage.
+ */
+export function asksCommandHelp(command: string, rest: string[]): boolean {
+  if (["guard", "dashboard", "ui", "chaos"].includes(command)) return false;
+  const isHelp = (a: string | undefined): boolean => a === "--help" || a === "-h";
+  if (command === "session" || command === "sessions") return isHelp(rest[0]);
+  const end = rest.indexOf("--");
+  return (end < 0 ? rest : rest.slice(0, end)).some(isHelp);
+}
+
 function showHelp(): void {
+  console.log(helpText());
+}
+
+function helpText(): string {
   // The Environment list at the end names only variables something reads.
   // GNOMON_DIR was listed there from the first commit as "Override .gnomon/
   // directory path", and nothing has ever read it. It is only exported, by
@@ -2940,7 +2985,7 @@ function showHelp(): void {
   // `gnomon --help` could not distinguish a 133-commit-old checkout from HEAD.
   // harnessBuild() carries the version AND the commit, which is the question
   // being asked when someone types --version.
-  console.log(`${harnessBuild()} — deterministic coding agent harness
+  return `${harnessBuild()} — deterministic coding agent harness
 
 Commands:
   launch [--dir <path>] [--from <path>]
@@ -3295,7 +3340,7 @@ Environment:
   GNOMON_TRUST            A surface hash (or 12+ char prefix): run THAT surface
                           as declared even though it is untrusted. Any other
                           surface is still clamped. See \`gnomon trust\`.
-`);
+`;
 }
 
 // ---------------------------------------------------------------------------
@@ -3326,6 +3371,19 @@ async function main(): Promise<void> {
   // surface: runTask and runPromptLoop in the loop, and the endpoint commands
   // below. A command with no surface has no business holding a key.
 
+  // `gnomon help <command>` and `gnomon <command> --help`: that command's part
+  // of the help, and nothing run. Most commands read --help as one more
+  // argument and went on to do their work -- `gnomon launch --help` in an empty
+  // directory wrote a .gnomon/ there (end-to-end audit, 2026-11-21).
+  const asked =
+    args.command === "help" ? process.argv[3] : asksCommandHelp(args.command, process.argv.slice(3)) ? args.command : undefined;
+  if (asked) {
+    const block = commandHelp(asked);
+    if (block) {
+      console.log(`${block}\n\nEvery command: gnomon --help`);
+      return;
+    }
+  }
   if (args.command === "--help" || args.command === "-h" || args.command === "help") {
     showHelp();
     return;
