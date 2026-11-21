@@ -31,6 +31,7 @@
  * Everything here is pure: the loop owns the model calls, the tools and the
  * clock, and asks this module only what to do next and what to say.
  */
+import { splitThinking } from "./render.js";
 import type { GnomonConfig } from "./config.js";
 
 export const COMPLETION_GATE_MODES = ["off", "checklist", "review", "review_only"] as const;
@@ -438,7 +439,7 @@ export function reviewerInstruction(task: string, root: string, changed: string[
 
 /** Findings out of a reviewer's answer. Empty when it said NO FINDINGS. */
 export function parseFindings(answer: string): string[] {
-  const text = answer.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+  const text = splitThinking(answer).answer;
   if (!text) return [];
   const items: string[] = [];
   for (const raw of text.split("\n")) {

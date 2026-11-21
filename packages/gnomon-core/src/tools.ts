@@ -55,6 +55,7 @@ import { readOnlyBash, type ReadOnlyReading } from "./readonly_bash.js";
 import { suppliedByStore } from "./credentials.js";
 import { noteKeyVars, sessionKeyVars } from "./credential_pin.js";
 import { proposeSkill, ProposalRefused, renderSkill, SkillProposal } from "./skills.js";
+import { outputGlimpse } from "./render.js";
 import { adviseText, levelAtLeast, type GovernanceFamily, type GovernanceLevel, type GovernanceLevels, type ProtectedPathLists } from "./governance.js";
 import { compute, ComputeError } from "./compute.js";
 import type { McpRegistry, McpToolInfo } from "./mcp.js";
@@ -240,6 +241,12 @@ export interface ToolOutcome {
    * the allowlist admitted nothing, which is every call of a surface without it.
    */
   package_index?: string[];
+  /**
+   * What the command printed, in one clause, for the line under its step in
+   * the live trace (render.ts outputGlimpse). Display only: never sent to the
+   * model, never recorded, never read by a gate. Absent for every tool but bash.
+   */
+  glimpse?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -5201,6 +5208,7 @@ function exitOutcome(o: {
         ? `bash — killed by ${signal}`
         : `bash — exit ${exit}`) + (drift ? " · surface changed" : ""),
     surface_drift: drift ?? undefined,
+    glimpse: outputGlimpse(stdout, stderr, failed),
   };
 }
 
