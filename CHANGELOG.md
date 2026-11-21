@@ -26,8 +26,64 @@
 
 ## [Unreleased]
 
+## [0.6.4] — 2026-11-21
+
+A live trace you can follow, reasoning read the way every 2026 model family
+sends it, and a provider's own reasoning objects sent back in its own shape;
+plus the fixes from the 2026-11-20 shadow test and the 2026-11-21 end-to-end
+audit. `.gnomon/ci.sh` passes on the release commit, the property suites hold
+their published figures (5/5), and a live run on qwen3.6-35b (llama.cpp,
+thinking on) fixed a seeded bug with the trace drawn from its real streamed
+reasoning. Upgrade if you follow gnomon at the terminal, run a reasoning model
+(GLM, DeepSeek, Kimi, Qwen, MiniMax, Gemma 4, gpt-oss, Magistral) or reach
+models through OpenRouter.
+
+### Added
+
+- **A live trace you can follow** (#237). Each model response prints as one
+  block: `✻` its reasoning, `●` the prose it wrote, `⚙ tool  subject` for a
+  step and `⎿` what came back with a line of what the command printed (line
+  count and first line on success, the last stderr line on failure). A
+  delegated turn (`task`, the completion reviewer) sits behind a `┊` gutter,
+  opened with `↳ role on model` and closed with `↲` and the first line of what
+  it handed back. Skills a turn loads print as `◆ skills` with the word that
+  fired each, for sub-turns and chain stages too; a skill the model opens is
+  `◆ skill` and is never folded. Steps name glob/grep patterns, a task's role
+  and instruction, and a skill proposal as one. The display line is never sent
+  to the model, recorded, or read by a gate.
+- **Reasoning in every shape the 2026 families send it** (#237): the
+  `reasoning_content`, `reasoning`, Ollama `thinking` and OpenRouter/MiniMax
+  `reasoning_details` fields; `thinking`/`reasoning` content parts (Mistral,
+  Cohere, Anthropic-shaped relays); and inline `<think>` (including a reply
+  that opens mid-thought with only `</think>`, as Qwen3 *-Thinking-2507 and
+  DeepSeek-R1-0528 templates produce), `<seed:think>`, `<thought>`, `[THINK]`,
+  Gemma 4's thought channel, `◁think▷`, gpt-oss Harmony channels, and the
+  Granite, Hunyuan and Apriel answer wrappers. Shown live, final answer
+  included; kept out of the answer, the history replayed on later turns, and
+  the completion and finish gates. A tag quoted in backticks is left alone.
+  GUIDE §5 lists them.
+- **A provider's own reasoning objects go back in its own shape** (#237):
+  OpenRouter's `reasoning_details` unmodified and in order (Anthropic
+  signatures, Gemini's encrypted reasoning), Mistral's ThinkChunk inside the
+  assistant message's `content` (rebuilt from a stream), a streamed tool
+  call's Gemini `extra_content` thought signature, and a declared
+  `replay_reasoning = true` on Ollama's `/api/chat` as `thinking`. They go
+  only to the endpoint and model that produced them, never under
+  `replay_reasoning = false` or after a refusal; reasoning read from content
+  parts never turns `reasoning_content` replay on.
+- **`gnomon <command> --help` prints that command's help and runs nothing**
+  (#238). Most commands read `--help` as one more argument: `gnomon launch
+  --help` in an empty directory wrote a `.gnomon/` there, `security --help`
+  ran the report, `check --help` exited 10.
+
 ### Fixed
 
+- **`gnomon endpoint add thinker --url …`** wrote `[endpoints.custom]` and
+  ignored the name; a bare word after `add` is the name now (#238).
+- **`gnomon guard install`** stated a `[check.roles]` mapping that did not
+  exist and printed the absolute-path note inside the hook list (#238).
+- **The prefix-cache notice is said once per model per session**, not under
+  every turn (#237).
 - **A `[verify]` run that never ran to an exit is no longer recorded as a
   failed check** (#231). Four cases, all of them `failed` and handed back as
   "your answer is not accepted" until now:
@@ -143,6 +199,14 @@
 - **`host_exec` names the right file.** Its fix said to set `[sandbox] exec`
   in `.gnomon/config.toml`; `[sandbox]` lives in `.gnomon/policy.toml`, which
   the fix now names on every platform.
+
+### Changed (model-visible)
+
+- Earlier turns are replayed with the newly recognised inline reasoning
+  stripped, as `<think>` always was; it used to go back as if it were the
+  answer. The completion and finish gates no longer read reasoning as answer.
+  Only models that write those formats inline see a difference; benchmark
+  arms on them should use this build (#237).
 
 ## [0.6.3] — 2026-11-20
 
@@ -5592,7 +5656,8 @@ was written.
 
 <!-- 0.4.4 and 0.4.5 were never published, so 0.5.0 compares against 0.4.3 and
      their links point at the tags, not at (draft) release pages. -->
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.3...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.4...HEAD
+[0.6.4]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.2...v0.6.3
 [0.6.2]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.0...v0.6.1
