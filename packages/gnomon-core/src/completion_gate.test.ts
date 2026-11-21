@@ -108,6 +108,18 @@ describe("findings", () => {
     expect(parseFindings("")).toEqual([]);
     expect(parseFindings("The output file is missing.")).toEqual(["The output file is missing."]);
   });
+  it("a reviewer's reasoning is never a finding, in any family's markup", () => {
+    // A list item inside the reasoning is the reviewer thinking aloud. Only
+    // <think> was stripped, so a Seed-OSS, Gemma 4 or Qwen3-2507 reviewer's
+    // scratchpad came back as findings and handed the turn back for nothing.
+    for (const thinking of [
+      "<seed:think>\n- maybe the newline is missing?\n</seed:think>",
+      "<|channel>thought\n- maybe the newline is missing?\n<channel|>",
+      "- maybe the newline is missing?\n</think>",
+    ]) {
+      expect(parseFindings(`${thinking}\n${NO_FINDINGS}`)).toEqual([]);
+    }
+  });
   it("is bounded", () => {
     const many = Array.from({ length: 30 }, (_, i) => `- finding ${i} ${"x".repeat(600)}`).join("\n");
     const out = parseFindings(many);

@@ -184,31 +184,143 @@ export function paint(ui: ResolvedUi, color: string, text: string): string {
 // Chain-of-thought
 // ---------------------------------------------------------------------------
 
-const THINK_BLOCK = /<think(?:ing)?>([\s\S]*?)<\/think(?:ing)?>/gi;
-const THINK_OPEN = /<think(?:ing)?>/i;
+/**
+ * Reasoning markup that model families write inline, in the content, when the
+ * server in front of them does not split it out (llama.cpp with
+ * `--reasoning-format none`, a raw Ollama template, a provider that passes
+ * the text through). Survey read 2026-11-21:
+ *
+ *   <think>…</think>          Qwen3/3.5+, DeepSeek-R1/V3.1+, GLM, Kimi, MiniMax M2,
+ *                             Nemotron, Phi-4-reasoning, Granite, ERNIE, Ring, Hy
+ *   <thinking>…</thinking>    the same, as some templates spell it
+ *   <seed:think>…</seed:think> ByteDance Seed-OSS
+ *   <thought>…</thought>      Gemini through its OpenAI-compatible endpoint
+ *   [THINK]…[/THINK]          Mistral Magistral, raw
+ *   <|channel>thought…<channel|>  Gemma 4
+ *   ◁think▷…◁/think▷          Kimi-VL thinking
+ *
+ * Reasoning that arrives on a separate field (reasoning_content, reasoning,
+ * thinking, reasoning_details) is read where the reply is parsed
+ * (prompt_loop.ts readReasoning), not here.
+ */
+const REASONING_MARKUP: ReadonlyArray<{ open: RegExp; close: RegExp }> = [
+  { open: /<think(?:ing)?>/i, close: /<\/think(?:ing)?>/i },
+  { open: /<seed:think>/i, close: /<\/seed:think>/i },
+  { open: /<thought>/i, close: /<\/thought>/i },
+  { open: /\[THINK\]/, close: /\[\/THINK\]/ },
+  { open: /<\|channel>thought/, close: /<channel\|>/ },
+  { open: /◁think▷/, close: /◁\/think▷/ },
+];
+
+/**
+ * The first match of `re` in `text` at or after `from` that is markup, not a
+ * mention: a tag quoted in backticks (`` `</think>` ``) is an answer talking
+ * about the tag, and reading it as markup ate the answer from there on.
+ */
+function findMarkup(text: string, re: RegExp, from = 0): { index: number; length: number } | null {
+  const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
+  g.lastIndex = from;
+  for (let m = g.exec(text); m; m = g.exec(text)) {
+    const quoted = text[m.index - 1] === "`" || text[m.index + m[0].length] === "`";
+    if (!quoted) return { index: m.index, length: m[0].length };
+  }
+  return null;
+}
+
+/** Take one markup's reasoning out of `text`, into `found`. */
+function takeMarkup(text: string, m: { open: RegExp; close: RegExp }, found: string[]): string {
+  let rest = text;
+  let answer = "";
+  let opened = false;
+  for (;;) {
+    const o = findMarkup(rest, m.open);
+    if (!o) break;
+    opened = true;
+    answer += rest.slice(0, o.index);
+    const after = rest.slice(o.index + o.length);
+    const c = findMarkup(after, m.close);
+    if (!c) {
+      // Unterminated: a reply cut off mid-thought is reasoning to the end, so
+      // a truncated turn degrades to "no answer", never to "answer made of
+      // reasoning".
+      found.push(after.trim());
+      return answer;
+    }
+    found.push(after.slice(0, c.index).trim());
+    rest = after.slice(c.index + c.length);
+  }
+  answer += rest;
+  // A closer with no opener anywhere: the template put the opener in the
+  // PROMPT, so the reply starts mid-thought (Qwen3 *-Thinking-2507, QwQ,
+  // DeepSeek-R1-0528). Everything before the closer is reasoning; it was being
+  // shown, and replayed, as the answer. Only a lone closer: two of them is
+  // not that shape, and guessing would cut an answer.
+  if (!opened) {
+    const c = findMarkup(answer, m.close);
+    if (c && !findMarkup(answer, m.close, c.index + c.length)) {
+      found.push(answer.slice(0, c.index).trim());
+      answer = answer.slice(c.index + c.length);
+    }
+  }
+  return answer;
+}
+
+// gpt-oss (Harmony) served raw: `<|channel|>analysis<|message|>…<|end|>` is
+// the reasoning, `<|channel|>final<|message|>…` the answer, and `commentary`
+// the prose beside tool calls. A parsing server splits these itself.
+const HARMONY_SEGMENT =
+  /<\|channel\|>(\w+)(?:(?!<\|channel\|>)[\s\S])*?<\|message\|>([\s\S]*?)(?=<\|end\|>|<\|return\|>|<\|call\|>|<\|start\|>|<\|channel\|>|$)/g;
+const HARMONY_TOKEN = /<\|(?:start|end|return|call|message|channel|constrain)\|>(?:assistant)?/g;
+
+function takeHarmony(text: string, found: string[]): string {
+  if (!text.includes("<|channel|>")) return text;
+  const said: string[] = [];
+  for (const [, channel, body] of text.matchAll(HARMONY_SEGMENT)) {
+    if (channel === "analysis") found.push(body!.trim());
+    else said.push(body!.trim());
+  }
+  return said.length ? said.join("\n\n") : text.replace(HARMONY_SEGMENT, "").replace(HARMONY_TOKEN, "");
+}
+
+/**
+ * The answer inside a wrapper some families put round it once the reasoning
+ * is done: Granite's `<response>`, older Hunyuan's `<answer>`, Apriel's
+ * `[BEGIN FINAL RESPONSE]` (where the text before it is the reasoning). Only a
+ * wrapper the answer STARTS with is unwrapped, so an answer that merely
+ * mentions one of these tags is left alone.
+ */
+function unwrapAnswer(text: string, found: string[]): string {
+  const apriel = text.indexOf("[BEGIN FINAL RESPONSE]");
+  if (apriel >= 0) {
+    const before = text.slice(0, apriel).trim();
+    if (before) found.push(before);
+    const body = text.slice(apriel + "[BEGIN FINAL RESPONSE]".length);
+    const end = body.indexOf("[END FINAL RESPONSE]");
+    return (end >= 0 ? body.slice(0, end) : body).replace(/<\|end\|>\s*$/, "");
+  }
+  const t = text.trim();
+  for (const tag of ["answer", "response"]) {
+    if (t.toLowerCase().startsWith(`<${tag}>`)) {
+      const body = t.slice(tag.length + 2);
+      const end = body.toLowerCase().indexOf(`</${tag}>`);
+      return end >= 0 ? body.slice(0, end) + body.slice(end + tag.length + 3) : body;
+    }
+  }
+  return text;
+}
 
 /**
  * Split reasoning out of a model reply.
  *
- * Reasoning models in this surface (qwen3.6, deepseek-r1) wrap their scratchpad
- * in <think>…</think>. Without this the scratchpad lands in the answer, which
- * is what makes replies look rambling. An unterminated opener — a reply cut off
- * mid-thought — is treated as reasoning all the way to the end, so a truncated
- * turn degrades to "no answer" rather than "answer made of reasoning".
+ * Without this the scratchpad lands in the answer, which is what makes
+ * replies look rambling, and in the history replayed to the model on the next
+ * turn. See REASONING_MARKUP for the formats read.
  */
 export function splitThinking(text: string): { think: string; answer: string } {
   const found: string[] = [];
-  let answer = text.replace(THINK_BLOCK, (_m, body: string) => {
-    found.push(body.trim());
-    return "";
-  });
-
-  const open = answer.match(THINK_OPEN);
-  if (open && open.index !== undefined) {
-    found.push(answer.slice(open.index + open[0].length).trim());
-    answer = answer.slice(0, open.index);
-  }
-
+  let answer = takeHarmony(text, found);
+  for (const m of REASONING_MARKUP) answer = takeMarkup(answer, m, found);
+  answer = unwrapAnswer(answer, found);
   return {
     think: found.filter(Boolean).join("\n\n").trim(),
     answer: answer.trim(),
@@ -595,6 +707,80 @@ const EMPTY_TRACE = /^(no reasoning( (is )?available)?|no thoughts?|reasoning (i
 /** A provider's stand-in for "no reasoning", which is not text the model wrote. */
 export function isEmptyReasoning(text: string): boolean {
   return EMPTY_TRACE.test(text.trim());
+}
+
+// ---------------------------------------------------------------------------
+// The live step trace
+//
+// What a turn prints while it works, one block per model response:
+//
+//   ✻ reasoning, from <think> tags or the provider's reasoning channel
+//   ● the prose the model wrote beside its calls
+//   ⚙ tool  what it was called on
+//     ⎿ what came back, and a line of what it printed
+//
+// The reasoning channel (`reasoning_content`) is where GLM, DeepSeek, Kimi and
+// Qwen-over-API put their chain of thought. It was replayed to the model and
+// never shown, so a turn on those models read as a row of tool calls with no
+// reason for any of them.
+// ---------------------------------------------------------------------------
+
+/**
+ * The result half of a tool summary.
+ *
+ * Summaries read `tool subject — result` (`glob **\/*.py — 16 file(s)`), and
+ * the `⚙` line above already names the tool and its subject, so printing them
+ * twice is noise. A summary without that shape is returned whole.
+ */
+export function summaryResult(summary: string): string {
+  const i = summary.indexOf(" — ");
+  if (i < 0) return summary;
+  const rest = summary.slice(i + 3).trim();
+  return rest || summary;
+}
+
+// CSI and OSC sequences a program printed for its own terminal. Shown escaped
+// they are noise (`\x1b[32mPASSED`), so a glimpse drops them before escaping
+// whatever control characters are left.
+// eslint-disable-next-line no-control-regex
+const ANSI_SEQ = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+
+/**
+ * What a command printed, in one clause, for the line under its step.
+ *
+ * Success: how many lines it printed and the first of them, which is where a
+ * listing, a count or a version starts. Failure: the last line of stderr,
+ * else of stdout, which is where tracebacks, compilers and test runners put
+ * the verdict. Display only; the model gets the full output as before.
+ *
+ * Program-chosen text, so terminal sequences are dropped and remaining control
+ * characters escaped (safeForPrompt).
+ */
+export function outputGlimpse(stdout: string, stderr: string, failed: boolean): string {
+  const lines = (s: string): string[] =>
+    s
+      .replace(ANSI_SEQ, "")
+      .split("\n")
+      .map((l) => l.trimEnd())
+      .filter((l) => l.trim() !== "");
+  const out = lines(stdout);
+  const err = lines(stderr);
+  const clip = (l: string): string => {
+    const safe = safeForPrompt(l.trim());
+    return safe.length > 160 ? `${safe.slice(0, 159)}…` : safe;
+  };
+  if (failed) {
+    const last = err.at(-1) ?? out.at(-1);
+    return last ? clip(last) : "no output";
+  }
+  if (out.length === 0) return err.length ? `no stdout · ${clip(err[0]!)}` : "no output";
+  return `${out.length} line${out.length === 1 ? "" : "s"} · ${clip(out[0]!)}`;
+}
+
+/** Fit one rendered row to the terminal, so a wrapped row cannot outlive the spinner's erase. */
+export function fitRow(text: string, columns: number): string {
+  const { head, tail } = cut(text, Math.max(20, columns - 2));
+  return tail ? `${head}…` : head;
 }
 
 /**

@@ -844,7 +844,7 @@ describe("model API errors", () => {
       const out = lines.join("\n");
       expect(readFileSync(join(dir, "f.txt"), "utf8")).toBe("aa\nbb\ncc\n");
       expect(out).not.toContain("steps folded");
-      expect(out.match(/⚙ edit f\.txt/g)?.length).toBe(3);
+      expect(out.match(/⚙ edit\s+f\.txt/g)?.length).toBe(3);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -888,7 +888,7 @@ describe("model API errors", () => {
       { command: "echo a" }, { command: "echo b" }, { command: "false" }, { command: "echo d" },
     ]);
     // The failing step is on its own line, whatever happened around it.
-    expect(out).toMatch(/bash — exit 1/);
+    expect(out).toMatch(/✗ exit 1/);
   });
 
   it("`work` still shows reasoning and prose — it folds steps, not thinking", async () => {
@@ -927,8 +927,288 @@ describe("model API errors", () => {
       }
     );
     const out = lines.join("\n");
-    expect(out, "work shows reasoning").toContain("·");
-    expect(out, "work shows prose").toContain("│");
+    expect(out, "work shows reasoning").toContain("✻ weighing options");
+    expect(out, "work shows prose").toContain("● let me check");
+  });
+
+  it("shows the provider's reasoning channel live, and what each step was called on and printed", async () => {
+    // GLM, DeepSeek, Kimi and Qwen-over-API send their chain of thought as
+    // `reasoning_content`, not <think> tags. It was replayed to the model and
+    // never shown, so the trace was a row of tool calls with no reason for any
+    // of them. A glob printed `⚙ glob ` with nothing after it, and a command's
+    // result said `bash — exit 0` and nothing it printed.
+    const config: any = loadConfig("../..");
+    const state: any = {
+      config, exchanges: [], currentRole: "implement",
+      ui: { ...resolveUi(config), cot: "full", think: "collapse", color: false },
+    };
+    const lines: string[] = [];
+    let call = 0;
+    await withFetch(
+      (async () => {
+        call++;
+        return {
+          ok: true,
+          json: async () => ({
+            message: {
+              content: call === 1 ? "checking what landed" : "done",
+              ...(call === 1 ? { reasoning_content: "The last turn was cancelled.\nVerify the files first." } : {}),
+              tool_calls: call === 1
+                ? [
+                    { function: { name: "glob", arguments: { pattern: "**/*.md" } } },
+                    { function: { name: "bash", arguments: { command: "printf 'one\\ntwo\\n'" } } },
+                  ]
+                : undefined,
+            },
+          }),
+        };
+      }) as unknown as typeof fetch,
+      async () => {
+        await promptLoop.runAgenticTurn(
+          state, "implement",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "go" }],
+          { approve: async () => true, progress: { start() {}, update() {}, stop() {} } as any,
+            ui: state.ui, say: (s: string) => lines.push(s) }
+        );
+      }
+    );
+    const out = lines.join("\n");
+    expect(out).toContain("✻ The last turn was cancelled.");
+    expect(out).toContain("Verify the files first.");
+    expect(out).toContain("● checking what landed");
+    expect(out).toMatch(/⚙ glob\s+\*\*\/\*\.md/);
+    expect(out).toMatch(/⎿ \d+ file\(s\)/);
+    expect(out, "the result names what it printed, not the tool again").toMatch(/⎿ exit 0 · 2 lines · one/);
+    expect(out).not.toMatch(/⎿ bash —/);
+  });
+
+  it("a delegation's trace sits under the step that started it, behind a gutter", async () => {
+    // A sub-turn printed through the parent's channel at the parent's indent,
+    // so delegating read as the parent suddenly doing more things itself.
+    const config: any = loadConfig("../..");
+    const state: any = {
+      config, exchanges: [], currentRole: "plan",
+      ui: { ...resolveUi(config), cot: "work", think: "collapse", color: false },
+    };
+    const lines: string[] = [];
+    let call = 0;
+    await withFetch(
+      (async () => {
+        call++;
+        const tool_calls =
+          call === 1
+            ? [{ function: { name: "task", arguments: { role: "verifier", instruction: "list the docs" } } }]
+            : call === 2
+              ? [{ function: { name: "glob", arguments: { pattern: "docs/*.md" } } }]
+              : undefined;
+        const content = call === 1 ? "" : call === 2 ? "looking" : call === 3 ? "found the docs\nmore detail" : "done";
+        return { ok: true, json: async () => ({ message: { content, tool_calls } }) };
+      }) as unknown as typeof fetch,
+      async () => {
+        await promptLoop.runAgenticTurn(
+          state, "plan",
+          { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+          [{ role: "user", content: "delegate a listing" }],
+          { approve: async () => true, progress: { start() {}, update() {}, stop() {} } as any,
+            ui: state.ui, say: (s: string) => lines.push(s) }
+        );
+      }
+    );
+    const at = (re: RegExp): number => lines.findIndex((l) => re.test(l));
+    const started = at(/^  ⚙ task\s+verifier: list the docs/);
+    const opened = at(/^  ┊  ↳ verifier on /);
+    const step = at(/^  ┊  ⚙ glob\s+docs\/\*\.md/);
+    const closed = at(/^  ┊  ↲ verifier 1 step\(s\) · found the docs$/);
+    const result = at(/^    ⎿ 1 tool call\(s\)/);
+    expect([started, opened, step, closed, result].every((i) => i >= 0), lines.join("\n")).toBe(true);
+    expect(started < opened && opened < step && step < closed && closed < result, lines.join("\n")).toBe(true);
+  });
+
+  it("nestedDeps puts the gutter on every line of both channels", () => {
+    const said: string[] = [];
+    const warned: string[] = [];
+    const ui = { meta: [], meta_style: "line", think: "hide", spinner: false, color: false } as any;
+    const d = promptLoop.nestedDeps({
+      ui, approve: async () => true, progress: {} as any,
+      say: (l: string) => said.push(l), warn: (l: string) => warned.push(l),
+    });
+    d.say("  ⚙ grep  x\n    ⎿ 1 match");
+    d.warn!("  [endpoint] slow");
+    expect(said).toEqual(["  ┊  ⚙ grep  x\n  ┊    ⎿ 1 match"]);
+    expect(warned).toEqual(["  ┊  [endpoint] slow"]);
+  });
+
+  describe("reasoning from every field and part shape in the 2026-11 survey", () => {
+    it("readReasoning reads reasoning_content, reasoning, Ollama's thinking and reasoning_details", () => {
+      expect(promptLoop.readReasoning({ reasoning_content: "a" })).toBe("a");
+      expect(promptLoop.readReasoning({ reasoning: "b" }), "vLLM, OpenRouter, Ollama /v1").toBe("b");
+      expect(promptLoop.readReasoning({ thinking: "c" }), "Ollama native /api/chat").toBe("c");
+      expect(
+        promptLoop.readReasoning({
+          reasoning_details: [
+            { type: "reasoning.text", text: "d1" },
+            { type: "reasoning.summary", summary: "d2" },
+            { type: "reasoning.encrypted", data: "opaque" },
+          ],
+        }),
+        "OpenRouter / MiniMax details; encrypted skipped"
+      ).toBe("d1d2");
+      expect(
+        promptLoop.readReasoning({ reasoning: "same", reasoning_details: [{ type: "reasoning.text", text: "same" }] }),
+        "OpenRouter sends both: read once"
+      ).toBe("same");
+      expect(promptLoop.readReasoning({ reasoning_content: "", reasoning: "e" })).toBe("e");
+      expect(promptLoop.readReasoning({ reasoning_content: "" })).toBe("");
+      expect(promptLoop.readReasoning({ content: "x" })).toBeUndefined();
+    });
+
+    it("content parts: reasoning parts are read as reasoning and kept out of the answer", () => {
+      const anthropic = [{ type: "thinking", thinking: "t1", signature: "s" }, { type: "text", text: "answer" }];
+      const mistral = [{ type: "thinking", thinking: [{ type: "text", text: "t2" }] }, { type: "text", text: "answer" }];
+      const generic = [{ type: "reasoning", text: "t3" }, { type: "text", text: "answer" }];
+      const redacted = [{ type: "redacted_thinking", data: "x" }, { type: "text", text: "answer" }];
+      for (const [parts, why] of [[anthropic, "t1"], [mistral, "t2"], [generic, "t3"], [redacted, ""]] as const) {
+        expect(promptLoop.partsText(parts as unknown[])).toBe("answer");
+        expect(promptLoop.partsReasoning(parts as unknown[])).toBe(why);
+      }
+    });
+
+    it("a stream's reasoning arrives on any of the fields, and in Mistral's part arrays", async () => {
+      const body = (...parts: string[]) =>
+        (async function* () {
+          for (const p of parts) yield new TextEncoder().encode(p);
+        })();
+      const viaDetails = await promptLoop.readChatStream(
+        body(
+          'data: {"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"r1"}]}}]}\n\n',
+          'data: {"choices":[{"delta":{"thinking":"r2"}}]}\n\n',
+          'data: {"choices":[{"delta":{"content":[{"type":"thinking","thinking":[{"type":"text","text":"r3"}]},{"type":"text","text":"ok"}]}}]}\n\n',
+          "data: [DONE]\n\n"
+        )
+      );
+      expect(viaDetails.reasoning).toBe("r1r2r3");
+      expect(viaDetails.content).toBe("ok");
+    });
+
+    const turnOn = async (message: Record<string, unknown>, cot = "work") => {
+      const config: any = loadConfig("../..");
+      const state: any = {
+        config, exchanges: [], currentRole: "implement",
+        ui: { ...resolveUi(config), cot, think: "collapse", color: false },
+      };
+      const lines: string[] = [];
+      let call = 0;
+      await withFetch(
+        (async () => {
+          call++;
+          return { ok: true, json: async () => ({ message: call === 1 ? message : { content: "done" } }) };
+        }) as unknown as typeof fetch,
+        async () => {
+          await promptLoop.runAgenticTurn(
+            state, "implement",
+            { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+            [{ role: "user", content: "go" }],
+            { approve: async () => true, progress: { start() {}, update() {}, stop() {} } as any,
+              ui: state.ui, say: (s: string) => lines.push(s) }
+          );
+        }
+      );
+      return lines.join("\n");
+    };
+    const glob = [{ function: { name: "glob", arguments: { pattern: "*.md" } } }];
+
+    it("Ollama's native `thinking` field is shown in the trace", async () => {
+      const out = await turnOn({ content: "", thinking: "Ollama reasoning here", tool_calls: glob });
+      expect(out).toContain("✻ Ollama reasoning here");
+    });
+
+    it("Mistral's thinking parts are shown, and only the text part is prose", async () => {
+      const out = await turnOn({
+        content: [{ type: "thinking", thinking: [{ type: "text", text: "Magistral reasoning" }] }, { type: "text", text: "looking" }],
+        tool_calls: glob,
+      });
+      expect(out).toContain("✻ Magistral reasoning");
+      expect(out).toContain("● looking");
+      expect(out).not.toContain("● Magistral");
+    });
+
+    it("the same reasoning on the channel and inline (llama.cpp deepseek-legacy) shows once", async () => {
+      const out = await turnOn({ content: "<think>twice sent</think>looking", reasoning_content: "twice sent", tool_calls: glob });
+      expect(out.match(/twice sent/g)?.length).toBe(1);
+    });
+
+    it("markup a model wrote into the reasoning field itself is not shown as reasoning", () => {
+      expect(promptLoop.reasoningOf("<think>", "")).toBe("");
+      expect(promptLoop.reasoningOf("<think>\nweigh it\n</think>", "")).toBe("weigh it");
+      expect(promptLoop.reasoningOf("plain reasoning", "")).toBe("plain reasoning");
+    });
+
+    it("the final answer's channel reasoning is shown, not only the steps'", async () => {
+      const out = await turnOn({ content: "All done.", reasoning_content: "Final thoughts before answering" });
+      expect(out).toContain("✻ Final thoughts before answering");
+    });
+  });
+
+  describe("skills in the trace", () => {
+    const skill = (over: Partial<any>) => ({ id: "s", name: "s", body: "", proposed: false, ...over }) as any;
+    const ui = { meta: [], meta_style: "line", think: "hide", spinner: false, color: false } as any;
+
+    it("skillsRow names each loaded skill and the word that fired it", () => {
+      const row = promptLoop.skillsRow(
+        ui,
+        [skill({ name: "secrets", match: "\\b(token|secret)\\b" }), skill({ name: "house style" })],
+        "rotate the API token",
+        200
+      );
+      expect(row).toBe('  ◆ skills  secrets ("token"), house style (always)');
+      expect(promptLoop.skillsRow(ui, [], "x")).toBeNull();
+    });
+
+    it("skillRead recognises a read of a skill file, and nothing else", () => {
+      const read = (path: string) => ({ name: "read", args: { path } }) as any;
+      expect(promptLoop.skillRead(read(".gnomon/skills/verifying-changes.md"), ".gnomon")).toBe("verifying-changes");
+      expect(promptLoop.skillRead(read("./.gnomon/skills/git-branching.md"), ".gnomon")).toBe("git-branching");
+      expect(promptLoop.skillRead(read(".gnomon/skills/proposed/x.md"), ".gnomon"), "a proposal is not a loaded skill").toBeNull();
+      expect(promptLoop.skillRead(read("docs/skills/x.md"), ".gnomon")).toBeNull();
+      expect(promptLoop.skillRead({ name: "bash", args: { command: "cat .gnomon/skills/x.md" } } as any, ".gnomon")).toBeNull();
+    });
+
+    it("a skill the model opens is drawn as a skill and never folded with the recon around it", async () => {
+      const config: any = loadConfig("../..");
+      const state: any = {
+        config, exchanges: [], currentRole: "implement",
+        ui: { ...resolveUi(config), cot: "work", think: "collapse", color: false },
+      };
+      const lines: string[] = [];
+      let call = 0;
+      await withFetch(
+        (async () => {
+          call++;
+          const tool_calls = call === 1
+            ? [
+                { function: { name: "glob", arguments: { pattern: "*.md" } } },
+                { function: { name: "read", arguments: { path: ".gnomon/skills/verifying-changes.md" } } },
+                { function: { name: "glob", arguments: { pattern: "docs/*.md" } } },
+                { function: { name: "glob", arguments: { pattern: "*.json" } } },
+              ]
+            : undefined;
+          return { ok: true, json: async () => ({ message: { content: call === 1 ? "" : "done", tool_calls } }) };
+        }) as unknown as typeof fetch,
+        async () => {
+          await promptLoop.runAgenticTurn(
+            state, "implement",
+            { model: "m", temperature: 0, top_p: 1, target: { model: "m", temperature: 0, top_p: 1, url: "http://x" } } as any,
+            [{ role: "user", content: "go" }],
+            { approve: async () => true, progress: { start() {}, update() {}, stop() {} } as any,
+              ui: state.ui, say: (s: string) => lines.push(s) }
+          );
+        }
+      );
+      const out = lines.join("\n");
+      expect(out).toMatch(/◆ skill\s+verifying-changes/);
+      expect(out).not.toContain("⚙ read  .gnomon/skills");
+    });
   });
 
   it("never folds a call the operator is being asked about one at a time", async () => {
@@ -1022,24 +1302,24 @@ describe("model API errors", () => {
 
     const has = (s: string, m: string) => s.includes(m);
     const full = await runWith("full");
-    expect(has(full, "·"), "full shows reasoning").toBe(true);
-    expect(has(full, "│"), "full shows prose").toBe(true);
+    expect(has(full, "✻"), "full shows reasoning").toBe(true);
+    expect(has(full, "●"), "full shows prose").toBe(true);
     expect(has(full, "⚙"), "full shows the call line").toBe(true);
 
     const tools = await runWith("tools");
     expect(has(tools, "⚙"), "tools shows the call line").toBe(true);
-    expect(has(tools, "·") || has(tools, "│"), "tools hides reasoning/prose").toBe(false);
+    expect(has(tools, "✻") || has(tools, "●"), "tools hides reasoning/prose").toBe(false);
 
     const think = await runWith("think");
-    expect(has(think, "·"), "think shows reasoning").toBe(true);
-    expect(has(think, "⚙") || has(think, "✓"), "think hides tool lines").toBe(false);
+    expect(has(think, "✻"), "think shows reasoning").toBe(true);
+    expect(has(think, "⚙") || has(think, "⎿"), "think hides tool lines").toBe(false);
 
     const brief = await runWith("brief");
     expect(has(brief, "•"), "brief shows a bullet per step").toBe(true);
-    expect(has(brief, "⚙") || has(brief, "·"), "brief has no call line or reasoning").toBe(false);
+    expect(has(brief, "⚙") || has(brief, "✻"), "brief has no call line or reasoning").toBe(false);
 
     const off = await runWith("off");
-    for (const m of ["·", "│", "⚙", "✓", "•"]) {
+    for (const m of ["✻", "●", "⚙", "⎿", "•"]) {
       expect(has(off, m), `off suppresses ${m}`).toBe(false);
     }
   });
