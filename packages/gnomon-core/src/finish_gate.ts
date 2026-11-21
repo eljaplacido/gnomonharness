@@ -39,6 +39,7 @@
  *
  * Pure: the loop owns the model calls, the tools and the clock.
  */
+import { splitThinking } from "./render.js";
 import type { GnomonConfig } from "./config.js";
 import { COMPLETION_GATE_DEFAULTS } from "./completion_gate.js";
 import { resolveTodoGate } from "./sweep_knobs.js";
@@ -206,9 +207,9 @@ function clipQuote(s: string): string {
  * lines and sentence ends.
  */
 function sentencesOf(answer: string): string[] {
-  const text = answer
-    .replace(/\r\n?/g, "\n")
-    .replace(/<think>[\s\S]*?<\/think>/g, " ")
+  // Reasoning in any markup a family writes inline (render.ts splitThinking)
+  // is the model thinking aloud, not a caveat it handed the reader.
+  const text = splitThinking(answer.replace(/\r\n?/g, "\n")).answer
     .replace(/```[\s\S]*?(?:```|$)/g, "\n");
   const out: string[] = [];
   for (const line of text.split("\n")) {

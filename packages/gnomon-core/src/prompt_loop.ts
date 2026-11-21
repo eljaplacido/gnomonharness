@@ -76,7 +76,7 @@ import {
   type EscalateRoute,
 } from "./config.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence,
-  safeForPrompt, traceLines, isEmptyReasoning, terminalWidth,
+  safeForPrompt, traceLines, isEmptyReasoning, terminalWidth, summaryResult, fitRow,
 } from "./render.js";
 export { isLocalEndpoint } from "./config.js";
 import {
@@ -232,6 +232,7 @@ import {
   applySkills,
   SKILLS_DIR,
   withWorkingContext,
+  type Skill,
 } from "./skills.js";
 import { AuditTrail, resolveAudit, type AuditKind } from "./audit.js";
 import { announceAnchorBacklog } from "./anchor.js";
@@ -343,6 +344,12 @@ export interface PromptState {
   interactive?: boolean;
   /** Resolved `[ui]`; /meta and /think edit this copy for the session only */
   ui?: ResolvedUi;
+  /**
+   * Models already told about a prefix-cache miss this session. Said once per
+   * model per session: the miss is a property of the endpoint, and repeating
+   * it under every turn buried the trace it sat in. Every miss is still counted.
+   */
+  cacheMissSaid?: string[];
   /** Resolved `[routing]`; /mode edits this copy for the session only */
   routing?: ResolvedRouting;
   /** Surface-edit consent for this session, set by `/allow`. Default `strict`. */
@@ -602,6 +609,16 @@ export interface ChatMessage {
    * to an endpoint with replay_reasoning on (see callEndpoint).
    */
   reasoning_content?: string;
+  /**
+   * The provider's own reasoning objects, verbatim: OpenRouter's (and
+   * MiniMax's) `reasoning_details`, and content parts that carried reasoning
+   * (Mistral's ThinkChunk). Sent back only to the endpoint named by `origin`
+   * (callEndpoint), never to a fallback or an escalation target.
+   */
+  reasoning_details?: unknown[];
+  content_parts?: unknown[];
+  /** `url|model` of the endpoint that produced `reasoning_details` / `content_parts` */
+  origin?: string;
   /** Set on a tool result; both spellings, since backends differ */
   tool_call_id?: string;
   tool_name?: string;
@@ -891,6 +908,12 @@ interface InferenceResult {
   toolCalls: ToolCall[];
   /** The backend's own representation, echoed back unchanged */
   rawToolCalls?: unknown[];
+  /** The provider's own `reasoning_details` (OpenRouter, MiniMax), merged by index when streamed */
+  reasoningDetails?: unknown[];
+  /** The provider's own content parts, when they carried reasoning (Mistral's ThinkChunk); rebuilt when streamed */
+  rawContent?: unknown[];
+  /** `url|model` of the endpoint that produced `reasoningDetails` / `rawContent` */
+  origin?: string;
   /** The backend refused the request because this model cannot use tools */
   toolsUnsupported?: boolean;
   /**
@@ -993,26 +1016,180 @@ interface InferenceResult {
    * attempt rather than the transport grace: the endpoint is reachable.
    */
   unreadable?: boolean;
+  /**
+   * The reasoning came from content parts (partsReasoning), not a reasoning
+   * field. Shown like any other, and never learned as a replay signal: those
+   * providers (Mistral, Cohere, Anthropic-shaped relays) take their parts back
+   * inside `content`, and sent a `reasoning_content` field a strict one
+   * answers 422.
+   */
+  reasoningFromParts?: boolean;
   /** `content` arrived as an array of content parts and was read as their text. */
   contentParts?: boolean;
   /** Streamed `data:` lines that were not JSON: pieces of the reply that are missing from it. */
   droppedChunks?: number;
 }
 
+/** Content-part types that carry reasoning, not answer. */
+const REASONING_PART = new Set(["thinking", "reasoning", "redacted_thinking"]);
+
 /**
  * The text of an array of content parts: `[{type: "text", text}]`, or strings.
- * Parts with no text (an image, a refusal object) contribute nothing.
+ * Parts with no text (an image, a refusal object) contribute nothing, and
+ * neither does a reasoning part (partsReasoning reads those): a
+ * `{type: "reasoning", text}` part was being joined into the answer.
  */
 export function partsText(parts: unknown[]): string {
   return parts
     .map((p) =>
       typeof p === "string"
         ? p
-        : p && typeof p === "object" && typeof (p as { text?: unknown }).text === "string"
+        : p && typeof p === "object" &&
+            !REASONING_PART.has(String((p as { type?: unknown }).type)) &&
+            typeof (p as { text?: unknown }).text === "string"
           ? (p as { text: string }).text
           : ""
     )
     .join("");
+}
+
+/**
+ * The reasoning in an array of content parts. Three spellings, read 2026-11-21:
+ *   `{type: "thinking", thinking: "…"}`                    Anthropic, Cohere
+ *   `{type: "thinking", thinking: [{type: "text", text}]}` Mistral Magistral
+ *   `{type: "reasoning", text | summary | reasoning}`      generic gateways
+ * `redacted_thinking` carries no readable text and contributes nothing.
+ */
+export function partsReasoning(parts: unknown[]): string {
+  const textOf = (v: unknown): string =>
+    typeof v === "string" ? v : Array.isArray(v) ? v.map(textOf).join("") :
+      v && typeof v === "object" && typeof (v as { text?: unknown }).text === "string" ? (v as { text: string }).text : "";
+  return parts
+    .map((p) => {
+      if (!p || typeof p !== "object") return "";
+      const part = p as Record<string, unknown>;
+      if (part.type === "thinking") return textOf(part.thinking);
+      if (part.type === "reasoning") return textOf(part.text ?? part.summary ?? part.reasoning);
+      return "";
+    })
+    .join("");
+}
+
+/**
+ * The reasoning a reply (or a streamed delta) carries beside its content.
+ *
+ * The field is not stable across servers, so all four are read, first
+ * non-empty wins (survey read 2026-11-21):
+ *   reasoning_content   DeepSeek, Kimi, GLM, DashScope Qwen, llama.cpp, SGLang
+ *   reasoning           vLLM (its current name), OpenRouter, Ollama's /v1
+ *   thinking            Ollama's native /api/chat -- never read before, so a
+ *                       local thinking model's reasoning was dropped unseen
+ *   reasoning_details   OpenRouter and MiniMax: `reasoning.text` parts carry
+ *                       `text`, `reasoning.summary` parts `summary`;
+ *                       `reasoning.encrypted` is opaque and skipped
+ * OpenRouter sends `reasoning` beside `reasoning_details` with the same text;
+ * the order above keeps it from being read twice.
+ */
+export function readReasoning(m: unknown): string | undefined {
+  if (!m || typeof m !== "object") return undefined;
+  const r = m as Record<string, unknown>;
+  for (const key of ["reasoning_content", "reasoning", "thinking"]) {
+    const v = r[key];
+    if (typeof v === "string" && v !== "") return v;
+  }
+  if (Array.isArray(r.reasoning_details)) {
+    const text = r.reasoning_details
+      .map((d) => {
+        const part = (d ?? {}) as Record<string, unknown>;
+        return typeof part.text === "string" ? part.text : typeof part.summary === "string" ? part.summary : "";
+      })
+      .join("");
+    if (text) return text;
+  }
+  // Present but empty is still an answer about the channel: "".
+  for (const key of ["reasoning_content", "reasoning", "thinking"]) {
+    if (typeof r[key] === "string") return "";
+  }
+  return undefined;
+}
+
+/**
+ * Merge one streamed `reasoning_details` chunk into the details so far.
+ *
+ * OpenRouter streams each detail in pieces that carry its `index`: text,
+ * summary and encrypted data are concatenated in order, and every other field
+ * (type, id, format, signature) takes its latest value. A piece with no index
+ * continues the last detail.
+ */
+export function mergeReasoningDetails(acc: Array<Record<string, unknown>>, chunk: unknown[]): void {
+  for (const raw of chunk) {
+    if (!raw || typeof raw !== "object") continue;
+    const d = raw as Record<string, unknown>;
+    const at = typeof d.index === "number" ? acc.findIndex((x) => x.index === d.index) : acc.length - 1;
+    const slot = at >= 0 ? acc[at]! : acc[acc.push({}) - 1]!;
+    for (const [k, v] of Object.entries(d)) {
+      if (v === undefined || v === null) continue;
+      if ((k === "text" || k === "summary" || k === "data") && typeof v === "string") {
+        slot[k] = (typeof slot[k] === "string" ? (slot[k] as string) : "") + v;
+      } else {
+        slot[k] = v;
+      }
+    }
+  }
+}
+
+/**
+ * What an assistant message keeps of a reply's reasoning for the requests
+ * after it.
+ *
+ * `reasoning_content` is gnomon's own replay, sent where replay_reasoning is
+ * on. `reasoning_details` and `content_parts` are the provider's own objects,
+ * kept verbatim with the endpoint that produced them: OpenRouter asks for its
+ * details back unmodified and in order (Anthropic signatures, Gemini's
+ * encrypted reasoning), and Mistral's reasoning guide says "always replay the
+ * full assistant message (including ThinkChunk)" (both read 2026-11-21).
+ * callEndpoint sends them back to that endpoint only.
+ */
+/**
+ * The provider's own reasoning objects out of a streamed reply. Details come
+ * back merged; content parts are rebuilt in the shape the stream used, since a
+ * stream carries the thinking parts in pieces and the answer as plain strings
+ * (Mistral's reasoning guide, read 2026-11-21).
+ */
+export function streamedReplay(
+  s: Pick<StreamedReply, "content" | "reasoning" | "reasoningFromParts" | "reasoningDetails" | "thinkingShape" | "thinkingSignature">,
+  promoted: boolean,
+  target: { url: string; model: string }
+): { reasoningDetails?: unknown[]; rawContent?: unknown[]; origin?: string } {
+  const details = s.reasoningDetails?.length ? s.reasoningDetails : undefined;
+  const thinking =
+    !promoted && s.reasoningFromParts && s.reasoning
+      ? s.thinkingShape === "string"
+        ? { type: "thinking", thinking: s.reasoning, ...(s.thinkingSignature ? { signature: s.thinkingSignature } : {}) }
+        : { type: "thinking", thinking: [{ type: "text", text: s.reasoning }] }
+      : undefined;
+  const parts = thinking ? [thinking, ...(s.content ? [{ type: "text", text: s.content }] : [])] : undefined;
+  return {
+    ...(details ? { reasoningDetails: details } : {}),
+    ...(parts ? { rawContent: parts } : {}),
+    ...(details || parts ? { origin: `${target.url}|${target.model}` } : {}),
+  };
+}
+
+export function replayFields(r: {
+  reasoning?: string;
+  reasoningDetails?: unknown[];
+  rawContent?: unknown[];
+  origin?: string;
+}): Partial<ChatMessage> {
+  const details = r.origin && r.reasoningDetails?.length ? r.reasoningDetails : undefined;
+  const parts = r.origin && r.rawContent?.length ? r.rawContent : undefined;
+  return {
+    ...(r.reasoning ? { reasoning_content: r.reasoning } : {}),
+    ...(details ? { reasoning_details: details } : {}),
+    ...(parts ? { content_parts: parts } : {}),
+    ...(details || parts ? { origin: r.origin } : {}),
+  };
 }
 
 /**
@@ -1920,10 +2097,35 @@ async function callEndpointOnce(
   // never be mistaken for that. Untouched otherwise, so the default request
   // is the same bytes it always was.
   const outgoing = target.steerRole === "user" ? steerAsUser(messages) : messages;
+  // The provider's own reasoning objects (replayFields) go back only to the
+  // endpoint that produced them, and not where replay is declared off or was
+  // refused this session. Any other endpoint -- a fallback, an escalation --
+  // is sent the plain text, which is what it would have been sent before.
+  const self = `${target.url}|${target.model}`;
+  let sentProviderReasoning = false;
   const wireMessages = outgoing.map((m) => {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(m as unknown as Record<string, unknown>)) {
       if (v !== undefined && allowedKeys.has(k)) out[k] = v;
+    }
+    const msg = m as ChatMessage;
+    if (!isOllama && !target.replayReasoningDeclined && msg.origin === self) {
+      if (msg.reasoning_details) {
+        out.reasoning_details = msg.reasoning_details;
+        // OpenRouter takes the string or the details, not both.
+        delete out.reasoning_content;
+        sentProviderReasoning = true;
+      }
+      if (msg.content_parts) {
+        out.content = msg.content_parts;
+        sentProviderReasoning = true;
+      }
+    }
+    // Ollama's /api/chat takes an assistant message's reasoning as `thinking`.
+    // It was dropped by the allow-list even where replay_reasoning = true was
+    // declared; local lanes stay off unless declared (replayFieldsOf).
+    if (isOllama && target.replayReasoning && msg.role === "assistant" && msg.reasoning_content) {
+      out.thinking = msg.reasoning_content;
     }
     return out;
   });
@@ -2144,12 +2346,16 @@ async function callEndpointOnce(
       // declared) and the server named it in a 400: the strict-schema refusal
       // ("Extra inputs are not permitted, field: 'messages[3].reasoning_content'").
       // A declared replay is left to fail as declared.
+      // The provider refusing its own reasoning objects back is not expected
+      // (both document sending them), but a strict schema naming the field is
+      // handled the same way rather than failing every later request.
       const replayRejected =
         !steerRoleRejected &&
         res.status === 400 &&
-        target.replayReasoning === true &&
-        target.replayReasoningSource === "default" &&
-        /reasoning_content/i.test(detail);
+        ((target.replayReasoning === true &&
+          target.replayReasoningSource === "default" &&
+          /reasoning_content/i.test(detail)) ||
+          (sentProviderReasoning && /reasoning_details|thinking/i.test(detail)));
       return {
         content:
           `Model API error: ${res.status} ${res.statusText}` +
@@ -2227,6 +2433,7 @@ async function callEndpointOnce(
         ...(c.id !== undefined ? { id: c.id } : {}),
         type: c.type ?? "function",
         function: { name: c.name, arguments: c.args },
+        ...(c.extra !== undefined ? { extra_content: c.extra } : {}),
       }));
       // Content first and reasoning last, as below. A stream cannot tell a
       // null content from an empty one, so the reasoning stands in only for a
@@ -2243,6 +2450,8 @@ async function callEndpointOnce(
         usage: s.usage,
         finishReason: s.finishReason,
         ...(!promoted && s.reasoning && !isEmptyReasoning(s.reasoning) ? { reasoning: s.reasoning } : {}),
+        ...(s.reasoningFromParts ? { reasoningFromParts: true } : {}),
+        ...streamedReplay(s, promoted, target),
       };
     }
 
@@ -2289,7 +2498,12 @@ async function callEndpointOnce(
     // what a streamed reply does. OpenAI-style servers send content: null
     // beside tool_calls as a matter of course, and promoting the reasoning
     // there replayed the model's thinking to it as something it had said.
-    const reasoning = message.reasoning_content ?? message.reasoning;
+    // Content parts can carry the reasoning themselves (partsReasoning) when
+    // no field does.
+    const fieldReasoning = readReasoning(message);
+    const partReasoning =
+      fieldReasoning === undefined && Array.isArray(message.content) ? partsReasoning(message.content) || undefined : undefined;
+    const reasoning = fieldReasoning ?? partReasoning;
     trace.detail = readUsageDetail(json);
     trace.reasoningChars = typeof reasoning === "string" ? reasoning.length : 0;
     const raw: unknown[] = Array.isArray(message.tool_calls)
@@ -2300,6 +2514,13 @@ async function callEndpointOnce(
     // reached `.trim()` as an array and the TypeError ended the run as
     // "gnomon task could not start", exit 10 (gnomon chaos, schema.content).
     const contentParts = Array.isArray(message.content);
+    // The provider's own objects, kept verbatim for replayFields.
+    const rawParts: unknown[] | undefined =
+      contentParts && partsReasoning(message.content) ? [...message.content] : undefined;
+    const details: unknown[] | undefined =
+      Array.isArray(message.reasoning_details) && message.reasoning_details.length > 0
+        ? message.reasoning_details
+        : undefined;
     if (contentParts) message.content = partsText(message.content);
     else if (message.content != null && typeof message.content !== "string") {
       message.content = JSON.stringify(message.content);
@@ -2331,6 +2552,10 @@ async function callEndpointOnce(
       ...(reasoningOnly ? { reasoningOnly: true } : {}),
       ...(contentParts ? { contentParts: true } : {}),
       ...kept,
+      ...(partReasoning !== undefined && "reasoning" in kept ? { reasoningFromParts: true } : {}),
+      ...(details ? { reasoningDetails: details } : {}),
+      ...(rawParts ? { rawContent: rawParts } : {}),
+      ...(details || rawParts ? { origin: `${target.url}|${target.model}` } : {}),
     };
   } catch (err) {
     if (signal?.aborted) {
@@ -2508,7 +2733,13 @@ export interface StreamedReply {
   /** reasoning_content (DeepSeek, llama.cpp) or reasoning (OpenRouter, Ollama) */
   reasoning: string;
   /** Assembled by index; `args` is the concatenated arguments string */
-  toolCalls: Array<{ id?: string; type?: string; name: string; args: string }>;
+  toolCalls: Array<{ id?: string; type?: string; name: string; args: string; extra?: unknown }>;
+  /** `reasoning_details` pieces, merged by index (mergeReasoningDetails) */
+  reasoningDetails?: Array<Record<string, unknown>>;
+  /** How the stream's thinking parts held their text: Mistral's list, or a plain string */
+  thinkingShape?: "list" | "string";
+  /** The last signature a thinking part carried */
+  thinkingSignature?: string;
   finishReason?: string;
   usage?: TokenUsage;
   /** Cached and reasoning tokens, when the usage chunk carried them */
@@ -2517,6 +2748,15 @@ export interface StreamedReply {
   error?: { message: string; status?: number; type?: string };
   /** A finish_reason or [DONE] arrived, so the reply is whole */
   complete: boolean;
+  /**
+   * The reasoning came from content parts (partsReasoning), not a reasoning
+   * field. Shown like any other, and never learned as a replay signal: those
+   * providers (Mistral, Cohere, Anthropic-shaped relays) take their parts back
+   * inside `content`, and sent a `reasoning_content` field a strict one
+   * answers 422.
+   */
+  reasoningFromParts?: boolean;
+
   /**
    * `data:` lines that were not JSON. Each was a chunk of the reply, and its
    * text is not in `content`. Skipped as before; counted so the loop can say
@@ -2592,12 +2832,32 @@ export async function readChatStream(
     const choice = chunk?.choices?.[0];
     if (!choice) return;
     const delta = choice.delta ?? choice.message ?? {};
+    // Mistral streams its content as part arrays too, thinking parts included;
+    // they were skipped whole, answer and reasoning both.
+    const parts = Array.isArray(delta.content) ? delta.content : undefined;
     if (typeof delta.content === "string") out.content += delta.content;
-    const thought = delta.reasoning_content ?? delta.reasoning;
+    else if (parts) out.content += partsText(parts);
+    const fromField = readReasoning(delta);
+    const fromParts = fromField === undefined && parts ? partsReasoning(parts) : "";
+    const thought = fromField ?? (parts ? fromParts : undefined);
     if (typeof thought === "string") out.reasoning += thought;
+    if (fromField) out.reasoningFromParts = false;
+    else if (fromParts && out.reasoningFromParts === undefined) out.reasoningFromParts = true;
+    if (Array.isArray(delta.reasoning_details) && delta.reasoning_details.length > 0) {
+      mergeReasoningDetails((out.reasoningDetails ??= []), delta.reasoning_details);
+    }
+    if (parts) {
+      for (const p of parts) {
+        if (!p || typeof p !== "object" || (p as Record<string, unknown>).type !== "thinking") continue;
+        const part = p as Record<string, unknown>;
+        out.thinkingShape ??= Array.isArray(part.thinking) ? "list" : "string";
+        if (typeof part.signature === "string") out.thinkingSignature = part.signature;
+      }
+    }
     if (
       onToken &&
       ((typeof delta.content === "string" && delta.content !== "") ||
+        (parts !== undefined && parts.length > 0) ||
         (typeof thought === "string" && thought !== "") ||
         (Array.isArray(delta.tool_calls) && delta.tool_calls.length > 0))
     ) {
@@ -2636,6 +2896,9 @@ export async function readChatStream(
         const args = tc?.function?.arguments;
         if (typeof args === "string") slot.args += args;
         else if (args && typeof args === "object") slot.args = JSON.stringify(args);
+        // Gemini 3's thought signature rides here and must be echoed back;
+        // the stream kept only id, type, name and arguments, so it was lost.
+        if (tc?.extra_content !== undefined && tc.extra_content !== null) slot.extra = tc.extra_content;
       }
     }
     if (typeof choice.finish_reason === "string" && choice.finish_reason) {
@@ -2961,9 +3224,13 @@ export function adaptSteerRole(state: PromptState, target: RouteTarget): RouteTa
  */
 export function adaptReplayReasoning(state: PromptState, target: RouteTarget): RouteTarget {
   const key = `${target.url}|${target.model}`;
-  if (target.replayReasoningSource === "default" && state.replayReasoningRefused?.has(key)) {
-    const { replayReasoningSource: _gone, ...rest } = target;
-    return { ...rest, replayReasoning: false };
+  if (state.replayReasoningRefused?.has(key)) {
+    if (target.replayReasoningSource === "default") {
+      const { replayReasoningSource: _gone, ...rest } = target;
+      return { ...rest, replayReasoning: false, replayReasoningDeclined: true };
+    }
+    // Refused the provider's own objects: none of them from here on.
+    if (target.replayReasoning !== true) return { ...target, replayReasoningDeclined: true };
   }
   if (
     target.replayReasoningAuto &&
@@ -3662,6 +3929,125 @@ export interface FoldStep {
   glyph: string;
   colour: string;
   summary: string;
+  /** What the command printed, in one clause (ToolOutcome.glimpse) */
+  glimpse?: string;
+}
+
+/**
+ * The reasoning to show for one reply: the provider's channel and any inline
+ * markup, once each. llama.cpp's `deepseek-legacy` format sends the same text
+ * both ways, and a provider's "no reasoning available" stand-in is not
+ * reasoning (isEmptyReasoning).
+ */
+export function reasoningOf(channel: string | undefined, inline: string): string {
+  // The channel is already reasoning, but a model can still write markup into
+  // it: qwen3.6 behind llama.cpp put a bare `<think>` there after tool
+  // results, and the trace showed `✻ <think>` (live run, 2026-11-21). Read
+  // through the same parser, keeping what it would call reasoning and answer.
+  const parsed = channel && !isEmptyReasoning(channel) ? splitThinking(channel) : undefined;
+  const c = parsed ? [parsed.think, parsed.answer].filter(Boolean).join("\n").trim() : "";
+  const i = inline.trim();
+  if (!c || !i) return c || i;
+  if (c.includes(i) || i.includes(c)) return c.length >= i.length ? c : i;
+  return `${c}\n${i}`;
+}
+
+/**
+ * The `⚙` row of a step: the tool, then what it was called on.
+ *
+ * `describe` is built from model-chosen arguments, so it is escaped like any
+ * other model text on the operator's screen, and the row is fitted to the
+ * terminal: a wrapped row is one the spinner's erase-line cannot see.
+ */
+export function stepCallRow(ui: ResolvedUi, tool: string, describe: string, columns: number = terminalWidth()): string {
+  // A skill the model opened is drawn as a skill, not as one more read.
+  if (tool === SKILL_STEP) return fitRow(paint(ui, "magenta", `  ◆ skill`) + `  ${safeForPrompt(describe)}`, columns);
+  return fitRow(paint(ui, "cyan", `  ⚙ ${tool}`) + (describe ? `  ${safeForPrompt(describe)}` : ""), columns);
+}
+
+/** FoldStep.tool for a `read` of a skill file (skillRead). */
+export const SKILL_STEP = "◆skill";
+
+/**
+ * The skill a `read` call opens, if it opens one: `.gnomon/skills/<id>.md`.
+ *
+ * Skills the turn did not load are listed to the model by name and path, and
+ * it opens the one it wants with an ordinary `read`. That read is the skill
+ * being used, so the trace says so rather than showing a file path, and never
+ * folds it away with the recon around it. Read off the declared path argument,
+ * never guessed from a command.
+ */
+export function skillRead(call: ToolCall, gnomonDirName: string): string | null {
+  if (call.name !== "read" || typeof call.args.path !== "string") return null;
+  const parts = call.args.path.replace(/\\/g, "/").replace(/^\.\//, "").split("/");
+  const at = parts.lastIndexOf(gnomonDirName);
+  if (at < 0 || parts[at + 1] !== SKILLS_DIR.replace(/\/+$/, "") || parts.length !== at + 3) return null;
+  const file = parts[at + 2]!;
+  return file.endsWith(".md") ? file.slice(0, -3) : null;
+}
+
+/**
+ * The skills a turn starts with, and why each fired:
+ * `◆ skills  secrets ("token"), writing tests (always)`.
+ *
+ * Selection is by declared pattern on the input (skills.ts selectSkills), and
+ * that happens before the turn, inside the system prompt, where no trace
+ * line could see it. This names the word that matched, so the operator sees
+ * the rule as well as its result. The word is the operator's own input, and
+ * escaped like any other text on this screen.
+ */
+export function skillsRow(ui: ResolvedUi, active: Skill[], input: string, columns: number = terminalWidth()): string | null {
+  if (active.length === 0) return null;
+  const why = (sk: Skill): string => {
+    if (!sk.match) return "always";
+    try {
+      const m = new RegExp(sk.match, "i").exec(input);
+      return m ? `"${safeForPrompt(m[0])}"` : "matched";
+    } catch {
+      return "matched";
+    }
+  };
+  return fitRow(
+    paint(ui, "magenta", "  ◆ skills") + "  " +
+      active.map((sk) => `${safeForPrompt(sk.name)} ${paint(ui, "gray", `(${why(sk)})`)}`).join(", "),
+    columns
+  );
+}
+
+/**
+ * The `⎿` row under it: what came back, without the tool and subject the row
+ * above already named, and a line of what the command printed. A clean result
+ * is muted; anything else keeps its glyph and colour so it cannot be skimmed past.
+ */
+export function stepResultRow(
+  ui: ResolvedUi,
+  step: { glyph: string; colour: string; summary: string; glimpse?: string },
+  columns: number = terminalWidth()
+): string {
+  const ok = step.glyph === "✓";
+  const text =
+    `${ok ? "" : `${step.glyph} `}${summaryResult(step.summary)}` + (step.glimpse ? ` · ${step.glimpse}` : "");
+  return fitRow(paint(ui, ok ? "gray" : step.colour, `    ⎿ ${text}`), columns);
+}
+
+/**
+ * The live trace of a delegated turn, set under the step that started it.
+ *
+ * A sub-turn printed through the parent's own channel at the parent's own
+ * indent, so a delegation read as the parent suddenly doing ten more things.
+ * Every line it prints now carries a `┊` gutter, and the run opens with who
+ * is working and on what model and closes with the first line of what it
+ * handed back.
+ */
+export function nestedDeps(deps: TurnDeps): TurnDeps {
+  const gutter = paint(deps.ui, "gray", "  ┊");
+  const indent = (text: string): string =>
+    text
+      .split("\n")
+      .map((l) => (l === "" ? l : `${gutter}${l}`))
+      .join("\n");
+  const warn = deps.warn ?? deps.say;
+  return { ...deps, say: (l) => deps.say(indent(l)), warn: (l) => warn(indent(l)) };
 }
 
 /** Result of one agentic turn, before it becomes a PromptExchange. */
@@ -5134,7 +5520,7 @@ export interface ResolvedTargetRecord {
   local: boolean;
   /** `on` from the first request; `on_reasoning` from the request after the first tool call answered with reasoning; `off` */
   replay: "on" | "on_reasoning" | "off";
-  /** `declared`; `default` (gnomon's rule, remote); `local_lane` (off by default on a local lane); `ollama_route` (Ollama's /api/chat: no reasoning is read there) */
+  /** `declared`; `default` (gnomon's rule, remote); `local_lane` (off by default on a local lane); `ollama_route` (Ollama's /api/chat: its `thinking` is read and shown, never sent back) */
   replay_source: "declared" | "default" | "local_lane" | "ollama_route";
   steer_role: "system" | "user";
   steer_role_source: "declared" | "default";
@@ -5299,8 +5685,9 @@ async function agenticTurn(
   // Two folded steps save one line and cost the detail of both.
   const FOLD_MIN = 3;
   const emitStep = (st: FoldStep): void => {
-    deps.say(paint(deps.ui, "cyan", `  ⚙ ${st.tool}`) + paint(deps.ui, "gray", ` ${st.describe}`));
-    deps.say(paint(deps.ui, st.colour, `    ${st.glyph} ${st.summary}`));
+    const columns = terminalWidth();
+    deps.say(stepCallRow(deps.ui, st.tool, st.describe, columns));
+    deps.say(stepResultRow(deps.ui, st, columns));
   };
   const flushFold = (): void => {
     if (pendingFold.length === 0) return;
@@ -5336,6 +5723,12 @@ async function agenticTurn(
   const say = (line: string): void => {
     flushFold();
     deps.say(line);
+  };
+  /** Reasoning as the trace shows it: `✻`, muted, at /think's verbosity. */
+  const sayReasoning = (text: string): void => {
+    traceLines(text, deps.ui.think, terminalWidth()).forEach((line, i) =>
+      say(paint(deps.ui, "gray", `  ${i === 0 ? "✻" : " "} ${line}`))
+    );
   };
 
   /**
@@ -5535,6 +5928,13 @@ async function agenticTurn(
         // That isolation is the reason to delegate at all.
         const subRoute = routeRole(config, subRole);
         const system = buildSystemPrompt(state, subRole, instruction, { delegated: true });
+        const shown = deps.ui.cot !== "off";
+        const nested = nestedDeps(deps);
+        if (shown) {
+          nested.say(paint(deps.ui, "magenta", `  ↳ ${subRole}`) + paint(deps.ui, "gray", ` on ${subRoute.target.model}`));
+          const loaded = skillsRow(deps.ui, selectSkills(loadSkills(config), subRole, instruction), instruction);
+          if (loaded) nested.say(loaded);
+        }
         const sub = await runAgenticTurn(
           state,
           subRole,
@@ -5543,10 +5943,20 @@ async function agenticTurn(
             ...(system ? [{ role: "system" as const, content: system }] : []),
             { role: "user" as const, content: instruction },
           ],
-          deps,
+          nested,
           depth + 1,
           ledger
         );
+        if (shown) {
+          const handed = splitThinking(sub.content ?? "").answer.trim().split("\n").find((l) => l.trim()) ?? "";
+          nested.say(
+            fitRow(
+              paint(deps.ui, "magenta", `  ↲ ${subRole}`) +
+                paint(deps.ui, "gray", ` ${sub.toolSteps} step(s)${handed ? ` · ${safeForPrompt(handed.trim())}` : " · no answer"}`),
+              terminalWidth() - 3
+            )
+          );
+        }
         return {
           content: sub.content,
           code: sub.code,
@@ -6324,7 +6734,7 @@ async function agenticTurn(
         paint(
           deps.ui,
           "yellow",
-          `  [endpoint] ${target.model} refused the reasoning_content gnomon sends back by default — ` +
+          `  [endpoint] ${target.model} refused the ${working.some((m) => m.origin) ? "reasoning" : "reasoning_content"} gnomon sends back by default — ` +
             `resending without it, and not replaying reasoning for the rest of this session. ` +
             `Declare replay_reasoning = false on the endpoint to skip the refused call.`
         )
@@ -6355,6 +6765,7 @@ async function agenticTurn(
       r.code === 0 &&
       r.toolCalls.length > 0 &&
       r.reasoning &&
+      !r.reasoningFromParts &&
       target.replayReasoningAuto &&
       !state.replayReasoningRefused?.has(`${target.url}|${target.model}`)
     ) {
@@ -6926,19 +7337,21 @@ async function agenticTurn(
     //
     // The endpoint reported reusing none of a prefix it had just been sent
     // (gnomon chaos: cache_miss; report RS5, a 40k re-prefill at 33-40 s on
-    // GB10). Every one counted; said once per turn.
+    // GB10). Every one counted; said once per model per session.
     const misses = ledger.takeCacheMisses();
     if (misses) {
       counters.prefix_cache_misses = (counters.prefix_cache_misses ?? 0) + misses.n;
-      if (!saidCacheMiss) {
+      const told = (state.cacheMissSaid ??= []);
+      if (!saidCacheMiss && !told.includes(usedModel)) {
         saidCacheMiss = true;
+        told.push(usedModel);
         warn(
           paint(
             deps.ui,
             "yellow",
             `  [endpoint] ${usedModel} reported 0 cached prompt tokens on a request that only appended to the one before ` +
-              `(${misses.last.reusable} tokens were there to reuse) — a prefix-cache miss: by its own count the whole ` +
-              `prompt was prefilled again (said once per turn; counters.prefix_cache_misses counts them)`
+              `(${misses.last.reusable} tokens were there to reuse) — a prefix-cache miss, so the whole prompt was ` +
+              `prefilled again. Said once this session; counters.prefix_cache_misses counts every one.`
           )
         );
       }
@@ -7123,7 +7536,7 @@ async function agenticTurn(
         working.push({
           role: "assistant",
           content: result.content,
-          ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
+          ...replayFields(result),
         });
       }
       working.push({
@@ -7166,7 +7579,7 @@ async function agenticTurn(
         working.push({
           role: "assistant",
           content: result.content,
-          ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
+          ...replayFields(result),
         });
         working.push({
           role: "user",
@@ -7276,6 +7689,18 @@ async function agenticTurn(
     if (!malformedOut && (result.code !== 0 || result.toolCalls.length === 0)) {
       // A reply the model meant as an answer is a usable reply.
       consecutiveMalformed = 0;
+      // The answer's own reasoning, in the trace like every step's. Inline
+      // markup is drawn with the answer at the top level (renderExchange); the
+      // provider's channel was drawn nowhere, so a reasoning model's final
+      // thinking was never seen. A sub-turn's answer is not drawn at all, so
+      // it shows both.
+      if (result.code === 0 && (deps.ui.cot === "full" || deps.ui.cot === "think" || deps.ui.cot === "work")) {
+        const finalReasoning = reasoningOf(
+          result.reasoning,
+          depth > 0 ? splitThinking(result.content ?? "").think : ""
+        );
+        if (finalReasoning) sayReasoning(finalReasoning);
+      }
       // The turn is about to end. If the surface declared a check and this
       // turn changed files, run it before letting the answer stand — a model
       // that reports success is reporting a belief, and the check is the only
@@ -7639,6 +8064,10 @@ async function agenticTurn(
                 reviewFailed = `reviewer role "${completion.reviewer}" is not declared`;
               } else {
                 const system = buildSystemPrompt(state, completion.reviewer, instruction, { delegated: true });
+                if (deps.ui.cot !== "off") {
+                  const loaded = skillsRow(deps.ui, selectSkills(loadSkills(config), completion.reviewer, instruction), instruction);
+                  if (loaded) nestedDeps(deps).say(loaded);
+                }
                 const rev = await runAgenticTurn(
                   state,
                   completion.reviewer,
@@ -7647,7 +8076,7 @@ async function agenticTurn(
                     ...(system ? [{ role: "system" as const, content: system }] : []),
                     { role: "user" as const, content: instruction },
                   ],
-                  deps,
+                  nestedDeps(deps),
                   depth + 1,
                   ledger,
                   { readOnly: true }
@@ -7973,7 +8402,7 @@ async function agenticTurn(
         working.push({
           role: "assistant",
           content: result.content,
-          ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
+          ...replayFields(result),
         });
         working.push({ role: endHandBack.role, content: endHandBack.content });
         // Sent as a system message only when the endpoint is not steered in
@@ -8270,7 +8699,7 @@ async function agenticTurn(
       content: result.content ?? "",
       tool_calls: result.rawToolCalls,
       // Sent only where replay is on (declared, or by default); see callEndpoint.
-      ...(result.reasoning ? { reasoning_content: result.reasoning } : {}),
+      ...replayFields(result),
     });
 
     // Models usually say why before they call something, and that text was
@@ -8278,10 +8707,16 @@ async function agenticTurn(
     // no reason for it. Approving a row of symbols is not oversight.
     // /cot decides how much of the live "while it works" trace to show.
     const split = splitThinking(result.content ?? "");
+    // Reasoning arrives two ways: inside <think> tags in the content, or on
+    // the provider's own reasoning channel (`reasoning_content`), which is
+    // where GLM, DeepSeek, Kimi and Qwen-over-API put it. Only the first was
+    // ever shown, so on those models the trace was tool calls with no reason
+    // for any of them. A provider's "no reasoning available" stand-in is not
+    // reasoning and is dropped (isEmptyReasoning).
+    const reasoning = reasoningOf(result.reasoning, split.think);
     if (deps.events?.text) {
-      const think = split.think.trim();
       const prose = split.answer.trim();
-      if (think) deps.events.text("thought", think);
+      if (reasoning) deps.events.text("thought", reasoning);
       if (prose) deps.events.text(depth > 0 ? "thought" : "message", prose);
     }
     // `work` shows the reasoning and the prose in full — it folds STEPS, not
@@ -8296,21 +8731,19 @@ async function agenticTurn(
     // Both are clipped and escaped by traceLines: under `collapse` a step shows
     // at most three rows of prose, and a step that repeats the last one's
     // prose word for word shows none -- the operator already read it.
+    //
+    // `✻` marks reasoning (muted: it is the model thinking aloud) and `●` the
+    // prose it wrote for the reader (full weight: it is the model talking to
+    // you). Under `collapse` each shows at most three rows and says how many
+    // it held back.
     if (showTrace) {
       const columns = terminalWidth();
-      const think = split.think.trim();
-      if (think) {
-        const all = traceLines(think, deps.ui.think, columns);
-        const lines = deps.ui.think === "collapse" && all.length > 1
-          ? [`${all[0]} …`]
-          : all;
-        for (const line of lines) say(paint(deps.ui, "gray", `  · ${line}`));
-      }
+      if (reasoning) sayReasoning(reasoning);
       const rationale = split.answer.trim();
       if (rationale && rationale !== lastRationale) {
-        for (const line of traceLines(rationale, deps.ui.think === "hide" ? "collapse" : deps.ui.think, columns)) {
-          say(paint(deps.ui, "gray", `  │ ${line}`));
-        }
+        traceLines(rationale, deps.ui.think === "hide" ? "collapse" : deps.ui.think, columns).forEach((line, i) =>
+          say(i === 0 ? `  ${paint(deps.ui, "bold", "●")} ${line}` : `    ${line}`)
+        );
       }
       lastRationale = rationale;
     }
@@ -8434,11 +8867,18 @@ async function agenticTurn(
       const askedIndividually = gated && !standing;
       if (askedIndividually) flushFold();
       deps.progress.stop();
-      if (deps.ui.cot === "full" || deps.ui.cot === "tools") {
-        say(
-          paint(deps.ui, "cyan", `  ⚙ ${call.name}`) +
-            paint(deps.ui, "gray", ` ${describeCall(call)}`)
-        );
+      // `work` prints a step once it is done, so it can fold. A delegation is
+      // the exception: its sub-turn prints while it runs, and that trace has
+      // to sit under the step that started it, not above it.
+      const announced =
+        deps.ui.cot === "full" || deps.ui.cot === "tools" || (deps.ui.cot === "work" && call.name === "task");
+      // A read that opens a skill file is the skill being used (skillRead).
+      const skillId = skillRead(call, basename(config.gnomonDir));
+      const stepTool = skillId ? SKILL_STEP : call.name;
+      const stepDescribe = skillId ?? describeCall(call);
+      if (announced) {
+        if (deps.ui.cot === "work") flushFold();
+        say(stepCallRow(deps.ui, stepTool, stepDescribe));
       }
 
       const eventCall: TurnEventCall | undefined = deps.events
@@ -8695,16 +9135,17 @@ async function agenticTurn(
         bucket === "result" && outcome.shell_exit !== undefined && outcome.shell_exit !== 0;
       const glyph = shellFailed ? "✗" : bucket === "result" ? "✓" : bucket === "refusal" ? "⚠" : "✗";
       const bcolor = shellFailed ? "yellow" : bucket === "result" ? "green" : bucket === "refusal" ? "yellow" : "red";
-      if (deps.ui.cot === "full" || deps.ui.cot === "tools") {
-        say(paint(deps.ui, bcolor, `    ${glyph} ${outcome.summary}`));
+      if (announced) {
+        say(stepResultRow(deps.ui, { glyph, colour: bcolor, summary: outcome.summary, glimpse: outcome.glimpse }));
       } else if (deps.ui.cot === "work") {
         const step: FoldStep = {
-          tool: call.name,
-          describe: describeCall(call),
+          tool: stepTool,
+          describe: stepDescribe,
           path: typeof call.args.path === "string" ? call.args.path : undefined,
           glyph,
           colour: bcolor,
           summary: outcome.summary,
+          ...(outcome.glimpse ? { glimpse: outcome.glimpse } : {}),
         };
         // Everything that must stay visible: it failed, it was refused, it
         // moved the tree, it moved the surface, or the operator was asked
@@ -8718,6 +9159,8 @@ async function agenticTurn(
           // comment at the top of the fold exists to rule out.
           call.name !== "write" &&
           call.name !== "edit" &&
+          // Using a skill is a step the operator follows, not recon to count.
+          skillId === null &&
           // The tool succeeding is not the work succeeding. `bash` returns
           // TOOL_OK for a command that ran and exited 1, so this check is what
           // stops a failing test run or a broken script being counted as one
@@ -8737,9 +9180,12 @@ async function agenticTurn(
       } else if (deps.ui.cot === "brief") {
         // One line per step: the call and what it returned.
         say(
-          paint(deps.ui, "cyan", `  • ${call.name}`) +
-            paint(deps.ui, "gray", ` ${describeCall(call)} `) +
-            paint(deps.ui, bcolor, `${glyph} ${outcome.summary}`)
+          fitRow(
+            paint(deps.ui, skillId ? "magenta" : "cyan", `  • ${skillId ? "skill" : call.name}`) +
+              paint(deps.ui, "gray", ` ${safeForPrompt(stepDescribe)} `) +
+              paint(deps.ui, bcolor, `${glyph} ${summaryResult(outcome.summary)}`),
+            terminalWidth()
+          )
         );
       }
       // think / off: no per-tool line — the spinner still shows activity.
@@ -8890,10 +9336,28 @@ export function describeEscalation(e: EscalateRoute | undefined): string | undef
  */
 function describeCall(call: ToolCall): string {
   const a = call.args;
+  const text = (v: unknown): string => (typeof v === "string" ? v.replace(/\s+/g, " ").trim() : "");
+  const clip = (v: string, n: number): string => (v.length > n ? `${v.slice(0, n)}…` : v);
+  // glob/grep: the pattern is what the call is about; the path only scopes it.
+  // It printed the path alone, and a glob with no path printed nothing at all.
+  const pattern = text(a.pattern);
+  if (pattern) return clip(pattern, 60) + (text(a.path) ? ` in ${text(a.path)}` : "");
   if (typeof a.path === "string") return String(a.path);
-  if (typeof a.command === "string") {
-    const c = String(a.command).replace(/\s+/g, " ");
-    return c.length > 70 ? `${c.slice(0, 70)}…` : c;
+  if (typeof a.command === "string") return clip(text(a.command), 120);
+  if (call.name === "task") {
+    const role = text(a.role);
+    const instruction = text(a.instruction);
+    return clip(role && instruction ? `${role}: ${instruction}` : role || instruction, 120);
+  }
+  if (Array.isArray(a.todos)) return `${a.todos.length} item(s)`;
+  // The `skill` tool writes a proposal for a person to accept; it never runs one.
+  if (call.name === "skill") return text(a.name) ? `propose: ${clip(text(a.name), 80)}` : "propose";
+  // Everything else (compute, webfetch, note, skill, job, MCP tools): the
+  // first argument that reads as a subject. Verbatim and clipped, never
+  // summarised.
+  for (const key of ["expression", "url", "query", "name", "text", "action", "id"]) {
+    const v = text(a[key]);
+    if (v) return clip(v, 80);
   }
   return "";
 }
@@ -9918,6 +10382,10 @@ export async function runTask(
           stageInput
         );
         note(`[chain] stage ${i + 1}/${chain.length} — ${stageRole}`);
+        {
+          const loaded = skillsRow(ui, selectSkills(loadSkills(config), stageRole, stageInput), stageInput);
+          if (loaded) note(loaded);
+        }
         const stageInfo = shadowTurnInfo(sessionId, `t1.s${i + 1}`, stageRole, stageRoute);
         const r = await runAgenticTurn(stageState, stageRole, stageRoute, stageMsgs.messages, {
           approve: approveHere,
@@ -11583,10 +12051,8 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       }
       console.log(`\n${steps.length} step(s) in the last folded run:`);
       for (const st of steps) {
-        console.log(
-          paint(ui, "cyan", `  ⚙ ${st.tool}`) + paint(ui, "gray", ` ${st.describe}`)
-        );
-        console.log(paint(ui, st.colour, `    ${st.glyph} ${st.summary}`));
+        console.log(stepCallRow(ui, st.tool, st.describe));
+        console.log(stepResultRow(ui, st));
       }
       // The scrollback is a convenience; the trail is the record. Said here
       // because this is the moment someone is looking for what happened.
@@ -11947,15 +12413,8 @@ export async function runSessionTurn(
   // Selection is by declared pattern, not model judgement, so the same
   // input loads the same skills on every machine.
   const active = selectSkills(loadSkills(config), role, cleanedInput);
-  if (active.length > 0) {
-    deps.log(
-      paint(
-        ui,
-        "gray",
-        `  [skills] ${active.map((sk) => sk.name).join(", ")}`
-      )
-    );
-  }
+  const skillsLine = ui.cot === "off" ? null : skillsRow(ui, active, cleanedInput);
+  if (skillsLine) deps.log(skillsLine);
   const systemPrompt = buildSystemPrompt(state, role, cleanedInput);
 
   // Build the window from prior turns before calling.
@@ -12040,6 +12499,10 @@ export async function runSessionTurn(
         print(
           paint(ui, "gray", `  [chain] stage ${i + 1}/${turnChain.length} — ${stageRole}`)
         );
+        {
+          const loaded = ui.cot === "off" ? null : skillsRow(ui, selectSkills(loadSkills(config), stageRole, stageInput), stageInput);
+          if (loaded) print(loaded);
+        }
         const stageInfo = shadowTurnInfo(
           sessionIdOf(state), `${shadowLabel}.s${i + 1}`, stageRole, stageRoute
         );
