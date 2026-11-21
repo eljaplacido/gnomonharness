@@ -147,7 +147,8 @@ describe("the version a user actually sees", () => {
     const src = readFileSync(
       join(dirname(fileURLToPath(import.meta.url)), "index.ts"), "utf8");
 
-    const banner = /console\.log\(`([^\n]*)— deterministic coding agent harness/.exec(src);
+    // helpText() returns the text that showHelp() prints, so the banner is a return.
+    const banner = /(?:console\.log\(|return )`([^\n]*)— deterministic coding agent harness/.exec(src);
     expect(banner, "help banner not found — did the wording change?").toBeTruthy();
 
     // It must interpolate, and must not carry a literal version.
