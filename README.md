@@ -27,10 +27,10 @@ gnomon dashboard   # optional: the same steps and the project's records, in a br
 gnomon launch      # start working
 ```
 
-The installer installs v0.6.3, the latest release. v0.6.3 is also published
+The installer installs v0.6.4, the latest release. v0.6.4 is also published
 to npm as `gnomon-harness` once the release's npm workflow completes; until
-`npm view gnomon-harness version` prints 0.6.3, `npm i -g gnomon-harness`
-installs 0.6.2. The installer also brings the native binaries; see
+`npm view gnomon-harness version` prints 0.6.4, `npm i -g gnomon-harness`
+installs 0.6.3. The installer also brings the native binaries; see
 [Install](#install). Update with `gnomon update`;
 `gnomon uninstall` prints how to remove it.
 
@@ -442,7 +442,7 @@ implementations agree.
 > in more detail.
 
 Node >= 22 and nothing else. **Use the installer below.** It installs the
-latest release, v0.6.3, together with the native binaries:
+latest release, v0.6.4, together with the native binaries:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/scripts/install.sh | sh
@@ -467,9 +467,9 @@ curl -fsSL https://raw.githubusercontent.com/eljaplacido/gnomonharness/master/sc
 # or: $env:GNOMON_SETUP = '1' before the irm | iex line
 ```
 
-The package is also published to npm, from v0.5.0 on. v0.6.3 arrives there
+The package is also published to npm, from v0.5.0 on. v0.6.4 arrives there
 once the release's npm workflow completes (`npm view gnomon-harness version`
-prints 0.6.3); until then the registry has 0.6.2:
+prints 0.6.4); until then the registry has 0.6.3:
 
 ```bash
 npm i -g gnomon-harness
@@ -483,7 +483,7 @@ npm belongs to an unrelated logging utility). It covers `launch`, `prompt`,
 The installer ([`scripts/install.sh`](scripts/install.sh),
 [`scripts/install.ps1`](scripts/install.ps1)) checks Node and, if it is missing
 or older than 22, prints the command for your OS instead of running one as root.
-It resolves the latest published release (`GNOMON_VERSION=0.6.3` pins one; a
+It resolves the latest published release (`GNOMON_VERSION=0.6.4` pins one; a
 draft release cannot be pinned), installs the
 npm package — from the registry when that version is published there, from
 the release's own tarballs when it is not (an older pin, or the minute between
@@ -521,11 +521,11 @@ the release job builds, refuses to publish unless they install and run, and
 then publishes to npm byte for byte:
 
 ```bash
-V=0.6.3; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
+V=0.6.4; B=https://github.com/eljaplacido/gnomonharness/releases/download/v$V
 npm i -g $B/gnomon-core-$V.tgz $B/gnomon-natives-$V.tgz $B/gnomon-tui-$V.tgz $B/gnomon-harness-$V.tgz
 ```
 
-<!-- bash only: `V=0.6.3` is not an assignment in PowerShell, and `$B/...` is
+<!-- bash only: `V=0.6.4` is not an assignment in PowerShell, and `$B/...` is
 not a path there. The installer one-liners above are the cross-shell route. -->
 
 From the registry this is `npm i -g gnomon-harness` (or
