@@ -925,7 +925,7 @@ export const PROPERTY_SUITES = [
     question: "Does every change that alters behaviour move the surface hash?",
     dir: "benchmarks/surface-fidelity",
     prefix: "result",
-    published: "14/14",
+    published: "15/15",
     unit: "paths",
   },
   {

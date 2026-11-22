@@ -11,7 +11,9 @@
 import * as readline from "node:readline";
 import { safeGit } from "./git_safe.js";
 import { checkCitations } from "./citations.js";
-import { mustFailFirst, readVerifyExit } from "./must_fail_first.js";
+import { mustFailFirst, readVerifyExit, readVerifyRun } from "./must_fail_first.js";
+import { runVerifySetup, verifyContext } from "./verify_run.js";
+import { changedProtected, protectedHandBack, snapshotProtected } from "./verify_protects.js";
 import { resolve, dirname, join, basename, sep, relative } from "node:path";
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, realpathSync, renameSync } from "node:fs";
 import { readRegular } from "./root_fs.js";
@@ -58,6 +60,8 @@ import {
   MetaField,
   META_FIELDS,
   COT_MODES,
+  THINK_MODES,
+  type ThinkMode,
   loadConfig,
   auditSurface,
   probeEndpointAuth,
@@ -115,6 +119,7 @@ import { pinCredentials, holdCredentials, heldNotice, type CredentialPin } from 
 import { StallSignals, STALL_SIGNAL_PATTERNS, normalizeCommand, type StallSignalCounters } from "./stall_signals.js";
 import { JobTable, scratchDirs, statSnapshot, statChangedPaths } from "./tools.js";
 import { resolveSandboxProfile, sandboxProfileRecord } from "./sandbox_profile.js";
+import { auditSecretsInRoot, secretsInRootRecord } from "./secrets_in_root.js";
 import { JOB_TOOL, resolveSoftTimeout } from "./soft_shell.js";
 import {
   resolveCompletionGate,
@@ -179,6 +184,7 @@ import {
   type TokenCalibration,
   type UsageDetail,
 } from "./mediators.js";
+import { estimateTokens, messageTokens, messagesTokens, type MessageTokenOptions } from "./message_tokens.js";
 import { writeTamperRecord, compareWithCheckpoint, writeCheckpoint } from "./record_tamper.js";
 import {
   promptCacheOn,
@@ -231,10 +237,14 @@ import {
   selectSkills,
   roleSkills,
   applySkills,
+  skillBlock,
+  skillId as skillIdOf,
   SKILLS_DIR,
   withWorkingContext,
   type Skill,
 } from "./skills.js";
+import { readSkillUsage, type SkillUsage } from "./skill_mine.js";
+import { SkillUse, skillsUsedText, type SkillCounters } from "./skill_use.js";
 import { AuditTrail, resolveAudit, type AuditKind } from "./audit.js";
 import { announceAnchorBacklog } from "./anchor.js";
 import {
@@ -454,6 +464,12 @@ export interface PromptState {
    */
   lastFold?: FoldStep[];
   /**
+   * The last turn's reasoning (`✻`) and prose (`●`) blocks, whole, for
+   * `/expand think`. Display state like `lastFold`: never sent to the model,
+   * never saved. Bounded by THINK_KEEP_BYTES.
+   */
+  lastThink?: { kind: "reasoning" | "prose"; text: string }[];
+  /**
    * Where over-long tool output is written instead of being discarded.
    *
    * Session-scoped rather than turn-scoped on purpose: the sink numbers the
@@ -656,11 +672,10 @@ export interface BuiltContext {
  * would have to be installed and resolved per machine — exactly the
  * machine-scoped dependency Rule 1 forbids. This is pure, deterministic, and
  * has no dependencies: the same string always yields the same number, so the
- * window slides identically on every machine.
+ * window slides identically on every machine. Defined in message_tokens.ts,
+ * beside `messageTokens`, which is what a context decision should call.
  */
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
+export { estimateTokens, messageTokens, messagesTokens };
 
 /**
  * Whether a turn with this exit code is replayed into the next context.
@@ -1269,6 +1284,18 @@ export function addUsage(
 }
 
 /**
+ * Provider wordings for "the prompt did not fit". llama.cpp, vLLM and OpenAI
+ * (context length, maximum context, exceed_context_size, exceeds the available
+ * context); Anthropic ("prompt is too long", "input length and `max_tokens`
+ * exceed context limit"); Gemini ("input token count ... exceeds the maximum
+ * number of tokens allowed"); LiteLLM (ContextWindowExceededError, "input is
+ * too long"). HTTP 413 is classified by status. An output-limit refusal
+ * ("max_tokens is too large") is not one.
+ */
+const CONTEXT_OVERFLOW =
+  /context length|maximum context|too many tokens|context_length|exceed_context_size|exceeds the available context|prompt is too long|input is too long|exceeds? (?:the )?context (?:limit|window)|context ?window ?exceeded|input token count.{0,40}exceeds|too large for the (?:model|context)/i;
+
+/**
  * Which apparatus failure this is.
  *
  * Both failure sites used to return 10 for everything, so a 400 "no such
@@ -1291,14 +1318,15 @@ export function classifyFailure(opts: {
   message?: string;
 }): number {
   const { status, errName, message = "" } = opts;
-  if (errName === "TimeoutError" || /timed? ?out/i.test(message)) return 11;
+  // The timeout-in-prose test comes AFTER the overflow test: an error body that
+  // mentions a timeout must not hide a real overflow.
+  if (errName === "TimeoutError") return 11;
   // llama.cpp says "request (107910 tokens) exceeds the available context size
   // (98304 tokens)", type exceed_context_size_error. Read as 10 (a bad request),
   // that overflow ended the turn instead of reaching the trim-and-retry below
   // (R1, 2026-11-02, r1-k1-bc-fix-code-vulnerability).
-  if (/context length|maximum context|too many tokens|context_length|exceed_context_size|exceeds the available context/i.test(message)) {
-    return 13;
-  }
+  if (status === 413 || CONTEXT_OVERFLOW.test(message)) return 13;
+  if (/timed? ?out/i.test(message)) return 11;
   if (status === undefined) {
     // A transport error with no HTTP status: refused, DNS, socket hangup.
     return /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|EPIPE|fetch failed|socket hang up|network/i
@@ -3829,6 +3857,8 @@ export interface TurnDeps {
   ui: ResolvedUi;
   /** Emit a transcript line as work happens */
   say: (line: string) => void;
+  /** Columns `say` adds to the left of every line (the `┊` gutter of a delegated turn). */
+  gutter?: number;
   /** Aborted when the user presses Esc (or Ctrl+C) mid-turn */
   signal?: AbortSignal;
   /** Append-only trail; a disabled one is a no-op */
@@ -4067,8 +4097,20 @@ export function skillRead(call: ToolCall, gnomonDirName: string): string | null 
  * the rule as well as its result. The word is the operator's own input, and
  * escaped like any other text on this screen.
  */
-export function skillsRow(ui: ResolvedUi, active: Skill[], input: string, columns: number = terminalWidth()): string | null {
-  if (active.length === 0) return null;
+export function skillsRow(
+  ui: ResolvedUi,
+  active: Skill[],
+  input: string,
+  columns: number = terminalWidth(),
+  /** Skills this role may use, loaded or not: what `none matched · N available` counts. */
+  available: number = active.length
+): string | null {
+  if (active.length === 0) {
+    // Only where the operator asked to see the work: at brief and tools the
+    // absence of a row is the quiet reading.
+    if (available === 0 || (ui.cot !== "work" && ui.cot !== "full")) return null;
+    return fitRow(paint(ui, "magenta", "  ◆ skills") + "  " + paint(ui, "gray", `none matched · ${available} available`), columns);
+  }
   const why = (sk: Skill): string => {
     if (!sk.match) return "always";
     try {
@@ -4078,11 +4120,74 @@ export function skillsRow(ui: ResolvedUi, active: Skill[], input: string, column
       return "matched";
     }
   };
+  const cost = active.map(skillTokens);
   return fitRow(
     paint(ui, "magenta", "  ◆ skills") + "  " +
-      active.map((sk) => `${safeForPrompt(sk.name)} ${paint(ui, "gray", `(${why(sk)})`)}`).join(", "),
+      active.map((sk, i) => `${safeForPrompt(sk.name)} ${paint(ui, "gray", `(${why(sk)}) ~${cost[i]} tok`)}`).join(", ") +
+      paint(ui, "gray", `  · ~${cost.reduce((a, b) => a + b, 0)} tok`),
     columns
   );
+}
+
+/**
+ * One `skill_use` record for a turn that involved skills (CONTRACTS section
+ * 52): the same derived data as `counters.skills`, as a record of its own so a
+ * reader of the trail can follow skills without parsing every turn.
+ */
+export function writeSkillUse(
+  audit: Pick<TurnAudit, "write"> | undefined,
+  turn: number,
+  role: string,
+  skills: SkillCounters | undefined
+): void {
+  if (!audit || !skills) return;
+  const { v: _v, ...fields } = skills;
+  audit.write("skill_use", { turn, role, ...fields });
+}
+
+/**
+ * The `/skills` lines about how one skill has been used: this session from the
+ * turns' `counters.skills`, and the project's history from `skill_use` and
+ * `skill_trial` records (readSkillUsage). Derived; nothing the model said.
+ */
+export function skillUsageLines(sk: Skill, exchanges: PromptExchange[], past: SkillUsage | undefined): string[] {
+  let fired = 0;
+  let read = 0;
+  let cited = 0;
+  for (const e of exchanges) {
+    const c = e.counters?.skills;
+    if (!c) continue;
+    if (c.fired.some((f) => f.name === sk.id)) fired += 1;
+    read += c.read[sk.id] ?? 0;
+    if (c.cited_in_reasoning.includes(sk.id)) cited += 1;
+  }
+  const lines = [
+    `      this session: fired ${fired}×, read ${read}×, cited ${cited}× · ~${skillTokens(sk)} tok per firing`,
+  ];
+  if (past && (past.firings > 0 || past.reads > 0)) {
+    const rate = past.firings > 0 ? `${Math.round((past.cited / past.firings) * 100)}%` : "n/a";
+    lines.push(
+      `      across sessions: ${past.firings} firing(s), cited ${rate}, last used ${past.last_used ? past.last_used.slice(0, 10) : "never"}`
+    );
+  } else {
+    lines.push(`      across sessions: no firings recorded`);
+  }
+  if (past?.trial) {
+    const verdict = past.trial.meets_thresholds === true ? "meets thresholds" : past.trial.meets_thresholds === false ? "does not meet thresholds" : String(past.trial.status ?? "no verdict");
+    lines.push(`      latest trial: ${verdict} (${past.trial.ts.slice(0, 10)})`);
+  }
+  return lines;
+}
+
+/** What a loaded skill costs the prompt: the estimate of the block applySkills adds. */
+export function skillTokens(sk: Skill): number {
+  return estimateTokens(skillBlock(sk));
+}
+
+/** The `◆ skills` row for `role` and `input`, read from the surface. */
+function skillsRowFor(ui: ResolvedUi, config: GnomonConfig, role: string, input: string): string | null {
+  const all = loadSkills(config);
+  return skillsRow(ui, selectSkills(all, role, input), input, terminalWidth(), roleSkills(all, role).length);
 }
 
 /**
@@ -4118,7 +4223,22 @@ export function nestedDeps(deps: TurnDeps): TurnDeps {
       .map((l) => (l === "" ? l : `${gutter}${l}`))
       .join("\n");
   const warn = deps.warn ?? deps.say;
-  return { ...deps, say: (l) => deps.say(indent(l)), warn: (l) => warn(indent(l)) };
+  return {
+    ...deps,
+    gutter: (deps.gutter ?? 0) + 3,
+    say: (l) => deps.say(indent(l)),
+    warn: (l) => warn(indent(l)),
+  };
+}
+
+/** Most reasoning text `/expand think` keeps from one turn. */
+const THINK_KEEP_BYTES = 256 * 1024;
+
+/** Remember a reasoning/prose block for `/expand think`, up to the bound. */
+function keepThink(state: PromptState, kind: "reasoning" | "prose", text: string): void {
+  const kept = (state.lastThink ??= []);
+  const room = THINK_KEEP_BYTES - kept.reduce((n, b) => n + b.text.length, 0);
+  if (room > 0) kept.push({ kind, text: text.length > room ? text.slice(0, room) : text });
 }
 
 /** Result of one agentic turn, before it becomes a PromptExchange. */
@@ -4191,7 +4311,15 @@ export interface TurnResult {
    * could not tell that from a clean pass. Same silent-success shape as `exit
    * null` read as a clean zero, one level up.
    */
-  verify?: "passed" | "failed" | "unrunnable" | "declined" | "skipped";
+  verify?: "passed" | "passed_unverified" | "failed" | "unrunnable" | "regressed" | "declined" | "skipped";
+  /**
+   * What the check came to, in numbers and a sentence (#235): the last run's
+   * exit (null when it never reached one), how many runs the turn made, why the
+   * verdict is what it is, and the tail of the output. Always computed when a
+   * check ran; the TASK RECORD carries it only when the surface or the caller
+   * asked (`record_detail`, `exit_on_fail`, `--require-verify`).
+   */
+  verifyDetail?: VerifyDetail;
   toolSteps: number;
   toolLog: string[];
   /**
@@ -5025,6 +5153,12 @@ const COUNT_LINES_MAX_BYTES = 16 * 1024 * 1024;
 
 export interface TurnCounters {
   /**
+   * What the turn did with skills: loaded (with context cost), opened,
+   * named in its reasoning, proposed. Derived, never asked of the model
+   * (skill_use.ts, CONTRACTS section 54). Absent when no skill was involved.
+   */
+  skills?: SkillCounters;
+  /**
    * What actually changed in the worktree this turn — MEASURED, at the end,
    * from git. Never the model's account of it.
    *
@@ -5295,12 +5429,21 @@ function callSignature(call: ToolCall): string {
  * The instructions and the original request are kept whole — losing the task
  * halfway through a task is the one unrecoverable outcome. The oldest tool
  * traffic gives way, and what was dropped is stated rather than vanishing.
+ *
+ * Sizes are `messageTokens`: content, tool-call arguments and, when `opts` says
+ * the target replays it, reasoning. Eviction is by UNIT, an assistant message
+ * with every tool result that answers it (parallel calls included): a unit is
+ * kept whole or dropped whole, so no request ever carries a tool result without
+ * its call, or a call without its results. Survivors keep their original order,
+ * the pinned request included. A second trim carries the first one's ledger
+ * forward rather than erasing it.
  */
 export function trimWorking(
   working: ChatMessage[],
-  budgetTokens: number
+  budgetTokens: number,
+  opts: MessageTokenOptions = {}
 ): { messages: ChatMessage[]; dropped: number } {
-  const cost = (m: ChatMessage) => estimateTokens(m.content);
+  const cost = (m: ChatMessage) => messageTokens(m, opts);
   const total = working.reduce((n, m) => n + cost(m), 0);
   if (total <= budgetTokens) return { messages: working, dropped: 0 };
 
@@ -5321,57 +5464,134 @@ export function trimWorking(
   // halfway through" outcome this function's own comment calls unrecoverable.
   //
   // Pin the LAST user message too. It is the only message whose loss cannot be
-  // compensated by anything else in the window.
+  // compensated by anything else in the window. It stays where it was: older
+  // exchanges before it are evicted like any other, but never moved behind it.
   const lastUser = working.map((m) => m.role).lastIndexOf("user");
   const pinnedIdx = lastUser > firstUser ? lastUser : -1;
   const pinned = pinnedIdx === -1 ? null : working[pinnedIdx]!;
 
-  const tail =
-    firstUser === -1
-      ? []
-      : working.slice(firstUser + 1).filter((_, k) => firstUser + 1 + k !== pinnedIdx);
+  if (firstUser === -1) return { messages: working, dropped: 0 };
+
+  // The tail, in order, as units. An earlier trim's ledger is not a unit: it is
+  // read for what it carries and replaced.
+  interface Unit {
+    msgs: ChatMessage[];
+    cost: number;
+    orphan: boolean;
+  }
+  const units: Unit[] = [];
+  let priorLedger: ParsedLedger | null = null;
+  for (let i = firstUser + 1; i < working.length; i++) {
+    const m = working[i]!;
+    if (i === pinnedIdx) {
+      units.push({ msgs: [m], cost: cost(m), orphan: false });
+      continue;
+    }
+    if (m.role === "system" && isTrimLedger(m)) {
+      priorLedger = parseTrimLedger(m.content);
+      continue;
+    }
+    if (m.role === "assistant") {
+      const msgs = [m];
+      let j = i + 1;
+      while (j < working.length && j !== pinnedIdx && working[j]!.role === "tool") msgs.push(working[j++]!);
+      units.push({ msgs, cost: msgs.reduce((n, x) => n + cost(x), 0), orphan: false });
+      i = j - 1;
+      continue;
+    }
+    // A tool result no assistant message in the tail answers, or anything else.
+    units.push({ msgs: [m], cost: cost(m), orphan: m.role === "tool" });
+  }
 
   const headCost = head.reduce((n, m) => n + cost(m), 0);
-  const kept: ChatMessage[] = [];
-  let used = headCost + (pinned ? cost(pinned) : 0);
+  const pinnedUnit = pinned ? units.find((u) => u.msgs[0] === pinned) : undefined;
+  const evictable = units.filter((u) => u !== pinnedUnit);
+  const keptUnits = new Set<Unit>(pinnedUnit ? [pinnedUnit] : []);
+  let used = headCost + (pinnedUnit?.cost ?? 0);
 
   // Newest first: recent tool results are what the next call reasons from.
-  for (let i = tail.length - 1; i >= 0; i--) {
-    const c = cost(tail[i]);
-    if (used + c > budgetTokens) break;
-    used += c;
-    kept.unshift(tail[i]);
+  for (let i = evictable.length - 1; i >= 0; i--) {
+    const u = evictable[i]!;
+    if (u.orphan) continue;
+    if (used + u.cost > budgetTokens) break;
+    used += u.cost;
+    keptUnits.add(u);
   }
-  // Back in front of the traffic it produced, where it reads as the request.
-  if (pinned) kept.unshift(pinned);
 
-  const dropped = tail.length - (kept.length - (pinned ? 1 : 0));
-  if (dropped === 0) return { messages: working, dropped: 0 };
-
-  // A tool result must not be the first thing after the head: some backends
-  // reject a tool message that answers no visible call.
-  while (kept.length > 0 && kept[0].role === "tool") kept.shift();
-
-  const keptSet = new Set(kept);
-  const ledger = droppedLedger(tail.filter((m) => !keptSet.has(m)));
-
-  return {
-    messages: [
-      ...head,
-      {
-        role: "system",
-        content:
-          `[gnomon context] ${dropped} earlier step(s) in this turn were dropped ` +
-          `to stay inside the context window. Their full output is gone, but ` +
-          `what they were and how they ended is not:\n${ledger}\n` +
-          `Do not repeat a step listed here to learn its outcome again — the ` +
-          `outcome is above. Re-run one only if something it depends on has ` +
-          `changed since.`,
-      },
-      ...kept,
-    ],
-    dropped,
+  const build = (): { messages: ChatMessage[]; dropped: number } | null => {
+    const droppedMsgs: ChatMessage[] = [];
+    const kept: ChatMessage[] = [];
+    for (const u of units) {
+      if (keptUnits.has(u)) kept.push(...u.msgs);
+      else droppedMsgs.push(...u.msgs);
+    }
+    if (droppedMsgs.length === 0) return null;
+    const steps = droppedMsgs.filter((m) => m.role === "tool").length || droppedMsgs.length;
+    const ledger = droppedLedger(droppedMsgs, 40, priorLedger ?? undefined);
+    const earlier = (priorLedger?.steps ?? 0) + steps;
+    return {
+      messages: [
+        ...head,
+        {
+          role: "system",
+          content:
+            `[gnomon context] ${earlier} earlier step(s) in this turn were dropped ` +
+            `to stay inside the context window. Their full output is gone, but ` +
+            `what they were and how they ended is not:\n${ledger}\n` +
+            `Do not repeat a step listed here to learn its outcome again — the ` +
+            `outcome is above. Re-run one only if something it depends on has ` +
+            `changed since.`,
+        },
+        ...kept,
+      ],
+      dropped: droppedMsgs.length,
+    };
   };
+
+  let out = build();
+  if (!out) return { messages: working, dropped: 0 };
+  // The ledger message costs tokens too: when it tips the result over, the
+  // oldest survivor gives way (never the head or the pinned request).
+  const oldestFirst = evictable.filter((u) => keptUnits.has(u));
+  while (oldestFirst.length > 0 && out && out.messages.reduce((n, m) => n + cost(m), 0) > budgetTokens) {
+    keptUnits.delete(oldestFirst.shift()!);
+    out = build();
+  }
+  return out ?? { messages: working, dropped: 0 };
+}
+
+/** The ledger message a trim inserts, as opposed to any other `[gnomon context]` notice. */
+function isTrimLedger(m: ChatMessage): boolean {
+  return m.role === "system" && m.content.startsWith("[gnomon context]") && m.content.includes("earlier step(s) in this turn were dropped");
+}
+
+/** What an earlier trim's ledger said: how many steps, and its lines. */
+export interface ParsedLedger {
+  steps: number;
+  /** Lines before the repeat-collapsing, oldest first */
+  entries: { text: string; n: number }[];
+  /** Lines the earlier trim itself cut for length */
+  cut: number;
+}
+
+function parseTrimLedger(content: string): ParsedLedger {
+  const steps = Number(/^\[gnomon context\] (\d+) earlier step/.exec(content)?.[1] ?? 0);
+  const start = content.indexOf("is not:\n");
+  const end = content.lastIndexOf("\nDo not repeat a step");
+  const body = start === -1 ? "" : content.slice(start + "is not:\n".length, end === -1 ? undefined : end);
+  const entries: { text: string; n: number }[] = [];
+  let cut = 0;
+  for (const raw of body.split("\n")) {
+    if (!raw.startsWith("- ")) continue;
+    const gone = /^- … (\d+) older line\(s\) not shown$/.exec(raw);
+    if (gone) {
+      cut += Number(gone[1]);
+      continue;
+    }
+    const rep = /^(.*?)(?: ×(\d+))?$/.exec(raw)!;
+    entries.push({ text: rep[1]!, n: Number(rep[2] ?? 1) });
+  }
+  return { steps, entries, cut };
 }
 
 /**
@@ -5382,8 +5602,11 @@ export function trimWorking(
  * session: after two trims it re-ran `pnpm run verify` twelve times, each time
  * because the previous run's exit status had been dropped with its output. The
  * outcome costs one line; the output is what the window cannot hold.
+ *
+ * `prior` is an earlier trim's ledger: its lines come first, so a second trim
+ * does not forget what the first one recorded.
  */
-export function droppedLedger(dropped: ChatMessage[], maxLines = 40): string {
+export function droppedLedger(dropped: ChatMessage[], maxLines = 40, prior?: ParsedLedger): string {
   const calls = new Map<string, { name: string; args: Record<string, unknown> }>();
   for (const m of dropped) {
     if (m.role !== "assistant" || !Array.isArray(m.tool_calls)) continue;
@@ -5400,7 +5623,13 @@ export function droppedLedger(dropped: ChatMessage[], maxLines = 40): string {
       });
     }
   }
-  const lines: string[] = [];
+  const lines: { text: string; n: number }[] = [];
+  const add = (text: string, n = 1) => {
+    const prev = lines[lines.length - 1];
+    if (prev && prev.text === text) prev.n += n;
+    else lines.push({ text, n });
+  };
+  for (const e of prior?.entries ?? []) add(e.text, e.n);
   for (const m of dropped) {
     if (m.role !== "tool") continue;
     const call = m.tool_call_id ? calls.get(m.tool_call_id) : undefined;
@@ -5413,15 +5642,13 @@ export function droppedLedger(dropped: ChatMessage[], maxLines = 40): string {
       name === "bash" || /^(Refused|Error|Could not|Cancelled|Command timed out)/.test(first)
         ? first.slice(0, 100)
         : "ok";
-    const line = `- ${name}${what ? ` ${what}` : ""} → ${how}`;
-    const prev = lines[lines.length - 1];
-    const rep = prev ? /^(.*?)(?: ×(\d+))?$/.exec(prev) : null;
-    if (rep && rep[1] === line) lines[lines.length - 1] = `${line} ×${Number(rep[2] ?? 1) + 1}`;
-    else lines.push(line);
+    add(`- ${name}${what ? ` ${what}` : ""} → ${how}`);
   }
-  if (lines.length === 0) return "- (no tool calls among them)";
-  const cut = lines.length - maxLines;
-  return (cut > 0 ? [`- … ${cut} older line(s) not shown`, ...lines.slice(cut)] : lines).join("\n");
+  if (lines.length === 0 && !prior?.cut) return "- (no tool calls among them)";
+  const rendered = lines.map((l) => (l.n > 1 ? `${l.text} ×${l.n}` : l.text));
+  const cut = rendered.length - maxLines + (prior?.cut ?? 0);
+  const shown = rendered.length > maxLines ? rendered.slice(rendered.length - maxLines) : rendered;
+  return (cut > 0 ? [`- … ${cut} older line(s) not shown`, ...shown] : shown).join("\n");
 }
 
 /** Severity order, so the worst outcome in a turn is the one reported. */
@@ -5663,6 +5890,8 @@ export function resolvedSessionRecord(config: GnomonConfig, roles: string[]): Re
     // `[turn] max_reasoning_tokens_without_action` (think_cap.ts, CONTRACTS §52).
     // Absent unless declared.
     ...(thinkCapRecord(config) ? { think_cap: thinkCapRecord(config) } : {}),
+    // `[governance] secrets_in_root = "allow"` taken with a declared secret in an exec = "os" root (issue #227).
+    ...(secretsInRootRecord(config) ? { secrets_in_root: secretsInRootRecord(config) } : {}),
   };
 }
 
@@ -5707,9 +5936,20 @@ export async function runAgenticTurn(
   parentLedger?: CallLedger,
   sub?: { readOnly?: boolean }
 ): Promise<TurnResult> {
-  const held: { jobs?: JobTable } = {};
+  const held: { jobs?: JobTable; skills?: SkillUse } = {};
   try {
-    return await agenticTurn(state, role, route, messages, deps, depth, parentLedger, sub, held);
+    const result = await agenticTurn(state, role, route, messages, deps, depth, parentLedger, sub, held);
+    // The turn's skill activity, on its counters and, for a turn a person
+    // asked for, as a closing trace line. A delegated sub-turn's is carried to
+    // its parent by the `↲` line (delegate.run) instead of a line of its own.
+    const used = held.skills?.counters();
+    if (used) {
+      result.counters.skills = used;
+      if (depth === 0 && deps.ui.cot !== "off") {
+        deps.say(fitRow(paint(deps.ui, "magenta", "  ◆ ") + paint(deps.ui, "gray", skillsUsedText(used)), terminalWidth()));
+      }
+    }
+    return result;
   } finally {
     await held.jobs?.closeAll("turn_end");
   }
@@ -5734,9 +5974,19 @@ async function agenticTurn(
    */
   sub?: { readOnly?: boolean },
   /** Where this turn's job table is left for runAgenticTurn to close. */
-  held: { jobs?: JobTable } = {}
+  held: { jobs?: JobTable; skills?: SkillUse } = {}
 ): Promise<TurnResult> {
   const config = state.config;
+  // What this turn does with skills, derived from what the loop already sees.
+  // The input is the last user message, which is what selectSkills matched on.
+  const skillUse = (held.skills = (() => {
+    const input = [...messages].reverse().find((m) => m.role === "user")?.content;
+    const fired = selectSkills(loadSkills(config), role, typeof input === "string" ? input : "");
+    return new SkillUse(
+      fired.map((sk) => ({ id: sk.id, tokens: skillTokens(sk) })),
+      fired
+    );
+  })());
   // `gnomon task --deadline`'s stopping clock, when the caller set one. A
   // deadline with only `total_ms` and `started_at` is read by the
   // completion gate and stops nothing.
@@ -5805,11 +6055,27 @@ async function agenticTurn(
     deps.say(line);
   };
   /** Reasoning as the trace shows it: `✻`, muted, at /think's verbosity. */
-  const sayReasoning = (text: string): void => {
-    traceLines(text, deps.ui.think, terminalWidth()).forEach((line, i) =>
-      say(paint(deps.ui, "gray", `  ${i === 0 ? "✻" : " "} ${line}`))
+  const sayReasoning = (text: string, uses: string[] = []): void => {
+    keepThink(state, "reasoning", text);
+    // `·uses <skill>`: which loaded skill this reasoning names. Appended to the
+    // first row, which is clipped to leave room for it.
+    const tag = uses.length > 0 ? `  ·uses ${uses.join(", ")}` : "";
+    traceLines(text, deps.ui.think, Math.max(20, terminalWidth() - tag.length), {
+      reserve: 6 + (deps.gutter ?? 0),
+      hint: takeThinkHint(),
+    }).forEach((line, i) =>
+      say(paint(deps.ui, "gray", `  ${i === 0 ? "✻" : " "} ${line}`) + (i === 0 && tag ? paint(deps.ui, "magenta", tag) : ""))
     );
   };
+  // The "how to see more" hint names two commands; once a turn is enough.
+  let thinkHintShown = false;
+  const takeThinkHint = (): boolean => {
+    if (thinkHintShown) return false;
+    thinkHintShown = true;
+    return true;
+  };
+  // `/expand think` is about the last top-level turn; a delegated one adds to it.
+  if (depth === 0) state.lastThink = [];
 
   /**
    * Announce a degradation on a channel nobody can silence.
@@ -6012,7 +6278,7 @@ async function agenticTurn(
         const nested = nestedDeps(deps);
         if (shown) {
           nested.say(paint(deps.ui, "magenta", `  ↳ ${subRole}`) + paint(deps.ui, "gray", ` on ${subRoute.target.model}`));
-          const loaded = skillsRow(deps.ui, selectSkills(loadSkills(config), subRole, instruction), instruction);
+          const loaded = skillsRowFor(deps.ui, config, subRole, instruction);
           if (loaded) nested.say(loaded);
         }
         const sub = await runAgenticTurn(
@@ -6027,12 +6293,14 @@ async function agenticTurn(
           depth + 1,
           ledger
         );
+        skillUse.absorb(sub.counters.skills);
         if (shown) {
           const handed = splitThinking(sub.content ?? "").answer.trim().split("\n").find((l) => l.trim()) ?? "";
+          const subSkills = sub.counters.skills ? ` · ${skillsUsedText(sub.counters.skills)}` : "";
           nested.say(
             fitRow(
               paint(deps.ui, "magenta", `  ↲ ${subRole}`) +
-                paint(deps.ui, "gray", ` ${sub.toolSteps} step(s)${handed ? ` · ${safeForPrompt(handed.trim())}` : " · no answer"}`),
+                paint(deps.ui, "gray", ` ${sub.toolSteps} step(s)${subSkills}${handed ? ` · ${safeForPrompt(handed.trim())}` : " · no answer"}`),
               terminalWidth() - 3
             )
           );
@@ -6107,6 +6375,22 @@ async function agenticTurn(
   // the gate exists to prevent. Nothing else reads it.
   let shellMayHaveTouched = false;
   const verify = resolveVerify(config);
+  // `[verify] setup` runs HERE, before the model's first call and so before any
+  // write of the turn: an install executes lifecycle scripts, build backends and
+  // .npmrc/pip.conf from the working tree, and must see the manifests as they
+  // were, not as the model left them. Once per fresh worktree (memoised by
+  // root); the check later reads the remembered result.
+  if (verify?.setup && !sub?.readOnly && depth === 0) {
+    await runVerifySetup(
+      verify,
+      { ...verifyContext(ctx, verify), gate: gate === "always" ? "always" : "never", allow: "strict" as SurfaceConsent },
+      (command, sctx) => executeTool("bash", { command }, sctx, new Set(["bash"])),
+      { audit: deps.audit, role }
+    );
+  }
+  // `[verify] protects` (#234): what the check executes, as it stood before the
+  // turn changed anything. Taken only when declared; read at the end of the turn.
+  const protectsBefore = verify?.protects ? snapshotProtected(ctx.root, verify) : null;
   // An unattended `gnomon task` waits out a provider outage longer
   // (taskResilience); a session keeps the declared grace.
   const resilience = deps.unattended ? taskResilience(resolveResilience(config)) : resolveResilience(config);
@@ -6170,6 +6454,12 @@ async function agenticTurn(
   // The last outcome of the declared check. Last, not first: a failing check
   // hands the turn back, and the round after it is the one that counts.
   let verifyOutcome: TurnResult["verify"];
+  let verifyDetail: VerifyDetail | undefined;
+  let verifyRuns = 0;
+  const verifyTail = (text: string): string => {
+    const t = text.split("\n").slice(-10).join("\n").slice(-600);
+    return deps.audit ? (deps.audit.text(t) ?? t) : t;
+  };
   // The finish_reason of the completion the turn ends on, so a reply the
   // backend cut off can be recorded as cut off rather than as an answer.
   let lastFinishReason: string | undefined;
@@ -6401,7 +6691,7 @@ async function agenticTurn(
   const ledger =
     parentLedger ??
     new CallLedger({
-      estimate: estimateTokens,
+      estimate: messageTokens,
       windowOf: (t) => resolveContext(config, t).max_context_tokens,
       target: route.target,
       mode: estimateMode,
@@ -6412,7 +6702,12 @@ async function agenticTurn(
   const observe = ledger.observer({ depth, leg: () => leg });
   if (depth === 0) counters.model_calls = ledger.sent;
   const measured = (): ModelCallsMeasured | undefined => (depth === 0 ? ledger.measured() : undefined);
-  const estOf = (ms: ChatMessage[]): number => ms.reduce((n, m) => n + estimateTokens(m.content), 0);
+  // The estimate every context decision uses (message_tokens.ts): content, tool-call
+  // arguments and, where the target is sent them, replayed reasoning.
+  const tokOptsFor = (t: RouteTarget): MessageTokenOptions => ({
+    reasoning: adaptTarget(state, t).replayReasoning === true,
+  });
+  const estOf = (ms: ChatMessage[], t: RouteTarget = route.target): number => messagesTokens(ms, tokOptsFor(t));
 
   // What the worktree looked like BEFORE this turn. Without it, `tree_delta`
   // reports the whole dirty tree as the turn's doing -- including for a
@@ -6522,6 +6817,7 @@ async function agenticTurn(
         endpoint_url: usedTarget.url,
         wire: { ...wireOf(adaptTarget(state, usedTarget)), tools_hash: offeredHash },
         verify: verifyOutcome,
+        ...(verifyDetail ? { verifyDetail } : {}),
         toolSteps: steps,
         toolLog,
         usage: turnUsage,
@@ -6548,6 +6844,7 @@ async function agenticTurn(
     endpoint_url: usedTarget.url,
     wire: { ...wireOf(adaptTarget(state, usedTarget)), tools_hash: offeredHash },
     verify: verifyOutcome,
+    ...(verifyDetail ? { verifyDetail } : {}),
     toolSteps: steps,
     toolLog,
     usage: turnUsage,
@@ -6599,6 +6896,7 @@ async function agenticTurn(
       endpoint: usedTarget.endpoint,
       endpoint_url: usedTarget.url,
       verify: verifyOutcome,
+      ...(verifyDetail ? { verifyDetail } : {}),
       toolSteps: steps,
       toolLog,
       usage: turnUsage,
@@ -7290,7 +7588,7 @@ async function agenticTurn(
     if (mask) {
       const next = escalation ? active : onFallback && route.fallback ? route.fallback : route.target;
       const window = resolveContext(config, next).max_context_tokens;
-      const batch = maskObservations(working, observations, mask, window, lastChangeSeq);
+      const batch = maskObservations(working, observations, mask, window, lastChangeSeq, tokOptsFor(next));
       if (batch) {
         const m = counters.masking!;
         m.batches++;
@@ -7315,6 +7613,47 @@ async function agenticTurn(
           window,
           first_index: batch.first_index,
         });
+      }
+    }
+
+    // Before the request goes out: when the estimate of what is about to be sent
+    // exceeds the window, trim first rather than wait for the provider to refuse
+    // it (and a request, a retry and a trim later, send it again). Only against
+    // a window that is KNOWN: declared, or read from the endpoint by "auto".
+    // `max_context_tokens_source = "default"` is a guess, often a local-sized
+    // 65536 under a model with hundreds of thousands, and trimming a hosted run
+    // harder on a guess is exactly what the per-endpoint window exists to stop;
+    // there the checkpoint and the overflow retry stay the only decision points.
+    {
+      const next = escalation ? active : onFallback && route.fallback ? route.fallback : route.target;
+      if (next.contextTokens && next.contextSource !== undefined && next.contextSource !== "default") {
+        const window = resolveContext(config, next).max_context_tokens;
+        const ratio = ledger.ratioFor(next) ?? 1;
+        const est = estOf(working, next);
+        if (est * ratio > window) {
+          const { budget, ratio: used } = ledger.trimBudget(legBudget(window), next);
+          const trimmed = trimWorking(working, budget, tokOptsFor(next));
+          if (trimmed.dropped > 0) {
+            working.length = 0;
+            working.push(...trimmed.messages);
+            ledger.trimmed(working, {
+              why: "pre_call",
+              dropped: trimmed.dropped,
+              before: est,
+              after: estOf(working, next),
+              budget,
+              ...(used !== undefined ? { ratio: used } : {}),
+            });
+            say(
+              paint(
+                deps.ui,
+                "gray",
+                `  [context] the next request (~${est} tok) was over the ${window}-token window — ` +
+                  `dropped ${trimmed.dropped} older message(s) before sending it`
+              )
+            );
+          }
+        }
       }
     }
 
@@ -7783,16 +8122,16 @@ async function agenticTurn(
         overflowBudget(resolveContext(config, usedTarget).max_context_tokens),
         usedTarget
       );
-      const trimmed = trimWorking(working, budget);
+      const trimmed = trimWorking(working, budget, tokOptsFor(usedTarget));
       if (trimmed.dropped > 0) {
-        const estBefore = estOf(working);
+        const estBefore = estOf(working, usedTarget);
         working.length = 0;
         working.push(...trimmed.messages);
         ledger.trimmed(working, {
           why: "overflow",
           dropped: trimmed.dropped,
           before: estBefore,
-          after: estOf(working),
+          after: estOf(working, usedTarget),
           budget,
           ...(ratio !== undefined ? { ratio } : {}),
         });
@@ -7891,6 +8230,7 @@ async function agenticTurn(
 
         if (gateApplies && verify) {
           verifyRounds++;
+          verifyRuns++;
           deps.progress.stop();
           say(paint(deps.ui, "cyan", `  ⚙ verify`) +
             paint(deps.ui, "gray", ` ${verify.command}`));
@@ -7904,12 +8244,48 @@ async function agenticTurn(
           // it stays ungated, because a declared check is not the model reaching
           // for the shell.
           const verifyGate: ApprovalGate = gate === "always" ? "always" : "never";
-          const check = await executeTool(
-            "bash",
-            { command: verify.command },
-            { ...ctx, gate: verifyGate, allow: "strict" as SurfaceConsent },
-            new Set(["bash"])
+          const verifyCtx: ToolContext = { ...verifyContext(ctx, verify), gate: verifyGate, allow: "strict" as SurfaceConsent };
+          // `[verify] setup` (#233): once per fresh worktree, before the first
+          // check, from the surface. A setup that did not complete means the
+          // check never had what it needs: `unrunnable`, not the work's fault.
+          let setupOut: ToolOutcome | undefined;
+          const setup = await runVerifySetup(
+            verify,
+            verifyCtx,
+            async (command, sctx) => (setupOut = await executeTool("bash", { command }, sctx, new Set(["bash"]))),
+            { audit: deps.audit, role }
           );
+          if (setupOut && setupOut.code === TOOL_DENIED_CODE && /^Refused: the user declined/.test(setupOut.content)) {
+            say(paint(deps.ui, "gray", `  ⚙ verify — setup declined; not run`));
+            toolLog.push("verify — setup declined by the operator");
+            verifyOutcome = "declined";
+            deps.audit?.write("verify", { role, command: verify.command, declined: true });
+            return null;
+          }
+          if (setup && !setup.ok) {
+            const why = `setup ${setup.reason ?? "did not complete"}`;
+            say(
+              paint(
+                deps.ui,
+                "yellow",
+                `  ⚙ verify — the check could not run (${why}). Not counted against the work; fix [verify] setup.`
+              )
+            );
+            toolLog.push(`verify — could not run (${why})`);
+            verifyOutcome = "unrunnable";
+            deps.audit?.write("verify", {
+              command: verify.command,
+              ok: false,
+              unrunnable: true,
+              exit: null,
+              reason: why,
+              round: verifyRounds,
+            });
+            verifyRounds = verify.max_rounds;
+            verifyDetail = { exit: null, rounds: verifyRuns, reason: why, ...(setup.output ? { tail: verifyTail(setup.output) } : {}) };
+            return null;
+          }
+          const check = await executeTool("bash", { command: verify.command }, verifyCtx, new Set(["bash"]));
           // Declined by the person asked (approval = "always"). A rule that
           // refused the command (bash_deny, sudo, network) returns the same code
           // but no person saw it, so it is read below as "could not run", not
@@ -7945,7 +8321,14 @@ async function agenticTurn(
           // The reading lives in readVerifyExit (must_fail_first.ts) because
           // `gnomon check` reads the same command's exit and must not read it
           // differently. An unreadable status is null there; 1 here, as before.
-          const verifyExit = readVerifyExit(check);
+          //
+          // The reading into a verdict is verify_outcome.ts's one table, shared
+          // with `gnomon check` (#232): exit 0 passed; 126/127 and a run that
+          // never reached an exit unrunnable; anything else failed -- unless the
+          // surface declares `[verify] contract` or `[verify.exit_map]`, which
+          // say what a tool's other codes mean (pytest 5 is "nothing collected",
+          // SeptaCore 2 is "could not measure" and 3 is "regressed").
+          const verifyExit = readVerifyRun(check, verify);
           const shellExit = verifyExit.exit ?? 1;
           const passed = verifyExit.passed;
 
@@ -7976,8 +8359,11 @@ async function agenticTurn(
           // `gnomon check` already reads it as could-not-run (check.ts), and the
           // two must agree. A run killed by a signal still has an exit (1, from
           // readVerifyExit) and stays a failure: an OOM-killed suite is not green.
-          const notRun = !passed && check.code !== 0 && verifyExit.exit === null;
-          const unrunnable = notRun || shellExit === 126 || shellExit === 127;
+          const notRun = verifyExit.notRun;
+          const unrunnable = verifyExit.verdict === "unrunnable";
+          // Measured, and worse than the baseline the check keeps: recorded, and
+          // not handed back as a failure of the work unless the surface asks.
+          const regressed = verifyExit.verdict === "regressed";
           if (!passed && unrunnable) {
             const why = notRun ? check.summary.replace(/^bash — /, "") : `exit ${shellExit}`;
             say(
@@ -8002,6 +8388,24 @@ async function agenticTurn(
             // the surface rather than in the work, so stop checking.
             verifyRounds = verify.max_rounds;
           }
+          if (regressed) {
+            say(
+              paint(
+                deps.ui,
+                "yellow",
+                `  ⚙ verify — regressed (exit ${shellExit}). ` +
+                  (verify.regressed_hand_back ? `Handing the turn back.` : `Recorded; not handed back as a failure.`)
+              )
+            );
+            deps.audit?.write("verify", {
+              command: verify.command,
+              ok: false,
+              regressed: true,
+              exit: shellExit,
+              round: verifyRounds,
+            });
+            if (!verify.regressed_hand_back) verifyRounds = verify.max_rounds;
+          }
           // A test that would have passed BEFORE this turn pins nothing.
           //
           // Only meaningful when the check passed and the turn actually wrote a
@@ -8019,7 +8423,7 @@ async function agenticTurn(
               executeTool(
                 "bash",
                 { command },
-                { ...ctx, gate: "never" as ApprovalGate, allow: "strict" as SurfaceConsent },
+                { ...verifyContext(ctx, verify), gate: "never" as ApprovalGate, allow: "strict" as SurfaceConsent },
                 new Set(["bash"])
               )
             );
@@ -8039,12 +8443,35 @@ async function agenticTurn(
             }
           }
 
+          // Files the check executes that this turn changed (verify_protects.ts).
+          const protChanged = protectsBefore ? changedProtected(protectsBefore, ctx.root, verify) : [];
+          verifyDetail = {
+            exit: notRun ? null : shellExit,
+            rounds: verifyRuns,
+            reason: notRun
+              ? check.summary.replace(/^bash — /, "")
+              : `exit ${shellExit}` +
+                (verifyExit.mapped ? ` read as ${verifyExit.verdict}` : "") +
+                (passed && protChanged.length > 0 ? `; changed ${protChanged.join(", ")}` : ""),
+            ...(passed ? {} : { tail: verifyTail(check.content) }),
+          };
+          // A walk that stopped at its limit read only part of the tree: said
+          // here and in the trail, never read as "nothing changed".
+          const protTruncated = protectsBefore?.truncated === true;
+          if (protTruncated) {
+            warn(paint(deps.ui, "yellow", `  ⚠ [verify] protects: the file walk hit its limit (50,000 entries, 8 deep); files past it are not protected`));
+          }
           toolLog.push(`verify — ${check.summary}${pinsNothing ? " · test pins nothing" : ""}`);
           deps.audit?.write("verify", {
             role,
             command: verify.command,
             exit: notRun ? null : shellExit,
             passed,
+            ...(protChanged.length > 0 ? { protects_changed: protChanged } : {}),
+            ...(protTruncated ? { protects_truncated: true } : {}),
+            // Only when the surface declared a table: a record a surface that
+            // declares none writes is the record it always wrote.
+            ...(verify.exit_map ? { verdict: verifyExit.verdict } : {}),
           });
 
           // An unrunnable check is a defect in the surface, not in the work, and
@@ -8054,8 +8481,10 @@ async function agenticTurn(
           // with it.
           if (unrunnable && !pinsNothing) {
             // Already reported above, with the audit record saying why.
+          } else if (regressed && !verify.regressed_hand_back && !pinsNothing) {
+            verifyOutcome = "regressed";
           } else if (!passed || pinsNothing) {
-            verifyOutcome = "failed";
+            verifyOutcome = regressed ? "regressed" : "failed";
             lastVerifyOutput = `$ ${verify.command}\n${check.content}`;
             // `warn`: a declared check failing is not chatter, and on
             // `gnomon task --json` it was the one line saying so (gnomon chaos,
@@ -8074,11 +8503,19 @@ async function agenticTurn(
                 `or say plainly that you cannot and why.`,
             };
           }
+          // A green run of a check this turn edited: not `passed`. The model is
+          // handed the file names once per round, and may revert or explain.
+          if (passed && protChanged.length > 0) {
+            verifyOutcome = "passed_unverified";
+            warn(paint(deps.ui, "yellow",
+              `    ⚠ verify passed, but the turn changed ${protChanged.join(", ")}, which the check executes — passed_unverified`));
+            return { stage: "verify", role: "system", content: protectedHandBack(verify.command, protChanged) };
+          }
           // Only say it passed when it actually ran and passed. A check that
           // could not run has already reported itself, and calling that "passed"
           // would be the same silent success this gate exists to contradict --
           // just from the other side.
-          if (!unrunnable) {
+          if (!unrunnable && !(regressed && !verify.regressed_hand_back)) {
             verifyOutcome = "passed";
             say(paint(deps.ui, "gray", `    ✓ verify passed`));
           }
@@ -8186,7 +8623,7 @@ async function agenticTurn(
               } else {
                 const system = buildSystemPrompt(state, completion.reviewer, instruction, { delegated: true });
                 if (deps.ui.cot !== "off") {
-                  const loaded = skillsRow(deps.ui, selectSkills(loadSkills(config), completion.reviewer, instruction), instruction);
+                  const loaded = skillsRowFor(deps.ui, config, completion.reviewer, instruction);
                   if (loaded) nestedDeps(deps).say(loaded);
                 }
                 const rev = await runAgenticTurn(
@@ -8564,6 +9001,7 @@ async function agenticTurn(
         wire: { ...wireOf(adaptTarget(state, usedTarget)), tools_hash: offeredHash },
         ...keepReasoning(result.reasoning),
         verify: verifyOutcome,
+        ...(verifyDetail ? { verifyDetail } : {}),
         toolSteps: steps,
         toolLog,
         usage: turnUsage,
@@ -8748,6 +9186,7 @@ async function agenticTurn(
         endpoint_url: usedTarget.url,
         wire: { ...wireOf(adaptTarget(state, usedTarget)), tools_hash: offeredHash },
         verify: verifyOutcome,
+        ...(verifyDetail ? { verifyDetail } : {}),
         toolSteps: steps,
         toolLog,
         usage: turnUsage,
@@ -8780,16 +9219,16 @@ async function agenticTurn(
         usedTarget
       );
       const before = working.length;
-      const trimmed = trimWorking(working, budget);
+      const trimmed = trimWorking(working, budget, tokOptsFor(usedTarget));
       if (trimmed.dropped > 0) {
-        const estBefore = estOf(working);
+        const estBefore = estOf(working, usedTarget);
         working.length = 0;
         working.push(...trimmed.messages);
         ledger.trimmed(working, {
           why: "leg",
           dropped: trimmed.dropped,
           before: estBefore,
-          after: estOf(working),
+          after: estOf(working, usedTarget),
           budget,
           ...(ratio !== undefined ? { ratio } : {}),
         });
@@ -8845,6 +9284,8 @@ async function agenticTurn(
     // thought, which is the opposite of what folding is for.
     const showTrace =
       deps.ui.cot === "full" || deps.ui.cot === "think" || deps.ui.cot === "work";
+    // Derived from the reasoning text, whether or not the trace shows it.
+    const uses = reasoning ? skillUse.noteReasoning(reasoning) : [];
     // Chain-of-thought as it happens — the model's <think> reasoning, at the
     // verbosity /think sets (collapse = one line, show = all, hide = none). This
     // is what "see it chewing" means; models that emit no <think> show nothing.
@@ -8859,10 +9300,14 @@ async function agenticTurn(
     // it held back.
     if (showTrace) {
       const columns = terminalWidth();
-      if (reasoning) sayReasoning(reasoning);
+      if (reasoning) sayReasoning(reasoning, uses);
       const rationale = split.answer.trim();
       if (rationale && rationale !== lastRationale) {
-        traceLines(rationale, deps.ui.think === "hide" ? "collapse" : deps.ui.think, columns).forEach((line, i) =>
+        keepThink(state, "prose", rationale);
+        traceLines(rationale, deps.ui.think === "hide" ? "collapse" : deps.ui.think, columns, {
+          reserve: 6 + (deps.gutter ?? 0),
+          hint: takeThinkHint(),
+        }).forEach((line, i) =>
           say(i === 0 ? `  ${paint(deps.ui, "bold", "●")} ${line}` : `    ${line}`)
         );
       }
@@ -8995,7 +9440,9 @@ async function agenticTurn(
         deps.ui.cot === "full" || deps.ui.cot === "tools" || (deps.ui.cot === "work" && call.name === "task");
       // A read that opens a skill file is the skill being used (skillRead).
       const skillId = skillRead(call, basename(config.gnomonDir));
-      const stepTool = skillId ? SKILL_STEP : call.name;
+      // The `skill` tool is skills being LEARNED (a proposal), drawn as a skill
+      // row beside the read of one being used.
+      const stepTool = skillId || call.name === "skill" ? SKILL_STEP : call.name;
       const stepDescribe = skillId ?? describeCall(call);
       if (announced) {
         if (deps.ui.cot === "work") flushFold();
@@ -9256,6 +9703,11 @@ async function agenticTurn(
         bucket === "result" && outcome.shell_exit !== undefined && outcome.shell_exit !== 0;
       const glyph = shellFailed ? "✗" : bucket === "result" ? "✓" : bucket === "refusal" ? "⚠" : "✗";
       const bcolor = shellFailed ? "yellow" : bucket === "result" ? "green" : bucket === "refusal" ? "yellow" : "red";
+      // Skill attribution is read off calls that ran: a refused read is no use.
+      if (bucket === "result") {
+        if (skillId) skillUse.noteRead(skillId);
+        else if (call.name === "skill" && typeof call.args.name === "string") skillUse.noteProposed(skillIdOf(call.args.name));
+      }
       if (announced) {
         say(stepResultRow(deps.ui, { glyph, colour: bcolor, summary: outcome.summary, glimpse: outcome.glimpse }));
       } else if (deps.ui.cot === "work") {
@@ -9282,6 +9734,7 @@ async function agenticTurn(
           call.name !== "edit" &&
           // Using a skill is a step the operator follows, not recon to count.
           skillId === null &&
+          call.name !== "skill" &&
           // The tool succeeding is not the work succeeding. `bash` returns
           // TOOL_OK for a command that ran and exited 1, so this check is what
           // stops a failing test run or a broken script being counted as one
@@ -9302,7 +9755,7 @@ async function agenticTurn(
         // One line per step: the call and what it returned.
         say(
           fitRow(
-            paint(deps.ui, skillId ? "magenta" : "cyan", `  • ${skillId ? "skill" : call.name}`) +
+            paint(deps.ui, stepTool === SKILL_STEP ? "magenta" : "cyan", `  • ${stepTool === SKILL_STEP ? "skill" : call.name}`) +
               paint(deps.ui, "gray", ` ${safeForPrompt(stepDescribe)} `) +
               paint(deps.ui, bcolor, `${glyph} ${summaryResult(outcome.summary)}`),
             terminalWidth()
@@ -9718,6 +10171,28 @@ export async function listModels(config: GnomonConfig): Promise<EndpointModels[]
 // Non-interactive execution
 // ---------------------------------------------------------------------------
 
+/** What the declared check came to (TurnResult.verifyDetail, the task record's verify_* fields). */
+export interface VerifyDetail {
+  exit: number | null;
+  rounds: number;
+  reason: string;
+  tail?: string;
+}
+
+/**
+ * The exit a `gnomon task` gives for its declared check, when the caller asked
+ * for one (`--require-verify`, `[verify] exit_on_fail`), else null: the bucket
+ * decides, as #211 documents. 1 (`failed`) for a check that ran and did not
+ * pass: `failed`, `regressed`, `passed_unverified`. 4 (`preconditions_unmet`)
+ * for one that never measured anything: `unrunnable`. `passed`, `declined`,
+ * `skipped` and no check at all are not this function's to change.
+ */
+export function verifyExitCode(verify: TurnResult["verify"] | undefined): 1 | 4 | null {
+  if (verify === "failed" || verify === "regressed" || verify === "passed_unverified") return 1;
+  if (verify === "unrunnable") return 4;
+  return null;
+}
+
 /** One task run, as data. Separated so a caller can compare runs. */
 /**
  * The turn's own window, budget and trims, for the `turn` and `chain_stage`
@@ -9738,7 +10213,7 @@ export function contextFields(counters: TurnCounters | undefined): Record<string
     context_window: mc.window,
     context_budget: mc.budget,
     context_estimate: mc.estimate,
-    context_trims: mc.trims.leg + mc.trims.overflow,
+    context_trims: mc.trims.leg + mc.trims.overflow + (mc.trims.pre_call ?? 0),
     context_trimmed: mc.trims.dropped,
   };
 }
@@ -9813,6 +10288,19 @@ export interface TaskRecord {
    * check ran, so a record without one is the record it always was.
    */
   verify?: TurnResult["verify"];
+  /**
+   * The check's detail (#235), present only when the surface or the caller
+   * asked: `[verify] record_detail` or `exit_on_fail`, or `--require-verify`.
+   * `verify_exit` is the last run's exit (null: it never reached one),
+   * `verify_rounds` how many runs the task made, `verify_reason` why the
+   * verdict is what it is, `verify_tail` the last lines of the output of a
+   * check that did not pass, redacted as the trail is. Absent otherwise, so a
+   * record that did not ask is the record it always was.
+   */
+  verify_exit?: number | null;
+  verify_rounds?: number;
+  verify_reason?: string;
+  verify_tail?: string;
   /** Counts the loop already kept and used to discard. */
   counters: TurnCounters;
   /**
@@ -9919,6 +10407,12 @@ export function gateCountersOutsideVolatile(counters: TurnCounters): TurnCounter
 
 export interface RunTaskOptions {
   role?: string;
+  /**
+   * `gnomon task --require-verify` (#235): the record carries the check's
+   * detail (`verify_exit`, `verify_rounds`, `verify_reason`, `verify_tail`),
+   * as `[verify] exit_on_fail` does. The exit is the command's (`verifyExitCode`).
+   */
+  requireVerify?: boolean;
   /** Approve gated tool calls. Without it every gated call is refused. */
   yes?: boolean;
   /** Emit progress lines to stderr */
@@ -9995,8 +10489,22 @@ export function formatSpan(ms: number): string {
  * 0 result, 2 refusal, 10 apparatus_failure. One function so the command and
  * anything scoring a record (`gnomon chaos`) cannot read it two ways.
  */
-export function taskExitCode(record: Pick<TaskRecord, "bucket">): 0 | 2 | 10 {
-  return record.bucket === "result" ? 0 : record.bucket === "refusal" ? 2 : 10;
+export function taskExitCode(
+  record: Pick<TaskRecord, "bucket"> & Partial<Pick<TaskRecord, "verify">>,
+  opts: { requireVerify?: boolean } = {}
+): 0 | 1 | 2 | 4 | 10 {
+  const byBucket = record.bucket === "result" ? 0 : record.bucket === "refusal" ? 2 : 10;
+  // #211 stands: a failed check leaves the task at its bucket's exit, 0. Only a
+  // caller that asked (`--require-verify`, `[verify] exit_on_fail`) gets the
+  // check in the exit, and only where the bucket said 0: a refusal or an
+  // apparatus failure is never demoted or replaced by it.
+  if (opts.requireVerify && byBucket === 0) return verifyExitCode(record.verify) ?? 0;
+  return byBucket;
+}
+
+/** Does this surface (or this run) want the check in the exit and the record? */
+export function verifyExitRequested(config: GnomonConfig, flag?: boolean): boolean {
+  return flag === true || resolveVerify(config)?.exit_on_fail === true;
 }
 
 /**
@@ -10094,6 +10602,7 @@ export async function runTask(
   options: RunTaskOptions = {}
 ): Promise<TaskRecord> {
   applyCredentials(undefined, declaredKeyVars(config));
+  const verifyDeclared = resolveVerify(config);
 
   // The surface audit ran only on the interactive path, so `gnomon task` -- the
   // non-interactive entry point, and the one every benchmark adapter uses --
@@ -10111,7 +10620,7 @@ export async function runTask(
   // an interpreter, saw nothing at all. A record is where a measured fact
   // belongs, and these are measured facts about the surface that produced the
   // record.
-  const surfaceFindings = auditSurface(config);
+  const surfaceFindings = [...auditSurface(config), ...auditSecretsInRoot(config)];
   // A `role_profile` the surface names and does not ship is a routing change
   // that did not happen. The interactive loop discloses it -- "✗ profile "x"
   // is not in .gnomon/profiles/ ... running the base roles unchanged" -- and
@@ -10504,7 +11013,7 @@ export async function runTask(
         );
         note(`[chain] stage ${i + 1}/${chain.length} — ${stageRole}`);
         {
-          const loaded = skillsRow(ui, selectSkills(loadSkills(config), stageRole, stageInput), stageInput);
+          const loaded = skillsRowFor(ui, config, stageRole, stageInput);
           if (loaded) note(loaded);
         }
         const stageInfo = shadowTurnInfo(sessionId, `t1.s${i + 1}`, stageRole, stageRoute);
@@ -10550,6 +11059,7 @@ export async function runTask(
           ...contextFields(r.counters),
           surface_hash,
         });
+        writeSkillUse(audit, 1, stageRole, r.counters.skills);
         last = r;
         carried = r.content;
         // An apparatus failure is not a result to hand onward: the endpoint
@@ -10717,6 +11227,8 @@ export async function runTask(
     input: audit.text(input),
     output: audit.text(turn.content),
   });
+  // A chain wrote each stage's own `skill_use` above; the last stage's is not repeated.
+  if (stageRecords.length === 0) writeSkillUse(audit, 1, role, turn.counters.skills);
 
   const record: TaskRecord = {
     surface_hash,
@@ -10749,6 +11261,14 @@ export async function runTask(
     stop_reason: turn.stop_reason,
     ...(turn.stop_detail ? { stop_detail: turn.stop_detail } : {}),
     ...(turn.verify ? { verify: turn.verify } : {}),
+    ...(turn.verifyDetail && (options.requireVerify || verifyDeclared?.record_detail)
+      ? {
+          verify_exit: turn.verifyDetail.exit,
+          verify_rounds: turn.verifyDetail.rounds,
+          verify_reason: turn.verifyDetail.reason,
+          ...(turn.verifyDetail.tail ? { verify_tail: turn.verifyDetail.tail } : {}),
+        }
+      : {}),
     // The completion gate's clock is the one part of its counters that is not
     // reproducible, so it moves to `volatile.completion_gate_ms`.
     counters: gateCountersOutsideVolatile(turn.counters),
@@ -11090,7 +11610,7 @@ export function completeInput(
   if (thinkArg) {
     const partial = thinkArg[1];
     return [
-      ["hide", "collapse", "show"].filter((m) => m.startsWith(partial)),
+      THINK_MODES.filter((m) => m.startsWith(partial)),
       partial,
     ];
   }
@@ -11841,6 +12361,7 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         return true;
       }
 
+      const usage = readSkillUsage(state.config);
       console.log(`\nIn use — added to the prompt when they match:`);
       if (active.length === 0) console.log("  (none yet)");
       for (const sk of active) {
@@ -11852,6 +12373,7 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         // "always" is the correct reading of a skill whose match never parsed,
         // and indistinguishable from one that meant it. Say which this is.
         if (sk.problem) console.log(paint(uiOf(state), "yellow", `      ⚠ ${sk.problem}`));
+        for (const line of skillUsageLines(sk, state.exchanges, usage.get(sk.id))) console.log(line);
       }
 
       console.log(`\nProposed by an agent — not in use until you accept:`);
@@ -12120,15 +12642,17 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       if (!mode) {
         console.log(`\nChain-of-thought: ${ui.think}`);
         console.log(`  hide      — drop reasoning entirely`);
-        console.log(`  collapse  — one line, so you see it happened`);
-        console.log(`  show      — full reasoning block`);
+        console.log(`  collapse  — first 3 lines, one row each, cut at a word (compact; default)`);
+        console.log(`  wrap      — first 3 lines written out whole, word-wrapped (max 12 rows)`);
+        console.log(`  show      — everything, word-wrapped`);
+        console.log(`/expand think reprints the last turn's reasoning in full.`);
         return true;
       }
-      if (mode !== "hide" && mode !== "collapse" && mode !== "show") {
-        console.log(`\nUnknown mode: "${mode}". Use: hide | collapse | show`);
+      if (!(THINK_MODES as string[]).includes(mode)) {
+        console.log(`\nUnknown mode: "${mode}". Use: ${THINK_MODES.join(" | ")}`);
         return true;
       }
-      ui.think = mode;
+      ui.think = mode as ThinkMode;
       console.log(`\nChain-of-thought: ${ui.think}`);
       console.log(`Session only — edit [ui].think in .gnomon/config.toml to make it stick.`);
       return true;
@@ -12161,6 +12685,27 @@ export function processCommand(cmd: string, state: PromptState): boolean {
 
     case "/expand": {
       const ui = uiOf(state);
+      if ((parts[1] ?? "").trim() === "think") {
+        const blocks = state.lastThink ?? [];
+        if (blocks.length === 0) {
+          console.log(`\nNo reasoning or prose from the last turn to expand.`);
+          return true;
+        }
+        const columns = terminalWidth();
+        console.log(`\n${blocks.length} block(s) from the last turn, in full:`);
+        for (const b of blocks) {
+          traceLines(b.text, "show", columns).forEach((line, i) =>
+            console.log(
+              b.kind === "reasoning"
+                ? paint(ui, "gray", `  ${i === 0 ? "✻" : " "} ${line}`)
+                : i === 0
+                  ? `  ${paint(ui, "bold", "●")} ${line}`
+                  : `    ${line}`
+            )
+          );
+        }
+        return true;
+      }
       const steps = state.lastFold ?? [];
       if (steps.length === 0) {
         console.log(`\nNothing folded yet this session.`);
@@ -12534,7 +13079,7 @@ export async function runSessionTurn(
   // Selection is by declared pattern, not model judgement, so the same
   // input loads the same skills on every machine.
   const active = selectSkills(loadSkills(config), role, cleanedInput);
-  const skillsLine = ui.cot === "off" ? null : skillsRow(ui, active, cleanedInput);
+  const skillsLine = ui.cot === "off" ? null : skillsRowFor(ui, config, role, cleanedInput);
   if (skillsLine) deps.log(skillsLine);
   const systemPrompt = buildSystemPrompt(state, role, cleanedInput);
 
@@ -12621,7 +13166,7 @@ export async function runSessionTurn(
           paint(ui, "gray", `  [chain] stage ${i + 1}/${turnChain.length} — ${stageRole}`)
         );
         {
-          const loaded = ui.cot === "off" ? null : skillsRow(ui, selectSkills(loadSkills(config), stageRole, stageInput), stageInput);
+          const loaded = ui.cot === "off" ? null : skillsRowFor(ui, config, stageRole, stageInput);
           if (loaded) print(loaded);
         }
         const stageInfo = shadowTurnInfo(
@@ -12657,6 +13202,7 @@ export async function runSessionTurn(
           stop_reason: r.stop_reason,
           tool_steps: r.toolSteps,
         });
+        writeSkillUse(deps.audit, state.exchanges.length + 1, stageRole, r.counters.skills);
         last = r;
         carriedAnswer = r.content;
         // A dead endpoint is not an answer to hand onward, and Esc must
@@ -12869,6 +13415,7 @@ export async function runSessionTurn(
     input: deps.audit.text(cleanedInput),
     output: deps.audit.text(turn.content),
   });
+  if (turnChain.length < 2) writeSkillUse(deps.audit, exchange.turn, role, turn.counters.skills);
   // The turn's live record, final, in the shape `gnomon task --json` prints.
   deps.live?.close(
     {
@@ -13141,7 +13688,7 @@ export async function runPromptLoop(
   // every one of these used to surface as a 401 or a model error somewhere in
   // the middle of a task, with nothing on screen connecting it to the line
   // that caused it.
-  if (!reportSurfaceProblems(auditSurface(config), uiOf(state))) {
+  if (!reportSurfaceProblems([...auditSurface(config), ...auditSecretsInRoot(config)], uiOf(state))) {
     process.exit(1);
   }
   const ungoverned = governanceStartupLine(config);

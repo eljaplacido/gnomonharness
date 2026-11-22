@@ -344,6 +344,8 @@ describe("initSurface", () => {
       // was fixed by an INSTRUCTION rather than a mechanism, which is unusual
       // enough here to be worth shipping to every new project.
       join("skills", "writing-tests.md"),
+      // 2026-11: a starter trial spec, so eval and skill trial can run (#228).
+      join("trials", "default.toml"),
     ]);
     for (const f of r.written) {
       expect(existsSync(join(root, ".gnomon", f))).toBe(true);

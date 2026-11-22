@@ -186,7 +186,10 @@ function wireDigest(raws: string[], rec: TaskRecord): string {
  * requests, same bytes, same record. A deliberate change to what the loop
  * sends moves it, and the PR making that change says so and updates it here.
  */
-const MASTER_WIRE_DIGEST = "4aa54197833c34c05263f57cf15d778539f3280e0da4b12e9675a806456ba441";
+const MASTER_WIRE_DIGEST = "34103bb805840ee617ce97c0363318a5ea70f52c42d9f76b888adc69ddde9c7a";
+// Re-taken 2026-11-22 (fix/context-robustness), from 4aa54197...: the trims count
+// tool-call arguments now (messageTokens), so the scripted turn's leg trims fall
+// where its real size puts them. The change moves the wire, as the note above says.
 
 describe("keys absent: the wire is master's, byte for byte", () => {
   it("a scripted turn with trims, nudges and the wrap-up sends exactly what v0.4.0 sent", async () => {
@@ -451,10 +454,12 @@ describe("observation masking in a turn", () => {
 
   it("acts before the lossy trim: in the window that trims without it, masking leaves nothing to drop", async () => {
     const { url, raws } = await serve(scripted);
-    const rec = await runTask(loadConfig(surface(url, { extraConfig: MASK(2, 0.3, 2) })), "read the files one by one", {
+    const rec = await runTask(loadConfig(surface(url, { extraConfig: MASK(2, 0.3, 1) })), "read the files one by one", {
       role: "smol",
     });
     // The keys-absent turn in this same 6000-token window trims at every leg (see the digest test).
+    // batch = 1: tool-call arguments count towards the estimate now, which put
+    // a batch of 2 ~34 tokens over the leg budget at one checkpoint.
     expect(raws.some((r) => r.includes("earlier step(s) in this turn were dropped"))).toBe(false);
     expect(rec.counters.masking!.batches).toBeGreaterThan(0);
   });

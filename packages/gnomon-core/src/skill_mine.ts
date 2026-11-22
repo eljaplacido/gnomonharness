@@ -356,3 +356,127 @@ export function writeCandidates(
   }
   return { dir, written, fresh: written.filter((id) => !known.has(id)) };
 }
+
+// ---------------------------------------------------------------------------
+// Skill usage, from `skill_use` records
+// ---------------------------------------------------------------------------
+
+/**
+ * The signals `skillUsageSignals` reports, published (Rule 6). Unlike the
+ * candidates above they are about skills that already exist, so they are
+ * printed and returned, never written to `.gnomon-skills/candidates/`.
+ */
+export const USAGE_SIGNALS = ["fires_never_cited", "cited_often"] as const;
+export type UsageSignal = (typeof USAGE_SIGNALS)[number];
+
+/** Firings before "never cited" says anything: one quiet turn is not a pattern. */
+export const MIN_FIRINGS = 5;
+/** Citations, and the share of firings, that make a skill worth a trial. */
+export const MIN_CITATIONS = 3;
+export const MIN_CITED_RATE = 0.5;
+
+/** What the audit trail says about one skill, across sessions. */
+export interface SkillUsage {
+  id: string;
+  /** `skill_use` records in which the skill was loaded */
+  firings: number;
+  /** Records whose reasoning named the skill */
+  cited: number;
+  /** Times the model opened the skill file */
+  reads: number;
+  /** Mean estimated context per firing; null when it never fired */
+  tokens_per_firing: number | null;
+  /** `ts` of the latest record that loaded or read it */
+  last_used: string | null;
+  /** The latest `skill_trial` record for it, if any */
+  trial: { ts: string; status: unknown; meets_thresholds: unknown } | null;
+}
+
+export interface UsageSignalHit {
+  signal: UsageSignal;
+  skill: string;
+  firings: number;
+  cited: number;
+  tokens_per_firing: number | null;
+  /** A sentence, not a skill */
+  suggestion: string;
+}
+
+/** Usage of every skill that appears in the trails, by id. Pure over the files. */
+export function readSkillUsage(config: GnomonConfig): Map<string, SkillUsage> {
+  const out = new Map<string, SkillUsage>();
+  const dir = resolveAudit(config).dir;
+  if (!existsSync(dir)) return out;
+  const sums = new Map<string, number>();
+  const get = (id: string): SkillUsage => {
+    let u = out.get(id);
+    if (!u) {
+      u = { id, firings: 0, cited: 0, reads: 0, tokens_per_firing: null, last_used: null, trial: null };
+      out.set(id, u);
+    }
+    return u;
+  };
+  const files = readdirSync(dir).filter((f) => f.endsWith(".jsonl")).sort();
+  for (const f of files) {
+    for (const r of readRecords(join(dir, f))) {
+      if (r.kind === "skill_trial" && typeof r.skill === "string") {
+        const u = get(r.skill);
+        if (!u.trial || r.ts >= u.trial.ts) u.trial = { ts: r.ts, status: r.status, meets_thresholds: r.meets_thresholds };
+        continue;
+      }
+      if (r.kind !== "skill_use") continue;
+      const touched = new Set<string>();
+      for (const fired of Array.isArray(r.fired) ? (r.fired as Array<{ name?: unknown; tokens?: unknown }>) : []) {
+        if (typeof fired?.name !== "string") continue;
+        const u = get(fired.name);
+        u.firings += 1;
+        sums.set(fired.name, (sums.get(fired.name) ?? 0) + (typeof fired.tokens === "number" ? fired.tokens : 0));
+        touched.add(fired.name);
+      }
+      const read = r.read && typeof r.read === "object" ? (r.read as Record<string, unknown>) : {};
+      for (const [id, n] of Object.entries(read)) {
+        if (typeof n === "number") get(id).reads += n;
+        touched.add(id);
+      }
+      for (const c of Array.isArray(r.cited_in_reasoning) ? (r.cited_in_reasoning as unknown[]) : []) {
+        if (typeof c === "string") get(c).cited += 1;
+      }
+      for (const id of touched) {
+        const u = get(id);
+        if (!u.last_used || r.ts > u.last_used) u.last_used = r.ts;
+      }
+    }
+  }
+  for (const u of out.values()) {
+    if (u.firings > 0) u.tokens_per_firing = Math.round((sums.get(u.id) ?? 0) / u.firings);
+  }
+  return out;
+}
+
+/** The two usage signals, in skill-id order. */
+export function skillUsageSignals(usage: Map<string, SkillUsage>): UsageSignalHit[] {
+  const hits: UsageSignalHit[] = [];
+  for (const u of [...usage.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))) {
+    const cost = u.tokens_per_firing === null ? "" : `, ~${u.tokens_per_firing} tok of context each time`;
+    if (u.firings >= MIN_FIRINGS && u.cited === 0) {
+      hits.push({
+        signal: "fires_never_cited",
+        skill: u.id,
+        firings: u.firings,
+        cited: u.cited,
+        tokens_per_firing: u.tokens_per_firing,
+        suggestion: `Loaded ${u.firings} times and never named in the reasoning${cost}. Tighten its \`match\`, or prune it.`,
+      });
+    } else if (u.cited >= MIN_CITATIONS && u.firings > 0 && u.cited / u.firings >= MIN_CITED_RATE) {
+      hits.push({
+        signal: "cited_often",
+        skill: u.id,
+        firings: u.firings,
+        cited: u.cited,
+        tokens_per_firing: u.tokens_per_firing,
+        suggestion: `Named in the reasoning in ${u.cited} of ${u.firings} firings${cost}. A candidate for \`gnomon skill trial ${u.id}\`.`,
+      });
+    }
+  }
+  return hits;
+}

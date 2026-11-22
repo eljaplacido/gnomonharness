@@ -707,6 +707,29 @@ api_key_env = "OPENCODE_API_KEY"
 max_context_tokens = "auto"   # 1000000 for deepseek-v4.1-flash, from /models
 ```
 
+**What a turn's context is measured by, and when it is trimmed.** One estimate
+decides every trim, masking batch and the per-request record: ~4 characters a
+token over a message's content, its tool-call name and arguments (a `write`
+body costs what it weighs) and, where the endpoint it goes to is sent
+replayed reasoning, that reasoning. Tool schemas are not in it. A turn's
+working context is trimmed at three points: at a leg checkpoint (every
+`max_steps` calls, to 60% of the window); when the provider refuses a request
+as too long (code 13: llama.cpp, vLLM, OpenAI, Anthropic's "prompt is too
+long", Gemini's token count, LiteLLM's `ContextWindowExceededError` and HTTP
+413 all count), to 50%, then one resend; and, only against a window gnomon
+knows, before the request goes out when its estimate exceeds that window
+(`pre_call`, to 60%). A window is known when the endpoint declares
+`max_context_tokens = <n>` or `"auto"` read it from the listing. When
+`max_context_tokens_source` is `default`, the `[defaults]` figure is a guess:
+no pre-call trim happens, and the checkpoint and the overflow retry are the only
+decision points. A trim drops whole units: an assistant message and every
+tool result that answers it, so a request never carries a result without its
+call. The newest request stays where it was, ahead of the work it started, and
+the note that says what was dropped lists each step: a second trim keeps the
+first one's lines. Foreground `bash` output is bounded in memory the same way
+background jobs already were: past twice the output limit a stream keeps its
+start and end, and the rest goes to a file (capped at 64 MB) the result names.
+
 **What each request carried.** The turn record lists every model request in
 `counters.model_calls`: gnomon's estimate of it, the reasoning it replayed,
 the steering it carried (nudge, convergence push, other) and in which role,
@@ -1055,7 +1078,7 @@ nothing; `gnomon --help` prints all of it.
 | `gnomon task "TEXT" [--role R] [--yes] [--json] [--profile N] [--trust] [--deadline S]` | One task, no terminal. Gated calls are refused unless `--yes`. An untrusted loosening surface runs clamped to the defaults unless `--trust`. `--deadline` (seconds or an ISO time) stops it cleanly before a time cap (§7.2). `--task-file PATH` (or `-` for stdin) takes the text from a file instead of the command line, where a model's `pkill -f <a word from the task>` would match a wrapper's shell; gnomon's own command line reads `gnomon task` while it runs. | Scripts, CI, cron, benchmarks |
 | `gnomon setup [--json] [--yes] [--pull TAG] [--speed-check] [--mode local\|hybrid\|cloud] [--cloud-endpoint URL --cloud-model NAME]` | Scans the machine, recommends a local model it can run, pulls only on a yes, speed-checks it, connects an optional cloud model, suggests a mode, and writes `.gnomon/` after you accept the diff ([4.0](#40-get-started-in-3-steps)) | First run; a new machine |
 | `gnomon doctor [--json]` | Read-only: the machine, whether every role's model answers, drift since setup, and what would fix each problem. Exit 0 clear, 1 attention, 10 could not run. | "Why does nothing answer?"; after moving machines |
-| `gnomon init [--from P] [--force] [--no-verify]` | Writes a surface. `--from` copies another project's `.gnomon/`. | New project; team template |
+| `gnomon init [--from P] [--force] [--no-verify]` | Writes a surface, and a starter `.gnomon/trials/default.toml` (a locate task checked by hash, and a planted-secret canary whose token is random per cell; `gnomon eval --against REF` runs it with a local model). Where `.claude/` exists it also maps Claude Code's hook to a role (`[check.roles] claude-code = "implement"`) and prints `gnomon guard install claude-code --write`, which it never runs. `--from` copies another project's `.gnomon/`; `--no-verify` writes neither. | New project; team template |
 | `gnomon migrate [--check]` | Brings a surface up to current scaffold defaults. `--check` writes nothing and exits 1 if anything is pending. | After `gnomon update` |
 | `gnomon endpoint [list \| test NAME \| add …]` | Lists endpoints and keys and cross-checks model ids; runs one token; declares an endpoint end to end | Model setup, diagnosis |
 | `gnomon key [set \| list \| unset] NAME` | The machine-local credential store | Keys |
@@ -1068,7 +1091,7 @@ nothing; `gnomon --help` prints all of it.
 | `gnomon audit [show \| verify]` | Lists trails; checks every chain, seal and signature anchor. `verify` exits 1 on a break or when there is nothing to verify. | Review, release gates |
 | `gnomon dashboard [--port N] [--no-open] [--dir P]` | A command center in the browser on 127.0.0.1: projects, sessions as a timeline, refusals by rule, audit verification, contracts, token measurements (alias `ui`); setup, check, trust and endpoint test as buttons that run those same commands, each change confirmed first. | Reviewing what happened without reading JSONL; first-run setup without a terminal wizard |
 | `gnomon sessions` | Saved interactive sessions, newest last | Find one to resume |
-| `gnomon skill [list \| accept ID \| reject ID]` | Active skills and the proposals the agent made | Reviewing what it learned |
+| `gnomon skill [list \| accept ID \| reject ID \| mine]` | Active skills and the proposals the agent made; `mine` also reports skills that fire but are never cited, skills worth trialling, and context cost per firing | Reviewing what it learned |
 | `gnomon loop [list \| status \| dry-run N \| run N \| install N \| uninstall N \| reset N \| kill]` | Cron-scheduled guard/act loops declared in `.gnomon/loops/` (alias `loops`) | Unattended supervision |
 | `gnomon surface [hash \| manifest \| paths]` | The surface hash, the manifest, the hashed paths | Pinning, drift, bug reports |
 | `gnomon enumerations` | The published legal values (alias `enums`) | Contract checks |
@@ -1106,8 +1129,34 @@ Press **Tab** after `/` to list everything. These matter most:
 | `/network on\|off` · `/sandbox off\|confined\|strict` | Session-only consent dials. The surface default is untouched. |
 | `/session [id]` · `/new` | Switch sessions · start a fresh one (the old one stays resumable) |
 | `/context` · `/todo` · `/manifest` | The window · the agent's checklist · the surface hash and what it covers |
-| `/cot MODE` · `/think MODE` · `/expand` | How much of the live trace and reasoning to show · list the steps in the last folded run |
+| `/cot MODE` · `/think MODE` · `/expand [think]` | How much of the live trace and reasoning to show (`/think`: `hide`, `collapse`, `wrap`, `show`) · list the steps in the last folded run, or reprint the last turn's reasoning in full |
+| `/skills` | Active skills: times fired, read and cited this session, estimated tokens per firing, and from the audit trail total firings, cited rate, last used and the latest trial verdict; pending proposals |
 | `/quit` | Leave. See the note on sealing in [section 9](#9-troubleshooting). |
+
+**Skills in the live trace.** `◆ skills  name ("word") ~420 tok  · ~420 tok`
+lists the skills a turn loaded, the word that fired each and what each costs the
+prompt (an estimate); at `/cot work` and `full`, `◆ skills  none matched · N
+available` says skills exist and none fired. `◆ skill  name` is a skill file the
+model opened, `◆ skill  propose: name` one it proposed. A reasoning line that
+names a loaded skill ends in `·uses name` (whole-word match on the id or name;
+names under four characters and generic words such as `testing` never match).
+At the end of a turn with any skill activity, `◆ skills used: name (loaded ~420
+tok, read 1×, cited) · proposed: x`; a skill that fired and was never named has
+no `cited`. Each such turn writes a `skill_use` audit record and a
+`counters.skills` object. Nothing is asked of the model: the record is derived,
+so a skill the model ignores simply shows as loaded and uncited. `gnomon skill
+mine` turns those records into signals: a skill loaded five or more times and
+never cited (tighten its `match`, or prune it), one cited in at least half its
+firings (a candidate for `gnomon skill trial`), and its context cost per firing.
+
+`/think` sets how reasoning (`✻`) and prose (`●`) read in the live trace.
+`collapse` (the default) is compact: the first three lines, one row each, cut at
+a word, with a hint once per turn. `wrap` writes those lines out whole,
+word-wrapped to the terminal and capped at 12 rows. `show` prints everything,
+wrapped with a hanging indent for list items. `hide` drops it. Set the default
+with `[ui] think = "wrap"` in `config.toml`. Rows never exceed the terminal
+width, including under the `┊` gutter of a delegated turn, so the spinner can
+erase them. `/expand think` reprints the last turn's reasoning in full.
 
 **Esc** cancels the turn in progress. Anything you type during a turn is queued.
 
@@ -1155,6 +1204,12 @@ esac
   [exit contract](CONTRACTS.md) is stable. A declared `[verify]` check that
   still fails after its last round does not change it: the run is a `result`
   (0) with `verify: "failed"`, so read `verify` as well before calling it done.
+  A script that wants the check in the exit asks for it: `--require-verify`
+  (or `[verify] exit_on_fail = true`) exits `1` for a check that failed,
+  regressed or passed unverified and `4` for one that could not run, and adds
+  `verify_exit`, `verify_rounds`, `verify_reason` and `verify_tail` to the record
+  ([CONTRACTS.md §53](CONTRACTS.md)). `[verify] record_detail = true` adds the
+  fields without the exit.
 - **`--deadline <seconds|ISO time>`** (since v0.5.0)
   (or `GNOMON_DEADLINE`) gives the run a
   wall clock, opt-in. At `[turn] deadline_notes` (default 50% and 80% of the
@@ -1178,6 +1233,8 @@ esac
   (`volatile.tool_calls`) and on its `tool_call` audit record (`started_at`,
   `duration_ms`); a partial record names the call in flight
   (`volatile.tool_in_flight`).
+- `gnomon security` lists a surface that lags this gnomon's defaults as `rules_drift`
+  (the migrations `gnomon migrate --check` would apply; advice, exit unchanged).
 - In a directory gnomon cannot write (a read-only mount), `gnomon init` keeps
   the surface and gnomon's records in `$XDG_STATE_HOME/gnomon/workdirs/<key>`
   (else `~/.local/state/...`), keyed by the directory's path; `gnomon task`
@@ -1317,7 +1374,23 @@ read a name, not the file. `cp .env.example .env` is refused at `prevent`,
 because it writes a secret file; ask the person to create it, or set
 `secrets = "advise"`. Like every shell rule, this reads the command's text: a
 script that opens `.env` itself is not refused by it (containment is
-`[sandbox] exec`).
+`[sandbox] exec`): `python3 -c "print(open('.env'+'.x').read())"` names no
+secret in its text. So, at `prevent` (the secrets family), containment acts on
+the files the `secrets` list names inside the repository: under `exec =
+"docker"` an empty read-only file is mounted over each, so nothing in the
+container reads it; under `exec = "os"` (which grants the whole root) the
+session refuses to start while one is there, naming the files, and the fix is
+to move them out of the repository. To accept the risk, say so:
+
+```toml
+# .gnomon/policy.toml
+[governance]
+level = "prevent"
+secrets_in_root = "allow"   # recorded in session_start.resolved.secrets_in_root
+```
+
+Below `prevent`, and with `exec = "off"`, nothing changes; `gnomon security`
+lists in-tree secrets as `secrets_in_tree`.
 
 **Writes outside the project.** Under the same declaration a shell command
 that writes or removes something outside the repository root is refused as
@@ -1698,6 +1771,110 @@ enabled = true
 max_lines = 200
 ```
 
+**Opt-in: the check's own timeout and a setup command.** The declared `[verify]`
+check used to inherit the bash tool's timeout (120 s on typical surfaces) and
+whatever dependencies the worktree had, so a full suite was killed every time
+and a fresh worktree (an eval cell, `gnomon check`'s temporary worktree) failed
+for want of an install. Two keys fix that, and a surface that declares neither
+runs the check as before ([CONTRACTS.md §53](CONTRACTS.md)):
+
+```toml
+# policy.toml: inside the existing [verify] block
+[verify]
+timeout_seconds = 900             # the check's own budget; a timeout reads as `unrunnable`
+setup = "uv sync --frozen"        # once per fresh worktree, before the model's first call
+setup_network = "registry"        # "none" (default) or "registry": open for setup alone
+setup_timeout_seconds = 1200      # defaults to timeout_seconds
+```
+
+Write `setup` so it cannot run code from the tree: `pnpm install
+--frozen-lockfile --ignore-scripts`, `npm ci --ignore-scripts`, `uv sync
+--frozen`. An install otherwise runs lifecycle scripts, build backends and
+`.npmrc`/`pip.conf` from the working tree. In a session `setup` runs at the
+start of the turn, before the model can edit a manifest; in `gnomon check` it
+runs on the head being judged, so **with `setup_network = "registry"` on a host
+`[verify]` an untrusted head's install scripts run with network access**: keep
+`none`, use `exec = "docker"`, or use the flags above. `registry` has no effect
+under `exec = "docker"` or `"os"`: the floor stays as declared. `setup` comes
+from the hashed surface (changing it moves the surface hash), runs once per
+worktree, is not bound by the role's `write_allow` (an install
+writes `node_modules`), and is recorded as a `verify` audit record with
+`phase: "setup"` and the network it had. A setup that fails makes the check
+`unrunnable`: nothing is handed back to the model as "fix your code".
+`gnomon check` runs it in the temporary worktree it makes for a head that is not
+checked out.
+
+**Opt-in: what the check's other exit codes mean.** A check has four
+verdicts: `passed` (exit 0, and only exit 0), `failed` (handed back to the
+model), `unrunnable` (nothing was measured: not found, timed out, refused; never
+handed back as "fix your code") and `regressed` (measured and worse than a
+baseline the check keeps; recorded, handed back only on request). By default
+126 and 127 are `unrunnable` and every other non-zero exit is `failed`. Tools
+use other codes, so name them ([CONTRACTS.md §53](CONTRACTS.md)):
+
+```toml
+# policy.toml: inside the existing [verify] block
+[verify]
+contract = "pytest"               # "septacore" or "pytest": 2, 4, 5 are unrunnable
+regressed_hand_back = false       # true: hand a `regressed` verdict back like `failed`
+
+# the exit_map is read over the preset; a sub-table, not an inline table
+[verify.exit_map]
+4 = "unrunnable"                  # a script that prints "NOT RUN" and exits 4
+3 = "regressed"
+```
+
+`gnomon task` and `gnomon check` read a run through the same table, so a check
+cannot come out `unrunnable` in one and `failed` in the other. In `gnomon check`
+`regressed` is a `fail` (no model to hand it to). Nothing can make a non-zero
+exit pass.
+
+**Opt-in: tell a green check from a weakened one.** The check runs code the
+agent can edit in the same turn: `package.json` scripts, `conftest.py`, pytest
+`addopts`, your `scripts/verify.sh`, a `.septacore.json`. `protects` names them;
+a turn that changes one cannot come out `passed` ([CONTRACTS.md §53](CONTRACTS.md)):
+
+```toml
+# policy.toml: inside the existing [verify] block
+[verify]
+protects = ["@detected", "scripts/verify.sh"]   # @detected: conftest.py, pytest.ini, pyproject.toml, package.json,
+                                                # .septacore.json, vitest/jest config, tox.ini, setup.cfg, noxfile.py,
+                                                # .coveragerc, and the command's own script (the Makefile for make)
+```
+
+The files are hashed before and after the turn, by `write`, `edit` or the shell.
+A green check over a changed one is `passed_unverified`, and the answer is handed
+back once, naming the file: revert it, or say why it does not weaken the check.
+Only `package.json` `scripts` and `jest`, `pyproject.toml` `[tool.pytest*]` and
+`setup.cfg` `[tool:pytest]` count as changes in those files; any other file
+counts by its bytes. **Files the check merely imports (a helper a test pulls
+in) are not protected** unless you list them. The walk that finds glob matches
+stops at 50,000 entries or 8 directories deep; when it does, gnomon warns and
+the `verify` audit record carries `protects_truncated: true`, and files past the
+limit are not protected. `gnomon check`
+reads the list from the base commit and reports a change to it as a `fail`
+(`passed_unverified`). Not declared, nothing is snapshotted.
+
+**Opt-in: the exit, the detail, and a probe.** A failed or unrunnable check
+leaves `gnomon task` at exit 0 (the bucket's), as #211 documents, and the
+record carries only `verify`. Two opt-ins for a script, and one command to try
+the check before relying on it ([CONTRACTS.md §53](CONTRACTS.md)):
+
+```toml
+# policy.toml: inside the existing [verify] block
+[verify]
+exit_on_fail = true               # task exits 1 (failed/regressed/passed_unverified) or 4 (unrunnable)
+record_detail = true              # verify_exit, verify_rounds, verify_reason, verify_tail in the record
+```
+
+`gnomon task --require-verify` is `exit_on_fail` for one run. `gnomon doctor
+verify` runs the declared check once on the tree as it is (or the one `init`
+would detect, if none is declared) and says what it means: it could not run, it
+exits 0 but ran no test, it exits 4 or 5 (pytest's usage error and "nothing
+collected", which read as failures unless `contract` or `exit_map` says
+otherwise), or it fails on a clean tree. It does not run `setup`, and plain
+`gnomon doctor` still runs nothing of the project's.
+
 **Opt-in: the completion gate** (since v0.5.0). Off unless declared. When a turn that changed
 the worktree first answers "done" with budget left, gnomon does not accept it:
 it hands the turn back with a checklist lifted from the task's own text (each
@@ -1925,7 +2102,7 @@ answer." Reasoning counts from every channel gnomon reads (`reasoning_content`,
 stopped, and after `max_consecutive_malformed` stops in a row the next call runs
 uncapped. Each stop is a `think_cap` audit record and the turn's
 `counters.think_cap` says how many and at how many tokens
-([CONTRACTS.md §52](CONTRACTS.md)).
+([CONTRACTS.md §53](CONTRACTS.md)).
 
 ```toml
 # config.toml

@@ -495,6 +495,45 @@ describe("slash commands inside the running loop", () => {
     }
   }, 30000);
 
+  it("/think accepts wrap, rejects an unknown mode, and lists four modes", async () => {
+    const root = makeProject();
+    try {
+      const r = await drive(root, ["/think", "/think wrap", "/think sideways"]);
+      for (const m of ["hide", "collapse", "wrap", "show"]) expect(r.log).toContain(`  ${m} `);
+      expect(r.log).toContain("Chain-of-thought: wrap");
+      expect(r.log).toContain('Unknown mode: "sideways". Use: hide | collapse | wrap | show');
+      expect(r.calls).toHaveLength(0);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  it("/expand think reprints the last turn's reasoning whole, and says when there is none", async () => {
+    const root = makeProject();
+    const sentence = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega";
+    const reply = (_call: ModelCall, n: number) =>
+      n === 1
+        ? {
+            message: {
+              content: `<think>${sentence}\nline two\nline three\nline four</think>`,
+              tool_calls: [{ function: { name: "read", arguments: { path: "README.md" } } }],
+            },
+          }
+        : { message: { content: "the final answer" } };
+    try {
+      const none = await drive(root, ["/expand think"]);
+      expect(none.log).toContain("No reasoning or prose from the last turn");
+      const r = await drive(root, ["/think collapse", "a turn", "/expand think"], { reply });
+      const at = r.log.indexOf("block(s) from the last turn, in full");
+      expect(at).toBeGreaterThanOrEqual(0);
+      const after = r.log.slice(at);
+      expect(after).toContain("omega");
+      expect(after).toContain("line four");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30000);
+
   it("/cot off stops the live trace while the turn runs; the answer still lands", async () => {
     // /cot governs the "while it works" transcript, which only exists on a turn
     // that calls a tool -- a turn that answers straight out returns before the

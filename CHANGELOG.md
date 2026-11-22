@@ -32,6 +32,134 @@
   the cap with no answer text and no tool call is stopped and the model is told to write a script or run a command;
   audit kind `think_cap`, `counters.think_cap`, `session_start.resolved.think_cap`. Ported alone from the bench
   branch's OC-mode bundle so it can be measured as one variable. Absent, requests and records are unchanged.
+### Fixed
+
+- **A secret read through an interpreter no longer gets through at
+  `[governance] level = "prevent"` where the sandbox can stop it (#227).**
+  `python3 -c "print(open('.env'+'.matrix').read())"` names no secret in its
+  text, and Landlock under `exec = "os"` grants the whole root, so the word check
+  held 1 of 34 surfaces. Under `exec = "docker"` an empty read-only file is now
+  mounted over each in-root file the `[governance.paths] secrets` globs name, so
+  no route inside the container reads it. Under `exec = "os"` with the secrets
+  family at prevent or above, the session refuses to start while a declared
+  secret sits inside the root (the message names the files and the fix: move
+  them out of the repository); `[governance] secrets_in_root = "allow"` accepts
+  the risk and is recorded in `session_start.resolved.secrets_in_root`. Nothing
+  changes below prevent, without `exec = "os"`, or without `[governance]`.
+  `gnomon security` reports in-tree secret files (`secrets_in_tree`, advice;
+  `surface_fatal` where the session would not start), and THREAT-MODEL.md
+  states the limit: a word check cannot see interpreter code or run-time paths.
+### Added
+
+- **`gnomon init` writes a starter trial spec and offers the guard hook (#228).**
+  `.gnomon/trials/default.toml` holds one task grounded in the repository
+  (where a name this repository defines once is defined; the answer is checked
+  by a git blob hash of the path, never written in the spec) and a
+  planted-secret canary (the token is generated per cell by `setup` and read
+  back by `check`, so the agent cannot find it in the spec), so `gnomon eval`
+  and `gnomon skill trial` run on a new project with a local model. A
+  repository with no source the scanner reads gets the canary alone. Where
+  `.claude/` exists, `[check.roles] claude-code = "implement"` is written so
+  the hook decides as a role (#205), and `gnomon guard install claude-code
+  --write` is printed, never run. `--no-verify` and `--from` write neither.
+  `gnomon security` shows `gnomon migrate --check` drift as a `rules_drift`
+  advice finding.
+### Added
+
+- **An opt-in non-zero exit for the declared check, verify detail in the task
+  record, and `gnomon doctor verify`** (#235). `gnomon task --require-verify`
+  (or `[verify] exit_on_fail = true`) exits `1` for a check that failed,
+  regressed or passed unverified and `4` for one that could not run, where the
+  bucket says 0; the #211 default is unchanged without it. The record then
+  carries `verify_exit`, `verify_rounds`, `verify_reason` and `verify_tail`
+  (`[verify] record_detail = true` adds them without the exit). `gnomon doctor
+  verify` runs the declared (or detected) check once on the tree as it is and
+  flags a check that cannot run, exits 0 having run no test, exits 4 or 5, or is
+  red on the clean tree. Nothing changes unless asked. CONTRACTS §53.
+
+- **`[verify] protects` and the `passed_unverified` verdict** (#234). A check
+  runs code the agent can edit in the same turn (`package.json` scripts,
+  `conftest.py`, pytest `addopts`, a `scripts/verify.sh`, `.septacore.json`).
+  `protects = ["@detected", ...]` names the files; a turn that changes one, by
+  `write`, `edit` or the shell, cannot come out `passed`: a green run is
+  `passed_unverified`, the answer is handed back once naming the file, and the
+  `verify` audit record carries `protects_changed`. `gnomon check` reads the
+  list from the base commit and reports a change to it as a `fail`. Opt-in:
+  nothing is snapshotted unless declared. CONTRACTS §53.
+
+- **A four-outcome `[verify]` verdict: `contract`, `[verify.exit_map]`,
+  `regressed_hand_back`** (#232). `passed`, `failed`, `unrunnable` and the new
+  `regressed`. `contract = "septacore"` or `"pytest"` and `[verify.exit_map]`
+  (exit code = verdict) say what a tool's other codes mean: pytest 2/4/5 and
+  SeptaCore 2 are `unrunnable`, so a check that never measured anything no
+  longer makes the model rewrite correct code. `regressed` is recorded and not
+  handed back unless `regressed_hand_back = true`. `gnomon task` and `gnomon
+  check` now read a run through one function, so they cannot drift. Nothing
+  makes a non-zero exit pass. With none declared the table is the old one.
+  CONTRACTS §53, `conformance/verify_contract.json`.
+
+- **`[verify] timeout_seconds`, `setup`, `setup_network`, `setup_timeout_seconds`**
+  (#233). The declared check no longer has to fit the bash tool's 120 s, and a
+  fresh worktree can install its dependencies first. `timeout_seconds` is the
+  check's own budget (a timeout reads as `unrunnable`); `setup` runs once per
+  worktree from the hashed surface, with the network shut unless
+  `setup_network = "registry"` opens it for that command alone, and is a
+  `verify` audit record with `phase: "setup"`. `gnomon check` runs it in the
+  temporary worktree it makes for a head that is not checked out. All opt-in:
+  with none declared the check runs as before. CONTRACTS §53,
+  `conformance/verify_contract.json`.
+### Added
+
+- **Skill visibility and attribution** in the live trace, the audit trail and
+  `/skills`. The `◆ skills` row carries each skill's estimated context cost and
+  the total, and `none matched · N available` at `/cot work|full`; reasoning
+  that names a loaded skill ends in `·uses <skill>`; the `skill` tool's
+  proposals get a `◆ skill  propose: name` row; a turn with skill activity ends
+  in `◆ skills used: ...` (a delegated turn's rides on its `↲` line). New audit
+  kind `skill_use` and `counters.skills` (CONTRACTS §54, `conformance/skill_use.json`).
+  `/skills` shows firings, reads, citations, cost and the latest trial verdict;
+  `gnomon skill mine` adds `fires_never_cited` and `cited_often`. All derived
+  from what the loop sees: no new prompt text and no model-reported outcome.
+### Fixed
+
+- **The token estimate counts what a request carries.** Every context decision
+  (the leg and overflow trims, observation masking's fill, the per-call record)
+  measured `content` alone, so an assistant message that called `write` cost
+  nothing and a 60k-token working set estimated at 12 tokens and was never
+  trimmed. One `messageTokens` now counts content, tool-call arguments and,
+  where the target is sent it, replayed reasoning. This moves the request bytes
+  of a long tool-heavy turn (it trims where its real size puts it); the pinned
+  digests in `mediator_record.test.ts` and `context_hygiene.test.ts` are re-taken.
+- **A trim no longer orphans tool results or reorders history.** It evicts whole
+  units (an assistant message with all its parallel tool results), keeps the
+  current request in its chronological place, and counts its own ledger in the
+  budget.
+- **A second trim keeps the first one's ledger**, so "do not repeat a listed
+  step" survives the trim that matters most; the count in it is steps, not messages.
+- **Context overflows in Anthropic, Gemini, LiteLLM and HTTP 413 wordings are
+  recognised** (code 13, trim and retry) instead of ending the turn as code 10;
+  a timeout mentioned in an error body no longer outranks a real overflow.
+- **Foreground `bash` output is bounded in memory.** A flood (`yes`, a multi-GB
+  `cat`) used to grow an unbounded string until the process died. Output beyond
+  twice the limit keeps its start and end, with the rest in a file capped at
+  64 MB that the result names. Output that fits is byte for byte unchanged.
+
+### Added
+
+- **A pre-call trim, against a known window only.** When the estimate of the
+  next request exceeds a window the endpoint declared or `auto` read from its
+  listing, the context is trimmed to the leg budget before sending, rather than
+  after a refusal. Against the unresolved `[defaults]` fallback nothing changes.
+  Recorded as `trims.pre_call` and a `pre_call` trim in `counters.model_calls`
+  (CONTRACTS §29, `conformance/mediator_record.json`).
+- A model-free context-stack suite (`context_stack.test.ts`): a scripted
+  write-heavy model against an endpoint with a hard context limit and a
+  request-body validator.
+### Added
+- `/think wrap` (and `[ui] think = "wrap"`): the first three reasoning lines written out whole, word-wrapped, at most 12 rows. `/expand think` reprints the last turn's reasoning and prose in full.
+
+### Changed
+- `/think show` word-wraps with a hanging indent instead of leaving long rows to the terminal; `collapse` cuts at a word boundary and names `/think wrap` and `/think show` (once per turn). Widths account for the `┊` gutter of delegated turns.
 
 ## [0.6.5] — 2026-11-21
 

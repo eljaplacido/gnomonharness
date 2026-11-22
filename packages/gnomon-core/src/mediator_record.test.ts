@@ -28,6 +28,7 @@ import { join } from "node:path";
 import { runTask, runSessionTurn, platformBlock } from "./prompt_loop.js";
 import { auditSurface, loadConfig, recomputeManifest, resolveContext, resolveUi } from "./config.js";
 import { CallLedger, readUsageDetail } from "./mediators.js";
+import { messagesTokens } from "./message_tokens.js";
 import { Progress } from "./render.js";
 
 let servers: Server[] = [];
@@ -247,6 +248,11 @@ function bodiesHash(groups: Array<[string, string[]]>): string {
  * this feature existed: the sha256 over all of them, and each request's own
  * (first 16 hex) so a mismatch names the request.
  *
+ * Re-pinned once, 2026-11-22 (fix/context-robustness): scenario A replays
+ * reasoning and calls tools, and the trims now count both (messageTokens), so
+ * its leg trim falls a request earlier and A#5 onward differ. A#1-4, B and C
+ * are master's bytes still. The new bodies were taken the same two ways.
+ *
  * Two captures, because on Windows the system message carries the platform
  * note. It is cut out of what is hashed, but the trims still count it as part
  * of the head they always keep, so from A's 6th request (after the overflow
@@ -257,17 +263,17 @@ function bodiesHash(groups: Array<[string, string[]]>): string {
  */
 const MASTER = {
   posix: {
-    bodies: "ffbe2ef96da6c693a20ff8b140d2dd4ad669538f741ac31a3f3365ab06769847",
+    bodies: "596415bcf4141b4475a483d3b80eaaf09e842c51d9228114dfb2a79b93c1abf4",
     requests: {
-      A: ["578883c4f83c1e69", "af3db1c44c8e1d1f", "b8c84d1fa33bff2b", "8a917fca5ed1d2ae", "410204d50d4ec10d", "daef7af67f8b0d77", "3d699aaff82acbf7", "008d7d9f09860ff6", "92ee0720f788cc62", "0ab17ae8faa3487a", "1f518745b94d45ea"],
+      A: ["578883c4f83c1e69", "af3db1c44c8e1d1f", "b8c84d1fa33bff2b", "8a917fca5ed1d2ae", "a086bcf5f9872713", "407c1be1cd306993", "f696ad28c3f1a1bc", "2ff7157a9c87205a", "b68f4fdc6163f00e", "0a176cf6861dc9dc", "a1dd8073bd798b83"],
       B: ["01905ff4470273e5", "f92ca214d1a84993", "53f155a186b5debd", "9fbfc4a769fb2184", "364016f1de34f494"],
       C: ["c483304477310109", "e48db92c6c916f5d", "4b42dfb4bdb13dda"],
     } as Record<string, string[]>,
   },
   win32: {
-    bodies: "5111848c6c8d6fee4ea5783c072038feb6c901d71efef781acf9b548e202279d",
+    bodies: "c464c05b7a82c8751233042304bf51cedc32fc3d6df7a6a3fab945489b0a9ac0",
     requests: {
-      A: ["578883c4f83c1e69", "af3db1c44c8e1d1f", "b8c84d1fa33bff2b", "8a917fca5ed1d2ae", "410204d50d4ec10d", "a018e062e97229dd", "7b836304c651de63", "6c47a489c970fc64", "9211878717e348da", "ed6390a5dfab6556", "c6503c682c702768"],
+      A: ["578883c4f83c1e69", "af3db1c44c8e1d1f", "b8c84d1fa33bff2b", "8a917fca5ed1d2ae", "a086bcf5f9872713", "407c1be1cd306993", "f696ad28c3f1a1bc", "2ff7157a9c87205a", "d860368730d8353e", "0d7e2d303d4eae00", "fbc10e7539e86241"],
       B: ["01905ff4470273e5", "f92ca214d1a84993", "53f155a186b5debd", "9fbfc4a769fb2184", "364016f1de34f494"],
       C: ["c483304477310109", "e48db92c6c916f5d", "4b42dfb4bdb13dda"],
     } as Record<string, string[]>,
@@ -319,7 +325,8 @@ function trail(root: string, kind: string): Array<Record<string, any>> {
 
 /** gnomon's estimate, recomputed from what the server received. */
 const estOfBody = (raw: string) =>
-  (JSON.parse(raw).messages as Array<{ content: string }>).reduce((n, m) => n + Math.ceil(m.content.length / 4), 0);
+  // messageTokens: content and tool calls, and the reasoning that was sent.
+  messagesTokens(JSON.parse(raw).messages as Array<{ content: string }>, { reasoning: true });
 
 describe("the per-call record, on a streamed reply with reasoning and usage", () => {
   it("records every request: estimate, replayed reasoning, steering by kind, trims, and what came back", async () => {
@@ -532,7 +539,10 @@ describe('[context] token_estimate = "calibrated"', () => {
     const first = trims[0]!.i;
     expect(cal.raws.slice(0, first - 1)).toEqual(chars4.raws.slice(0, first - 1));
     expect(cal.raws[first - 1]!.length).toBeLessThan(chars4.raws[first - 1]!.length);
-    expect(mc.trims.dropped).toBeGreaterThan(chars4.record.counters.model_calls!.trims.dropped);
+    // The strict property is the line above (the calibrated run keeps less at its first trim).
+    // Trims evict whole call+result units, so the total dropped count can tie (it does on
+    // Windows, whose longer temp paths size the units differently); it can never be fewer.
+    expect(mc.trims.dropped).toBeGreaterThanOrEqual(chars4.record.counters.model_calls!.trims.dropped);
     // The trail says the ratio each request was sized under.
     const calls = trail(cal.root, "model_call");
     expect(calls.every((r) => r.estimate === "calibrated")).toBe(true);
@@ -586,7 +596,7 @@ describe("the ledger itself", () => {
 
   it("keeps the last entries, says where they start, and counts every request", () => {
     const target = { url: "http://x", model: "m", kind: "openai" as const, temperature: 0, top_p: 1 };
-    const ledger = new CallLedger({ estimate: (t) => Math.ceil(t.length / 4), windowOf: () => 100, target, mode: "chars4", cap: 3 });
+    const ledger = new CallLedger({ estimate: (m) => Math.ceil(m.content.length / 4), windowOf: () => 100, target, mode: "chars4", cap: 3 });
     const observe = ledger.observer({ depth: 0, leg: () => 1 });
     for (let n = 1; n <= 5; n++) {
       observe({ target, messages: [{ role: "user", content: "x".repeat(40 * n) }], bodyEst: 20 * n, code: 0, ms: 1, usage: { input: 30 * n, output: 1 } });

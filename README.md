@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 3979 TypeScript tests (3300 core, 654 cli, 18
-> natives, 7 tui) and 120 Rust tests — **4099 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 4210 TypeScript tests (3517 core, 668 cli, 18
+> natives, 7 tui) and 120 Rust tests — **4330 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1136,7 +1136,7 @@ See [Roles and the Trust Dial](#roles-and-the-trust-dial).
 [ui]
 meta = ["turn", "role", "model", "bucket", "duration", "context", "tokens", "tools"]
 meta_style = "line"               # line | compact
-think = "collapse"                # hide | collapse | show
+think = "collapse"                # hide | collapse | wrap | show
 spinner = true
 color = true
 markdown = true
@@ -1146,8 +1146,10 @@ theme = "dark"                    # dark | dim | light | high-contrast | mono | 
 `meta` is an ordered list drawn from `turn`, `role`, `model`, `bucket`,
 `duration`, `context`, `tokens`, `think`, `tools`; an empty list shows no meta
 line. `think` controls how much chain-of-thought survives — reasoning models
-wrap their scratchpad in `<think>…</think>`, and `collapse` shows one line of
-it so you can see it happened without reading it.
+wrap their scratchpad in `<think>…</think>`. `collapse` (the default) shows three
+rows, each cut at a word, so you can see it happened without reading it; `wrap`
+writes the first three lines out whole, word-wrapped, up to 12 rows; `show`
+prints everything, wrapped. No row ever outruns the terminal.
 
 `theme` sets the palette the loop draws in — `dark` (default), `dim`, `light`,
 `high-contrast`, and `mono` recolour gnomon's own output only. `tokyonight` and
@@ -1519,7 +1521,9 @@ the agent is on purpose.
 help, such as one rule refusing one role on the same paths again and again.
 Each one points at the records it came from. A candidate is not loaded and not
 hashed, and a person decides what, if anything, becomes a skill
-(docs/CONTRACTS.md §12).
+(docs/CONTRACTS.md §12). It also reads `skill_use` records and flags skills
+that fire often but are never cited (tighten `match`, or prune), skills cited
+often (candidates to trial), and what each costs in context per firing.
 
 Before accepting, you can measure a proposal:
 
@@ -3572,7 +3576,7 @@ undiscoverable.
 | `/tools` | What this role may call, and what is withheld |
 | `/endpoints` | Declared inference endpoints |
 | `/context` | Window, folded turns, summary size |
-| `/skills` | Active skills and pending proposals |
+| `/skills` | Active skills with how often each fired, was read and cited (this session and across the audit trail), its context cost and latest trial verdict; pending proposals |
 | `/session [id]` | This session, earlier ones, and switching between them |
 | `/new` | Start a fresh session; the current one stays resumable |
 | `/explain [topic]` | What a feature is, how **this** repo has it set, and what to do with it |
@@ -3581,7 +3585,7 @@ undiscoverable.
 | `/manifest` | The surface hash and what it covers |
 | `/reset` | Alias for `/new`. It does **not** clear history in place — that overwrote the record |
 | `/meta [fields]` | Set the meta line — `/meta all`, `/meta none`, `/meta style compact` |
-| `/think [mode]` | Chain-of-thought: `hide` \| `collapse` \| `show` |
+| `/think [mode]` | Chain-of-thought: `hide` \| `collapse` (one cut row per line) \| `wrap` (first lines written out whole, word-wrapped) \| `show` (everything, wrapped). `/expand think` reprints the last turn's reasoning in full. |
 | `/cot [mode]` | Live trace while it works: `off` \| `brief` \| `tools` \| `think` \| `work` \| `full`. `work` is the default: it shows reasoning and prose in full, and folds a run of steps that succeeded and changed nothing into one line. `full` never folds. |
 | `/expand` | List the steps inside the last folded run. |
 | `/theme [name]` | Colour theme; `tokyonight`/`catppuccin` recolour the whole terminal |
@@ -3590,10 +3594,12 @@ undiscoverable.
 **Reading the live trace.** Each model response prints as one block:
 
 ```
-  ◆ skills  writing tests ("test")                                skills this turn loaded, and why
+  ◆ skills  writing tests ("test") ~420 tok  · ~420 tok           skills this turn loaded, why, and their context cost
   ✻ The last turn was cancelled, so check what landed first.     reasoning
+  ✻ I will follow writing tests here.  ·uses writing tests       reasoning that names a loaded skill (derived)
   ● Let me look at what is on disk.                               what it told you
   ◆ skill  secrets                                                a skill it opened on its own
+  ◆ skill  propose: tag-notes                                     a skill it proposed (not active until you accept)
   ⚙ bash  ls experiments/                                         a step: the tool, what it was called on
     ⎿ exit 0 · 3 lines · stack_bench.py                           what came back, and a line of output
   ⚙ task  verifier: run the bench files
@@ -3602,6 +3608,7 @@ undiscoverable.
   ┊    ⎿ ✗ exit 1 · ModuleNotFoundError: No module named 'numpy'
   ┊  ↲ verifier 1 step(s) · stack_bench.py fails: numpy is missing
     ⎿ 1 tool call(s)
+  ◆ skills used: writing tests (loaded ~420 tok, read 1×, cited)  end of turn, only when a skill was involved
 ```
 
 Reasoning is shown whichever way the model sends it: a reasoning field
@@ -3609,10 +3616,15 @@ Reasoning is shown whichever way the model sends it: a reasoning field
 `reasoning_details`), thinking content parts (Mistral, Anthropic-shaped
 relays), or inline markup (`<think>`, Seed's `<seed:think>`, Gemma 4's
 thought channel, gpt-oss Harmony, and the rest listed in
-[GUIDE §5](docs/GUIDE.md#5-model-setup-recipes)). `/think show` prints all of it; the default
+[GUIDE §5](docs/GUIDE.md#5-model-setup-recipes)). `/think show` prints all of it, `/think wrap` the first lines whole, and
+`/expand think` reprints the last turn's reasoning in full; the default
 `collapse` shows three rows. Skills a turn loads print as `◆ skills`, with
 the word that fired each; a skill the model opens itself prints as
-`◆ skill`, and a delegated turn shows its own. A role switch prints
+`◆ skill`, and a delegated turn shows its own. Each loaded skill carries its
+estimated context cost, `·uses <skill>` marks reasoning that names a loaded
+skill, and `◆ skills none matched · N available` (at `/cot work` and `full`)
+says skills exist and none fired. All of it is derived from what the loop
+sees, never asked of the model (docs/CONTRACTS.md §54). A role switch prints
 `⇢ auto: implement → plan`, and an escalation `[escalate]`.
 
 **You can type while a turn is running.** Anything you enter is queued and runs

@@ -32,6 +32,8 @@ import {
   unresolvedTamper,
   resolveTamper,
   mineCandidates,
+  readSkillUsage,
+  skillUsageSignals,
   writeCandidates,
   loadCandidates,
   MIN_REPEATS,
@@ -46,6 +48,7 @@ import {
   parseDeadline,
   unstartedTaskRecord,
   taskExitCode,
+  verifyExitRequested,
   type TaskRecord,
   resolveAudit,
   loadLoops,
@@ -248,6 +251,10 @@ export function parseArgs(args: string[]): CliArgs {
       // Bare as well. Accepts a role leaving the container it ran in here,
       // for this run, which --trust alone does not (trust.ts).
       result.flags["trust-exec-downgrade"] = "true";
+    } else if (arg === "--require-verify") {
+      // Bare: the declared [verify] check is in the exit (1 failed, 4 unrunnable)
+      // and in the record's verify_* detail. Without it #211 stands: exit 0.
+      result.flags["require-verify"] = "true";
     } else if (arg === "--require-trust") {
       // Bare: an untrusted surface that grants more than the defaults stops
       // the run (exit 3) instead of running clamped. For CI.
@@ -1797,6 +1804,7 @@ async function cmdTask(args: CliArgs): Promise<void> {
   // defaults runs clamped to them, with one line on stderr -- never blocked,
   // never silently widened.
   let record: TaskRecord;
+  let requireVerify = args.flags["require-verify"] === "true";
   // A time cap's SIGTERM (Harbor, Terminal-Bench), a closed terminal, a kill
   // -INT: the run's record is flushed as `killed` -- the live record beside
   // the trail, a `turn` audit record and session_end -- and, under --json,
@@ -1822,9 +1830,11 @@ async function cmdTask(args: CliArgs): Promise<void> {
       trustOptions(args)
     );
     pinSessionAnchor(settled.config);
+    requireVerify = verifyExitRequested(settled.config, requireVerify);
     record = await runTask(settled.config, text, {
       role: args.role,
       yes: args.yes,
+      ...(args.flags["require-verify"] === "true" ? { requireVerify: true } : {}),
       verbose: !args.json,
       trust: settled.outcome,
       interrupt,
@@ -1867,7 +1877,7 @@ async function cmdTask(args: CliArgs): Promise<void> {
   }
 
   // Exit code carries the bucket, so a caller can gate on it without parsing.
-  process.exit(taskExitCode(record));
+  process.exit(taskExitCode(record, { requireVerify }));
 }
 
 async function cmdSkill(args: CliArgs): Promise<void> {
@@ -1880,22 +1890,31 @@ async function cmdSkill(args: CliArgs): Promise<void> {
     // to .gnomon-skills/candidates/, and changes nothing the agent loads.
     const found = mineCandidates(config);
     const w = writeCandidates(config, found);
+    // Signals about skills that already exist, from `skill_use` records.
+    const usage = readSkillUsage(config);
+    const usageSignals = skillUsageSignals(usage);
     if (args.json) {
-      console.log(JSON.stringify({ dir: w.dir, fresh: w.fresh, candidates: found }, null, 2));
+      console.log(JSON.stringify({ dir: w.dir, fresh: w.fresh, candidates: found, skill_usage: [...usage.values()], skill_signals: usageSignals }, null, 2));
       return;
     }
     if (found.length === 0) {
       console.log("No skill candidates: no rule refused the same role on the same thing " +
         `${MIN_REPEATS} or more times in the audit trails.`);
-      return;
+    } else {
+      console.log(`${found.length} skill candidate(s), ${w.fresh.length} new → ${w.dir}`);
+      for (const c of found) {
+        console.log(`  ${c.id}${w.fresh.includes(c.id) ? "  (new)" : ""}`);
+        console.log(`      ${c.suggestion}`);
+        console.log(`      ${c.records.length} record(s), first ${c.records[0]!.trail} seq ${c.records[0]!.seq}`);
+      }
+      console.log("Candidates are evidence, not skills: nothing is loaded until a person accepts one.");
     }
-    console.log(`${found.length} skill candidate(s), ${w.fresh.length} new → ${w.dir}`);
-    for (const c of found) {
-      console.log(`  ${c.id}${w.fresh.includes(c.id) ? "  (new)" : ""}`);
-      console.log(`      ${c.suggestion}`);
-      console.log(`      ${c.records.length} record(s), first ${c.records[0]!.trail} seq ${c.records[0]!.seq}`);
-    }
-    console.log("Candidates are evidence, not skills: nothing is loaded until a person accepts one.");
+    console.log(`\nSkills in use (from skill_use records): ${usageSignals.length} signal(s)`);
+    for (const h of usageSignals) console.log(`  ${h.skill} [${h.signal}]\n      ${h.suggestion}`);
+    const costly = [...usage.values()]
+      .filter((u) => u.tokens_per_firing !== null)
+      .sort((x, y) => y.tokens_per_firing! - x.tokens_per_firing!);
+    for (const u of costly) console.log(`  ${u.id}: ${u.firings} firing(s), ~${u.tokens_per_firing} tok each, cited ${u.cited}×`);
     return;
   }
 
@@ -2210,6 +2229,21 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
     console.log("Audit: on — decisions and outcomes, no prompt text, in .gnomon-audit/ ([audit] in config.toml).");
   }
 
+  if (result.trial) {
+    console.log(
+      `Trial: .gnomon/trials/default.toml — ${result.trial.locate ? "a locate task (answer checked by hash) and " : ""}a planted-secret canary,\n` +
+        `       runnable with your local model: gnomon eval --against <ref>   (or gnomon skill trial <skill>).`
+    );
+  }
+  if (result.claudeCode) {
+    // Offered, never performed: the hook is a file in .claude/ that Claude Code
+    // runs on every call, and installing it is the person's decision.
+    console.log("");
+    console.log(`Claude Code: .claude/ is here, and [check.roles] maps its hook to the "${result.claudeCode.role}" role.`);
+    console.log("  Put a live guard in front of its tool calls (not run for you):");
+    console.log("    gnomon guard install claude-code --write");
+  }
+
   // Name the file whose edits take effect. The scaffold ships
   // `role_profile = "local_first"` and a profile that restates `model` and
   // `endpoint` for every role that has one, and a profile is merged OVER the
@@ -2466,6 +2500,23 @@ async function cmdSetup(args: CliArgs, opts: { fromLaunch?: boolean } = {}): Pro
  * from what setup recorded. Never writes; says what would fix each problem.
  */
 async function cmdDoctor(args: CliArgs): Promise<number> {
+  // `gnomon doctor verify`: run the declared check once (verify_probe.ts). A
+  // separate command, because plain doctor never runs anything of the project's.
+  if (args.subcommand === "verify") {
+    const { probeVerify, formatVerifyProbe, VERIFY_PROBE_SCHEMA, VERIFY_PROBE_EXIT } = await import("gnomon-core");
+    const dir = projectRoot(args);
+    if (!existsSync(join(dir, ".gnomon"))) {
+      return commandError(args, VERIFY_PROBE_SCHEMA, `No .gnomon/ in ${dir}: nothing declares a check (gnomon init).`, VERIFY_PROBE_EXIT.couldNotRun);
+    }
+    try {
+      const report = await probeVerify(dir);
+      if (args.json) console.log(JSON.stringify(report, null, 2));
+      else for (const l of formatVerifyProbe(report)) console.log(l);
+      return report.exit_code;
+    } catch (err) {
+      return commandError(args, VERIFY_PROBE_SCHEMA, `doctor verify could not run: ${err instanceof Error ? err.message : String(err)}`, VERIFY_PROBE_EXIT.couldNotRun);
+    }
+  }
   const [{ runDoctor, formatDoctor, DOCTOR_EXIT }, { loadCatalog, defaultCatalogPath }, { systemHost }] = await Promise.all([
     import("./doctor.js"),
     import("./catalog.js"),
@@ -3009,6 +3060,15 @@ Commands:
     3 the surface or the change moved, 4 needs consent or a model, 12 the
     model server stopped answering.
 
+  doctor verify [--json] [--dir <path>]
+    Run the project's [verify] check once on the tree as it is (the command
+    the surface declares, else the one init would detect), through the same
+    sandbox, and say what it means: could not run (126/127, a timeout), exits
+    0 but ran no test, exits 4 or 5 (usage error or nothing collected, which
+    reads as a failure unless [verify] contract or exit_map says otherwise),
+    or fails on the clean tree. Does not run [verify] setup. Exit 0 the check
+    runs and holds up, 1 a problem, 10 nothing to run.
+
   doctor [--json] [--catalog FILE]
     Read-only: this machine, whether every role's model answers, and what
     changed since setup (memory, GPUs, model servers, catalog). Says what
@@ -3121,6 +3181,10 @@ Commands:
     sealed trail (exit 2).
     Gated tool calls are REFUSED unless --yes: a non-interactive run has
     nobody to ask. Exit code: 0 result, 2 refusal, 10 apparatus_failure.
+    --require-verify (or [verify] exit_on_fail = true) puts the declared
+    [verify] check in the exit where the bucket says 0: 1 for a check that
+    failed (or regressed, or passed_unverified), 4 for one that could not
+    run; the record then carries verify_exit, verify_rounds, verify_reason.
     A surface granting more than the defaults that this machine has not
     trusted runs CLAMPED to the defaults, with one line on stderr; --trust
     (or GNOMON_TRUST=<surface hash>) runs it as declared -- except a role

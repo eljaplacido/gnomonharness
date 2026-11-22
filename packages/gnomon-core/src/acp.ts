@@ -50,6 +50,7 @@ import { existsSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
+import { auditSecretsInRoot } from "./secrets_in_root.js";
 import {
   auditSurface,
   declaredKeyVars,
@@ -613,7 +614,7 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
 
     // The same audit the terminal runs before its first turn, and the same
     // consequence: a fatal finding ends it before anything reaches a model.
-    const findings = auditSurface(config);
+    const findings = [...auditSurface(config), ...auditSecretsInRoot(config)];
     const fatal = findings.filter((p) => p.fatal);
     if (fatal.length > 0) {
       throw new RpcFailure(

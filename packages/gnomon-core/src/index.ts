@@ -17,6 +17,7 @@
  */
 
 export * from "./config.js";
+export * from "./secrets_in_root.js";
 export * from "./git_safe.js";
 export * from "./root_fs.js";
 // Whether a relative path leaves its base: `..` as a component, not a name
@@ -36,6 +37,8 @@ export * from "./mediators.js";
 // The completion gate (`[verify] completion_gate`): checklist, required check
 // and read-only reviewer at the end of a turn (docs/CONTRACTS.md §30).
 export * from "./completion_gate.js";
+export * from "./verify_outcome.js";
+export * from "./verify_probe.js";
 // The finish gate (`[verify] finish_gate = "v2"`): task verbatim, caveat
 // audit, claims against evidence, targeted checks. CONTRACTS.md §33.
 export * from "./finish_gate.js";
@@ -79,6 +82,7 @@ export * from "./record_tamper.js";
 // A turn's record on disk while it runs, and the signals that flush it.
 export * from "./live_record.js";
 export * from "./skill_mine.js";
+export * from "./skill_use.js";
 export * from "./skill_trial.js";
 // `gnomon eval`: the trial's cells, for a profile or a surface instead of a skill.
 export * from "./eval.js";
@@ -105,11 +109,13 @@ export * from "./trust.js";
 // Governance levels per role, read by `gnomon security` (the posture report),
 // and where they fall short of prevent (governance_off, `gnomon guard status`).
 export {
+  DEFAULT_SECRET_PATHS,
   GOVERNANCE_FIX,
   UNDECLARED_OFF,
   governanceGapLine,
   governanceGaps,
   resolveLevels,
+  resolveProtectedPaths,
   type GovernanceGaps,
   type GovernanceLevels,
 } from "./governance.js";

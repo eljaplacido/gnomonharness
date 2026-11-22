@@ -14,6 +14,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { safeGit, setGitSandbox, containerStarted, containerGone, dockerContainerGone, CONTAINER_ROOT_LABEL } from "./git_safe.js";
 import { recordDegradation, type DegradationSink } from "./degradation.js";
 import {
@@ -89,6 +90,7 @@ import {
 } from "./shell.js";
 import {
   containedMountPoints,
+  appendFileIn,
   containedReadonlyPaths,
   ensureDirIn,
   readRegular,
@@ -1506,6 +1508,97 @@ function clampEnds(text: string, ctx: ToolContext, label: string): string {
   );
 }
 
+/** The most a flooding command's full output is written to disk: 64 MB, then the file stops. */
+export const FLOOD_SPILL_CAP_BYTES = 64 * 1024 * 1024;
+
+/**
+ * One output stream of a foreground command, bounded in memory.
+ *
+ * The streams used to be `s += chunk.toString()` and were clamped only once the
+ * command had exited, so `yes`, a multi-GB `cat` or a verbose test loop grew a
+ * string until Node threw RangeError inside the data handler and took the whole
+ * process (session, audit seal, the turn's work) with it. Background jobs were
+ * already bounded (JOB_LIMITS.buffer_bytes); this makes foreground the same.
+ *
+ * Up to twice the output limit it is held whole, so an ordinary command's
+ * result is byte for byte what it was, and clamp / clampEnds spill it as
+ * before. Past that it keeps only the head and the tail (so what the model is
+ * shown is still the start and the end), streams everything to a spill file
+ * capped at FLOOD_SPILL_CAP_BYTES, and says how many bytes went and where the
+ * file is. Each stream is held to 45% of the limit, so the two together still
+ * fit one result without a second clamp. One decoder per stream: a multi-byte
+ * character split across chunks is no longer corrupted.
+ */
+export class StreamCapture {
+  private readonly dec = new StringDecoder("utf8");
+  private readonly memCap: number;
+  private readonly headKeep: number;
+  private readonly tailKeep: number;
+  private buf = "";
+  private head = "";
+  private tail = "";
+  private total = 0;
+  private writer: SpillWriter | null = null;
+  private over = false;
+  private flushed = false;
+
+  constructor(
+    private readonly ctx: ToolContext,
+    private readonly label: string
+  ) {
+    const limit = Math.max(1, ctx.maxOutputBytes);
+    this.memCap = 2 * limit;
+    const bound = Math.max(1, Math.floor(limit * 0.45));
+    this.headKeep = Math.floor(bound * 0.6);
+    this.tailKeep = bound - this.headKeep;
+  }
+
+  /** Whether the stream outgrew memory, so what `text()` returns is not all of it. */
+  get overflowed(): boolean {
+    return this.over;
+  }
+
+  push(chunk: Buffer): void {
+    this.total += chunk.length;
+    this.add(this.dec.write(chunk));
+  }
+
+  private add(s: string): void {
+    if (s === "") return;
+    if (!this.over) {
+      this.buf += s;
+      if (this.buf.length > this.memCap) {
+        this.over = true;
+        this.writer = this.ctx.spill?.open?.(this.label, FLOOD_SPILL_CAP_BYTES) ?? null;
+        this.writer?.write(this.buf);
+        this.head = this.buf.slice(0, this.headKeep);
+        this.tail = this.buf.slice(-this.tailKeep);
+        this.buf = "";
+      }
+      return;
+    }
+    this.writer?.write(s);
+    this.tail += s;
+    if (this.tail.length > 2 * this.tailKeep) this.tail = this.tail.slice(-this.tailKeep);
+  }
+
+  /** What the command printed: all of it, or its start and end with a note in between. */
+  text(): string {
+    if (!this.flushed) {
+      this.flushed = true;
+      this.add(this.dec.end());
+    }
+    if (!this.over) return this.buf;
+    const tail = this.tail.slice(-this.tailKeep);
+    const dropped = Math.max(0, this.total - Buffer.byteLength(this.head) - Buffer.byteLength(tail));
+    const saved = this.writer?.end() ?? null;
+    const where = saved
+      ? ` The first ${saved.bytes} of ${this.total} bytes are saved at ${saved.rel}${saved.capped ? " (the file stops at its size cap)" : ""} — \`grep\` that path for what you need rather than running the command again.`
+      : ` No copy could be saved, so narrow the command instead.`;
+    return `${this.head}\n… [${dropped} bytes dropped from the middle — this is the start and the end of the output, not all of it.${where}]\n${tail}`;
+  }
+}
+
 /** What `read` refuses before it would ask or touch the filesystem. */
 export function readPrecheck(
   args: Record<string, unknown>,
@@ -2150,6 +2243,10 @@ export function sandboxCommand(
         ]
       : []),
     ...readonly.map((p) => `-v ${shq(p)}:${shq(p)}:ro`),
+    // Declared secrets in the root, hidden: an empty file over each, so no
+    // route inside the container (an interpreter building the path at run
+    // time included) reads one. Only where the secrets family is at prevent.
+    ...hiddenSecretMounts(ctx).map((p) => `-v ${shq(emptySecretFile())}:${shq(p)}:ro`),
     `-w ${shq(ctx.root)}`,
     // Which project the container can write, for any gnomon process to ask
     // (git_safe liveContainer): the dashboard, `gnomon check`, `gnomon
@@ -4530,6 +4627,42 @@ function shellExpand(base: string, rest: string): string[] {
 }
 
 /**
+ * Declared secret files (`[governance.paths] secrets`) inside `root`: real
+ * regular files only (walkFiles skips symlinks and the never-walked trees).
+ * Exceptions (`!.env.example`) apply, in order, as everywhere.
+ */
+export function secretFilesInRoot(root: string, list: readonly string[] | undefined): string[] {
+  if (!list || list.length === 0) return [];
+  const base = resolve(root);
+  const could = couldBeListed(list, base, base);
+  const out: string[] = [];
+  for (const rel of walkFiles(base, base)) {
+    const parts = rel.split("/");
+    if (!could(rel, parts[parts.length - 1]!)) continue;
+    const at = join(base, rel);
+    if (pathListed(list, base, at)) out.push(at);
+  }
+  return out;
+}
+
+/** Secret files a docker command must not see: declared, in the root, secrets family at prevent or above. */
+function hiddenSecretMounts(ctx: Pick<ToolContext, "root" | "protectedPaths" | "governance">): string[] {
+  if (ctx.protectedPaths === undefined) return [];
+  if (ctx.governance && !levelAtLeast(ctx.governance.levels.secrets, "prevent")) return [];
+  return secretFilesInRoot(ctx.root, ctx.protectedPaths.secrets);
+}
+
+let emptyFile: string | undefined;
+/** An empty, read-only file of this process's own, to mount over a secret. */
+function emptySecretFile(): string {
+  if (emptyFile && existsSync(emptyFile)) return emptyFile;
+  const dir = mkdtempSync(join(tmpdir(), "gnomon-empty-"));
+  emptyFile = join(dir, "empty");
+  writeFileSync(emptyFile, "", { mode: 0o444 });
+  return emptyFile;
+}
+
+/**
  * The first protected secret FILE a recursive reader starting at `abs` would
  * open (`grep -r KEY .`, `rg KEY`, `tar cf - .`, `find . -exec cat {} +`).
  * protectedBelow finds a listed place (`~/.ssh`); this finds a listed name
@@ -4955,8 +5088,11 @@ async function bashTool(
       // Under exec = "docker" the container gets --network none instead, and
       // under exec = "os" gnomon-exec blocks egress in the kernel.
     });
-    let stdout = "";
-    let stderr = "";
+    const outCap = new StreamCapture(ctx, "bash-stdout");
+    const errCap = new StreamCapture(ctx, "bash-stderr");
+    // A flood was already saved by the capture; clamping the combined text
+    // again must not save the (already shortened) text a second time.
+    const resultCtx = (): ToolContext => (outCap.overflowed || errCap.overflowed ? { ...ctx, spill: undefined } : ctx);
     let settled = false;
     if (osPlan) {
       let report = "";
@@ -4988,6 +5124,8 @@ async function bashTool(
       // the fact of the timeout, and the only move that leaves is to run the
       // same command again. Report the elapsed limit, then hand back both ends
       // of what was captured.
+      const stdout = outCap.text();
+      const stderr = errCap.text();
       const captured = [
         stdout ? `stdout:\n${stdout}` : "stdout: (empty)",
         stderr ? `stderr:\n${stderr}` : "",
@@ -4996,7 +5134,7 @@ async function bashTool(
         .join("\n");
       releasePipes(proc);
       // Opt-in line cap (CX3); unchanged text and context when none is declared.
-      const cappedCapture = capLines(captured, ctx.maxLines?.bash, ctx, `bash-timeout`);
+      const cappedCapture = capLines(captured, ctx.maxLines?.bash, resultCtx(), `bash-timeout`);
       const drift = surfaceDrift(ctx, surfaceBefore);
       const movedTree = worktreeMoved(ctx, worktreeBefore, shellCwd);
       // So the next identical call is refused for free rather than stalling.
@@ -5040,10 +5178,10 @@ async function bashTool(
             ? `Stopped at this task's deadline after ${Date.now() - startedAt}ms. Output captured before the stop:\n`
             : `Cancelled by the operator after ${Date.now() - startedAt}ms. Output captured before the stop:\n`) +
           clampEnds(
-            [stdout ? `stdout:\n${stdout}` : "stdout: (empty)", stderr ? `stderr:\n${stderr}` : ""]
+            [outCap.text() ? `stdout:\n${outCap.text()}` : "stdout: (empty)", errCap.text() ? `stderr:\n${errCap.text()}` : ""]
               .filter(Boolean)
               .join("\n"),
-            ctx,
+            resultCtx(),
             `bash-cancelled`
           ) +
           (containerLeft ? CONTAINER_NOT_GONE : ""),
@@ -5052,8 +5190,8 @@ async function bashTool(
     };
     ctx.signal?.addEventListener("abort", onAbort, { once: true });
 
-    proc.stdout?.on("data", (d: Buffer) => (stdout += d.toString()));
-    proc.stderr?.on("data", (d: Buffer) => (stderr += d.toString()));
+    proc.stdout?.on("data", (d: Buffer) => outCap.push(d));
+    proc.stderr?.on("data", (d: Buffer) => errCap.push(d));
     proc.on("error", (err) => {
       if (settled) return;
       settled = true;
@@ -5098,7 +5236,9 @@ async function bashTool(
       settled = true;
       clearTimeout(timer);
       if (sandboxed) containerAfterExit(sandboxName, exit);
-      const outcome = exitOutcome({ command, exit, signal, stdout, stderr, ctx, surfaceBefore, worktreeBefore, shellCwd });
+      const stdout = outCap.text();
+      const stderr = errCap.text();
+      const outcome = exitOutcome({ command, exit, signal, stdout, stderr, ctx: resultCtx(), surfaceBefore, worktreeBefore, shellCwd });
       done(
         osPlan && exit !== 0 && /\bkill\b[\s\S]*(Operation not permitted|not permitted)/i.test(stderr + stdout)
           ? {
@@ -8200,13 +8340,27 @@ export const JOB_LOG_DIR = ".gnomon-jobs";
 export const OVERFLOW_DIR = ".gnomon-out";
 
 /**
+ * A file filled chunk by chunk, for output too large to hold: a command that
+ * floods stdout. `write` appends up to `capBytes` and drops the rest; `end`
+ * says what landed. Never throws.
+ */
+export interface SpillWriter {
+  write(chunk: string): void;
+  end(): { rel: string; bytes: number; capped: boolean } | null;
+}
+
+
+/**
  * Save one over-long tool output, returning a root-relative path or null.
  *
  * Null on any failure, and every caller treats null as "no file exists" — a
  * harness that names a path it did not manage to write has told the model to
  * read something that is not there.
  */
-export type SpillSink = (text: string, label: string) => string | null;
+export type SpillSink = ((text: string, label: string) => string | null) & {
+  /** Start a streamed spill file, or null when none can be made. */
+  open?: (label: string, capBytes: number) => SpillWriter | null;
+};
 
 /**
  * A sink that writes under `<root>/.gnomon-out/<session>/`.
@@ -8225,7 +8379,7 @@ export function createSpillSink(
   let dir: string | null = null;
   let unusable = false;
   let n = 0;
-  return (text: string, label: string): string | null => {
+  const place = (label: string): { abs: string; rel: string } | null => {
     if (unusable) return null;
     if (!dir) {
       try {
@@ -8240,15 +8394,53 @@ export function createSpillSink(
     }
     const safe = label.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
     const name = `${String(++n).padStart(3, "0")}-${safe || "output"}.txt`;
+    // Forward slashes: this string is handed to the model to pass back to
+    // `read`, and a Windows separator would come back as an escape.
+    return { abs: join(dir, name), rel: `${OVERFLOW_DIR}/${safeSession}/${name}` };
+  };
+  const sink = ((text: string, label: string): string | null => {
+    const at = place(label);
+    if (!at) return null;
     try {
-      writeFileIn(root, join(dir, name), text);
+      writeFileIn(root, at.abs, text);
     } catch {
       return null;
     }
-    // Forward slashes: this string is handed to the model to pass back to
-    // `read`, and a Windows separator would come back as an escape.
-    return `${OVERFLOW_DIR}/${safeSession}/${name}`;
+    return at.rel;
+  }) as SpillSink;
+  sink.open = (label, capBytes) => {
+    const at = place(label);
+    if (!at) return null;
+    let bytes = 0;
+    let capped = false;
+    let failed = false;
+    let started = false;
+    return {
+      write(chunk) {
+        if (failed || capped || chunk === "") return;
+        let data = Buffer.from(chunk, "utf8");
+        if (bytes + data.length > capBytes) {
+          data = data.subarray(0, Math.max(0, capBytes - bytes));
+          capped = true;
+        }
+        try {
+          if (!started) {
+            writeFileIn(root, at.abs, data);
+            started = true;
+          } else {
+            appendFileIn(root, at.abs, data);
+          }
+          bytes += data.length;
+        } catch {
+          failed = true;
+        }
+      },
+      end() {
+        return failed || !started ? null : { rel: at.rel, bytes, capped };
+      },
+    };
   };
+  return sink;
 }
 
 /** Keep the `keep` most recently modified session directories, drop the rest. */

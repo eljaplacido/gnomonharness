@@ -22,9 +22,13 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
+  DEFAULT_SECRET_PATHS,
   GOVERNANCE_FIX,
   UNDECLARED_OFF,
+  auditSecretsInRoot,
   auditSurface,
+  secretFilesInRoot,
+  resolveProtectedPaths,
   evaluateTrust,
   governanceGaps,
   isToolEnabled,
@@ -40,6 +44,7 @@ import {
   type TrustOptions,
 } from "gnomon-core";
 import { guardStatus } from "./guard.js";
+import { pendingMigrations } from "./migrate.js";
 
 export const SECURITY_SCHEMA = "gnomon.security/1";
 export const SECURITY_EXIT = { clean: 0, risk: 2, couldNotRun: 10 } as const;
@@ -50,11 +55,13 @@ export const SECURITY_FINDING_IDS = [
   "host_hook",
   "audit_off",
   "governance_off",
+  "rules_drift",
   "host_exec",
   "judge_can_write",
   "approval_never_on_host",
   "sandbox_network",
   "exec_os_windows",
+  "secrets_in_tree",
   "surface_warning",
 ] as const;
 export type SecurityFindingId = (typeof SECURITY_FINDING_IDS)[number];
@@ -154,7 +161,7 @@ export function buildSecurityReport(dir: string, trust: TrustOptions = {}, platf
   const config = loadConfig(dir);
   const findings: SecurityFinding[] = [];
 
-  for (const p of auditSurface(config)) {
+  for (const p of [...auditSurface(config), ...auditSecretsInRoot(config)]) {
     findings.push({
       id: p.fatal ? "surface_fatal" : "surface_warning",
       severity: p.fatal ? "risk" : "advice",
@@ -222,6 +229,50 @@ export function buildSecurityReport(dir: string, trust: TrustOptions = {}, platf
           ? `${names} run${osRoles.length === 1 ? "s" : ""} bash under exec = "os", and Windows has no OS sandbox: on this machine every shell command is refused (fail closed), so there is no bash here, and [verify] and gnomon check cannot run either (check gives no verdict)`
           : `${names} run${osRoles.length === 1 ? "s" : ""} bash under exec = "os": on a Windows machine that runs this surface every shell command is refused (Windows has no OS sandbox), so a repository shared with Windows has no bash there, and no [verify] or gnomon check verdict either`,
       fix: 'for Windows: exec = "docker" ([sandbox] in .gnomon/policy.toml, or per role in roles.toml), or run gnomon inside WSL2',
+    });
+  }
+
+  // Declared secrets inside the repository (#227): a word check cannot see an
+  // interpreter build the path at run time, and exec = "os" grants the whole
+  // root. exec = "docker" hides them with an empty mount, so it is not listed.
+  // Where exec = "os" at prevent already stopped the session (surface_fatal or
+  // an accepted secrets_in_root), that finding says so; this one is the rest.
+  const bashRoles = roles.filter((r) => r.bash && r.exec !== "docker");
+  if (bashRoles.length > 0 && auditSecretsInRoot(config).length === 0) {
+    let lists;
+    try {
+      lists = resolveProtectedPaths(config, resolveLevels(config, bashRoles[0]!.role));
+    } catch {
+      lists = undefined; // malformed governance: surface_fatal says so
+    }
+    const files = secretFilesInRoot(dir, lists?.secrets ?? DEFAULT_SECRET_PATHS).map((f) => relative(dir, f));
+    if (files.length > 0) {
+      findings.push({
+        id: "secrets_in_tree",
+        severity: "advice",
+        message:
+          `${files.slice(0, 5).join(", ")}${files.length > 5 ? `, +${files.length - 5} more` : ""} ` +
+          `${files.length === 1 ? "is a declared secret" : "are declared secrets"} inside the repository: readable by any interpreter the role may run ` +
+          `(${bashRoles.map((r) => r.role).join(", ")}), by a path built at run time that the word check cannot see`,
+        fix: 'move it out of the repository; or exec = "docker" with [governance] level = "prevent", which hides it behind an empty mount',
+      });
+    }
+  }
+
+  // Rule drift (#228): the surface lags the defaults this gnomon ships (15 of 16
+  // surveyed projects with their own rules did). Read-only, as `migrate --check`.
+  let drift: ReturnType<typeof pendingMigrations> = [];
+  try {
+    drift = pendingMigrations(config.gnomonDir);
+  } catch {
+    drift = []; // a file that will not read is surface_fatal's to say
+  }
+  if (drift.length > 0) {
+    findings.push({
+      id: "rules_drift",
+      severity: "advice",
+      message: `${drift.length} migration(s) pending against this gnomon's defaults: ${drift.map((d) => d.id).join(", ")} (gnomon migrate --check lists what each changes)`,
+      fix: "gnomon migrate --check, then gnomon migrate, review `git diff .gnomon/` and commit it",
     });
   }
 

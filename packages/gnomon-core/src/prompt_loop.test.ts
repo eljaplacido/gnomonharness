@@ -492,6 +492,7 @@ describe("tab completion", () => {
   it("completes /think modes", () => {
     const [hits] = promptLoop.completeInput("/think s", roles);
     expect(hits).toEqual(["show"]);
+    expect(promptLoop.completeInput("/think w", roles)[0]).toEqual(["wrap"]);
   });
 
   it("offers nothing for ordinary prose", () => {
@@ -1039,6 +1040,14 @@ describe("model API errors", () => {
     expect(warned).toEqual(["  ┊  [endpoint] slow"]);
   });
 
+  it("nestedDeps counts the gutter's columns, once per level", () => {
+    const ui = { meta: [], meta_style: "line", think: "hide", spinner: false, color: false } as any;
+    const base = { ui, approve: async () => true, progress: {} as any, say: () => {} };
+    const once = promptLoop.nestedDeps(base);
+    expect(once.gutter).toBe(3);
+    expect(promptLoop.nestedDeps(once).gutter).toBe(6);
+  });
+
   describe("reasoning from every field and part shape in the 2026-11 survey", () => {
     it("readReasoning reads reasoning_content, reasoning, Ollama's thinking and reasoning_details", () => {
       expect(promptLoop.readReasoning({ reasoning_content: "a" })).toBe("a");
@@ -1161,7 +1170,7 @@ describe("model API errors", () => {
         "rotate the API token",
         200
       );
-      expect(row).toBe('  ◆ skills  secrets ("token"), house style (always)');
+      expect(row).toMatch(/^  ◆ skills  secrets \("token"\) ~\d+ tok, house style \(always\) ~\d+ tok  · ~\d+ tok$/);
       expect(promptLoop.skillsRow(ui, [], "x")).toBeNull();
     });
 

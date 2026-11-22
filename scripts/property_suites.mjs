@@ -11,7 +11,7 @@
  * cases all errored the same way, can still exit 0. So each one here is held to
  * the figure the README and the website publish, case count included:
  *
- *   surface-fidelity      14/14 faithful, 0 false negatives, 0 false positives, 0 unmeasurable,
+ *   surface-fidelity      15/15 faithful, 0 false negatives, 0 false positives, 0 unmeasurable,
  *                         and a trial-spec change that flips a verdict and moves the hash
  *   degradation-contract  17/17 complete (14/14 until shadow_unreachable and audit_anchor_queued, 2026-11-03,
  *                         and context_window_unresolved, 2026-11-04)
@@ -88,7 +88,11 @@ const check = (name, r, problems) => {
   }
 };
 
-// ── surface fidelity: 14/14 ──
+// ── surface fidelity: 15/15 ──
+//
+// 14 until 2026-11-22: the 15th path is `.gnomon/trials/default.toml`, the
+// starter trial spec `gnomon init` now scaffolds (#228); a trial spec is
+// behaviour, so the hash must move with it.
 //
 // 13 until 2026-11-03. The 14th path is `.gnomon/trials/probe.toml`: a
 // skill-trial spec decides what `require_trial` accepts, so the suite counts it
@@ -100,12 +104,12 @@ const check = (name, r, problems) => {
   const p = [];
   if (existsSync(out)) {
     const d = json(out), s = d.summary ?? {};
-    if (d.rows?.length !== 14) p.push(`${d.rows?.length} paths, published 14`);
-    if (s.faithful !== 14) p.push(`faithful ${s.faithful}/14`);
+    if (d.rows?.length !== 15) p.push(`${d.rows?.length} paths, published 15`);
+    if (s.faithful !== 15) p.push(`faithful ${s.faithful}/15`);
     for (const k of ["false_negative", "false_positive", "unmeasurable"]) if (s[k] !== 0) p.push(`${k} ${s[k]}`);
     if (!d.trial_spec_flip?.flipped || !d.trial_spec_flip?.hash_moved) p.push("a trial-spec change did not flip the verdict and move the hash");
   } else p.push("no JSON written");
-  check("surface-fidelity 14/14", r, p);
+  check("surface-fidelity 15/15", r, p);
 }
 
 // ── degradation contract: 17/17 complete ──

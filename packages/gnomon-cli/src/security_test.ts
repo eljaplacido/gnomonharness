@@ -156,6 +156,7 @@ const LIMITS = [
   "Decisions of the policy layer only: a call a host runs without asking its hook is not seen (gnomon guard status checks the hooks).",
   "Cursor's hooks give no event before a file write or edit, so those cases are listed as not covered there; gnomon check judges Cursor's writes afterwards.",
   "Command recognition is by pattern: code an interpreter runs (python -c) is gated as a command, not parsed, so it is asked about rather than refused.",
+  "A secret read through an interpreter with a path built at run time (python3 -c \"open('.env'+'.x')\") is not seen by the word check: it is contained by exec = \"docker\" (an empty mount) or by keeping the file out of the repository (gnomon security: secrets_in_tree).",
   "The surface tested is this checkout's .gnomon/ as it is on disk, committed in a scratch repository.",
   "On Windows, a shell redirection to an absolute Windows path outside the project is asked about, not refused (bash_write_outside expects blocked there).",
 ];

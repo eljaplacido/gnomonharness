@@ -132,6 +132,7 @@ import {
   workRootOf,
 } from "./config.js";
 import { mapBucket } from "./session.js";
+import { classifyVerify } from "./verify_outcome.js";
 import { buildToolSet, callNeedsApproval, needsApproval, ApprovalGate } from "./tools.js";
 import { loadSkills, selectSkills } from "./skills.js";
 import { resolveAudit, verifyTrail, AuditRecord, AuditDetail } from "./audit.js";
@@ -973,7 +974,13 @@ export function replay(
         }
         if (typeof record.exit === "number") {
           if (record.unrunnable !== undefined) {
-            tcmp(e, "verify.unrunnable", record.unrunnable, record.exit === 126 || record.exit === 127);
+            // The same table the loop read it with, from this surface's [verify].
+            tcmp(
+              e,
+              "verify.unrunnable",
+              record.unrunnable,
+              classifyVerify({ exit: record.exit, passed: record.exit === 0, notRun: false }, resolveVerify(config)).verdict === "unrunnable"
+            );
           }
           if (typeof record.passed === "boolean") {
             tcmp(e, "verify.passed", record.passed, record.exit === 0);

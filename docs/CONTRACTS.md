@@ -144,14 +144,31 @@ round exits by its bucket like any other: the model answered, so it is a
 `result` (`0`) with `stop_reason: "answered"` and `verify: "failed"` on the
 record. The exit does not carry the check; a refusal floor is never demoted,
 so a failed check at `2` would leave every unverified run there. Read `verify`
-beside the bucket: one of `passed`, `failed`, `unrunnable`, `declined`,
-`skipped`, absent when no check ran (§20). `declined` means the person asked
+beside the bucket: one of `passed`, `passed_unverified`, `failed`,
+`unrunnable`, `regressed`, `declined`, `skipped`, absent when no check ran
+(§20, §53). `declined` means the person asked
 (`approval = "always"`) said no; `unrunnable` means the check never ran to an
 exit -- not found or not executable (126/127), timed out and killed, or refused
 by the sandbox or a rule -- the same reading `gnomon check` gives (§6). Neither
 hands the turn back. Since 0.6.4; before, all but 126/127 were `failed` and
 handed back (#231). A run killed by a signal, or a non-zero exit, is `failed`.
 Each case is pinned in `conformance/verify_outcomes.json`.
+This stays the default. A caller that wants the check in the exit asks for it
+(`gnomon task --require-verify`, or `[verify] exit_on_fail = true`, §53): then a
+task whose bucket says `0` exits `1` for a check that ran and did not pass
+(`failed`, `regressed`, `passed_unverified`) and `4` (`preconditions_unmet`) for
+one that never measured anything (`unrunnable`). `passed`, `declined`, `skipped`
+and no check at all stay `0`, and a refusal (`2`) or apparatus failure (`10`) is
+never demoted or replaced by it. Both codes are already in the table above.
+**A deviation, stated:** `conformance/exit_codes.json` maps `4` to the `refusal`
+bucket and `1` to `result`. Under `--require-verify` a task whose record says
+`bucket: "result"` can exit `4` (`unrunnable`), so a caller that switches on the
+exit's bucket reads it as a refusal while the record's own `bucket` stays
+`result`. The record is authoritative for what the run did; `4` is
+`preconditions_unmet`, which is what an unrunnable check is, and no `result`
+code is free to carry it. `taskExitCode` and `mapBucket` are pinned to this in
+`verify_exit_detail.test.ts`; `gnomon chaos` reads the record's bucket and never
+passes the flag, so it is unaffected.
 The command and its exit, per round, are the trail's `verify` records. A role that declares `escalate` on
 `verify_failed` hands the turn on instead (§42).
 
@@ -234,7 +251,7 @@ so both format drift and non-determinism fail the build.
   "governance_family": ["write", "bash", "network", "secrets", "rules", "ci"],
   "audit_kind": ["session_start", "session_resume", "turn", "chain_stage", "tool_call", "approval",
                  "verify", "bootstrap", "context_mask", "degradation", "check", "trust", "guard",
-                 "skill_accept", "skill_reject", "skill_trial", "record_tamper",
+                 "skill_accept", "skill_reject", "skill_trial", "skill_use", "record_tamper",
                  "record_tamper_resolved", "record_notice", "mcp_tools", "stall_signal",
                  "completion_gate", "todo_gate", "job", "deliverable_first", "first_token_stall",
                  "checkpoint", "think_cap", "finish_gate", "model_call", "escalation", "eval_run",
@@ -576,7 +593,7 @@ change.
 | `abort` | after each scored tool call (every call up to 30, then every 5th) | `subject_id` `<session>.<turn>:<k>`, `model`, `question` `gnomon_abort.v1`, `order`, `labels`, `probs`?, `live` `continue`, `excerpt`, `latency_ms`, `error` |
 | `role` | once per prompt | as `abort`; `subject_id` `<session>.<turn>`, `question` `gnomon_routing.v1`, `live` = the role that ran or `chain:<a>><b>…` |
 | `approval` | after each tool call | as `abort`; `question` `needs_approval.v1`, `live` one of `not_gated`, `asked:approved`, `asked:declined`, `standing:approved`, `flag:approved`, `default:declined`, `policy:<bucket>` |
-| `turn_end` | once per turn, or per chain stage | `subject_id`, `stop_reason`, `code`, `bucket`, `verify` (`pass`, `fail`, `none`, or the raw `unrunnable`/`declined`/`skipped`), `tool_steps`, `tokens`, `duration_ms` |
+| `turn_end` | once per turn, or per chain stage | `subject_id`, `stop_reason`, `code`, `bucket`, `verify` (`pass`, `fail`, `none`, or the raw `unrunnable`/`regressed`/`passed_unverified`/`declined`/`skipped`), `tool_steps`, `tokens`, `duration_ms` |
 | `shadow` | once, when the shadow stops: unreachable at session start, or after three connection failures in a row | `error` |
 
 **Common keys:**
@@ -802,7 +819,7 @@ decision gnomon could not make is never an allow.
 | `host_hooks` | a write, edit or shell write target in a host harness's hook configuration — what `gnomon guard install` writes and what can switch it off: `.claude/settings.json`, `.claude/settings.local.json`, `.claude/hooks/`, `.opencode/plugins/` (and `plugin/`), `opencode.json[c]`, `.cursor/hooks.json` in the root and the git toplevel; the user-level copies (`$CLAUDE_CONFIG_DIR` or `~/.claude`, `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`, `$OPENCODE_CONFIG`, `~/.cursor/hooks.json`); and gnomon's per-repository state (the guard's session bases and rules cache). A recursive removal, `mv`, `git rm` or `git clean` that would reach one counts. For every role, under every gate: removing the hook detaches the layer from every later session (GBS-LAYER pilot, 2026-11-06) |
 | `write_allow` | a path outside the role's `write_allow`; or a relative shell write after a `cd` gnomon cannot follow (`cd "$X"`), which it cannot place |
 | `outside_root` | only under a declared governance (§38), and not under `[sandbox] level = "off"`: a shell write or removal target outside the root and every granted `extra_roots` — redirections, `rm`/`mv`/`cp`/`tee`/`dd`/`install`/`ln`/`truncate`/`sed -i`/`chmod`/`chown`/… operands, `find -delete`/`-exec rm`, literal paths in inline python/node/perl code — after `cd` sequences gnomon can follow, `~` and `$HOME`, globs by their literal part. Temp space is scratch, except the project's own neighbours when it lives there. The bash half of what `sandbox` refuses for write and edit |
-| `secret_path` | only under a declared governance (§37): a read, write or edit of a protected secret path (`[governance.paths] secrets`, or its default: `.env`, keys, `~/.ssh`, `~/.aws`, …), a shell command with a word or redirection naming one (a glob by what it expands to) or a recursive reader (`grep -r`, `rg`, `tar`, `cp -r`, `find -exec`) whose walk reaches one, a command that prints the environment (`printenv`, `env` with no command, a bare `export`, `/proc/<pid>/environ`), or a grep/glob whose scope is one or holds one |
+| `secret_path` | only under a declared governance (§37): a read, write or edit of a protected secret path (`[governance.paths] secrets`, or its default: `.env`, keys, `~/.ssh`, `~/.aws`, …), a shell command with a word or redirection naming one (a glob by what it expands to) or a recursive reader (`grep -r`, `rg`, `tar`, `cp -r`, `find -exec`) whose walk reaches one, a command that prints the environment (`printenv`, `env` with no command, a bare `export`, `/proc/<pid>/environ`), or a grep/glob whose scope is one or holds one. Containment of an in-root secret (#227): `exec = "docker"` mounts an empty read-only file over each declared file at secrets >= prevent; `exec = "os"` at secrets >= prevent refuses to start unless `[governance] secrets_in_root = "allow"` (recorded as `session_start.resolved.secrets_in_root`) |
 | `ci_path` | only under a declared governance (§37): a write, edit or shell write target in a CI definition (`[governance.paths] ci`, or its default: `.github/workflows/`, `.gitlab-ci.yml`, `.circleci/`, `Jenkinsfile`, …), or a recursive removal reaching one |
 | `network` | `[sandbox] network = false`, and the call names a network client, a remote `scp`/`rsync` target, `/dev/tcp`, interpreter code that opens a connection, a git remote by URL (`push`, `fetch`, `pull`, `ls-remote`, `clone`, `remote add\|set-url`, `submodule add`, `archive --remote`, a `-c` value, `git config remote.*.url`), or a package manager's registry or package URL (`--registry`, `--index-url`, `-i`, a URL operand) |
 | `url` | a scheme other than http(s), or a private, loopback or link-local address |
@@ -2620,7 +2637,7 @@ the surface, so it is outside `volatile`.
 | `est_max` | the largest request, by `est` |
 | `replayed_calls` | requests that carried replayed reasoning |
 | `steered_calls` | `{nudge, converge, other}`: requests carrying at least one steering message of that kind |
-| `trims` | `{leg, overflow, dropped}`: trims by reason, and the messages they dropped |
+| `trims` | `{leg, overflow, dropped}`, and `pre_call` once there has been one: trims by reason, and the messages they dropped |
 | `first` | `i` of `calls[0]`, present only when older entries were let go |
 | `steer_messages` | each of gnomon's mid-turn messages once, on the first request that carried it: `{i, kind, via, delivered}` (§39). Present once there is one; the last 512 |
 | `calls` | the last 512 requests, one entry each (below) |
@@ -2636,15 +2653,17 @@ One entry per request:
 | `steer` | gnomon's own system messages after the leading ones, present in the request, by kind: `nudge` (the idle nudge), `converge` (the convergence push), `other` (a trim's ledger, a failed check, the wrap-up, a context notice) |
 | `via` | `system`, or `user` under `steer_role = "user"` (declared, or learned from a refusal): the role they went out in. Present with `steer` |
 | `delivered` | beside `via`, always: `true` when that channel is known to reach the model (user content; a late system message to a remote endpoint), `false` for a late system message to a local lane, whose chat templates dropped every one on the M2 lanes (§39) |
-| `trim` | a trim since the request before: `why` (`leg`: the leg checkpoint; `overflow`: the provider refused the request as too long, code 13, and gnomon trimmed to 50% to send it again), `dropped` messages, the working context's estimate `before` and `after`, the `budget` it was trimmed to, and the `ratio` it was divided by under `calibrated` |
+| `trim` | a trim since the request before: `why` (`leg`: the leg checkpoint; `overflow`: the provider refused the request as too long, code 13, and gnomon trimmed to 50% to send it again; `pre_call`: the estimate of the request about to go out exceeded a window the surface declared or `auto` read from the endpoint, never the `[defaults]` fallback, and gnomon trimmed to the leg budget before sending it), `dropped` messages, the working context's estimate `before` and `after`, the `budget` it was trimmed to, and the `ratio` it was divided by under `calibrated` |
 | `leg` | the turn's leg, from 2 on |
 | `depth` | `1` for a request a delegated sub-turn (the `task` tool) made; its requests are its parent's |
 | `window` | this request's window, when its target's differs from the turn's (a fallback) |
 
 Absent keys mean none: no `replayed` is no reasoning replayed, no `steer` is no
-steering present. There is no per-request window check: between two
-checkpoints a request can grow past the window, and `prompt_tokens` against
-`window` below is where that shows.
+steering present. Against a window that is only `[defaults]`'s fallback
+(`max_context_tokens_source = "default"`) there is no per-request window check:
+between two checkpoints a request can grow past the window, and `prompt_tokens`
+against `window` below is where that shows. Against a declared or `auto`-read
+window, a request whose estimate exceeds it is trimmed first (`pre_call`).
 
 **What came back: `model_calls`.** Under `volatile` on the `TaskRecord`, as
 `tokens_in` is, because it is the backend's measurement and the clock. As
@@ -2688,7 +2707,7 @@ keep their meaning):
 | `context_window` | `counters.model_calls.window` |
 | `context_budget` | `counters.model_calls.budget` |
 | `context_estimate` | `chars4` or `calibrated` |
-| `context_trims` | trims made in the turn, both reasons |
+| `context_trims` | trims made in the turn, every reason |
 | `context_trimmed` | messages they dropped |
 
 **`[context] token_estimate`** (config.toml, content-hashed with the surface):
@@ -4245,10 +4264,12 @@ governance levels (§36), `gnomon guard status` (§44) and the audit trails
 | `exit` | 0 no risk, 2 a risk, 10 could not run |
 
 Risk ids: `surface_fatal`, `chain_broken`, `record_tamper`, `host_hook`.
-Advice ids: `audit_off`, `governance_off`, `host_exec`, `judge_can_write`,
-`approval_never_on_host`, `sandbox_network`, `exec_os_windows`,
+Advice ids: `audit_off`, `governance_off`, `rules_drift`, `host_exec`, `judge_can_write`,
+`approval_never_on_host`, `sandbox_network`, `exec_os_windows`, `secrets_in_tree`,
 `surface_warning`. An id's severity is fixed; adding an id is a minor change
 with a fixture update.
+
+`rules_drift` (#228) lists the migrations `gnomon migrate --check` would apply (ids only; advice).
 
 `exec_os_windows` (#216) names the roles holding bash under `exec = "os"`.
 Windows has no OS sandbox, so there `bash` refuses every command (fail closed,
@@ -4757,3 +4778,215 @@ byte for byte what they were (`think_cap.test.ts`, "absent").
 
 **Fixture**: `conformance/think_cap.json`;
 `packages/gnomon-core/src/think_cap.test.ts` asserts the code equals it.
+
+
+## 53. The declared check, run properly — `[verify]` `timeout_seconds`, `setup`, `setup_network`, `setup_timeout_seconds`, audit `verify` `phase: "setup"`, `v: 1`
+
+The check used to run as one of the agent's own bash calls: the bash tool's
+timeout (120 s on typical surfaces), the agent's working tree, whatever
+dependencies it had. Full suites did not fit, and a fresh worktree had no
+dependencies (17 of 25 non-passing checks in a cross-project test). Each key is
+opt-in. A surface declaring none of them resolves to the block it always did and
+runs the check in the context it always did; nothing is added to a request or a
+record.
+
+| Key | Value | Effect |
+|---|---|---|
+| `timeout_seconds` | a positive number | The check's own budget in place of the bash tool's. Applies to the check and to the `test_must_fail_first` re-run. A timeout is `unrunnable` (§1). Anything else is ignored, with a surface warning. |
+| `setup` | a shell command | Runs once per worktree (per process), at the start of the turn before the model's first call, so before any write the turn makes (an install runs lifecycle scripts, build backends and `.npmrc`/`pip.conf` from the working tree, and must see the manifests as they were, not as the model left them). The check reads the remembered result. Its text is in the hashed surface, so changing it moves the surface hash; the model cannot set it. Not bound by the role's `write_allow` or `bash_allow` (an install writes `node_modules`); the sandbox root and `bash_deny` still bind it. A setup that does not exit 0 makes the check `unrunnable`: the check is not run, nothing is handed back, and the work is not blamed. |
+| `setup_network` | `none` (default) or `registry` | `registry` opens the network for the `setup` command only; the check and the agent keep the surface's network setting. It applies only where bash runs on the host (`exec` off): under `exec = "docker"` or `"os"` the floor stays as declared and the effective network is `none` (one function, `effectiveSetupNetwork`, for the loop and `gnomon check`). gnomon does not filter hosts, so the name is the declared purpose, not an allowlist. Any other value reads as `none` (surface audit: the value is not one of the enumeration). |
+| `setup_timeout_seconds` | a positive number | The budget for `setup`; absent, `timeout_seconds`, else the tool's. |
+
+Each setup run is a `verify` audit record with `phase: "setup"`, `command`,
+`network` (`none` or `registry`), `exit`, `ok` and, when it failed, `reason`. No
+new audit kind. A declined setup (`approval = "always"`) reads as `declined`,
+like a declined check.
+
+`gnomon check` runs `setup` in the temporary worktree it creates for a head
+that is not checked out (which has no installed dependencies), never in the
+worktree it judges in place, and opens the network for it only where `[verify]`
+runs on the host (`exec = "off"`). A failed setup is `verify` = `error`
+("the check could not run: [verify] setup ..."), exit 10. The verdict carries
+`setup: {command_sha256, network, exit, ok}` and the check's trail record the
+same; the failure finding names the network and the hash too.
+
+**The limit, stated plainly.** In `gnomon check` the tree setup runs in is the
+head being judged, and the head is someone else's change. With
+`setup_network = "registry"` on a host `[verify]`, an install that runs
+lifecycle scripts executes that head's `package.json` scripts, build backend
+and registry config with network access. Do not judge an untrusted head with a
+networked setup on the host: leave `setup_network` at `none`, run `[verify]`
+under `exec = "docker"` (where the network stays as the floor left it), or write
+setup so it cannot run the head's code: `pnpm install --frozen-lockfile
+--ignore-scripts`, `npm ci --ignore-scripts`, `uv sync --frozen`. In the loop the
+pre-turn ordering above removes the model's own edits from this; it does not
+make a cloned repository's own manifests trustworthy.
+
+**Fixture**: `conformance/verify_contract.json`;
+`packages/gnomon-core/src/verify_setup.test.ts`.
+
+
+### Four verdicts, one table (`[verify] contract`, `[verify.exit_map]`, `regressed_hand_back`)
+
+A check had three outcomes: exit 0 `passed`, 126/127 `unrunnable`, anything else
+`failed`. Tools use other codes to say "nothing was measured" (pytest 2, 4 and
+5; SeptaCore's 2) or "measured, and worse" (SeptaCore's 3), and `failed` is
+handed back to the model, so a check that measured nothing made it rewrite
+correct code. There are now four verdicts, and **one function**
+(`classifyVerify`, `verify_outcome.ts`) reads a run into one of them for both
+`gnomon task` (the loop) and `gnomon check`, so the two cannot drift. Replay
+re-derives a recorded `unrunnable` from the same table.
+
+| Verdict | Meaning | `gnomon task` | `gnomon check` `verify` status |
+|---|---|---|---|
+| `passed` | exit 0, and only exit 0 | `verify: "passed"` | `pass` |
+| `failed` | the work is wrong | handed back; `verify: "failed"` | `fail` |
+| `unrunnable` | nothing was measured | not handed back; `verify: "unrunnable"` | `error` (exit 10) |
+| `regressed` | measured, worse than a baseline the check keeps | recorded, **not** handed back unless `regressed_hand_back = true`; `verify: "regressed"` | `fail`: there is no model to hand it to |
+
+With nothing declared the table is the old one: 0 `passed`; 126, 127 and a run
+that never reached an exit (timed out and killed, refused by the sandbox or a
+rule) `unrunnable`; anything else, a signal death included, `failed`.
+
+| Key | Value | Effect |
+|---|---|---|
+| `contract` | `septacore` or `pytest` | A preset. `septacore`: 0 passed, 1 failed, 2 unrunnable, 3 regressed. `pytest`: 0 passed, 1 failed, 2, 4 and 5 unrunnable (collection or usage error, nothing collected); 3 stays failed. An unknown name is no preset (surface audit). |
+| `[verify.exit_map]` | a sub-table, exit code = `"failed"` / `"unrunnable"` / `"regressed"` | Read over the preset. A TOML sub-table, not an inline table: gnomon's TOML subset has none (§5). An entry for exit 0, one that maps a non-zero exit to `passed`, a key that is not a code, or any other value is ignored and named by the surface audit: only exit 0 passes, and a map cannot change that. |
+| `regressed_hand_back` | `true` | `regressed` is handed back to the model like `failed`. Default off. |
+
+The `verify` audit record gains `verdict` only when a table is declared (a
+surface that declares none writes the record it always wrote); a `regressed`
+run also carries `regressed: true`. A `gnomon check` `verify` finding carries
+`verdict` under the same rule. `verify` on the task record, `turn_end` in the
+shadow log and the chaos scorecard's task record list `regressed` among their
+values.
+
+**Fixture**: `conformance/verify_contract.json` (`verdicts`, `contracts`,
+`exit_cases`); `packages/gnomon-core/src/verify_exit_map.test.ts` runs every
+case through the shared table, the real turn loop and `gnomon check`.
+
+
+### A green check the turn edited (`[verify] protects`, verdict `passed_unverified`)
+
+`[verify]` runs code the agent can edit in the same turn: `package.json`
+scripts, `conftest.py`, pytest's `addopts`, a project's `scripts/verify.sh`, a
+`.septacore.json`. The surface protects `.gnomon/` and must-fail-first catches a
+test that already passed, and neither notices a turn that weakens the check
+itself. The more the check can do (§53 above: a longer timeout, a setup with
+network), the more such an edit is worth to a model that wants the gate green.
+
+`[verify] protects = ["@detected", "scripts/verify.sh"]` lists globs (repo
+relative, `/`-separated; gnomon's glob dialect, `**/` matches zero or more
+directories). `"@detected"` stands for the known runners' config
+(`**/conftest.py`, `pytest.ini`, `pyproject.toml`, `package.json`,
+`.septacore.json`, `**/vitest.config.*`, `**/jest.config.*`, `tox.ini`,
+`setup.cfg`, `noxfile.py`, `.coveragerc`) and the files the declared command
+itself names (`bash scripts/verify.sh`, `./run_tests.sh`; the Makefile when it
+runs `make`). Nothing is protected unless the
+key is declared: a surface without it takes no snapshot and adds nothing to any
+record or request.
+
+What counts as a change: for `package.json`, the `scripts` object and the `jest`
+key (adding a dependency is not a change); for `pyproject.toml`, the
+`[tool.pytest*]` tables; for `setup.cfg`, `[tool:pytest]`; for any other file,
+its bytes. A file created or deleted is a change. Files over 4 MiB,
+`node_modules`, `.git`, virtualenvs, build output and gnomon's own directories
+are not read.
+
+**What is not protected.** A file the check merely imports (a helper module a
+test pulls in, a data file) is not protected unless a glob names it: `protects`
+lists what configures the check, it is not a dependency analysis. And the walk
+that finds glob matches stops at 50,000 entries or 8 directories deep. That is
+not fail-open silently: the loop prints a warning and the `verify` audit record
+carries `protects_truncated: true`, and files past the limit are not protected.
+A path named without a wildcard is read directly and is not subject to the
+walk.
+
+- **`gnomon task` and sessions.** The protected files are hashed before the turn
+  and after it, by any route: `write`, `edit` or the shell. A check that exits 0
+  while one changed is `verify: "passed_unverified"`, not `passed`. The answer is
+  handed back, by the same rounds as a failed check (`max_rounds`), naming the
+  files and asking the model to revert or say why the change does not weaken the
+  check. If it reverts and the check passes again, the verdict is `passed`. The
+  `verify` audit record carries `protects_changed` (sorted paths) whatever the
+  verdict, when any changed. A chain's `gate = "on_check"` treats
+  `passed_unverified` as not passed.
+- **`gnomon check`.** The list comes from the base surface (a head cannot widen
+  or empty it), and each changed path between base and head is compared. A
+  green `verify` over a changed protected file is `fail` (the check ran; exit 2)
+  with `reason` beginning `passed_unverified` and a finding
+  `{command, exit: 0, verdict: "passed_unverified", protects_changed}`.
+
+**Fixture**: `conformance/verify_contract.json` (`protects`, `verdicts_task`);
+`packages/gnomon-core/src/verify_protects.test.ts`.
+
+
+### The exit, the record detail and the probe (`--require-verify`, `exit_on_fail`, `record_detail`, `gnomon doctor verify`)
+
+All three are opt-in. A surface and a caller that ask for none of them get the
+exit, the record and the commands they always did.
+
+**Exit.** `gnomon task --require-verify`, or `[verify] exit_on_fail = true`, puts
+the declared check in the exit where the bucket says `0` (§1): `1` for `failed`,
+`regressed` and `passed_unverified`, `4` for `unrunnable`. The #211 default (a
+failed check leaves the task at its bucket's exit) is unchanged without it. The
+flag and the key mean the same; `taskExitCode(record, { requireVerify })` is the
+one function, so `gnomon chaos` and the command cannot read it two ways.
+
+**Record detail.** With `--require-verify`, `exit_on_fail` or
+`[verify] record_detail = true`, a task record whose check ran carries
+`verify_exit` (the last run's shell exit; `null` when it never reached one),
+`verify_rounds` (runs of the check this task made), `verify_reason` (`exit 5`,
+`exit 5 read as unrunnable`, `timeout`, `setup exit 1`, `exit 0; changed
+conftest.py`) and, for a check that did not pass, `verify_tail` (the last
+10 lines, at most 600 characters, redacted as the trail is). Without any of
+them the record has none of these keys. They sit beside `verify`, outside
+`volatile`.
+
+**`gnomon doctor verify [--json] [--dir <path>]`**, schema
+`gnomon.doctor_verify/1`. Plain `gnomon doctor` stays read-only and runs nothing
+of the project's. This runs the declared check once on the tree as it is (the
+command the surface declares, else the one `gnomon init` would detect), through
+the same bash tool and sandbox as the check, reads it through the §53 table, and
+reports `source` (`declared`, `detected`, `none`), `command`, `exit`, `verdict`,
+`duration_ms`, `tail`, `findings` (`kind`, `severity` `problem` or `info`,
+`message`, `fix`) and `exit_code`. It does not run `[verify] setup`. Finding
+kinds: `not_declared`, `unrunnable` (126/127, a timeout, a refusal),
+`no_tests` (exit 0 with output saying no test ran), `ambiguous_exit` (4 or 5
+read as a failure by the default table: pytest's usage error and "nothing
+collected", a script's "NOT RUN"; fix: `contract` or `exit_map`), `red_baseline`
+(the check fails or regresses on the tree as it is), `dirty_tree` and
+`setup_not_run` (both `info`). Exit `0` the check runs and holds up, `1` a
+problem, `10` nothing to run. `gnomon init` does not run the detected command
+(running a project script is not a scaffold step); it points at this command.
+
+**Fixture**: `conformance/verify_contract.json` (`task_exit`,
+`task_record_detail`, `doctor_verify`);
+`packages/gnomon-core/src/verify_exit_detail.test.ts`.
+
+## 54. Skill attribution — audit kind `skill_use`, `counters.skills`
+
+What a turn did with its skills, **derived** from what the loop already sees.
+Nothing is asked of the model: there is no self-reported outcome field, and a
+skill the reasoning never names stays visibly unattributed. Skill matching and
+injection are unchanged.
+
+**`counters.skills`** is absent unless a skill was loaded, opened with `read`
+or proposed. Keys: `v` (1), `fired` (`[{name, tokens}]`: the skill id and the
+estimate of the block added to the prompt), `read` (id to successful reads),
+`cited_in_reasoning` (ids of fired or opened skills whose id or name appears,
+whole-word and case-insensitive, in the reasoning; names under 4 characters and
+names made only of generic words never match) and `proposed` (ids written by
+the `skill` tool). A delegated sub-turn's data is merged into its parent's.
+
+**`skill_use`** is written at the end of every turn whose `counters.skills` is
+present (once per chain stage), with `turn`, `role` and the same four fields.
+It is hash-chained like any record.
+
+`gnomon skill mine` reads these records and returns, besides candidates,
+`skill_signals`: `fires_never_cited` (at least 5 firings, never cited) and
+`cited_often` (at least 3 citations and at least half of firings). They are
+about existing skills and are not written to `.gnomon-skills/candidates/`.
+
+**Fixture**: `conformance/skill_use.json`;
+`packages/gnomon-core/src/skill_attribution.test.ts`.
