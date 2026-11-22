@@ -1913,6 +1913,26 @@ network = false
 allow_package_index = ["pypi.org", "files.pythonhosted.org", "registry.npmjs.org"]
 ```
 
+**Opt-in: the think cap (`[turn] max_reasoning_tokens_without_action`).** Off
+unless declared (an integer of at least 1000; unmeasured). A streamed reply
+whose reasoning passes that many tokens (about 4 characters each) with no answer
+text and no tool call yet is stopped: the connection is closed so the server
+stops generating, the reasoning is not kept, and the next request ends with one
+note, "Stop reasoning at length; write a script or run a command to get the
+answer." Reasoning counts from every channel gnomon reads (`reasoning_content`,
+`reasoning`, Ollama's `thinking`, `reasoning_details`, thinking parts, inline
+`<think>` markup). A reply that has started answering or calling a tool is never
+stopped, and after `max_consecutive_malformed` stops in a row the next call runs
+uncapped. Each stop is a `think_cap` audit record and the turn's
+`counters.think_cap` says how many and at how many tokens
+([CONTRACTS.md §52](CONTRACTS.md)).
+
+```toml
+# config.toml
+[turn]
+max_reasoning_tokens_without_action = 12000
+```
+
 A declared chain is sequencing with a gate, not proof of quality: an ungated
 chain measured 48.7% against 56.6% without one, within noise
 ([README → Known Limits](../README.md#known-limits)). Full contract:

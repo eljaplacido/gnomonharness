@@ -25,6 +25,7 @@ import { auditSoftShell } from "./soft_shell.js";
 import { auditSandboxProfile } from "./sandbox_profile.js";
 import { auditDeliverableFirst } from "./deliverable_first.js";
 import { auditCheckpointGrind } from "./checkpoint_grind.js";
+import { auditThinkCap } from "./think_cap.js";
 import {
   CONTINUE_NOTE_AT,
   auditLongTaskProfile,
@@ -2101,6 +2102,12 @@ export interface RouteTarget {
   streamTotalMs?: number;
   /** `[resilience] first_token_timeout_ms`, for a streamed call; absent when 0 (off) */
   firstTokenMs?: number;
+  /**
+   * `[turn] max_reasoning_tokens_without_action` (think_cap.ts), for a streamed
+   * call: the reply is stopped once its reasoning passes this many tokens with
+   * no answer text and no tool call. Set per call by the loop; absent = off.
+   */
+  thinkCapTokens?: number;
   /** The output limit sent with each call; 0 or absent sends none. */
   maxTokens?: number;
   /**
@@ -2978,6 +2985,8 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "continue_message",
       "continue_max_rounds",
       "continue_until_s",
+      // think cap (think_cap.ts, CONTRACTS §52)
+      "max_reasoning_tokens_without_action",
     ],
   ],
   [
@@ -3620,6 +3629,7 @@ problems.push(...auditSweepKnobs(config, (ep) => endpointKind(ep)));
 problems.push(...auditSoftShell(config));
 problems.push(...auditDeliverableFirst(config));
 problems.push(...auditCheckpointGrind(config));
+problems.push(...auditThinkCap(config));
 problems.push(...auditLongTaskProfile(config));
 problems.push(...auditSandboxProfile(config));
 

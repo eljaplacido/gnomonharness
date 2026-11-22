@@ -77,6 +77,7 @@ impl Enumerations {
                 "deliverable_first".into(),
                 "first_token_stall".into(),
                 "checkpoint".into(),
+                "think_cap".into(),
                 "finish_gate".into(),
                 "model_call".into(),
                 "escalation".into(),
@@ -164,7 +165,7 @@ mod tests {
         assert_eq!(obj.get("role_profile").unwrap().as_array().unwrap().len(), 3);
         assert_eq!(obj.get("governance_level").unwrap().as_array().unwrap().len(), 4);
         assert_eq!(obj.get("governance_family").unwrap().as_array().unwrap().len(), 6);
-        assert_eq!(obj.get("audit_kind").unwrap().as_array().unwrap().len(), 32);
+        assert_eq!(obj.get("audit_kind").unwrap().as_array().unwrap().len(), 33);
         assert_eq!(obj.get("guard_decision").unwrap().as_array().unwrap().len(), 3);
         assert_eq!(obj.get("guard_rule").unwrap().as_array().unwrap().len(), 20);
         assert_eq!(obj.get("guard_tool").unwrap().as_array().unwrap().len(), 8);

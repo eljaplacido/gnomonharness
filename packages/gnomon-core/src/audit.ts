@@ -279,6 +279,9 @@ export type AuditKind =
   // `checkpoint_skipped`, and the end decision: `checkpoint_restored`,
   // `checkpoint_kept`, `checkpoint_kept_unverified`.
   | "checkpoint"
+  // `[turn] max_reasoning_tokens_without_action` (think_cap.ts, CONTRACTS §52):
+  // a streamed reply stopped for reasoning past the cap with no action.
+  | "think_cap"
   // One per end of a turn the finish gate (`[verify] finish_gate = "v2"`,
   // finish_gate.ts) judged: fire, no_tool or accept, the budget left, the
   // caveat ids its audit found, claims without evidence, the open todos.
@@ -335,6 +338,7 @@ export const AUDIT_KINDS = [
   "deliverable_first",
   "first_token_stall",
   "checkpoint",
+  "think_cap",
   "finish_gate",
   "model_call",
   "escalation",

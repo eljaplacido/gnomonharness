@@ -26,6 +26,13 @@
 
 ## [Unreleased]
 
+### Added — think cap (opt-in, unmeasured), CONTRACTS §52
+
+- `[turn] max_reasoning_tokens_without_action` (integer of at least 1000): a streamed reply whose reasoning passes
+  the cap with no answer text and no tool call is stopped and the model is told to write a script or run a command;
+  audit kind `think_cap`, `counters.think_cap`, `session_start.resolved.think_cap`. Ported alone from the bench
+  branch's OC-mode bundle so it can be measured as one variable. Absent, requests and records are unchanged.
+
 ## [0.6.5] — 2026-11-21
 
 One fix, found by rerunning the 34-project capability matrix on v0.6.4: the
