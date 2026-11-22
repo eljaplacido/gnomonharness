@@ -28,6 +28,8 @@ import {
   type EvalCellRunner,
   type GnomonConfig,
   type ImproveReport,
+  resolveExec,
+  ImproveRefusal,
   type TrustOutcome,
 } from "gnomon-core";
 
@@ -125,9 +127,9 @@ export async function runImproveCmd(config: GnomonConfig, a: ImproveCliArgs, bin
   };
   const f = a.flags;
   const flag = (k: string): string | undefined => (typeof f[k] === "string" && f[k] !== "true" ? f[k] : undefined);
-  const known = new Set(["run", "dry-run", "k", "budget-usd", "role", "json", "schedule", "scheduled", "profile", "dir", "yes-spend", "trust", "yes"]);
+  const known = new Set(["run", "dry-run", "k", "budget-usd", "role", "json", "schedule", "scheduled", "profile", "dir", "yes-spend", "trust", "yes", "max-requests", "allow-host-probes"]);
   const stray = Object.keys(f).filter((k) => !known.has(k));
-  if (stray.length > 0) return fail(`unknown option --${stray[0]}: improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--schedule nightly|weekly] [--json]`, IMPROVE_EXIT.usage);
+  if (stray.length > 0) return fail(`unknown option --${stray[0]}: improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--max-requests N] [--allow-host-probes] [--schedule nightly|weekly] [--json]`, IMPROVE_EXIT.usage);
 
   if (f.schedule !== undefined) {
     const every = EVERY[flag("schedule") ?? ""];
@@ -159,15 +161,32 @@ export async function runImproveCmd(config: GnomonConfig, a: ImproveCliArgs, bin
   if (f.k !== undefined && (!k || !/^\d+$/.test(k) || Number(k) < 1 || Number(k) > 20)) return fail("--k is a whole number from 1 to 20 (attempts per task per arm)", IMPROVE_EXIT.usage);
   const budget = flag("budget-usd");
   if (f["budget-usd"] !== undefined && (!budget || !Number.isFinite(Number(budget)) || Number(budget) < 0)) return fail("--budget-usd is a number of dollars, 0 or more", IMPROVE_EXIT.usage);
+  const maxReq = flag("max-requests");
+  if (f["max-requests"] !== undefined && (!maxReq || !/^\d+$/.test(maxReq) || Number(maxReq) < 1)) return fail("--max-requests is a whole number of model requests, 1 or more", IMPROVE_EXIT.usage);
   if (run) {
     const why = agentReason();
-    if (why && !scheduledRun) return fail(`not run: ${why}. gnomon improve --run spends model time and writes proposals; a person or a schedule starts it.`, IMPROVE_EXIT.refused);
+    if (why) return fail(`not run: ${why}. gnomon improve --run spends model time and writes proposals; a person or a schedule starts it.`, IMPROVE_EXIT.refused);
+  }
+
+  // Probe cells run model-written commands in temporary clones. Without a sandbox that is the host.
+  const hostProbes = f["allow-host-probes"] !== undefined;
+  if (run && !hostProbes) {
+    const level = (config.policy?.sandbox as { level?: unknown } | undefined)?.level;
+    const confined = level === "confined" || level === "strict" || resolveExec(config).mode !== "off";
+    if (!confined) {
+      return fail(
+        'not run: probe cells run model-written commands on this machine and [sandbox] is not confined. Set [sandbox] level = "confined" or "strict", or exec = "docker" or "os" in policy.toml, or pass --allow-host-probes to accept that for this run (the report records it).',
+        IMPROVE_EXIT.refused
+      );
+    }
   }
 
   let report: ImproveReport;
   try {
     report = await runImprove(config, {
       run,
+      ...(maxReq ? { maxRequests: Number(maxReq) } : {}),
+      ...(run && hostProbes ? { hostProbes: true } : {}),
       ...(k ? { k: Number(k) } : {}),
       ...(budget ? { budgetUsd: Number(budget) } : {}),
       role: a.role ?? flag("role"),
@@ -176,6 +195,7 @@ export async function runImproveCmd(config: GnomonConfig, a: ImproveCliArgs, bin
       log: a.json ? undefined : (l) => err(l),
     });
   } catch (e) {
+    if (e instanceof ImproveRefusal) return fail(`not run: ${e.message}`, IMPROVE_EXIT.refused);
     return fail(`could not run: ${e instanceof Error ? e.message : String(e)}`, IMPROVE_EXIT.couldNotRun);
   }
   if (f.scheduled !== undefined && !run && !a.json) out("(scheduled, dry: set [improve] scheduled = \"run\" in policy.toml to let the schedule write proposals)");

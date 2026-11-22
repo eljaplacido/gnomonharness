@@ -3435,7 +3435,7 @@ Commands:
     nothing. Exit 0 meets the spec, 2 does not, 10 no answer.
 
   improve [--dry-run] [--run] [--k <n>] [--budget-usd <x>] [--role <role>]
-          [--schedule nightly|weekly] [--json] [--dir <path>]
+          [--max-requests <n>] [--allow-host-probes] [--schedule nightly|weekly] [--json] [--dir <path>]
     Governed self-improvement (Harness^2's propose, probe, compose, over the
     hashed surface). Mines the audit trails for what keeps recurring: a
     refused rule (a skill), a skill that fires but is never cited (a
@@ -3448,7 +3448,9 @@ Commands:
     that helped, and writes PROPOSALS plus one inbox item; nothing reaches
     .gnomon/ until a person accepts (gnomon proposals) or the surface
     declares [improve] auto_accept in policy.toml and a lint-clean, probed
-    proposal meets its thresholds. --schedule writes
+    proposal meets its thresholds. --run refuses without a confined
+    [sandbox] (or --allow-host-probes) and, for a billed probe role with no
+    declared rates, without --max-requests. --schedule writes
     .gnomon/loops/improve.toml for a person to commit and install. Exit 0
     done, 1 usage, 3 refused, 10 could not run.
 

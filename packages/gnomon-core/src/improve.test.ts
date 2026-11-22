@@ -29,7 +29,7 @@ import {
 } from "./improve.js";
 import { LINT_LIMITS, lintProposal, nameProblem } from "./improve_lint.js";
 import { mineAll, withNote, matchFor, NOTES_HEADING } from "./improve_mine.js";
-import { AUTO_ACCEPT_RULE, IMPROVE_DEFAULTS, autoAcceptVerdict, declaredImprove, policyPathProblem } from "./improve_policy.js";
+import { AUTO_ACCEPT_RULE, IMPROVE_DEFAULTS, autoAcceptVerdict, declaredImprove, effectiveMinPassDelta, policyPathProblem } from "./improve_policy.js";
 import { listItems } from "./inbox.js";
 import { acceptProposal, listProposals, readProposal, rejectProposal, renderDiff, sha256Hex, writeProposal, ProposalRefusal, type Proposal } from "./proposals.js";
 
@@ -916,5 +916,94 @@ describe("the published contract (conformance/improve.json)", () => {
     expect(a).toBe(b);
     const opt = JSON.parse(a).kinds.proposal_decision.optional;
     for (const k of F.audit.added_optional_fields) expect(opt, k).toHaveProperty(k);
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+describe("review fixes: what policy acceptance rests on", () => {
+  // The run declares nothing, so nothing is accepted; the verdict is asked of a surface that declares the policy.
+  const IMPROVE = { auto_accept: ["skill"], min_probe_runs: 2, max_token_increase: 10 };
+  const declare = (extra: Record<string, unknown> = {}): GnomonConfig => ({ ...loadConfig(root), policy: { ...(loadConfig(root).policy as object), improve: { ...IMPROVE, ...extra } } }) as GnomonConfig;
+  async function probed(_policy = "", body?: string) {
+    const c = project();
+    refusalTrails(["check pass"]);
+    const r = await withModel(() => runImprove(c, { run: true, k: 1, model: drafter({ body }), runCell }));
+    return { cfg: declare(), p: readProposal(loadConfig(root), r.proposals[0]!.id)!, r };
+  }
+  const reasons = (cfg: GnomonConfig, p: Proposal): string => {
+    const v = autoAcceptVerdict(cfg, p);
+    return v.ok ? "" : v.reasons.join(" | ");
+  };
+
+  it("a self-consistent forged report with a recomputed sha but no eval_run record is refused (3)", async () => {
+    const { cfg, p } = await probed();
+    expect(autoAcceptVerdict(cfg, p).ok).toBe(true);
+    const file = join(root, p.improve!.probe.report!);
+    const forged = `${readFileSync(file, "utf-8")}\n`;
+    writeFileSync(file, forged);
+    const forgedP: Proposal = { ...p, improve: { ...p.improve!, probe: { ...p.improve!.probe, report_sha256: sha256Hex(forged) } } };
+    expect(reasons(cfg, forgedP)).toMatch(/no eval_run record/);
+  });
+
+  it("a trial spec changed since the probe is refused, and the evidence names the spec hash (3)", async () => {
+    const { cfg, p } = await probed();
+    const v = autoAcceptVerdict(cfg, p);
+    expect(v.ok && v.evidence.spec_sha256).toMatch(/^[0-9a-f]{64}$/);
+    const spec = join(root, ".gnomon/trials/default.toml");
+    writeFileSync(spec, `${readFileSync(spec, "utf-8")}\n# looser later\n`);
+    // trials/ is withheld from every cell, so the arms' surface hashes still match: only the spec hash catches it.
+    expect(reasons(declare(), p)).toMatch(/trial spec changed since the probe/);
+  });
+
+  it("a report path that climbs out of _eval/ is not a report (4)", async () => {
+    const { cfg, p } = await probed();
+    const body = readFileSync(join(root, p.improve!.probe.report!), "utf-8");
+    mkdirSync(join(root, ".gnomon-trials"), { recursive: true });
+    writeFileSync(join(root, ".gnomon-trials/report.json"), body);
+    for (const bad of [".gnomon-trials/_eval/../report.json", ".gnomon-trials/_eval/./report.json"]) {
+      const climbing: Proposal = { ...p, improve: { ...p.improve!, probe: { ...p.improve!.probe, report: bad, report_sha256: sha256Hex(body) } } };
+      expect(reasons(cfg, climbing), bad).toMatch(/cites no eval report/);
+    }
+  });
+
+  it("a neutral probe is not accepted by default for a skill; a regressed one or one with more refusals never is (5)", async () => {
+    const neutral = await probed("", "Prefer short answers because they are cheaper to read.");
+    expect(neutral.p.improve!.probe.pass_delta).toBe(0);
+    expect(reasons(neutral.cfg, neutral.p)).toMatch(/not an improvement/);
+    const { cfg, p } = await probed();
+    expect(autoAcceptVerdict(cfg, p).ok).toBe(true);
+    const withProbe = (patch: Record<string, unknown>): Proposal => ({ ...p, improve: { ...p.improve!, probe: { ...p.improve!.probe, ...patch } } });
+    expect(reasons(cfg, withProbe({ regressed: true }))).toMatch(/probe regressed/);
+    expect(reasons(cfg, withProbe({ candidate: { ...p.improve!.probe.candidate!, refusals: p.improve!.probe.base!.refusals + 1 } }))).toMatch(/refused more often/);
+    // A declared min_pass_delta is used as written; memory defaults to non-regression.
+    const declared = declaredImprove({ ...cfg, policy: { improve: { auto_accept: ["skill"], min_pass_delta: 0 } } } as unknown as GnomonConfig)!;
+    expect(effectiveMinPassDelta(declared, "skill")).toEqual({ min: 0, strict: false });
+    const dflt = declaredImprove({ ...cfg, policy: { improve: { auto_accept: ["skill", "memory"] } } } as unknown as GnomonConfig)!;
+    expect(effectiveMinPassDelta(dflt, "skill")).toEqual({ min: 0, strict: true });
+    expect(effectiveMinPassDelta(dflt, "memory")).toEqual({ min: 0, strict: false });
+  });
+});
+
+describe("review fixes: a probe that can reach a billed role (2)", () => {
+  const cell: EvalCellRunner = async () => ({ code: 0, bucket: "result", stop_reason: "end_turn", model: "dull", endpoint: "local", volatile: { requests: 1, tokens_in: 10, tokens_out: 5 } }) as never;
+
+  it("is refused without declared rates, unless --max-requests caps it, which then bounds the cells", async () => {
+    const c = project({ url: "https://models.example.invalid/v1/chat/completions" });
+    refusalTrails(["check pass"]);
+    let cells = 0;
+    const counting: EvalCellRunner = async (...a) => (cells++, cell(...a));
+    await expect(runImprove(c, { run: true, k: 1, yesSpend: true, runCell: counting })).rejects.toThrow(/usd_per_mtok_in and usd_per_mtok_out.*--max-requests/s);
+    expect(cells).toBe(0);
+    expect(existsSync(join(root, ".gnomon-proposals"))).toBe(false);
+    const r = await runImprove(c, { run: true, k: 1, yesSpend: true, maxRequests: 1, runCell: counting });
+    expect(cells).toBeLessThanOrEqual(1);
+    expect(r.proposals).toHaveLength(1);
+  });
+
+  it("declared rates are enough", async () => {
+    const c = project({ url: "https://models.example.invalid/v1/chat/completions", policy: `[improve]\nusd_per_mtok_in = 1\nusd_per_mtok_out = 2\n` });
+    refusalTrails(["check pass"]);
+    await expect(runImprove(c, { run: true, k: 1, yesSpend: true, runCell: cell })).resolves.toBeTruthy();
   });
 });

@@ -10,8 +10,13 @@
  *     [improve]
  *     auto_accept = ["skill", "memory"]   # kinds; "harness" only if named
  *     min_probe_runs = 3                  # valid pairs the probe must have
- *     min_pass_delta = 0.0                # candidate pass rate minus base, at least
+ *     min_pass_delta = 0.05               # candidate pass rate minus base, at least
  *     max_token_increase = 0.10           # candidate output tokens over base, at most
+ *
+ * With no `min_pass_delta` declared, a skill or a harness edit must STRICTLY
+ * improve the pass rate (a neutral change is a person's call) and a memory
+ * entry need only not lower it. Whatever is declared, a probe that regressed
+ * (fewer passes, or more refusals than the base) is never accepted.
  *
  * and then `gnomon improve --run` may accept a proposal for that kind as
  * `policy:improve.auto_accept`, and only when every check below holds. The
@@ -27,8 +32,9 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { verifyTrail, resolveAudit } from "./audit.js";
 import { recomputeManifest, type GnomonConfig } from "./config.js";
 import { lintProposal } from "./improve_lint.js";
 import { cellSurfaceHash } from "./skill_trial.js";
@@ -43,6 +49,8 @@ export interface ImprovePolicy {
   auto_accept: ProposalKind[];
   min_probe_runs: number;
   min_pass_delta: number;
+  /** Whether `[improve] min_pass_delta` was declared; if not, the default depends on the kind (see effectiveMinPassDelta). */
+  min_pass_delta_declared: boolean;
   max_token_increase: number;
   /** The role that drafts text. Absent: the first local role. */
   role?: string;
@@ -104,6 +112,7 @@ export function declaredImprove(config: GnomonConfig): ImprovePolicy | null {
     auto_accept: kinds,
     min_probe_runs: Math.round(pick("min_probe_runs", IMPROVE_DEFAULTS.min_probe_runs, 1, 1000)),
     min_pass_delta: pick("min_pass_delta", IMPROVE_DEFAULTS.min_pass_delta, -1, 1),
+    min_pass_delta_declared: t.min_pass_delta !== undefined && num(t.min_pass_delta) !== undefined,
     max_token_increase: pick("max_token_increase", IMPROVE_DEFAULTS.max_token_increase, -1, 100),
     ...(typeof t.role === "string" && t.role ? { role: t.role } : {}),
     ...(k !== undefined ? { k: Math.round(k) } : {}),
@@ -115,6 +124,16 @@ export function declaredImprove(config: GnomonConfig): ImprovePolicy | null {
   };
 }
 
+/**
+ * The pass-rate gain a kind needs when `min_pass_delta` is not declared: a
+ * skill or harness edit must strictly improve (`strict`), a memory entry need
+ * only not lower it. A declared value is used as written.
+ */
+export function effectiveMinPassDelta(policy: ImprovePolicy, kind: ProposalKind): { min: number; strict: boolean } {
+  if (policy.min_pass_delta_declared) return { min: policy.min_pass_delta, strict: false };
+  return { min: 0, strict: kind !== "memory" };
+}
+
 /** What the `proposal_decision` record carries under `policy_evidence`: the numbers the decision rested on. */
 export interface AutoAcceptEvidence {
   kind: ProposalKind;
@@ -123,6 +142,8 @@ export interface AutoAcceptEvidence {
   token_delta: number | null;
   report: string;
   report_sha256: string;
+  /** sha256 of the trial spec the report was measured on, re-read at accept. */
+  spec_sha256: string;
   min_probe_runs: number;
   min_pass_delta: number;
   max_token_increase: number;
@@ -142,12 +163,50 @@ export function policyPathProblem(kind: ProposalKind, path: string, deleted: boo
   return path === "system.md" ? null : `${path}: policy accepts a harness edit only to system.md`;
 }
 
-const REPORT_DIR = /^\.gnomon-trials\/_eval\/[A-Za-z0-9._-]+\/report\.json$/;
+/** `.` and `..` are not a run directory: the segment would climb out of `_eval/`. */
+const REPORT_DIR = /^\.gnomon-trials\/_eval\/(?!\.{1,2}\/)[A-Za-z0-9._-]+\/report\.json$/;
+
+/**
+ * The `eval_run` record, on a hash-chained trail, that `gnomon eval` wrote for
+ * this report: the proposal's own JSON is writable by anything that can write
+ * the project, so the report and its hash in it prove nothing alone.
+ */
+function evalRunRecorded(config: GnomonConfig, report: string, sha256: string): string | null {
+  const dir = resolveAudit(config).dir;
+  let names: string[] = [];
+  try {
+    names = readdirSync(dir).filter((n) => n.startsWith("eval-") && n.endsWith(".jsonl"));
+  } catch {
+    return "no audit trail records this eval (no eval_run record)";
+  }
+  for (const n of names) {
+    const file = join(dir, n);
+    let text: string;
+    try {
+      text = readFileSync(file, "utf-8");
+    } catch {
+      continue;
+    }
+    if (!text.includes(sha256)) continue;
+    const hit = text.split("\n").some((line) => {
+      try {
+        const r = JSON.parse(line) as { kind?: string; report?: string; report_sha256?: string };
+        return r.kind === "eval_run" && r.report_sha256 === sha256 && r.report === report;
+      } catch {
+        return false;
+      }
+    });
+    if (!hit) continue;
+    return verifyTrail(file).ok ? null : `the audit trail ${n} that records this eval does not verify`;
+  }
+  return "no audit trail records this eval (no eval_run record carries this report's sha256)";
+}
 
 interface ReportShape {
   mode?: string;
   status?: string;
   pairs?: { valid?: number };
+  spec?: { name?: string; sha256?: string };
   arms?: { base?: { cell_surface_hash?: string }; candidate?: { cell_surface_hash?: string } | null };
   endpoints?: { pass?: { base?: { passes?: number; n?: number }; candidate?: { passes?: number; n?: number } | null }; output_tokens?: { base?: number | null; candidate?: number | null } };
 }
@@ -185,6 +244,8 @@ export function autoAcceptVerdict(config: GnomonConfig, p: Proposal): AutoAccept
   // The report the probe cites, checked against the disk and against this proposal.
   const root = resolve(config.gnomonDir, "..");
   let report: ReportShape | null = null;
+  if (pr.regressed) why.push("the probe regressed (fewer passes, or more refusals, than the base)");
+  if (pr.base && pr.candidate && pr.candidate.refusals > pr.base.refusals) why.push(`the candidate was refused more often than the base (${pr.base.refusals} to ${pr.candidate.refusals})`);
   if (!pr.report || !REPORT_DIR.test(pr.report) || !pr.report_sha256) {
     why.push("the probe cites no eval report");
   } else {
@@ -194,6 +255,8 @@ export function autoAcceptVerdict(config: GnomonConfig, p: Proposal): AutoAccept
       const bytes = readFileSync(file);
       if (createHash("sha256").update(bytes).digest("hex") !== pr.report_sha256) throw new Error("the report file changed since the probe");
       report = JSON.parse(bytes.toString("utf-8")) as ReportShape;
+      const unrecorded = evalRunRecorded(config, pr.report, pr.report_sha256);
+      if (unrecorded) throw new Error(unrecorded);
     } catch (err) {
       why.push(`the probe's report cannot be trusted: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -206,6 +269,15 @@ export function autoAcceptVerdict(config: GnomonConfig, p: Proposal): AutoAccept
       ...manifest.filter((s) => !touched.has(s.path) && !removed.has(s.path)),
       ...[...touched].map(([path, sha256]) => ({ path: path as `.gnomon/${string}`, sha256 })),
     ];
+    let specSha = "";
+    try {
+      const name = report.spec?.name;
+      if (!name || !/^[A-Za-z0-9._-]+$/.test(name) || name === "." || name === "..") throw new Error("the report names no trial spec");
+      specSha = createHash("sha256").update(readFileSync(join(config.gnomonDir, "trials", `${name}.toml`))).digest("hex");
+      if (report.spec?.sha256 !== specSha) throw new Error("the trial spec changed since the probe, so the thresholds it was measured against are not these");
+    } catch (err) {
+      why.push(`the probe's trial spec cannot be trusted: ${err instanceof Error ? err.message : String(err)}`);
+    }
     if (report.mode !== "paired") why.push("the report is not a paired eval");
     if (report.status !== "complete") why.push(`the eval ended ${report.status ?? "unknown"}, not complete`);
     if (report.arms?.base?.cell_surface_hash !== cellSurfaceHash(manifest)) why.push("the surface changed since the probe: its base arm is not this surface");
@@ -221,7 +293,15 @@ export function autoAcceptVerdict(config: GnomonConfig, p: Proposal): AutoAccept
       const tc = report.endpoints?.output_tokens?.candidate;
       const tokenDelta = typeof tb === "number" && typeof tc === "number" && tb > 0 ? tc / tb - 1 : null;
       if (valid < policy.min_probe_runs) why.push(`${valid} valid pair(s) is under min_probe_runs = ${policy.min_probe_runs}`);
-      if (delta < policy.min_pass_delta - 1e-9) why.push(`the pass-rate change ${delta.toFixed(3)} is under min_pass_delta = ${policy.min_pass_delta}`);
+      const need = effectiveMinPassDelta(policy, p.kind);
+      if (need.strict ? delta <= 1e-9 : delta < need.min - 1e-9) {
+        why.push(
+          need.strict
+            ? `the pass-rate change ${delta.toFixed(3)} is not an improvement; a ${p.kind} must strictly improve it unless [improve] min_pass_delta is declared`
+            : `the pass-rate change ${delta.toFixed(3)} is under min_pass_delta = ${need.min}`
+        );
+      }
+      if (pr.base && pr.candidate && (pr.base.passes !== b.passes || pr.candidate.passes !== c.passes)) why.push("the proposal's probe numbers do not match the report");
       if (tokenDelta !== null && tokenDelta > policy.max_token_increase + 1e-9) {
         why.push(`output tokens rose ${(tokenDelta * 100).toFixed(1)}%, over max_token_increase = ${(policy.max_token_increase * 100).toFixed(1)}%`);
       }
@@ -236,8 +316,9 @@ export function autoAcceptVerdict(config: GnomonConfig, p: Proposal): AutoAccept
             token_delta: tokenDelta === null ? null : Math.round(tokenDelta * 1000) / 1000,
             report: pr.report!,
             report_sha256: pr.report_sha256!,
+            spec_sha256: specSha,
             min_probe_runs: policy.min_probe_runs,
-            min_pass_delta: policy.min_pass_delta,
+            min_pass_delta: need.min,
             max_token_increase: policy.max_token_increase,
           },
         };

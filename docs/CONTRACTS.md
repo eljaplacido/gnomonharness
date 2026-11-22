@@ -5336,7 +5336,16 @@ surface hash; written atomically, mode 0600, never through a symlink).
 | `diff` | 1 to 5 `{path, before_sha256, after}`: `path` relative to `.gnomon/` with POSIX separators, `before_sha256` the sha256 of the file it was written against (`null` when it did not exist), `after` the whole new content (at most 20000 characters) |
 | `evidence` | up to 20 `{trail?, seq?, note?}` |
 | `decided_by` | `human`, or `policy:improve.auto_accept`: the one declared rule that may accept (§59); any other `policy:<rule>` is refused |
-| limits | title 200, rationale 2000, note 1000 characters, path 200; 200 pending |
+| limits | title 200, rationale 2000, note 1000 characters, path 200; 200 pending, of which at most 20 may be `source: "agent"` (a further agent proposal is refused until a person decides some; `improve`, `mine` and `cli` are not counted against that share) |
+
+**Accepting applies each file under the project root, never through a symlink.**
+Just before it writes a file, `accept` reads it again without following anything
+(every directory from the root lstat'd as a plain directory, the file opened
+`O_NOFOLLOW`), compares its sha256 with `before_sha256`, and checks it is the same
+file by identity; an edit in the window since the first check refuses with "changed
+since this was proposed" and writes nothing of that file (the files written before
+it are put back). A retirement removes the file the same way (`removeIn`); a
+symlinked parent refuses.
 
 **Which paths a kind may touch** (checked when written and again when accepted,
 because the file is machine-local and could be written by anything). `memory`:
@@ -5388,7 +5397,7 @@ an entry.
 **Retrieval.** When `.gnomon/memory/` has entries, the system prompt ends its
 notes with `## Project memory`: for each entry (at most 40, then a count) one line
 ``- `.gnomon/memory/<id>.md` — <name>: <description>`` of at most 200 characters,
-never a body, stated as information and not instruction. The model opens an entry
+never a body, stated as information and not instruction. `name` and `description` are made one line first (control characters become spaces, a leading `#`, `-`, `*`, `+`, `>`, a backtick or a list number is backslash-escaped), and an entry whose name or description holds a control character is refused at proposal and at accept. At most 200 files are read, and the parsed entries are cached by the directory's names, mtimes and sizes. The model opens an entry
 with `read`; that read is counted. `counters.memory` is `{v: 1, indexed, read:
 {<id>: n}, proposed: [<id>]}` and is present on a turn only when `indexed` is not
 0 or the turn read or proposed an entry; a delegated sub-turn's is merged into its
@@ -5545,6 +5554,16 @@ inbox?, problems}`. A run writes the report to
 proposal), one `inbox` item for target `gnomon` (author `cli`; §57) naming the
 proposals, and nothing under `.gnomon/` except what the declared policy accepts.
 
+**Probing needs a ceiling.** A probe cell can run on a billed role (its target, fallback or escalation
+not local). With no `usd_per_mtok_in` and `usd_per_mtok_out` declared such a cell is
+charged 0 and no `--budget-usd` stops it, so `gnomon improve --run` refuses (exit 3, before any
+model call or write) unless `--max-requests <n>` is given, which caps the model requests of every
+probe's eval (`runEval`'s `maxRequests`). `--run` also refuses unless `[sandbox] level` is
+`confined` or `strict`, or `exec` is `docker` or `os`: probe cells run model-written commands.
+`--allow-host-probes` accepts that for one run; the report's `problems` record it.
+`--scheduled` with `scheduled = "run"` is still `--run`, so it keeps the agent-session refusal
+(`gnomon loop run improve` has no agent marker and is exempt as the launcher).
+
 **Budget.** `--budget-usd` (or `[improve] budget_usd`) caps the spend: drafting
 tokens and probe-cell tokens at `usd_per_mtok_in` / `usd_per_mtok_out`; a local
 endpoint costs 0. A billed role with no declared rates cannot be metered, so a
@@ -5555,7 +5574,8 @@ needs the spec's `[budget] max_requests` or `--yes-spend`, as `gnomon eval`.
 
 **`[improve]`** in `policy.toml` (all optional; a person's edit, hashed with the
 surface): `auto_accept` (list of kinds; default none), `min_probe_runs` (valid
-pairs, default 3), `min_pass_delta` (default 0), `max_token_increase` (default 0,
+pairs, default 3), `min_pass_delta` (when absent: strictly above 0 for a `skill` or `harness`
+proposal, and 0 (not lower) for `memory`; a declared value is used as written), `max_token_increase` (default 0,
 a fraction: 0.10 is 10%), `role`, `k`, `budget_usd`, `usd_per_mtok_in`,
 `usd_per_mtok_out`, `scheduled` (`dry` (default) or `run`). A value out of range,
 an unknown kind or a mistyped list is reported in `policy.problems` and the
@@ -5574,17 +5594,23 @@ a harness edit, `system.md`, never a deletion and never `policy.toml`,
 `roles.toml`, `tools.toml`, `config.toml`, `trials/`, `loops/`, `extensions/` or
 `profiles/` even if `[proposals] harness_paths` lists them; `improve.lint` is
 clean and a fresh lint is clean; the probe is `probed`; the cited report file
-exists, its bytes hash to `report_sha256`, it is a `paired` eval that ended
-`complete`, its base arm's cell surface hash is this surface's and its candidate
+exists at `.gnomon-trials/_eval/<run>/report.json` (`<run>` is not `.` or `..`), its bytes hash to
+`report_sha256`, a hash-chained `eval_run` record under the audit directory carries that report
+path and sha256 (the proposal's own JSON is writable, so the file and its hash in it prove
+nothing alone), the report's `spec.sha256` is the trial spec file's sha256 now (`trials/` is
+withheld from every cell, so the arms' surface hashes do not cover it), it is a `paired` eval that ended
+`complete`, the probe did not regress (`regressed` is false and the candidate was refused no more
+often than the base), its base arm's cell surface hash is this surface's and its candidate
 arm's is this proposal's diff applied; its pass counts give `valid pairs >=
-min_probe_runs`, `pass_delta >= min_pass_delta` and, when tokens were metered,
+min_probe_runs`, `pass_delta` at least the effective `min_pass_delta` (strictly positive when it
+is not declared, for a skill or harness edit) and, when tokens were metered,
 `token_delta <= max_token_increase`. The decision refuses in an agent session and
 while a tamper event is open, as any decision; it needs no person present (a
 schedule runs it), and `[skills] require_trial` still refuses a skill. The
 `proposal_decision` record is written first (§58) with `decided_by:
 "policy:improve.auto_accept"`, `by: "improve"`, `authorised_by: "policy"`,
 `interactive: false`, `policy_rule: "improve.auto_accept"` and `policy_evidence`
-`{kind, probe_pairs, pass_delta, token_delta, report, report_sha256,
+`{kind, probe_pairs, pass_delta, token_delta, report, report_sha256, spec_sha256,
 min_probe_runs, min_pass_delta, max_token_increase}`; the proposal is stored
 `accepted` with `decided_by: "policy:improve.auto_accept"`.
 `conformance/audit_record_schema.json` (and its catalog copy) adds the two

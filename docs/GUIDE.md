@@ -1120,7 +1120,7 @@ nothing; `gnomon --help` prints all of it.
 | `gnomon acp [--role R] [--profile N]` | Serves the Agent Client Protocol on stdin/stdout for an editor. Same surface, roles, approvals and audit as `prompt`. | Zed, JetBrains IDEs |
 | `gnomon trust [list \| grant \| revoke]` | What this project's `.gnomon/` grants beyond the defaults, and whether this machine trusts it | A repository you did not write |
 | `gnomon proposals [list \| show ID \| accept ID \| reject ID [--note N]] [--json]` | The pending proposals to change `.gnomon/` (a skill, a memory entry, an edit to `system.md`): `show` prints the exact diff, `accept` applies it (the surface hash moves; from the next session) and refuses if the files changed since, `reject` changes nothing. A person's decision: it refuses inside an agent session and without a terminal (exit 3). See 7.10 | Letting the harness learn without it editing itself |
-| `gnomon improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--schedule nightly\|weekly] [--json]` | Mines the audit trails for what keeps recurring (a refused rule, an unused skill, a build command, a failure class), drafts, lints and probes each against the current surface on `.gnomon/trials/`, composes the ones that helped, and writes proposals. A dry run by default; nothing reaches `.gnomon/` until you accept, or a policy you declared (`[improve] auto_accept`) does. See 7.11 | Letting the harness find its own improvements, measured, under your rules |
+| `gnomon improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--max-requests N] [--allow-host-probes] [--schedule nightly\|weekly] [--json]` | Mines the audit trails for what keeps recurring (a refused rule, an unused skill, a build command, a failure class), drafts, lints and probes each against the current surface on `.gnomon/trials/`, composes the ones that helped, and writes proposals. A dry run by default; nothing reaches `.gnomon/` until you accept, or a policy you declared (`[improve] auto_accept`) does. See 7.11 | Letting the harness find its own improvements, measured, under your rules |
 | `gnomon memory [list \| show NAME] [--json]` | The notes a person accepted into `.gnomon/memory/` | Seeing what the harness remembers about this repository |
 | `gnomon inbox [list \| show ID \| add --title T \| ack ID \| resolve ID \| mcp] [--json]` | Work items the dashboard's **Flag for fix** (or you) wrote to `.gnomon-inbox/` for a harness to read as information, never as an instruction. `gnomon guard install claude-code --write` (and `install cursor --write`, via Cursor's `sessionStart` hook) hands the open ones to the harness at session start; `gnomon inbox mcp` serves them to Cursor and Claude Code (list, get, acknowledge, resolve; no add) | Telling a harness what to fix |
 | `gnomon audit [show \| verify]` | Lists trails; checks every chain, seal and signature anchor. `verify` exits 1 on a break or when there is nothing to verify. | Review, release gates |
@@ -1898,7 +1898,7 @@ is a short note about this repository with `name`, `description`, `provenance`
 through an accepted proposal, so a change to what the agent remembers is a
 change to the surface hash, made by a person who saw the text. When the
 directory has entries the system prompt lists their names and one line each (at
-most 40, one line each); the model opens one with `read`, and that read is
+most 40, one line each, flattened so a name cannot add a heading or another line); the model opens one with `read`, and that read is
 counted (`counters.memory`). No directory, no change to the prompt.
 
 ```toml
@@ -1978,7 +1978,7 @@ accept`, or a policy you declared ahead of time in `policy.toml`:
 [improve]
 auto_accept = ["skill", "memory"]
 min_probe_runs = 4
-min_pass_delta = 0.0
+min_pass_delta = 0.05
 max_token_increase = 0.10
 ```
 
@@ -1987,7 +1987,10 @@ With that, `gnomon improve --run` accepts a proposal as
 harness edit only if `"harness"` is); it is lint clean; it was probed and the
 eval report it cites is intact, is for this surface and this exact diff, and
 ended complete; at least `min_probe_runs` pairs were valid; the pass rate did not
-fall below `min_pass_delta`; output tokens rose no more than
+fall below `min_pass_delta` (left out, a skill or `system.md` edit must strictly improve the
+pass rate and a memory entry only not lower it), and the probe did not regress (no
+fewer passes, no more refusals); a hash-chained `eval_run` audit record matches the report
+and the trial spec is unchanged since; output tokens rose no more than
 `max_token_increase`; and every path is a skill, a memory entry or `system.md`.
 Never by policy: a retirement, an unprobed proposal, `policy.toml`, `roles.toml`,
 `tools.toml`, `config.toml`, trials, loops, extensions or profiles. The decision
@@ -2002,6 +2005,12 @@ shows the diff.
 `scheduled = "run"` under `[improve]`. A run costs at most `--budget-usd` (`[improve]
 budget_usd`); a local role costs nothing, and a billed role needs
 `usd_per_mtok_in` and `usd_per_mtok_out` declared so the cap can be metered.
+**Before it spends anything.** `gnomon improve --run` refuses (exit 3) unless `[sandbox]` is
+`level = "confined"` or `"strict"`, or `exec = "docker"` or `"os"`: probe cells run
+model-written commands in clones on this machine. `--allow-host-probes` accepts that for one
+run (the report records it). If a probe cell's role can reach a billed endpoint and no rates are
+declared, it also refuses unless you pass `--max-requests <n>`, a ceiling on model requests. Run
+inside an agent session, even `--scheduled`, it refuses; a cron `gnomon loop run improve` does not.
 Contract: [CONTRACTS.md §59](CONTRACTS.md).
 
 ---

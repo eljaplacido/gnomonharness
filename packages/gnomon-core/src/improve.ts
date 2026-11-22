@@ -28,7 +28,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { isLocalEndpoint, routeRole, type GnomonConfig } from "./config.js";
+import { isLocalEndpoint, resolveRouting, routeRole, type GnomonConfig } from "./config.js";
 import { EvalAbort, recordEval, runEval, type EvalCell, type EvalCellRunner, type EvalReport } from "./eval.js";
 import { addItem, recordInbox } from "./inbox.js";
 import { lintProposal } from "./improve_lint.js";
@@ -164,6 +164,23 @@ export function candidateCommit(root: string, diff: Array<{ path: string; after:
 // ---------------------------------------------------------------------------
 
 /** What a run has spent, against its caps. Local endpoints cost 0; a billed one costs what the declared rates say. */
+/** A run that is refused before it spends anything (exit 3 at the command). */
+export class ImproveRefusal extends Error {}
+
+/** Every non-local route a probe cell run as `roleName` can reach: its target, its fallback and its escalation. */
+export function billedRoutes(config: GnomonConfig, roleName: string): string[] {
+  const out: string[] = [];
+  try {
+    const r = routeRole(config, roleName);
+    for (const t of [r.target, r.fallback, r.escalate]) {
+      if (t && !isLocalEndpoint(t.url)) out.push(`${t.endpoint} (${t.url})`);
+    }
+  } catch {
+    out.push(`${roleName} (its route cannot be read)`);
+  }
+  return out;
+}
+
 export class Budget {
   usd = 0;
   requests = 0;
@@ -230,6 +247,10 @@ export interface ImproveOptions {
   run?: boolean;
   k?: number;
   budgetUsd?: number;
+  /** A ceiling on model requests across a probe's cells. Required when a cell can reach a billed role with no declared rates. */
+  maxRequests?: number;
+  /** `--allow-host-probes`: the run goes ahead without a sandbox, and the report says so. */
+  hostProbes?: boolean;
   role?: string;
   families?: readonly MineFamily[];
   /** The drafting model. Absent: templates. */
@@ -377,6 +398,7 @@ async function probe(env: ProbeEnv, diff: Array<{ path: string; after: string; d
       runCell,
       settleTrust: opts.settleTrust,
       yesSpend: opts.yesSpend,
+      ...(opts.maxRequests !== undefined ? { maxRequests: opts.maxRequests } : {}),
       stop: () => env.budget.exhausted(),
       log: env.opts.log,
     });
@@ -526,6 +548,19 @@ export async function runImprove(config: GnomonConfig, opts: ImproveOptions = {}
 
   // A USD budget over a billed role needs rates to meter it; refuse rather than guess.
   const metered = (r: DraftRole | null): boolean => !r || r.local || (policy?.usd_per_mtok_in !== undefined && policy?.usd_per_mtok_out !== undefined) || budget.cap_usd === undefined;
+  if (opts.hostProbes) problems.push("--allow-host-probes: probe cells ran without a confined sandbox");
+  // A probe cell that can reach a billed endpoint is charged at the declared rates. With none declared
+  // it is charged at 0 and no budget stops it, so a request cap is the only ceiling left: ask for one.
+  if (spec && opts.runCell) {
+    const cellRole = spec.role ?? resolveRouting(config).default;
+    const billed = billedRoutes(config, cellRole);
+    const rated = policy?.usd_per_mtok_in !== undefined && policy?.usd_per_mtok_out !== undefined;
+    if (billed.length > 0 && !rated && opts.maxRequests === undefined) {
+      throw new ImproveRefusal(
+        `the probe's ${cellRole} role can reach ${billed.join(" and ")}, which is not local, and [improve] declares no usd_per_mtok_in and usd_per_mtok_out, so no budget can meter it. Declare the rates, or pass --max-requests <n> to cap the probe's model requests.`
+      );
+    }
+  }
   const runId = now.toISOString().replace(/[-:]/g, "").replace(".", "");
   report.run = runId;
 
