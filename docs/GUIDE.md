@@ -1155,6 +1155,12 @@ esac
   [exit contract](CONTRACTS.md) is stable. A declared `[verify]` check that
   still fails after its last round does not change it: the run is a `result`
   (0) with `verify: "failed"`, so read `verify` as well before calling it done.
+  A script that wants the check in the exit asks for it: `--require-verify`
+  (or `[verify] exit_on_fail = true`) exits `1` for a check that failed,
+  regressed or passed unverified and `4` for one that could not run, and adds
+  `verify_exit`, `verify_rounds`, `verify_reason` and `verify_tail` to the record
+  ([CONTRACTS.md §52](CONTRACTS.md)). `[verify] record_detail = true` adds the
+  fields without the exit.
 - **`--deadline <seconds|ISO time>`** (since v0.5.0)
   (or `GNOMON_DEADLINE`) gives the run a
   wall clock, opt-in. At `[turn] deadline_notes` (default 50% and 80% of the
@@ -1766,6 +1772,26 @@ Only `package.json` `scripts` and `pyproject.toml` `[tool.pytest*]` count as
 changes in those two files; any other file counts by its bytes. `gnomon check`
 reads the list from the base commit and reports a change to it as a `fail`
 (`passed_unverified`). Not declared, nothing is snapshotted.
+
+**Opt-in: the exit, the detail, and a probe.** A failed or unrunnable check
+leaves `gnomon task` at exit 0 (the bucket's), as #211 documents, and the
+record carries only `verify`. Two opt-ins for a script, and one command to try
+the check before relying on it ([CONTRACTS.md §52](CONTRACTS.md)):
+
+```toml
+# policy.toml: inside the existing [verify] block
+[verify]
+exit_on_fail = true               # task exits 1 (failed/regressed/passed_unverified) or 4 (unrunnable)
+record_detail = true              # verify_exit, verify_rounds, verify_reason, verify_tail in the record
+```
+
+`gnomon task --require-verify` is `exit_on_fail` for one run. `gnomon doctor
+verify` runs the declared check once on the tree as it is (or the one `init`
+would detect, if none is declared) and says what it means: it could not run, it
+exits 0 but ran no test, it exits 4 or 5 (pytest's usage error and "nothing
+collected", which read as failures unless `contract` or `exit_map` says
+otherwise), or it fails on a clean tree. It does not run `setup`, and plain
+`gnomon doctor` still runs nothing of the project's.
 
 **Opt-in: the completion gate** (since v0.5.0). Off unless declared. When a turn that changed
 the worktree first answers "done" with budget left, gnomon does not accept it:

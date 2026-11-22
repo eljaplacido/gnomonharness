@@ -28,6 +28,17 @@
 
 ### Added
 
+- **An opt-in non-zero exit for the declared check, verify detail in the task
+  record, and `gnomon doctor verify`** (#235). `gnomon task --require-verify`
+  (or `[verify] exit_on_fail = true`) exits `1` for a check that failed,
+  regressed or passed unverified and `4` for one that could not run, where the
+  bucket says 0; the #211 default is unchanged without it. The record then
+  carries `verify_exit`, `verify_rounds`, `verify_reason` and `verify_tail`
+  (`[verify] record_detail = true` adds them without the exit). `gnomon doctor
+  verify` runs the declared (or detected) check once on the tree as it is and
+  flags a check that cannot run, exits 0 having run no test, exits 4 or 5, or is
+  red on the clean tree. Nothing changes unless asked. CONTRACTS §52.
+
 - **`[verify] protects` and the `passed_unverified` verdict** (#234). A check
   runs code the agent can edit in the same turn (`package.json` scripts,
   `conftest.py`, pytest `addopts`, a `scripts/verify.sh`, `.septacore.json`).

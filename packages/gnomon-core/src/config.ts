@@ -495,6 +495,14 @@ export interface Policy {
      * A turn that changes one cannot come out `passed`: `passed_unverified`.
      */
     protects?: string[];
+    /**
+     * true: `gnomon task` exits 1 for a `failed` / `regressed` / `passed_unverified`
+     * check and 4 for an `unrunnable` one, where the bucket would say 0 (#235).
+     * `--require-verify` is the same for one run. Also turns on `record_detail`.
+     */
+    exit_on_fail?: boolean;
+    /** true: the task record carries `verify_exit`, `verify_rounds`, `verify_reason`, `verify_tail`. */
+    record_detail?: boolean;
     /** The completion gate (completion_gate.ts): "off", "checklist", "review" or "review_only". */
     completion_gate?: string;
     completion_rounds?: number;
@@ -3045,6 +3053,8 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "exit_map",
       "regressed_hand_back",
       "protects",
+      "exit_on_fail",
+      "record_detail",
       "completion_gate",
       "completion_rounds",
       "completion_min_remaining",
@@ -6383,6 +6393,10 @@ export interface ResolvedVerify {
   regressed_hand_back?: true;
   /** `[verify] protects`, the non-empty strings of it, when any (verify_protects.ts). */
   protects?: string[];
+  /** `[verify] exit_on_fail = true` (#235). */
+  exit_on_fail?: true;
+  /** `[verify] record_detail = true` (#235); `exit_on_fail` implies it. */
+  record_detail?: true;
 }
 
 /** A positive, finite number of seconds, or undefined. */
@@ -6428,6 +6442,8 @@ export function resolveVerify(config: GnomonConfig): ResolvedVerify | null {
       return r ? { exit_map: r.map, ...(r.contract ? { contract: r.contract } : {}) } : {};
     })(),
     ...(v?.regressed_hand_back === true ? { regressed_hand_back: true as const } : {}),
+    ...(v?.exit_on_fail === true ? { exit_on_fail: true as const } : {}),
+    ...(v?.record_detail === true || v?.exit_on_fail === true ? { record_detail: true as const } : {}),
     ...(Array.isArray(v?.protects) && v.protects.some((g) => typeof g === "string" && g.trim())
       ? { protects: (v.protects as unknown[]).filter((g): g is string => typeof g === "string" && g.trim() !== "").map((g) => g.trim()) }
       : {}),

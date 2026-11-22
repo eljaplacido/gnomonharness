@@ -6,7 +6,8 @@
     "resolved block must carry. `absent` lists fields it must not carry, because a key nobody declared",
     "adds nothing to what runs. Asserted by packages/gnomon-core/src/verify_setup.test.ts.",
     "Since #232: the verdict table (`verdicts`, `contracts`) and `exit_cases`: one run of the check with an exit, read by the loop (`gnomon task`) and by `gnomon check` through the same table. `check_status` is the `verify` entry's status in a `gnomon check` verdict (regressed is a fail there: a judge of someone else's change has no model to hand it to).",
-    "Since #234: `protects` (docs/CONTRACTS.md section 52). `detected` is what the token `@detected` names besides the files the command itself runs (`command_files`); `digest_cases` say what counts as a change to a protected file, by file. A turn that changes one cannot come out `passed`: `passed_unverified`. Asserted by packages/gnomon-core/src/verify_protects.test.ts."
+    "Since #234: `protects` (docs/CONTRACTS.md section 52). `detected` is what the token `@detected` names besides the files the command itself runs (`command_files`); `digest_cases` say what counts as a change to a protected file, by file. A turn that changes one cannot come out `passed`: `passed_unverified`. Asserted by packages/gnomon-core/src/verify_protects.test.ts.",
+    "Since #235: `task_exit` is the exit `gnomon task --require-verify` (or [verify] exit_on_fail) gives a task whose bucket says 0 (a refusal or apparatus failure keeps its own exit); `flag_exit: null` leaves it 0. Without the flag every row is 0 (#211). `doctor_verify` is `gnomon doctor verify`: its schema, exits, finding kinds, and the cases the probe is tested on. Asserted by packages/gnomon-core/src/verify_exit_detail.test.ts."
   ],
   "setup_network": [
     "none",
@@ -380,6 +381,122 @@
         "before": "[project]\nname = \"a\"\n[tool.pytest.ini_options]\naddopts = \"-q\"\n",
         "after": "[project]\nname = \"b\"\n[tool.pytest.ini_options]\naddopts = \"-q\"\n",
         "changed": false
+      }
+    ]
+  },
+  "task_exit": [
+    {
+      "verdict": "passed",
+      "flag_exit": null
+    },
+    {
+      "verdict": "failed",
+      "flag_exit": 1
+    },
+    {
+      "verdict": "regressed",
+      "flag_exit": 1
+    },
+    {
+      "verdict": "passed_unverified",
+      "flag_exit": 1
+    },
+    {
+      "verdict": "unrunnable",
+      "flag_exit": 4
+    },
+    {
+      "verdict": "declined",
+      "flag_exit": null
+    },
+    {
+      "verdict": "skipped",
+      "flag_exit": null
+    }
+  ],
+  "task_record_detail": {
+    "keys": [
+      "verify_exit",
+      "verify_rounds",
+      "verify_reason",
+      "verify_tail"
+    ],
+    "present_when": [
+      "--require-verify",
+      "[verify] exit_on_fail = true",
+      "[verify] record_detail = true"
+    ]
+  },
+  "doctor_verify": {
+    "schema": "gnomon.doctor_verify/1",
+    "exits": {
+      "clear": 0,
+      "attention": 1,
+      "couldNotRun": 10
+    },
+    "kinds": [
+      "not_declared",
+      "unrunnable",
+      "no_tests",
+      "ambiguous_exit",
+      "red_baseline",
+      "dirty_tree",
+      "setup_not_run"
+    ],
+    "cases": [
+      {
+        "name": "passes",
+        "exit_code": 0,
+        "verdict": "passed",
+        "kinds": []
+      },
+      {
+        "name": "not found",
+        "exit_code": 1,
+        "verdict": "unrunnable",
+        "kinds": [
+          "unrunnable"
+        ]
+      },
+      {
+        "name": "pytest's no tests collected",
+        "exit_code": 1,
+        "verdict": "failed",
+        "kinds": [
+          "ambiguous_exit"
+        ]
+      },
+      {
+        "name": "a usage error",
+        "exit_code": 1,
+        "verdict": "failed",
+        "kinds": [
+          "ambiguous_exit"
+        ]
+      },
+      {
+        "name": "a failing check",
+        "exit_code": 1,
+        "verdict": "failed",
+        "kinds": [
+          "red_baseline"
+        ]
+      },
+      {
+        "name": "exits 0 and ran nothing",
+        "exit_code": 1,
+        "verdict": "passed",
+        "kinds": [
+          "no_tests"
+        ]
+      },
+      {
+        "name": "an exit named in the table",
+        "exit_code": 1,
+        "verdict": "unrunnable",
+        "kinds": [
+          "unrunnable"
+        ]
       }
     ]
   }

@@ -178,13 +178,15 @@ export function auditVerifyKeys(config: GnomonConfig): VerifyKeyProblem[] {
       fatal: false,
     });
   }
-  if (v.regressed_hand_back !== undefined && typeof v.regressed_hand_back !== "boolean") {
-    out.push({
-      where: `${where} regressed_hand_back`,
-      problem: `regressed_hand_back is true or false; got ${JSON.stringify(v.regressed_hand_back)}, read as false.`,
-      fix: "regressed_hand_back = true",
-      fatal: false,
-    });
+  for (const key of ["regressed_hand_back", "exit_on_fail", "record_detail"]) {
+    if (v[key] !== undefined && typeof v[key] !== "boolean") {
+      out.push({
+        where: `${where} ${key}`,
+        problem: `${key} is true or false; got ${JSON.stringify(v[key])}, read as false.`,
+        fix: `${key} = true`,
+        fatal: false,
+      });
+    }
   }
   if (v.protects !== undefined) {
     const list = Array.isArray(v.protects) ? v.protects : null;

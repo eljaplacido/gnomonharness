@@ -153,6 +153,13 @@ by the sandbox or a rule -- the same reading `gnomon check` gives (§6). Neither
 hands the turn back. Since 0.6.4; before, all but 126/127 were `failed` and
 handed back (#231). A run killed by a signal, or a non-zero exit, is `failed`.
 Each case is pinned in `conformance/verify_outcomes.json`.
+This stays the default. A caller that wants the check in the exit asks for it
+(`gnomon task --require-verify`, or `[verify] exit_on_fail = true`, §52): then a
+task whose bucket says `0` exits `1` for a check that ran and did not pass
+(`failed`, `regressed`, `passed_unverified`) and `4` (`preconditions_unmet`) for
+one that never measured anything (`unrunnable`). `passed`, `declined`, `skipped`
+and no check at all stay `0`, and a refusal (`2`) or apparatus failure (`10`) is
+never demoted or replaced by it. Both codes are already in the table above.
 The command and its exit, per round, are the trail's `verify` records. A role that declares `escalate` on
 `verify_failed` hands the turn on instead (§42).
 
@@ -4831,3 +4838,47 @@ directories are not read.
 
 **Fixture**: `conformance/verify_contract.json` (`protects`, `verdicts_task`);
 `packages/gnomon-core/src/verify_protects.test.ts`.
+
+
+### The exit, the record detail and the probe (`--require-verify`, `exit_on_fail`, `record_detail`, `gnomon doctor verify`)
+
+All three are opt-in. A surface and a caller that ask for none of them get the
+exit, the record and the commands they always did.
+
+**Exit.** `gnomon task --require-verify`, or `[verify] exit_on_fail = true`, puts
+the declared check in the exit where the bucket says `0` (§1): `1` for `failed`,
+`regressed` and `passed_unverified`, `4` for `unrunnable`. The #211 default (a
+failed check leaves the task at its bucket's exit) is unchanged without it. The
+flag and the key mean the same; `taskExitCode(record, { requireVerify })` is the
+one function, so `gnomon chaos` and the command cannot read it two ways.
+
+**Record detail.** With `--require-verify`, `exit_on_fail` or
+`[verify] record_detail = true`, a task record whose check ran carries
+`verify_exit` (the last run's shell exit; `null` when it never reached one),
+`verify_rounds` (runs of the check this task made), `verify_reason` (`exit 5`,
+`exit 5 read as unrunnable`, `timeout`, `setup exit 1`, `exit 0; changed
+conftest.py`) and, for a check that did not pass, `verify_tail` (the last
+10 lines, at most 600 characters, redacted as the trail is). Without any of
+them the record has none of these keys. They sit beside `verify`, outside
+`volatile`.
+
+**`gnomon doctor verify [--json] [--dir <path>]`**, schema
+`gnomon.doctor_verify/1`. Plain `gnomon doctor` stays read-only and runs nothing
+of the project's. This runs the declared check once on the tree as it is (the
+command the surface declares, else the one `gnomon init` would detect), through
+the same bash tool and sandbox as the check, reads it through the §52 table, and
+reports `source` (`declared`, `detected`, `none`), `command`, `exit`, `verdict`,
+`duration_ms`, `tail`, `findings` (`kind`, `severity` `problem` or `info`,
+`message`, `fix`) and `exit_code`. It does not run `[verify] setup`. Finding
+kinds: `not_declared`, `unrunnable` (126/127, a timeout, a refusal),
+`no_tests` (exit 0 with output saying no test ran), `ambiguous_exit` (4 or 5
+read as a failure by the default table: pytest's usage error and "nothing
+collected", a script's "NOT RUN"; fix: `contract` or `exit_map`), `red_baseline`
+(the check fails or regresses on the tree as it is), `dirty_tree` and
+`setup_not_run` (both `info`). Exit `0` the check runs and holds up, `1` a
+problem, `10` nothing to run. `gnomon init` does not run the detected command
+(running a project script is not a scaffold step); it points at this command.
+
+**Fixture**: `conformance/verify_contract.json` (`task_exit`,
+`task_record_detail`, `doctor_verify`);
+`packages/gnomon-core/src/verify_exit_detail.test.ts`.

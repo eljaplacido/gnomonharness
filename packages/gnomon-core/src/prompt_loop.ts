@@ -4123,6 +4123,14 @@ export interface TurnResult {
    * null` read as a clean zero, one level up.
    */
   verify?: "passed" | "passed_unverified" | "failed" | "unrunnable" | "regressed" | "declined" | "skipped";
+  /**
+   * What the check came to, in numbers and a sentence (#235): the last run's
+   * exit (null when it never reached one), how many runs the turn made, why the
+   * verdict is what it is, and the tail of the output. Always computed when a
+   * check ran; the TASK RECORD carries it only when the surface or the caller
+   * asked (`record_detail`, `exit_on_fail`, `--require-verify`).
+   */
+  verifyDetail?: VerifyDetail;
   toolSteps: number;
   toolLog: string[];
   /**
@@ -6095,6 +6103,12 @@ async function agenticTurn(
   // The last outcome of the declared check. Last, not first: a failing check
   // hands the turn back, and the round after it is the one that counts.
   let verifyOutcome: TurnResult["verify"];
+  let verifyDetail: VerifyDetail | undefined;
+  let verifyRuns = 0;
+  const verifyTail = (text: string): string => {
+    const t = text.split("\n").slice(-10).join("\n").slice(-600);
+    return deps.audit ? (deps.audit.text(t) ?? t) : t;
+  };
   // The finish_reason of the completion the turn ends on, so a reply the
   // backend cut off can be recorded as cut off rather than as an answer.
   let lastFinishReason: string | undefined;
@@ -6440,6 +6454,7 @@ async function agenticTurn(
         endpoint_url: usedTarget.url,
         wire: { ...wireOf(adaptTarget(state, usedTarget)), tools_hash: offeredHash },
         verify: verifyOutcome,
+        ...(verifyDetail ? { verifyDetail } : {}),
         toolSteps: steps,
         toolLog,
         usage: turnUsage,
@@ -6466,6 +6481,7 @@ async function agenticTurn(
     endpoint_url: usedTarget.url,
     wire: { ...wireOf(adaptTarget(state, usedTarget)), tools_hash: offeredHash },
     verify: verifyOutcome,
+    ...(verifyDetail ? { verifyDetail } : {}),
     toolSteps: steps,
     toolLog,
     usage: turnUsage,
@@ -6517,6 +6533,7 @@ async function agenticTurn(
       endpoint: usedTarget.endpoint,
       endpoint_url: usedTarget.url,
       verify: verifyOutcome,
+      ...(verifyDetail ? { verifyDetail } : {}),
       toolSteps: steps,
       toolLog,
       usage: turnUsage,
@@ -7775,6 +7792,7 @@ async function agenticTurn(
 
         if (gateApplies && verify) {
           verifyRounds++;
+          verifyRuns++;
           deps.progress.stop();
           say(paint(deps.ui, "cyan", `  ⚙ verify`) +
             paint(deps.ui, "gray", ` ${verify.command}`));
@@ -7826,6 +7844,7 @@ async function agenticTurn(
               round: verifyRounds,
             });
             verifyRounds = verify.max_rounds;
+            verifyDetail = { exit: null, rounds: verifyRuns, reason: why, ...(setup.output ? { tail: verifyTail(setup.output) } : {}) };
             return null;
           }
           const check = await executeTool("bash", { command: verify.command }, verifyCtx, new Set(["bash"]));
@@ -7988,6 +8007,16 @@ async function agenticTurn(
 
           // Files the check executes that this turn changed (verify_protects.ts).
           const protChanged = protectsBefore ? changedProtected(protectsBefore, ctx.root, verify) : [];
+          verifyDetail = {
+            exit: notRun ? null : shellExit,
+            rounds: verifyRuns,
+            reason: notRun
+              ? check.summary.replace(/^bash — /, "")
+              : `exit ${shellExit}` +
+                (verifyExit.mapped ? ` read as ${verifyExit.verdict}` : "") +
+                (passed && protChanged.length > 0 ? `; changed ${protChanged.join(", ")}` : ""),
+            ...(passed ? {} : { tail: verifyTail(check.content) }),
+          };
           toolLog.push(`verify — ${check.summary}${pinsNothing ? " · test pins nothing" : ""}`);
           deps.audit?.write("verify", {
             role,
@@ -8527,6 +8556,7 @@ async function agenticTurn(
         wire: { ...wireOf(adaptTarget(state, usedTarget)), tools_hash: offeredHash },
         ...keepReasoning(result.reasoning),
         verify: verifyOutcome,
+        ...(verifyDetail ? { verifyDetail } : {}),
         toolSteps: steps,
         toolLog,
         usage: turnUsage,
@@ -8711,6 +8741,7 @@ async function agenticTurn(
         endpoint_url: usedTarget.url,
         wire: { ...wireOf(adaptTarget(state, usedTarget)), tools_hash: offeredHash },
         verify: verifyOutcome,
+        ...(verifyDetail ? { verifyDetail } : {}),
         toolSteps: steps,
         toolLog,
         usage: turnUsage,
@@ -9681,6 +9712,28 @@ export async function listModels(config: GnomonConfig): Promise<EndpointModels[]
 // Non-interactive execution
 // ---------------------------------------------------------------------------
 
+/** What the declared check came to (TurnResult.verifyDetail, the task record's verify_* fields). */
+export interface VerifyDetail {
+  exit: number | null;
+  rounds: number;
+  reason: string;
+  tail?: string;
+}
+
+/**
+ * The exit a `gnomon task` gives for its declared check, when the caller asked
+ * for one (`--require-verify`, `[verify] exit_on_fail`), else null: the bucket
+ * decides, as #211 documents. 1 (`failed`) for a check that ran and did not
+ * pass: `failed`, `regressed`, `passed_unverified`. 4 (`preconditions_unmet`)
+ * for one that never measured anything: `unrunnable`. `passed`, `declined`,
+ * `skipped` and no check at all are not this function's to change.
+ */
+export function verifyExitCode(verify: TurnResult["verify"] | undefined): 1 | 4 | null {
+  if (verify === "failed" || verify === "regressed" || verify === "passed_unverified") return 1;
+  if (verify === "unrunnable") return 4;
+  return null;
+}
+
 /** One task run, as data. Separated so a caller can compare runs. */
 /**
  * The turn's own window, budget and trims, for the `turn` and `chain_stage`
@@ -9776,6 +9829,19 @@ export interface TaskRecord {
    * check ran, so a record without one is the record it always was.
    */
   verify?: TurnResult["verify"];
+  /**
+   * The check's detail (#235), present only when the surface or the caller
+   * asked: `[verify] record_detail` or `exit_on_fail`, or `--require-verify`.
+   * `verify_exit` is the last run's exit (null: it never reached one),
+   * `verify_rounds` how many runs the task made, `verify_reason` why the
+   * verdict is what it is, `verify_tail` the last lines of the output of a
+   * check that did not pass, redacted as the trail is. Absent otherwise, so a
+   * record that did not ask is the record it always was.
+   */
+  verify_exit?: number | null;
+  verify_rounds?: number;
+  verify_reason?: string;
+  verify_tail?: string;
   /** Counts the loop already kept and used to discard. */
   counters: TurnCounters;
   /**
@@ -9882,6 +9948,12 @@ export function gateCountersOutsideVolatile(counters: TurnCounters): TurnCounter
 
 export interface RunTaskOptions {
   role?: string;
+  /**
+   * `gnomon task --require-verify` (#235): the record carries the check's
+   * detail (`verify_exit`, `verify_rounds`, `verify_reason`, `verify_tail`),
+   * as `[verify] exit_on_fail` does. The exit is the command's (`verifyExitCode`).
+   */
+  requireVerify?: boolean;
   /** Approve gated tool calls. Without it every gated call is refused. */
   yes?: boolean;
   /** Emit progress lines to stderr */
@@ -9958,8 +10030,22 @@ export function formatSpan(ms: number): string {
  * 0 result, 2 refusal, 10 apparatus_failure. One function so the command and
  * anything scoring a record (`gnomon chaos`) cannot read it two ways.
  */
-export function taskExitCode(record: Pick<TaskRecord, "bucket">): 0 | 2 | 10 {
-  return record.bucket === "result" ? 0 : record.bucket === "refusal" ? 2 : 10;
+export function taskExitCode(
+  record: Pick<TaskRecord, "bucket"> & Partial<Pick<TaskRecord, "verify">>,
+  opts: { requireVerify?: boolean } = {}
+): 0 | 1 | 2 | 4 | 10 {
+  const byBucket = record.bucket === "result" ? 0 : record.bucket === "refusal" ? 2 : 10;
+  // #211 stands: a failed check leaves the task at its bucket's exit, 0. Only a
+  // caller that asked (`--require-verify`, `[verify] exit_on_fail`) gets the
+  // check in the exit, and only where the bucket said 0: a refusal or an
+  // apparatus failure is never demoted or replaced by it.
+  if (opts.requireVerify && byBucket === 0) return verifyExitCode(record.verify) ?? 0;
+  return byBucket;
+}
+
+/** Does this surface (or this run) want the check in the exit and the record? */
+export function verifyExitRequested(config: GnomonConfig, flag?: boolean): boolean {
+  return flag === true || resolveVerify(config)?.exit_on_fail === true;
 }
 
 /**
@@ -10057,6 +10143,7 @@ export async function runTask(
   options: RunTaskOptions = {}
 ): Promise<TaskRecord> {
   applyCredentials(undefined, declaredKeyVars(config));
+  const verifyDeclared = resolveVerify(config);
 
   // The surface audit ran only on the interactive path, so `gnomon task` -- the
   // non-interactive entry point, and the one every benchmark adapter uses --
@@ -10712,6 +10799,14 @@ export async function runTask(
     stop_reason: turn.stop_reason,
     ...(turn.stop_detail ? { stop_detail: turn.stop_detail } : {}),
     ...(turn.verify ? { verify: turn.verify } : {}),
+    ...(turn.verifyDetail && (options.requireVerify || verifyDeclared?.record_detail)
+      ? {
+          verify_exit: turn.verifyDetail.exit,
+          verify_rounds: turn.verifyDetail.rounds,
+          verify_reason: turn.verifyDetail.reason,
+          ...(turn.verifyDetail.tail ? { verify_tail: turn.verifyDetail.tail } : {}),
+        }
+      : {}),
     // The completion gate's clock is the one part of its counters that is not
     // reproducible, so it moves to `volatile.completion_gate_ms`.
     counters: gateCountersOutsideVolatile(turn.counters),
