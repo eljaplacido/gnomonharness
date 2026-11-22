@@ -1373,7 +1373,7 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
   let claudeCode: InitResult["claudeCode"];
   if (!options.from && !options.noVerify) {
     const spec = starterTrialSpec(root);
-    templates = [...templates, { path: "trials/default.toml", content: spec.text }];
+    templates = [...templates, { path: join("trials", "default.toml"), content: spec.text }];
     trial = { locate: spec.locate };
     // The Claude Code hook passes --agent claude-code, and with no
     // [check.roles] entry the guard has no role and asks about every call
