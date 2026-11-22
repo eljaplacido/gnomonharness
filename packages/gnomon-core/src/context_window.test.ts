@@ -695,6 +695,27 @@ describe("a window declared nowhere is asked of the endpoint (B1)", () => {
     expect(r.target.contextAuto).toBeUndefined();
     expect(await settleContextWindows(config, r, hooks(config).h)).toBe(r);
   });
+
+  it("the precedence table in conformance/endpoint_window.json holds case by case", async () => {
+    const fixture = FIXTURE as {
+      precedence: { endpoint: string | null; defaults: string | null; publishes: string; tokens: number; source: string }[];
+    };
+    expect(fixture.precedence.length).toBeGreaterThanOrEqual(7);
+    for (const c of fixture.precedence) {
+      const [what, n] = c.publishes.split(":");
+      const f = await fake(
+        what === "models" ? { models: listing({ id: "m1", limit: { context: Number(n) } }) }
+          : what === "props" ? { props: { body: { default_generation_settings: { n_ctx: Number(n) } } } }
+          : { chat: [answer("ok")] }
+      );
+      const cfg = loadConfig(surface(f.url, {
+        ...(c.endpoint ? { endpoint: c.endpoint } : {}),
+        ...(c.defaults ? { defaults: c.defaults } : {}),
+      }));
+      const settled = await settleContextWindows(cfg, routeRole(cfg, "smol"), hooks(cfg).h);
+      expect(settled.target, JSON.stringify(c)).toMatchObject({ contextTokens: c.tokens, contextSource: c.source });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -322,7 +322,10 @@ describe("spinner", () => {
   };
 
   it("reads like Claude Code: frame, label, seconds, esc", () => {
-    expect(rowAt("sundial", 80, "thinking")).toMatch(/^ {2}[◐◓◑◒] thinking · 12s · esc cancels$/);
+    // The frames this machine draws: the sundial, or ascii on a legacy Windows console
+    // (the Windows CI runner is one). The frame set itself is pinned by the tests above.
+    const frames = spinnerSpec("sundial").frames.map((f) => f.replace(/[\\|]/g, "\\$&")).join("|");
+    expect(rowAt("sundial", 80, "thinking")).toMatch(new RegExp(`^ {2}(?:${frames}) thinking · 12s · esc cancels$`));
   });
 
   it("fits one row at 60 columns, with a long label and the double-width clock", () => {
