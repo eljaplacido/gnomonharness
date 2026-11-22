@@ -1449,6 +1449,30 @@ function printAnchorLine(r: AnchorTrailResult | undefined, acceptUnchecked = fal
  * missing — that is an anchor that was removed.
  */
 async function cmdAudit(args: CliArgs): Promise<void> {
+  // The audit record schema (CONTRACTS.md §55): what an outside reader of the
+  // trail needs for THIS install, with no surface and no trail required.
+  if (args.subcommand === "schema") {
+    const text = readFileSync(fileURLToPath(new URL("../catalog/audit_record_schema.json", import.meta.url)), "utf-8");
+    if (args.json) {
+      process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
+      return;
+    }
+    const doc = JSON.parse(text) as {
+      schema: string;
+      classes: Record<string, string>;
+      kinds: Record<string, { required: Record<string, { class: string }>; optional: Record<string, { class: string }> }>;
+    };
+    console.log(`${doc.schema}: the fields of every audit record, by kind, and what class each is.`);
+    for (const [cls, why] of Object.entries(doc.classes)) console.log(`  ${cls}: ${why}`);
+    console.log("");
+    for (const [kind, spec] of Object.entries(doc.kinds)) {
+      const mark = (o: Record<string, { class: string }>, opt: boolean) =>
+        Object.entries(o).map(([n, f]) => `${n}${opt ? "?" : ""}${f.class === "content" ? " [content]" : f.class === "identifier" ? " [id]" : ""}`);
+      console.log(`${kind}\n  ${[...mark(spec.required, false), ...mark(spec.optional, true)].join(", ")}`);
+    }
+    console.log("\n? optional. [content] may carry user, model or command text; [id] is a hash, id or path. Unmarked: metadata. --json prints the schema itself.");
+    return;
+  }
   // The detached delivery a session end starts: its settings are the sealed
   // ones the session handed it, and nothing is read from the project root.
   const handoff = args.flags["anchor-handoff"];
@@ -1564,7 +1588,7 @@ async function cmdAudit(args: CliArgs): Promise<void> {
   }
 
   if (sub !== "show" && sub !== "list" && sub !== "verify") {
-    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify | anchor | tamper | resolve`);
+    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify | anchor | tamper | metrics | schema | resolve`);
     process.exit(1);
   }
 
@@ -3093,7 +3117,8 @@ Commands:
 
   enumerations
     Show the enumerations contract (edit_format, sandbox, approval, role_profile, governance_level,
-    governance_family, audit_kind, guard_decision, guard_rule, guard_tool, exec)
+    governance_family, audit_kind, guard_decision, guard_rule, guard_tool, exec,
+    candidate_signal, trial_verdict, trial_status)
 
   session [--dir <path>] <command> [command ...]
     Run commands as a session, recording outcomes. Each command runs with
@@ -3121,7 +3146,7 @@ Commands:
           report what came back. A model listing is not a test of a key —
           some providers serve one to no key at all.
 
-  audit [show|verify|anchor|tamper|metrics|resolve <trail>:<seq> --reason <text>] [--dir <path>]
+  audit [show|verify|anchor|tamper|metrics|schema|resolve <trail>:<seq> --reason <text>] [--dir <path>]
     Audit trails, when [audit] is enabled. 'verify' re-hashes each record
     and checks the chain, so a trail altered after the fact is detectable.
     With [audit.anchor] declared it also checks every sealed head against

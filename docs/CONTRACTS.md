@@ -261,7 +261,10 @@ so both format drift and non-determinism fail the build.
                  "record", "git_hooks", "host_hooks", "write_allow", "outside_root", "secret_path",
                  "ci_path", "network", "url", "repo_code", "approval", "ungoverned", "error"],
   "guard_tool": ["bash", "write", "edit", "read", "webfetch", "grep", "glob", "execute"],
-  "exec": ["off", "docker", "os"]
+  "exec": ["off", "docker", "os"],
+  "candidate_signal": ["repeated_refusal"],
+  "trial_verdict": [true, false, "undetermined"],
+  "trial_status": ["complete", "budget_exhausted", "apparatus_failure"]
 }
 ```
 
@@ -269,13 +272,22 @@ so both format drift and non-determinism fail the build.
 first, and the families every policy rule is assigned to.
 
 `audit_kind` is every `kind` an audit trail record may carry (`AUDIT_KINDS`,
-audit.ts; the trail format is §44), and `guard_decision`, `guard_rule` and
-`guard_tool` are §10's tables (issue #113, Rule 6: what a record or a document
-can say is published, not only exported). `gnomon-core`'s guard test holds
-`AUDIT_KINDS`, `GUARD_DECISIONS`, `GUARD_RULES` and `GUARD_TOOLS` to the golden;
-the build fails when a kind is added to the `AuditKind` type and not to
-`AUDIT_KINDS`. The skill enumerations #113 also names (candidate signals, trial
-verdicts and statuses) stay in their own fixtures (§12, §13) for now.
+audit.ts; the trail format is §44; each kind's fields are §55), and
+`guard_decision`, `guard_rule` and `guard_tool` are §10's tables (issue #113,
+Rule 6: what a record or a document can say is published, not only exported).
+The build fails when a kind is added to the `AuditKind` type and not to
+`AUDIT_KINDS`.
+
+`candidate_signal`, `trial_verdict` and `trial_status` are the skill
+enumerations #113 also named: the signals `gnomon skill mine` raises (§12), a
+trial's `meets_thresholds` (`true`, `false` or the string `"undetermined"`: the
+one published list that mixes JSON types, so a reader compares by type as well
+as by value) and its `status` (§13). They were added after the keys above, as
+the last three, so every key published before keeps its position.
+`audit_schema.test.ts` (gnomon-core) runs the `gnomon-enums` binary and fails
+when its output differs from the golden, or when `AUDIT_KINDS`,
+`GUARD_DECISIONS`, `GUARD_RULES`, `GUARD_TOOLS`, `CANDIDATE_SIGNALS`,
+`TRIAL_VERDICTS` or `TRIAL_STATUSES` differs from the binary's list.
 
 **`exec` was added with the `os` value**, as the last key, so the keys
 published before it keep their positions. It was the one enumerated surface
@@ -4997,3 +5009,85 @@ about existing skills and are not written to `.gnomon-skills/candidates/`.
 
 **Fixture**: `conformance/skill_use.json`;
 `packages/gnomon-core/src/skill_attribution.test.ts`.
+
+---
+
+## 55. The audit record schema — `conformance/audit_record_schema.json`, `gnomon audit schema`, `gnomon.audit_record/1`, `v: 1`
+
+What every record of an audit trail (§44) may contain, for tools that read the
+trail and are not gnomon: an observability cockpit, a log pipeline, a
+compliance reader. For each kind in `audit_kind` (§3) the file lists the
+fields a record of that kind carries, which are required, their JSON types, and
+for each field a **class** saying what it can hold. A reader that must not
+show user, model or command text drops the `content` fields by looking them up,
+not by guessing from names.
+
+**Shape.** `schema` (`"gnomon.audit_record/1"`), `v` (1), `classes` (the three
+classes below, described), `nesting`, `unknown`, `envelope` and `kinds`. Both
+`envelope` and each kind have `required` and `optional`, each a map from field
+name to `{type, class, note?}`: `type` is a list of JSON types (`string`,
+`integer`, `number`, `boolean`, `null`, `array`, `object`; an `integer`
+satisfies `number`), the record's value is any one of them. A record of a kind
+carries the envelope's fields plus its kind's and **no others**: a field
+missing from the schema is a bug in the schema, and `audit_schema.test.ts`
+fails on it (it validates every record real scripted sessions write: tool
+calls, approvals, verify, bootstrap, context masking, model calls, the think
+cap, skill use, an escalation, the completion, finish and deliverable gates,
+and the guard's own trail).
+
+**Classes.**
+
+| Class | Holds | A cockpit may |
+|---|---|---|
+| `metadata` | counts, durations, token numbers, verdicts, rule ids, booleans, enumerated words, model and endpoint names | show it |
+| `content` | anything that can carry user, model or command text: command strings (`tool_call.target`, `verify.command`, `bootstrap.command`, `guard.target`, `job.command`), summaries (`tool_call.summary`, `approval.summary`, `tool_log`), prompts and replies (`turn.input`, `turn.output`), tool arguments and results, the escalation handover, error and probe text, an operator's free-text reason, the `check` verdict's per-check findings | withhold or redact unless the trail's owner cleared it |
+| `identifier` | hashes (`surface_hash`, `content_sha256`, `hash`), session, call and skill ids, host and user names, and **paths** | join on it; do not parse it |
+
+Paths are **identifiers, not content**: a path is a name gnomon or the
+operator chose, not prose a model wrote. They do reveal project layout, so a
+consumer that must not expose the layout drops them as it would content. The
+chain fields are identifiers: `seq` (position in the file), `prev` (the
+previous record's `hash`, `null` on the first record or when `[audit] chain =
+false`) and `hash` (absent when `chain = false`), §44.
+
+A field holding an array or object has the class of the most sensitive thing it
+can hold (content over identifier over metadata): `check.checks` is `content`
+because a finding names a command or a file, `mcp_tools.servers` is `identifier`.
+A `content` class does not mean the text is always written. `[audit] record =
+"metadata"` (the default) omits prompts, replies, tool arguments and results
+and the handover (`turn.input`, `turn.output`, `tool_call.args`,
+`tool_call.result`, `escalation.handover`), but a shell command is an action
+and is recorded in both modes, after `[audit] redact`, and so are the summaries. The word `metadata` is
+the class here and a setting there; they are not the same thing.
+
+**A reader that meets something this file does not list** (a kind or field from
+a newer gnomon) treats it as `content` until it has the newer schema. The
+`unknown` key says so in the file.
+
+**Versioning.** The schema's own version is `v` and the `/1` in its name. A
+change that only adds (a new kind, a new optional field, a wider type list, a
+new value of an existing enumeration) raises the minor version: `/1` stays,
+and a reader written for it keeps working, because it ignores what it does not
+know under the rule above. A removal or rename of a kind or field, a field
+becoming required, a type narrowed, or a field changing class to a less
+sensitive one is **major**: `/2`, `v: 2`, and the old file stays described here
+for as long as a release writes it. A field's class may become more sensitive
+within a major version (the safe direction). Every such change lands with the
+fixture and `audit_schema.test.ts`, as any contract change does.
+
+**`gnomon audit schema [--json]`** prints the schema of the installed
+version, for a tool that cannot read a checkout: `--json` is the file,
+unchanged; without it, a listing by kind with `?` on optional fields and
+`[content]` / `[id]` on the other two classes. It needs no surface and no
+trail. The copy it serves, `packages/gnomon-cli/catalog/audit_record_schema.json`,
+is held byte-equal to the fixture by `audit_schema_cmd.test.ts`.
+
+**What the schema is not.** It does not say a field is *safe*: `metadata` means
+gnomon wrote no user text there, not that a model name or an endpoint URL
+reveals nothing. It does not validate values beyond type (enumerated words are
+§3's, and the golden holds those). And the trail's tamper-evidence is §44's and
+§21's, not this file's.
+
+**Fixture**: `conformance/audit_record_schema.json`;
+`packages/gnomon-core/src/audit_schema.test.ts` (kinds equal `AUDIT_KINDS`,
+every record real sessions write validates), `packages/gnomon-cli/src/audit_schema_cmd.test.ts`.

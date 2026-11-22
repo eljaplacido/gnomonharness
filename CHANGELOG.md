@@ -26,6 +26,18 @@
 
 ## [Unreleased]
 
+### Added — the audit record schema, and the skill enumerations (#113), CONTRACTS §55
+
+- `conformance/audit_record_schema.json` (`gnomon.audit_record/1`): for every audit kind, its required and
+  optional fields, their JSON types, and a class each: `metadata`, `content` (can carry user, model or command
+  text) or `identifier` (hashes, ids, paths; the `seq`/`prev`/`hash` chain fields are identifiers). Built for
+  outside readers of the trail. Additive changes bump the minor version, removals the major.
+  `audit_schema.test.ts` validates every record real scripted sessions write against it.
+- `gnomon audit schema [--json]` prints the schema of the installed version; needs no surface and no trail.
+- `gnomon enumerations` also publishes `candidate_signal`, `trial_verdict` (`true`, `false`, `"undetermined"`)
+  and `trial_status`, added as the last keys so the earlier ones keep their positions. A test holds every
+  TypeScript constant to the binary's output. Closes #113.
+
 ### Behaviour change — `[defaults] max_context_tokens` is a fallback
 
 - `[defaults] max_context_tokens` (65536 in every scaffolded surface) no longer fixes the window of an endpoint whose
