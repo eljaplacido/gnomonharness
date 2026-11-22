@@ -81,8 +81,12 @@ import {
 } from "./config.js";
 import { thinkCapNote, thinkCapRecord, resolveThinkCap, type ThinkCapCounters } from "./think_cap.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence,
-  safeForPrompt, traceLines, isEmptyReasoning, terminalWidth, summaryResult, fitRow,
+  safeForPrompt, traceLines, isToolTagStub, isEmptyReasoning, terminalWidth, summaryResult, fitRow, metaText,
 } from "./render.js";
+import {
+  boxedActive, boxCtx, startupCard, statusRule, promptGlyph, turnHeader, turnFooter,
+  railLine, swatch, type BoxCtx,
+} from "./boxed.js";
 export { isLocalEndpoint } from "./config.js";
 import {
   Todo,
@@ -265,7 +269,7 @@ import {
   type BootstrapOutcome,
   type ObservationMeta,
 } from "./context_hygiene.js";
-import { resolveContextWindow, type ContextSource } from "./context_window.js";
+import { resolveContextWindow, type ContextSource, type WindowResolution } from "./context_window.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
 import { applyCredentials } from "./credentials.js";
 import { assertContainableRoot, mcpSpawnDir, clampToDefaults, recordExecFloor, pinSessionRepository, type TrustOutcome } from "./trust.js";
@@ -725,9 +729,11 @@ function exchangeCost(e: PromptExchange): number {
 export function buildMessages(
   state: PromptState,
   systemPrompt: string,
-  input: string
+  input: string,
+  /** The target the turn is routed to: its endpoint's window sizes the replay (audit B1) */
+  target?: { contextTokens?: number }
 ): BuiltContext {
-  const ctx = resolveContext(state.config);
+  const ctx = resolveContext(state.config, target);
   const messages: ChatMessage[] = [];
   let notice: string | undefined;
 
@@ -2193,6 +2199,10 @@ async function callEndpointOnce(
       temperature: target.temperature,
       top_p: target.top_p,
       ...(maxTokens > 0 ? { num_predict: maxTokens } : {}),
+      // B2: Ollama's native route takes the context it runs the model with here,
+      // and truncates silently from the front when it is smaller than the prompt.
+      // Only ever set on an Ollama target; see RouteTarget.ollamaCtx.
+      ...(target.ollamaCtx ? { num_ctx: target.ollamaCtx } : {}),
     };
   } else {
     payload.temperature = target.temperature;
@@ -3131,6 +3141,56 @@ export function wireOf(target: RouteTarget): WireRecord {
   };
 }
 
+/**
+ * B2: the `num_ctx` an Ollama request carries, bounded by what the model was
+ * trained for. A number the surface declared (or a Modelfile's `num_ctx`)
+ * goes out as it is, clamped to the trained length when /api/show states it.
+ * A window that is only the trained length is NOT sent: that can be hundreds
+ * of thousands of tokens of KV cache the user never asked Ollama to allocate.
+ * It is said once instead, with the two settings that do carry it.
+ */
+function settleOllamaCtx(
+  t: RouteTarget,
+  hooks: WindowHooks,
+  res: WindowResolution,
+  probed: boolean
+): RouteTarget {
+  const where = `${t.endpoint ?? "endpoint"} · ${t.model}`;
+  let want = t.ollamaCtx ?? (res.modelfile ? res.tokens : undefined);
+  if (want && res.trained && want > res.trained) {
+    if (probed) {
+      hooks.say(
+        paint(hooks.ui, "gray",
+          `  [context] ${where}: num_ctx ${want} is above the model's trained length ${res.trained}; sending ${res.trained}`)
+      );
+    }
+    want = res.trained;
+  }
+  if (!want && res.tokens && res.source === "listing:ollama" && !res.modelfile && probed) {
+    hooks.warn(
+      paint(hooks.ui, "yellow",
+        `  [context] ${where}: gnomon budgets ${res.tokens} tokens (the model's trained length) but sends no ` +
+          `num_ctx, so Ollama runs its own default and drops the start of a longer prompt without an error. ` +
+          `Set OLLAMA_CONTEXT_LENGTH=<n> for the server, a Modelfile "PARAMETER num_ctx <n>", or declare ` +
+          `max_context_tokens = <n> in [endpoints.${t.endpoint ?? "<name>"}] and gnomon sends it.`)
+    );
+  }
+  return want === t.ollamaCtx ? t : { ...t, ...(want ? { ollamaCtx: want } : {}) };
+}
+
+/**
+ * The route target of the session's current role, for sizing history by the
+ * window of the endpoint it goes to. Undefined when the role cannot be routed
+ * (the surface audit reports that), which leaves `[defaults]`.
+ */
+function currentTarget(state: PromptState): RouteTarget | undefined {
+  try {
+    return routeRole(state.config, state.currentRole).target;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Where settleContextWindows says what it found. */
 export interface WindowHooks {
   ui: ResolvedUi;
@@ -3157,10 +3217,12 @@ export async function settleContextWindows<R extends { target: RouteTarget; fall
   route: R,
   hooks: WindowHooks
 ): Promise<R> {
-  if (!route.target.contextAuto && !route.fallback?.contextAuto) return route;
+  const needs = (t: RouteTarget | undefined): boolean => t?.contextAuto === true;
+  if (!needs(route.target) && !needs(route.fallback)) return route;
   const fallbackWindow = defaultContextWindow(config);
+  const defaultsDeclared = typeof config.config.defaults?.max_context_tokens === "number";
   const settle = async (t: RouteTarget | undefined): Promise<RouteTarget | undefined> => {
-    if (!t?.contextAuto) return t;
+    if (!t || !needs(t)) return t;
     const { resolution, fresh } = await resolveContextWindow(t);
     const where = `${t.endpoint ?? "endpoint"} · ${t.model}`;
     if (fresh && resolution.tokens) {
@@ -3168,23 +3230,27 @@ export async function settleContextWindows<R extends { target: RouteTarget; fall
         paint(hooks.ui, "gray",
           `  [context] ${where}: window ${resolution.tokens} tokens, read from the endpoint (${resolution.from})`)
       );
-    } else if (fresh) {
+    } else if (fresh && !(t.contextImplicit && defaultsDeclared)) {
+      // Silent for an endpoint that declared nothing under a `[defaults]` number:
+      // that number is its declared fallback, and this is today's behaviour.
       hooks.warn(
         paint(hooks.ui, "yellow",
-          `  [context] ${where}: max_context_tokens = "auto" found no window ` +
+          `  [context] ${where}: ${!t.contextImplicit ? 'max_context_tokens = "auto"' : "no max_context_tokens is declared, and asking the endpoint"} found no window ` +
             `(${resolution.misses.join("; ")}). Trimming to [defaults] max_context_tokens = ` +
             `${fallbackWindow}; declare the number in [endpoints.${t.endpoint ?? "<name>"}] to skip the lookup.`)
       );
       recordDegradation(hooks.audit, {
         id: "context_window_unresolved",
-        declared: `max_context_tokens = "auto" for ${t.model} at ${t.endpoint ?? "endpoint"}`,
+        declared: !t.contextImplicit
+          ? `max_context_tokens = "auto" for ${t.model} at ${t.endpoint ?? "endpoint"}`
+          : `no max_context_tokens: asked ${t.endpoint ?? "endpoint"} for ${t.model}`,
         actual: `[defaults] max_context_tokens = ${fallbackWindow}`,
         detail: { probes: resolution.misses },
       });
     }
-    return resolution.tokens
-      ? { ...t, contextTokens: resolution.tokens, contextSource: resolution.source }
-      : { ...t, contextTokens: fallbackWindow, contextSource: "default" };
+    if (!resolution.tokens) return { ...t, contextTokens: fallbackWindow, contextSource: "default" };
+    const settled: RouteTarget = { ...t, contextTokens: resolution.tokens, contextSource: resolution.source };
+    return t.kind === "ollama" ? settleOllamaCtx(settled, hooks, resolution, fresh) : settled;
   };
   const [target, fallback] = await Promise.all([settle(route.target), settle(route.fallback)]);
   return { ...route, target: target!, ...(route.fallback ? { fallback } : {}) };
@@ -3491,6 +3557,24 @@ function modelTimeoutMs(config?: GnomonConfig): number {
 // ---------------------------------------------------------------------------
 // Terminal helpers
 // ---------------------------------------------------------------------------
+
+/** The git branch, read from .git/HEAD: no process is spawned for a status line. */
+function branchOf(root: string): string | undefined {
+  try {
+    const head = readFileSync(resolve(root, ".git", "HEAD"), "utf-8").trim();
+    const m = /^ref: refs\/heads\/(.+)$/.exec(head);
+    return m ? m[1] : head.slice(0, 7);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The boxed context, or null when the classic look is in force. */
+function boxOf(state: PromptState): BoxCtx | null {
+  const ui = uiOf(state);
+  ui.boxed = boxedActive(ui);
+  return ui.boxed ? boxCtx(ui) : null;
+}
 
 /** Print a styled header */
 function printBanner(): void {
@@ -3844,6 +3928,17 @@ function printExchange(exchange: PromptExchange, ui: ResolvedUi): void {
   for (const line of renderExchange(exchange, ui)) {
     console.log(line);
   }
+}
+
+/** The boxed form: the answer, then the meta line as the turn's footer. */
+function printExchangeBoxed(exchange: PromptExchange, ui: ResolvedUi, box: BoxCtx): void {
+  const thinkTokens = Math.ceil(splitThinking(exchange.output).think.length / 4);
+  // Close the frame first, then the answer below it with no prefix at all, so
+  // code copied from the answer never carries a rail. The spinner was stopped
+  // (and its row erased) when the turn ended, before this runs.
+  const m = metaText(exchange, ui, thinkTokens);
+  console.log(turnFooter(box, m ? { glyph: m.glyph, glyphRole: m.color, text: m.text } : { text: "" }));
+  for (const line of renderExchange(exchange, { ...ui, meta: [] })) console.log(line);
 }
 
 // ---------------------------------------------------------------------------
@@ -9301,7 +9396,8 @@ async function agenticTurn(
     if (showTrace) {
       const columns = terminalWidth();
       if (reasoning) sayReasoning(reasoning, uses);
-      const rationale = split.answer.trim();
+      // A tool-call parser's leaked tag start (`<t`) beside a real call is not prose.
+      const rationale = isToolTagStub(split.answer.trim()) ? "" : split.answer.trim();
       if (rationale && rationale !== lastRationale) {
         keepThink(state, "prose", rationale);
         traceLines(rationale, deps.ui.think === "hide" ? "collapse" : deps.ui.think, columns, {
@@ -9984,12 +10080,13 @@ export async function compactSession(
   systemPrompt: string,
   onNote?: (line: string) => void
 ): Promise<CompactionResult> {
-  const ctx = resolveContext(state.config);
+  const target = currentTarget(state);
+  const ctx = resolveContext(state.config, target);
   const wants = ctx.compaction === "summary" || ctx.policy === "summary";
   if (!wants) return { folded: 0, reclaimed: 0 };
 
   // Build against an empty next input to see what the window sheds.
-  const probe = buildMessages(state, systemPrompt, "");
+  const probe = buildMessages(state, systemPrompt, "", target);
   const pending = probe.evicted.filter((e) => !e.folded);
   if (pending.length === 0) return { folded: 0, reclaimed: 0 };
 
@@ -10683,7 +10780,7 @@ export async function runTask(
 
   const active = selectSkills(loadSkills(config), role, input);
   const systemPrompt = buildSystemPrompt(state, role, input);
-  const built = buildMessages(state, systemPrompt, input);
+  let built = buildMessages(state, systemPrompt, input, route.target);
 
   const errOut = options.stderr ?? process.stderr;
   const note = (line: string) => {
@@ -10915,6 +11012,7 @@ export async function runTask(
     note(`  ${line}`);
   }
   route = await settleContextWindows(config, route, { ui, say: note, warn, audit: auditForTurn });
+  built = buildMessages(state, systemPrompt, input, route.target);
 
   // Connect declared MCP servers here too. They were wired only in
   // runPromptLoop, so a surface declaring [mcp_servers] handed its tools to
@@ -11009,7 +11107,8 @@ export async function runTask(
         const stageMsgs = buildMessages(
           stageState,
           buildSystemPrompt(stageState, stageRole, stageInput),
-          stageInput
+          stageInput,
+          stageRoute.target
         );
         note(`[chain] stage ${i + 1}/${chain.length} — ${stageRole}`);
         {
@@ -11540,7 +11639,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/think", arg: "[mode]", help: "Chain-of-thought: hide | collapse | show" },
   { name: "/cot", arg: "[mode]", help: "Live trace while it works: off | brief | tools | think | work | full" },
   { name: "/expand", help: "List the steps inside the last folded run" },
-  { name: "/theme", arg: "[name]", help: "Colour theme — dark, dim, light, high-contrast, mono, tokyonight, catppuccin (the last two recolour the whole terminal)" },
+  { name: "/theme", arg: "[name]", help: "Colour theme — dark, dim, light, high-contrast, mono, tokyonight, catppuccin, gruvbox, nord (the last four recolour the whole terminal)" },
   { name: "/explain", arg: "[topic]", help: "What a feature is, how this repo has it set, and what to do with it" },
   { name: "/reflect", arg: "[topic]", help: "Alias for /explain" },
   { name: "/models", help: "Pick a model for a role (arrows, type to filter)" },
@@ -12614,6 +12713,7 @@ export function processCommand(cmd: string, state: PromptState): boolean {
           const warn = paint({ ...ui, theme: t.name }, "yellow", "attention");
           console.log(`  ${t.name.padEnd(14)} ${sample}  ${accent}  ${warn}  ${mark}`);
           console.log(`  ${" ".repeat(14)} ${t.description}`);
+          if (ui.boxed) console.log(`  ${" ".repeat(14)} ${swatch(boxCtx({ ...ui, theme: t.name }))}`);
         }
         console.log(`\nSet with: /theme <name>`);
         return true;
@@ -12628,6 +12728,7 @@ export function processCommand(cmd: string, state: PromptState): boolean {
 
       ui.theme = wanted;
       applyTerminalTheme(ui);
+      if (ui.boxed) console.log(`\n${swatch(boxCtx(ui))}`);
       console.log(`\nTheme: ${wanted} — ${THEMES[wanted].description}`);
       console.log(paint(ui, "gray", "  secondary text looks like this"));
       console.log(
@@ -12762,8 +12863,8 @@ export function processCommand(cmd: string, state: PromptState): boolean {
     }
 
     case "/context": {
-      const ctx = resolveContext(state.config);
-      const built = buildMessages(state, state.config.system.content ?? "", "");
+      const ctx = resolveContext(state.config, currentTarget(state));
+      const built = buildMessages(state, state.config.system.content ?? "", "", currentTarget(state));
       console.log(`\nContext policy (from .gnomon/config.toml):`);
       console.log(`  policy             ${ctx.policy}`);
       console.log(`  retain_after       ${ctx.retain_after} tok`);
@@ -13084,7 +13185,7 @@ export async function runSessionTurn(
   const systemPrompt = buildSystemPrompt(state, role, cleanedInput);
 
   // Build the window from prior turns before calling.
-  const built = buildMessages(state, systemPrompt, cleanedInput);
+  const built = buildMessages(state, systemPrompt, cleanedInput, route.target);
   if (built.notice) {
     deps.log(paint(ui, "yellow", `  [context] ${built.notice}`));
   }
@@ -13160,7 +13261,8 @@ export async function runSessionTurn(
         const stageBuilt = buildMessages(
           stageState,
           buildSystemPrompt(stageState, stageRole, stageInput),
-          stageInput
+          stageInput,
+          stageRoute.target
         );
         print(
           paint(ui, "gray", `  [chain] stage ${i + 1}/${turnChain.length} — ${stageRole}`)
@@ -13655,7 +13757,27 @@ export async function runPromptLoop(
     }
   };
 
-  printBanner();
+  const box0 = boxOf(state);
+  const startRoute = routeRole(config, state.currentRole);
+  if (box0) {
+    const root0 = workRootOf(config);
+    const gov = (config as unknown as { policy?: { governance?: { level?: string } } }).policy?.governance?.level;
+    console.log("");
+    for (const l of startupCard(box0, {
+      version: harnessBuild().replace(/^gnomon\//, ""),
+      role: state.currentRole,
+      model: startRoute.model,
+      where: isLocalEndpoint(startRoute.target.url) ? "local" : "cloud",
+      surface: surfaceHash || undefined,
+      governance: gov ?? "prevent",
+      audit: auditSettings.enabled,
+      repo: root0,
+      branch: branchOf(root0),
+    })) console.log(l);
+    console.log("");
+  } else {
+    printBanner();
+  }
 
   // Which project this session is operating on.
   //
@@ -13665,7 +13787,7 @@ export async function runPromptLoop(
   // working on the harness while its operator believed it was working on their
   // project. The root is the first thing on screen now.
   const projectRoot = workRootOf(config);
-  console.log(`Project: ${projectRoot}`);
+  if (!box0) console.log(`Project: ${projectRoot}`);
   if (isSelfTargeting(projectRoot)) {
     const ui0 = uiOf(state);
     console.log(
@@ -13694,9 +13816,10 @@ export async function runPromptLoop(
   const ungoverned = governanceStartupLine(config);
   if (ungoverned) console.log(paint(uiOf(state), "yellow", ungoverned));
 
-  console.log(`Role: ${state.currentRole}`);
-  const startRoute = routeRole(config, state.currentRole);
-  console.log(`Model: ${startRoute.model}`);
+  if (!box0) {
+    console.log(`Role: ${state.currentRole}`);
+    console.log(`Model: ${startRoute.model}`);
+  }
   const escLine = describeEscalation(startRoute.escalate);
   if (escLine) console.log(escLine);
   console.log("");
@@ -14514,7 +14637,25 @@ export async function runPromptLoop(
       // Show the prompt only when actually waiting on the user —
       // buffered (typed-ahead) lines replay silently instead.
       if (!closed && lineQueue.length === 0) {
-        rl.setPrompt(`${state.currentRole} ▸ `);
+        const boxP = boxOf(state);
+        if (boxP) {
+          // A rule above the prompt; nothing is drawn beside or below the input
+          // line, because readline's refresh would erase it.
+          const r = routeRole(config, state.currentRole);
+          const last = state.exchanges[state.exchanges.length - 1];
+          const win = r.target.contextTokens;
+          console.log(
+            statusRule(boxP, {
+              role: state.currentRole,
+              model: r.model,
+              ctxPct: last?.context_tokens !== undefined && win ? (last.context_tokens / win) * 100 : undefined,
+              branch: branchOf(workRootOf(config)),
+            })
+          );
+          rl.setPrompt(promptGlyph(boxP));
+        } else {
+          rl.setPrompt(`${state.currentRole} ▸ `);
+        }
         rl.prompt();
       }
       atPrompt = true;
@@ -14849,6 +14990,8 @@ export async function runPromptLoop(
       const controller = new AbortController();
       cancelTurn = () => controller.abort();
       let done: SessionTurn;
+      const boxT = boxOf(state);
+      if (boxT) console.log(turnHeader(boxT, { role: choice.role, model: routeRole(config, choice.role).model }));
       try {
         done = await runSessionTurn(state, choice.role, choice.input, choice.prefixed, {
           approve,
@@ -14858,7 +15001,8 @@ export async function runPromptLoop(
           surfaceHash,
           shadow: shadowFor(config),
           persist,
-          log: (line) => console.log(line),
+          log: (line) => console.log(boxT ? railLine(boxT, line) : line),
+          ...(boxT ? { print: (line: string) => progress.print(railLine(boxT, line)) } : {}),
           progress,
           reconfigure,
           live,
@@ -14868,7 +15012,8 @@ export async function runPromptLoop(
         activeProgress = null;
       }
       const { exchange, systemPrompt } = done;
-      printExchange(exchange, ui);
+      if (boxT) printExchangeBoxed(exchange, ui, boxT);
+      else printExchange(exchange, ui);
 
       // Fold anything the window has shed. After the turn, not during it, so
       // the cost lands between turns rather than inside one.

@@ -539,9 +539,8 @@ describe('[context] token_estimate = "calibrated"', () => {
     const first = trims[0]!.i;
     expect(cal.raws.slice(0, first - 1)).toEqual(chars4.raws.slice(0, first - 1));
     expect(cal.raws[first - 1]!.length).toBeLessThan(chars4.raws[first - 1]!.length);
-    // The strict property is the line above (the calibrated run keeps less at its first trim).
-    // Trims evict whole call+result units, so the total dropped count can tie (it does on
-    // Windows, whose longer temp paths size the units differently); it can never be fewer.
+    // Strict property: the line above (keeps less at its first trim). Whole call+result units are
+    // evicted, so the dropped total can tie (it does on Windows); it can never be fewer.
     expect(mc.trims.dropped).toBeGreaterThanOrEqual(chars4.record.counters.model_calls!.trims.dropped);
     // The trail says the ratio each request was sized under.
     const calls = trail(cal.root, "model_call");

@@ -13,6 +13,7 @@ import type { PromptExchange } from "./prompt_loop.js";
 import type { ResolvedUi, MetaField, ThinkMode } from "./config.js";
 import { renderMarkdown, DEFAULT_WIDTH } from "./markdown.js";
 import { cut, visibleWidth } from "./width.js";
+import { downgradeCode, colorDepth, colorCode, legacyWindowsConsole } from "./boxed.js";
 
 // ---------------------------------------------------------------------------
 // Colour
@@ -39,6 +40,23 @@ export interface Theme {
    * MUST run on exit. Omit it and the theme leaves the terminal's own colours be.
    */
   terminal?: { bg: string; fg?: string };
+  /** The boxed look (boxed.ts): accent, rail colour, border set, header chip. */
+  look?: ThemeLook;
+}
+
+/** A colour with its 16-colour fallback; the 256 value is derived from the hex. */
+export interface ThemeColor {
+  hex: string;
+  /** SGR foreground code (30-37, 90-97) used on a 16-colour terminal. */
+  c16: number;
+}
+export type BorderName = "rounded" | "sharp" | "heavy" | "double" | "ascii";
+export interface ThemeLook {
+  accent?: ThemeColor;
+  rail?: ThemeColor;
+  border: BorderName;
+  /** How the role chip in a turn header is set. */
+  chip: "plain" | "bold" | "inverse";
 }
 
 const RESET = `${ESC}0m`;
@@ -46,6 +64,7 @@ const RESET = `${ESC}0m`;
 export const THEMES: Record<string, Theme> = {
   dark: {
     name: "dark",
+    look: { accent: { hex: "#E2733F", c16: 33 }, rail: { hex: "#8A8178", c16: 37 }, border: "rounded", chip: "bold" },
     description: "Default. Secondary text stays legible on a dark background.",
     codes: {
       // NOT 90m. "Bright black" on a black terminal is charcoal on charcoal,
@@ -64,6 +83,7 @@ export const THEMES: Record<string, Theme> = {
   },
   dim: {
     name: "dim",
+    look: { accent: { hex: "#7C8FA6", c16: 36 }, rail: { hex: "#4B5563", c16: 90 }, border: "sharp", chip: "plain" },
     description: "Quieter. Secondary text recedes — good on a bright terminal.",
     codes: {
       gray: `${ESC}90m`,
@@ -79,6 +99,7 @@ export const THEMES: Record<string, Theme> = {
   },
   light: {
     name: "light",
+    look: { accent: { hex: "#1D4ED8", c16: 34 }, rail: { hex: "#9CA3AF", c16: 90 }, border: "rounded", chip: "bold" },
     description: "For a light background: darker foregrounds, blue for accent.",
     codes: {
       gray: `${ESC}90m`,
@@ -94,6 +115,7 @@ export const THEMES: Record<string, Theme> = {
   },
   "high-contrast": {
     name: "high-contrast",
+    look: { accent: { hex: "#FFFF00", c16: 93 }, rail: { hex: "#FFFFFF", c16: 97 }, border: "heavy", chip: "inverse" },
     description: "Bright and bold throughout. For small text or poor displays.",
     codes: {
       gray: `${ESC}97m`,
@@ -109,6 +131,7 @@ export const THEMES: Record<string, Theme> = {
   },
   mono: {
     name: "mono",
+    look: { border: "rounded", chip: "plain" },
     description: "No colour, but keeps the layout. For logs and screenshots.",
     codes: {},
   },
@@ -117,6 +140,7 @@ export const THEMES: Record<string, Theme> = {
   // exit. Foreground roles are RGB; bold/italic/dim stay attribute-only.
   tokyonight: {
     name: "tokyonight",
+    look: { accent: { hex: "#7AA2F7", c16: 94 }, rail: { hex: "#3B4261", c16: 90 }, border: "rounded", chip: "bold" },
     description: "Deep indigo with soft neon. Recolours the whole terminal.",
     codes: {
       gray: `${ESC}38;2;86;95;137m`,
@@ -133,6 +157,7 @@ export const THEMES: Record<string, Theme> = {
   },
   catppuccin: {
     name: "catppuccin",
+    look: { accent: { hex: "#CBA6F7", c16: 95 }, rail: { hex: "#585B70", c16: 90 }, border: "rounded", chip: "bold" },
     description: "Mocha — warm pastels on a plum background. Whole terminal.",
     codes: {
       gray: `${ESC}38;2;108;112;134m`,
@@ -146,6 +171,40 @@ export const THEMES: Record<string, Theme> = {
       magenta: `${ESC}38;2;203;166;247m`,
     },
     terminal: { bg: "#1e1e2e", fg: "#cdd6f4" },
+  },
+  gruvbox: {
+    name: "gruvbox",
+    description: "Warm retro earth tones. Recolours the whole terminal.",
+    look: { accent: { hex: "#FABD2F", c16: 93 }, rail: { hex: "#928374", c16: 90 }, border: "rounded", chip: "bold" },
+    codes: {
+      gray: `${ESC}38;2;146;131;116m`,
+      bold: `${ESC}1m`,
+      italic: `${ESC}3m`,
+      dim: `${ESC}38;2;102;92;84m`,
+      green: `${ESC}38;2;184;187;38m`,
+      yellow: `${ESC}38;2;250;189;47m`,
+      red: `${ESC}38;2;251;73;52m`,
+      cyan: `${ESC}38;2;142;192;124m`,
+      magenta: `${ESC}38;2;211;134;155m`,
+    },
+    terminal: { bg: "#282828", fg: "#ebdbb2" },
+  },
+  nord: {
+    name: "nord",
+    description: "Cool arctic blues, sharp corners. Recolours the whole terminal.",
+    look: { accent: { hex: "#88C0D0", c16: 36 }, rail: { hex: "#4C566A", c16: 90 }, border: "sharp", chip: "plain" },
+    codes: {
+      gray: `${ESC}38;2;129;140;160m`,
+      bold: `${ESC}1m`,
+      italic: `${ESC}3m`,
+      dim: `${ESC}38;2;76;86;106m`,
+      green: `${ESC}38;2;163;190;140m`,
+      yellow: `${ESC}38;2;235;203;139m`,
+      red: `${ESC}38;2;191;97;106m`,
+      cyan: `${ESC}38;2;136;192;208m`,
+      magenta: `${ESC}38;2;180;142;173m`,
+    },
+    terminal: { bg: "#2e3440", fg: "#d8dee9" },
   },
 };
 
@@ -177,7 +236,8 @@ export function paint(ui: ResolvedUi, color: string, text: string): string {
   // over the surface the same way an exported key wins over the store.
   if (!ui.color || process.env.NO_COLOR) return text;
   const code = themeOf(ui).codes[color];
-  return code ? `${code}${text}${RESET}` : text;
+  // The boxed look also fits a truecolor palette to a terminal that is not.
+  return code ? `${ui.boxed ? downgradeCode(code, colorDepth()) : code}${text}${RESET}` : text;
 }
 
 // ---------------------------------------------------------------------------
@@ -411,6 +471,21 @@ function metaField(
   }
 }
 
+/** The meta fields joined as one plain string, with the exchange's status glyph. */
+export function metaText(
+  exchange: PromptExchange,
+  ui: ResolvedUi,
+  thinkTokens = 0
+): { text: string; glyph: string; color: string } | null {
+  if (ui.meta.length === 0) return null;
+  const parts = ui.meta
+    .map((f) => metaField(f, exchange, thinkTokens))
+    .filter((v): v is string => v !== null);
+  if (parts.length === 0) return null;
+  const status = STATUS[exchange.bucket] ?? STATUS.result;
+  return { text: parts.join("  ·  "), glyph: status.glyph, color: status.color };
+}
+
 /**
  * Build the meta line(s) shown with an answer.
  *
@@ -514,7 +589,46 @@ export function spinnerFrames(
     ? ["|", "/", "-", "\\"]
     : ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 }
-const FRAMES = spinnerFrames();
+
+/** What a spinner draws: its frames, how long each stays, and the columns a frame takes. */
+export interface SpinnerSpec {
+  frames: string[];
+  ms: number;
+  width: number;
+}
+
+/**
+ * The spinner for `[ui] spinner`. The default is the sundial: the shaded half of
+ * the dial turns clockwise, the shadow sweeping round, as in gnomon's mark.
+ * The legacy Windows console has none of these glyphs and always gets ascii.
+ */
+export function spinnerSpec(
+  style: "sundial" | "clock" | "braille" | "ascii" = "sundial",
+  platform: NodeJS.Platform = process.platform,
+  env: Record<string, string | undefined> = process.env
+): SpinnerSpec {
+  const ascii = { frames: ["|", "/", "-", "\\"], ms: 100, width: 1 };
+  if (legacyWindowsConsole(platform, env) || style === "ascii") return ascii;
+  switch (style) {
+    case "clock":
+      return {
+        frames: ["🕛", "🕐", "🕑", "🕒", "🕓", "🕔", "🕕", "🕖", "🕗", "🕘", "🕙", "🕚"],
+        ms: 150,
+        width: 2,
+      };
+    case "braille":
+      return { frames: spinnerFrames(platform, env), ms: 80, width: 1 };
+    default:
+      return { frames: ["◐", "◓", "◑", "◒"], ms: 150, width: 1 };
+  }
+}
+
+function accentOf(ui: ResolvedUi, text: string): string {
+  const c = themeOf(ui).look?.accent;
+  if (!c) return paint(ui, "cyan", text);
+  if (!ui.color || process.env.NO_COLOR) return text;
+  return `${ESC}${colorCode(c, colorDepth())}m${text}${RESET}`;
+}
 
 /**
  * A live progress line: frame, label, elapsed seconds.
@@ -528,11 +642,14 @@ export class Progress {
   private started = 0;
   private label = "";
   private suspended = false;
+  private readonly spec: SpinnerSpec;
 
   constructor(
     private ui: ResolvedUi,
     private out: NodeJS.WriteStream = process.stdout
-  ) {}
+  ) {
+    this.spec = spinnerSpec(ui.spinner_style);
+  }
 
   /** Would a spinner be drawn here at all? */
   private get live(): boolean {
@@ -577,7 +694,7 @@ export class Progress {
 
   private arm(): void {
     this.clearTimer();
-    this.timer = setInterval(() => this.draw(), 80);
+    this.timer = setInterval(() => this.draw(), this.spec.ms);
     if (typeof this.timer.unref === "function") this.timer.unref();
   }
 
@@ -591,15 +708,22 @@ export class Progress {
     // Drawing without a start is a bug in the caller, but it must never render
     // the epoch as an elapsed time. Treat it as starting now.
     if (this.started === 0) this.started = Date.now();
-    const secs = ((Date.now() - this.started) / 1000).toFixed(1);
-    const f = FRAMES[this.frame++ % FRAMES.length];
-    this.out.write(
-      `\r\x1b[2K  ${paint(this.ui, "cyan", f)} ${this.label} ${paint(
-        this.ui,
-        "gray",
-        `${secs}s`
-      )}`
-    );
+    this.out.write(`\r\x1b[2K${this.row()}`);
+  }
+
+  /** One frame's row: `◐ thinking · 12s · esc cancels`, never wider than the terminal. */
+  row(now = Date.now()): string {
+    const e = (now - this.started) / 1000;
+    const secs = e < 10 ? `${e.toFixed(1)}s` : `${Math.round(e)}s`;
+    const f = this.spec.frames[this.frame++ % this.spec.frames.length];
+    const cols = this.out.columns || 80;
+    const tail = ` · ${secs} · esc cancels`;
+    // 2 leading columns, the frame, a space, then label and tail.
+    const room = Math.max(8, cols - 2 - this.spec.width - 1);
+    const { head, tail: over } = cut(this.label, Math.max(4, room - visibleWidth(tail) - 1));
+    const label = over ? `${head}…` : head;
+    const glyph = accentOf(this.ui, f);
+    return `  ${glyph} ${label}${paint(this.ui, "gray", tail)}`;
   }
 
   /**
@@ -854,6 +978,27 @@ export interface TraceOptions {
 }
 
 /**
+ * The leading characters of a tool-call tag and nothing else (`<`, `<t`,
+ * `<tool_ca`). A server's tool-call parser can leak the start of the tag it
+ * swallowed into the content beside a real call (nemotron-3-super via
+ * OpenRouter sends `<t`); that is not prose and is not shown as it.
+ */
+export function isToolTagStub(text: string): boolean {
+  return text.length > 0 && text.startsWith("<") && ["<tool_call>", "<function=", "<function_call>"].some((t) => t.startsWith(text));
+}
+
+/**
+ * A trace note and the longest of its "how to see more" tails that still fits
+ * `room`: a note wider than the row wraps in the terminal, and a wrapped row
+ * is one the spinner's erase-line cannot see. With no tail that fits, the
+ * bare note, cut to the row if even that is too wide.
+ */
+function hintRow(note: string, tails: string[], room: number): string {
+  for (const t of tails) if ([...note + t].length <= room) return note + t;
+  return [...note].length <= room ? note : [...note].slice(0, Math.max(1, room - 1)).join("") + "…";
+}
+
+/**
  * Model prose shown while a turn works, as lines ready for a `  │ ` prefix.
  *
  * - `collapse`: the first three lines, one row each, cut at a word boundary.
@@ -894,7 +1039,7 @@ export function traceLines(
       shown++;
     }
     const left = lines.length - shown;
-    if (left > 0) rows.push(`… ${left} more line(s)${hint ? " — /think show" : ""}`);
+    if (left > 0) rows.push(hintRow(`… ${left} more line(s)`, hint ? [" — /think show"] : [], room));
     return rows;
   }
   let cutAny = false;
@@ -904,8 +1049,8 @@ export function traceLines(
     return r.text;
   });
   const hidden = lines.length - kept.length;
-  const ways = " — /think wrap (whole lines) · /think show (all)";
-  if (hidden > 0) rows.push(`… ${hidden} more line(s)${hint ? ways : ""}`);
-  else if (cutAny && hint) rows.push(`… cut at the row edge${ways}`);
+  const ways = [" — /think wrap (whole lines) · /think show (all)", " — /think wrap · /think show", " — /think show"];
+  if (hidden > 0) rows.push(hintRow(`… ${hidden} more line(s)`, hint ? ways : [], room));
+  else if (cutAny && hint) rows.push(hintRow("… cut at the row edge", ways, room));
   return rows;
 }
