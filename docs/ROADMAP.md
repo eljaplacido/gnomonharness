@@ -57,9 +57,14 @@ role routing, `hashline` edit format. You stop reaching for other agents.
 - [x] Role routing: `plan`, `implement`, `critique`, `smol`, plus the
       `coordinator` / `implementor` / `verifier` triad
 - [x] TUI: basic session view, step listing, outcome buckets
-- [ ] Edit format: `hashline` — **not implemented.** `str_replace` is the only
-      format this build has; the other two are in the enumerations contract
-      and nothing reads them. `config.toml` says so where it is configured.
+- [x] Edit format: `hashline` — implemented (0.6.7), opt-in with
+      `edit_format = "hashline"`: `read` tags lines `LINE:HASH|text`, `edit`
+      takes anchors, a stale anchor is refused (`edit_hashline.ts`,
+      `conformance/edit_hashline.json`). `str_replace` stays the default and
+      byte-identical. `ast` is the one published format still not implemented,
+      and `config.toml` says so where it is configured. Whether hashline helps
+      is a benchmark question (Bölük 2026 reports gains; nwyin's edit-bench
+      found it neutral or worse on Python), not settled by this change.
 - [x] Manifest emitted every turn — every turn record and audit event carries a
       `surface_hash`. The "re-asserted on changes" half of what this line used
       to claim is not what the code does, checked 2026-09-01 by reading both

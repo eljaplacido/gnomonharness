@@ -2492,6 +2492,34 @@ network = false
 allow_package_index = ["pypi.org", "files.pythonhosted.org", "registry.npmjs.org"]
 ```
 
+**Opt-in: the hashline edit format (`[defaults] edit_format = "hashline"`).**
+Off unless declared; `str_replace` stays the default, with the same tool
+schemas, descriptions and wire as before. With it, `read` shows each line as
+`LINE:HASH|text` (`12:a3|  return x;`, the hash two hex digits of the line's
+text) and `edit` takes `path` and `edits`, a list of
+`{op, anchor, end?, text?}` where `op` is `replace`, `delete`, `insert_before`
+or `insert_after`, `anchor` is a tag copied from `read`, and `end` makes a
+replace or delete cover a range. The model copies two short tokens instead of
+reproducing the old text. Every anchor in a call is checked against the file as
+it is; one that no longer matches (the file changed since the read, or the tag
+was mistyped) refuses the whole call, writes nothing, and tells the model to
+read again. Edits in one call may not overlap. CRLF files keep their line
+endings and a missing final newline stays missing. The edit and `read`
+descriptions in the schema are replaced by short ones that say so; the format
+overrides a `variant = "compat"` on `edit`. The idea is Can Bölük's
+[The Harness Problem](https://blog.can.ac/2026/02/12/the-harness-problem/)
+(2026-02-12), which reports gains on many models from this change alone; an
+independent test (nwyin's edit-bench) found it neutral to negative on Python,
+so compare a pair on your own tasks before relying on it. `ast` is still
+published and not implemented. The spec is pinned in
+`conformance/edit_hashline.json`.
+
+```toml
+# config.toml
+[defaults]
+edit_format = "hashline"
+```
+
 **Opt-in: the think cap (`[turn] max_reasoning_tokens_without_action`).** Off
 unless declared (an integer of at least 1000; unmeasured). A streamed reply
 whose reasoning passes that many tokens (about 4 characters each) with no answer

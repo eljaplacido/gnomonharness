@@ -26,6 +26,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`edit_format = "hashline"` is implemented (opt-in).** `read` tags each line
+  `LINE:HASH|text` and `edit` takes `{op, anchor, end?, text?}` edits
+  (replace, delete, insert_before, insert_after) addressed by those tags, after
+  Can Bölük's "The Harness Problem" (2026). A stale anchor refuses the whole
+  call and says to read again; nothing is half-applied. Default `str_replace`
+  is byte-identical (tool schemas, descriptions, read output). The surface
+  audit no longer calls hashline inert (`ast` still is); the spec is pinned by
+  `conformance/edit_hashline.json`.
+
 ## [0.6.6] — 2026-11-22
 
 The daily-runtime release, audited against v0.6.5 before it was cut. With no new
