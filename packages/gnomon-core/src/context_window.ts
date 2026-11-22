@@ -20,6 +20,8 @@
  *               or data[id].top_provider.context_length
  *   vllm        GET <base>/models, data[id].max_model_len         (vLLM)
  *   llamacpp    GET <root>/props, default_generation_settings.n_ctx  (llama.cpp server)
+ *   anthropic   GET <base>/models/<id>, max_input_tokens           (Anthropic Models API, also in each
+ *               GET <base>/models entry; asked first on api.anthropic.com)
  *   ollama      POST <root>/api/show, the num_ctx parameter, else model_info.<arch>.context_length
  *
  * Nothing found is not an error. The turn runs on `[defaults]
@@ -40,7 +42,7 @@ import { knownHostedWindow } from "./known_windows.js";
 export const AUTO_WINDOW = "auto";
 
 /** The listings a window is read from. A shape names the fields, not the vendor. */
-export const LISTING_SHAPES = ["opencode", "openrouter", "vllm", "llamacpp", "ollama"] as const;
+export const LISTING_SHAPES = ["opencode", "openrouter", "vllm", "llamacpp", "ollama", "anthropic"] as const;
 export type ListingShape = (typeof LISTING_SHAPES)[number];
 
 /**
@@ -126,6 +128,7 @@ const MODEL_FIELDS: Array<[ListingShape, string, (e: Entry) => unknown]> = [
   ["openrouter", "context_length", (e) => e.context_length],
   ["openrouter", "top_provider.context_length", (e) => obj(e.top_provider)?.context_length],
   ["vllm", "max_model_len", (e) => e.max_model_len],
+  ["anthropic", "max_input_tokens", (e) => e.max_input_tokens],
 ];
 
 /** The window for `model` in an OpenAI-shaped `/models` listing body. */
@@ -139,6 +142,14 @@ export function windowFromModelList(body: unknown, model: string): WindowHit | W
     if (tokens) return { tokens, shape, field };
   }
   return { miss: `${model} is listed without a window` };
+}
+
+/** The window of one model from the Anthropic Models API (`GET /v1/models/<id>`): `max_input_tokens`. */
+export function windowFromAnthropicModel(body: unknown, model: string): WindowHit | WindowMiss {
+  const b = obj(body);
+  if (b?.id !== undefined && b.id !== model) return { miss: `answered for ${String(b.id)}, not ${model}` };
+  const tokens = tokensOf(b?.max_input_tokens);
+  return tokens ? { tokens, shape: "anthropic", field: "max_input_tokens" } : { miss: "no max_input_tokens" };
 }
 
 /** The window a llama.cpp server runs each slot with, from `/props`. */
@@ -200,6 +211,8 @@ export interface WindowProbe {
   url: string;
   body?: string;
   read: (json: unknown) => WindowHit | WindowMiss;
+  /** Extra request headers (the Anthropic API reads its key from `x-api-key`) */
+  headers?: (apiKey: string | undefined) => Record<string, string>;
   /** More the same body says, merged into the hit (Ollama's trained length) */
   extras?: (json: unknown) => { trained?: number; modelfile?: true };
 }
@@ -240,6 +253,22 @@ export function windowProbes(target: { url: string; kind?: EndpointKind; model: 
   const probes: WindowProbe[] = [];
   if (/\/chat\/completions\/?$/.test(url)) {
     const base = url.replace(/\/chat\/completions\/?$/, "");
+    if (originOf(url) === "https://api.anthropic.com") {
+      // The Models API states the window per model; the single-model route is
+      // asked first because the list is paginated.
+      const anthropicHeaders = (key: string | undefined): Record<string, string> => ({
+        "anthropic-version": "2023-06-01",
+        ...(key ? { "x-api-key": key } : {}),
+      });
+      probes.push({
+        method: "GET",
+        url: `${base}/models/${encodeURIComponent(target.model)}`,
+        read: (j) => windowFromAnthropicModel(j, target.model),
+        headers: anthropicHeaders,
+      });
+      probes.push({ method: "GET", url: `${base}/models`, read: (j) => windowFromModelList(j, target.model), headers: anthropicHeaders });
+      return probes;
+    }
     probes.push({ method: "GET", url: `${base}/models`, read: (j) => windowFromModelList(j, target.model) });
     probes.push({ method: "GET", url: `${base.replace(/\/v1$/, "")}/props`, read: windowFromLlamaProps });
   }
@@ -266,6 +295,7 @@ async function runProbe(
       method: probe.method,
       headers: {
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        ...(probe.headers?.(apiKey) ?? {}),
         ...(probe.body ? { "content-type": "application/json" } : {}),
       },
       ...(probe.body ? { body: probe.body } : {}),

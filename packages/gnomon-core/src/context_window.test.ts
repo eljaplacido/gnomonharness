@@ -20,6 +20,7 @@ import {
   WINDOW_PROBE_TIMEOUT_MS,
   windowFromModelList,
   windowFromLlamaProps,
+  windowFromAnthropicModel,
   windowFromOllamaShow,
   ollamaShowExtras,
   windowProbes,
@@ -171,6 +172,7 @@ function hooks(config: GnomonConfig) {
 
 function parse(probe: string, body: unknown, model: string): WindowHit | WindowMiss {
   if (probe === "models") return windowFromModelList(body, model);
+  if (probe === "model") return windowFromAnthropicModel(body, model);
   if (probe === "props") return windowFromLlamaProps(body);
   if (probe === "show") return windowFromOllamaShow(body);
   throw new Error(`unknown probe ${probe}`);
@@ -250,7 +252,7 @@ describe("the catalog of known hosted windows (CONTRACTS section 24)", () => {
     expect(at(api, "anthropic/claude-opus-5-5")).toBe("claude-opus-5-5");
     expect(at(api, "claude-haiku-5-5-20261101")).toBe("claude-haiku-5-5");
     expect(at(api, "claude-sonnet-5-5-latest")).toBe("claude-sonnet-5-5");
-    expect(at(api, "claude-sonnet-5")).toBeUndefined();
+    expect(at(api, "claude-sonnet-4-5")).toBeUndefined();
     expect(at(api, "claude-sonnet-5-55")).toBeUndefined();
     expect(at(api, "claude-sonnet-5-5-mini")).toBeUndefined();
     expect(at("http://127.0.0.1:8080/v1/chat/completions", "claude-sonnet-5-5")).toBeUndefined();
@@ -263,14 +265,46 @@ describe("the catalog of known hosted windows (CONTRACTS section 24)", () => {
       const config = loadConfig(surface("https://api.anthropic.com/v1/chat/completions", { model: "claude-opus-5-5", defaults: DEFAULTS_65K }));
       const h = hooks(config);
       const route = await settleContextWindows(config, routeRole(config, "smol"), h.h);
-      expect(route.target).toMatchObject({ contextTokens: 200_000, contextSource: "catalog" });
+      expect(route.target).toMatchObject({ contextTokens: 1_000_000, contextSource: "catalog" });
       expect(h.said.join("\n")).toContain("from the catalog");
       expect(h.said.join("\n")).toContain("claude-opus-5-5");
       // A catalog window is a resolved one: no warning, no degradation.
       expect(h.warned).toEqual([]);
       expect(h.recs).toEqual([]);
-      expect(rememberedWindow(route.target)).toMatchObject({ tokens: 200_000, source: "catalog" });
+      expect(rememberedWindow(route.target)).toMatchObject({ tokens: 1_000_000, source: "catalog" });
     } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("the live Anthropic listing resolves first (x-api-key sent, not Bearer-only); a 404 falls to the catalog; an unknown id to [defaults]", async () => {
+    const seen: Array<{ url: string; headers: Record<string, string> }> = [];
+    const answerWith = (live: boolean) => async (u: string, init?: { headers?: Record<string, string> }) => {
+      seen.push({ url: String(u), headers: init?.headers ?? {} });
+      return live && String(u).endsWith("/models/claude-sonnet-5-5")
+        ? new Response(JSON.stringify({ type: "model", id: "claude-sonnet-5-5", max_input_tokens: 1_000_000 }), { status: 200 })
+        : new Response("{}", { status: 404 });
+    };
+    const url = "https://api.anthropic.com/v1/chat/completions";
+    process.env.GNOMON_TEST_AKEY = "sk-test";
+    try {
+      vi.stubGlobal("fetch", answerWith(true));
+      const live = loadConfig(surface(url, { model: "claude-sonnet-5-5", endpoint: 'api_key_env = "GNOMON_TEST_AKEY"' }));
+      expect((await settleContextWindows(live, routeRole(live, "smol"), hooks(live).h)).target)
+        .toMatchObject({ contextTokens: 1_000_000, contextSource: "listing:anthropic" });
+      expect(seen[0]!.url).toBe("https://api.anthropic.com/v1/models/claude-sonnet-5-5");
+      expect(seen[0]!.headers["x-api-key"]).toBe("sk-test");
+      expect(seen[0]!.headers["anthropic-version"]).toBeTruthy();
+      forgetContextWindows();
+      vi.stubGlobal("fetch", answerWith(false));
+      expect((await settleContextWindows(live, routeRole(live, "smol"), hooks(live).h)).target)
+        .toMatchObject({ contextTokens: 1_000_000, contextSource: "catalog" });
+      forgetContextWindows();
+      const unknown = loadConfig(surface(url, { model: "claude-unknown-9", defaults: DEFAULTS_65K }));
+      expect((await settleContextWindows(unknown, routeRole(unknown, "smol"), hooks(unknown).h)).target)
+        .toMatchObject({ contextTokens: 65_536, contextSource: "default" });
+    } finally {
+      delete process.env.GNOMON_TEST_AKEY;
       vi.unstubAllGlobals();
     }
   });
@@ -281,7 +315,7 @@ describe("the catalog of known hosted windows (CONTRACTS section 24)", () => {
     try {
       const config = loadConfig(surface("https://api.anthropic.com/v1/responses", { model: "claude-haiku-5-5" }));
       const route = await settleContextWindows(config, routeRole(config, "smol"), hooks(config).h);
-      expect(route.target).toMatchObject({ contextTokens: 200_000, contextSource: "catalog" });
+      expect(route.target).toMatchObject({ contextTokens: 1_000_000, contextSource: "catalog" });
       expect(calls).toBe(0);
       const unknown = loadConfig(surface("https://api.anthropic.com/v1/responses", { model: "unlisted-model" }));
       expect(routeRole(unknown, "smol").target.contextTokens).toBeUndefined();
@@ -764,7 +798,7 @@ describe("a window declared nowhere is asked of the endpoint (B1)", () => {
     const fixture = FIXTURE as {
       precedence: { endpoint: string | null; defaults: string | null; publishes: string; tokens: number; source: string }[];
     };
-    expect(fixture.precedence.length).toBeGreaterThanOrEqual(13);
+    expect(fixture.precedence.length).toBeGreaterThanOrEqual(16);
     for (const c of fixture.precedence) {
       const [what, n] = c.publishes.split(":");
       if (c.hosted) {
@@ -772,7 +806,9 @@ describe("a window declared nowhere is asked of the endpoint (B1)", () => {
         vi.stubGlobal("fetch", async (u: string) =>
           what === "models" && String(u).endsWith("/models")
             ? new Response(JSON.stringify({ data: [{ id: c.hosted.model, limit: { context: Number(n) } }] }), { status: 200 })
-            : new Response("{}", { status: 404 })
+            : what === "anthropic" && String(u).endsWith(`/models/${c.hosted.model}`)
+              ? new Response(JSON.stringify({ id: c.hosted.model, max_input_tokens: Number(n) }), { status: 200 })
+              : new Response("{}", { status: 404 })
         );
         try {
           const cfg = loadConfig(surface(c.hosted.url, {

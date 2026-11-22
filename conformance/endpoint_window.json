@@ -10,7 +10,8 @@
     "through the parsers, derives every probe URL, and asserts the sources, the degradation",
     "id and that CONTRACTS.md names the same sources and fields.",
     "The opencode body is trimmed from GET https://opencode.ai/zen/go/v1/models, 2026-11-04.",
-    "The catalog source (2026-11-22) is gnomon's own dated table of known hosted windows, packages/gnomon-core/src/known_windows.ts; `catalog` below pins it, entry for entry."
+    "The catalog source (2026-11-22) is gnomon's own dated table of known hosted windows, packages/gnomon-core/src/known_windows.ts; `catalog` below pins it, entry for entry.",
+    "The anthropic body is the shape of GET https://api.anthropic.com/v1/models/<id> (max_input_tokens), per the Claude API reference, 2026-11-03."
   ],
   "value": "auto",
   "wire_keys": [
@@ -24,6 +25,7 @@
     "listing:vllm",
     "listing:llamacpp",
     "listing:ollama",
+    "listing:anthropic",
     "catalog",
     "default"
   ],
@@ -57,6 +59,14 @@
       "chat": "https://example.invalid/v1/responses",
       "kind": "openai",
       "requests": []
+    },
+    {
+      "chat": "https://api.anthropic.com/v1/chat/completions",
+      "kind": "openai",
+      "requests": [
+        "GET https://api.anthropic.com/v1/models/m",
+        "GET https://api.anthropic.com/v1/models"
+      ]
     }
   ],
   "shapes": [
@@ -178,6 +188,38 @@
         }
       },
       "tokens": 262144
+    },
+    {
+      "shape": "anthropic",
+      "probe": "model",
+      "field": "max_input_tokens",
+      "model": "claude-sonnet-5-5",
+      "body": {
+        "type": "model",
+        "id": "claude-sonnet-5-5",
+        "display_name": "Claude Sonnet 5.5",
+        "created_at": "2026-10-01T00:00:00Z",
+        "max_input_tokens": 1000000,
+        "max_tokens": 128000
+      },
+      "tokens": 1000000
+    },
+    {
+      "shape": "anthropic",
+      "probe": "models",
+      "field": "max_input_tokens",
+      "model": "claude-sonnet-5-5",
+      "body": {
+        "data": [
+          {
+            "type": "model",
+            "id": "claude-sonnet-5-5",
+            "max_input_tokens": 1000000
+          }
+        ],
+        "has_more": false
+      },
+      "tokens": 1000000
     }
   ],
   "misses": [
@@ -319,7 +361,7 @@
         "url": "https://api.anthropic.com/v1/chat/completions",
         "model": "claude-sonnet-5-5"
       },
-      "tokens": 200000,
+      "tokens": 1000000,
       "source": "catalog"
     },
     {
@@ -330,7 +372,7 @@
         "url": "https://api.anthropic.com/v1/chat/completions",
         "model": "claude-haiku-5-5-20261101"
       },
-      "tokens": 200000,
+      "tokens": 1000000,
       "source": "catalog"
     },
     {
@@ -376,26 +418,91 @@
       },
       "tokens": 65536,
       "source": "default"
+    },
+    {
+      "endpoint": null,
+      "defaults": "max_context_tokens = 65536",
+      "publishes": "anthropic:900000",
+      "hosted": {
+        "url": "https://api.anthropic.com/v1/chat/completions",
+        "model": "claude-sonnet-5-5"
+      },
+      "tokens": 900000,
+      "source": "listing:anthropic"
+    },
+    {
+      "endpoint": null,
+      "defaults": "max_context_tokens = 65536",
+      "publishes": "nothing",
+      "hosted": {
+        "url": "https://api.anthropic.com/v1/chat/completions",
+        "model": "claude-haiku-4-5"
+      },
+      "tokens": 200000,
+      "source": "catalog"
+    },
+    {
+      "endpoint": null,
+      "defaults": "max_context_tokens = 65536",
+      "publishes": "nothing",
+      "hosted": {
+        "url": "https://api.anthropic.com/v1/chat/completions",
+        "model": "claude-unknown-9"
+      },
+      "tokens": 65536,
+      "source": "default"
     }
   ],
   "catalog": {
-    "_why": "Used after the endpoint's listing found nothing and before [defaults]; never for an endpoint on this machine. A conservative standard window: a larger opt-in tier is declared on the endpoint.",
+    "_why": "Used after the endpoint's listing (listing:anthropic included) found nothing and before [defaults]; never for an endpoint on this machine. The figures are the Claude API reference's models table (https://platform.claude.com/docs/en/about-claude/models/overview, cached 2026-11-03).",
     "as_of": "2026-11-22",
     "models": [
       {
         "model": "claude-haiku-5-5",
-        "tokens": 200000
+        "tokens": 1000000
       },
       {
         "model": "claude-sonnet-5-5",
-        "tokens": 200000
+        "tokens": 1000000
       },
       {
         "model": "claude-opus-5-5",
-        "tokens": 200000
+        "tokens": 1000000
       },
       {
         "model": "claude-fable-5-2",
+        "tokens": 1000000
+      },
+      {
+        "model": "claude-fable-5-1",
+        "tokens": 1000000
+      },
+      {
+        "model": "claude-opus-5",
+        "tokens": 1000000
+      },
+      {
+        "model": "claude-sonnet-5",
+        "tokens": 1000000
+      },
+      {
+        "model": "claude-opus-4-8",
+        "tokens": 1000000
+      },
+      {
+        "model": "claude-opus-4-7",
+        "tokens": 1000000
+      },
+      {
+        "model": "claude-opus-4-6",
+        "tokens": 1000000
+      },
+      {
+        "model": "claude-sonnet-4-6",
+        "tokens": 1000000
+      },
+      {
+        "model": "claude-haiku-4-5",
         "tokens": 200000
       },
       {

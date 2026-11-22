@@ -2301,28 +2301,31 @@ from such a surface is the record it was before the key existed:
 | `listing:openrouter` | `data[id].context_length`, else `data[id].top_provider.context_length`, from `GET <base>/models` |
 | `listing:vllm` | `data[id].max_model_len` from `GET <base>/models` |
 | `listing:llamacpp` | `default_generation_settings.n_ctx` from `GET <root>/props` |
+| `listing:anthropic` | `max_input_tokens` from `GET <base>/models/<id>` (or that field of the `GET <base>/models` entry); asked first, with `x-api-key` and `anthropic-version`, on `https://api.anthropic.com` |
 | `listing:ollama` | the `num_ctx` line of `parameters`, else `model_info.<arch>.context_length`, from `POST <root>/api/show` |
 | `catalog` | the window gnomon's dated table of known hosted models gives (`packages/gnomon-core/src/known_windows.ts`), because the listing gave none |
 | `default` | `[defaults] max_context_tokens`: nothing found |
 
-**Catalog source (2026-11-22).** An endpoint that publishes no window (the
-Anthropic API's `/v1/models` carries none gnomon reads; some relays 404) used
-to fall back to `[defaults] max_context_tokens`, sized for a local model, and
-with the honest token estimate a Claude run trimmed at ~39k real tokens against
-a 200k window. The resolution order is now: a number on the endpoint
-(`declared`), then the endpoint's listing (`listing:<shape>`), then the catalog
-(`catalog`), then `[defaults]` (`default`). A listing that answers beats the
-catalog; a number on the endpoint beats both. The catalog is data, not surface:
-a table of model id, window, source and `as_of` date, updated with releases and
-never fetched. A model matches by id, whole and case-insensitively, after
-dropping a leading `anthropic/`, with an optional `-YYYYMMDD` or `-latest`
-snapshot suffix; an endpoint on this machine (loopback) never matches, and a
-model not in the table is not guessed. Its entries carry the standard window,
-not an opt-in larger tier: a window too small only trims earlier, one too
-large is refused by the provider. A catalog window is a resolved window (the
-pre-call trim applies to it) and raises no warning and no
-`context_window_unresolved` degradation; the `[context]` line says it came from
-the catalog. The table is pinned entry for entry in the fixture.
+**Catalog source (2026-11-22).** An endpoint that publishes no window used to
+fall back to `[defaults] max_context_tokens`, sized for a local model, and with
+the honest token estimate a Claude run trimmed at ~39k real tokens against a
+1,000,000-token window. The resolution order is now: a number on the endpoint
+(`declared`), then the endpoint's listing (`listing:<shape>`; on
+`api.anthropic.com` the Models API's `max_input_tokens`, `listing:anthropic`),
+then the catalog (`catalog`), then `[defaults]` (`default`). A listing that
+answers beats the catalog; a number on the endpoint beats both. The catalog is
+the fallback for a listing that is unreachable (a metering relay, a 404). It is
+data, not surface: a table of model id, window, source and `as_of` date
+(Claude 5.x and 4.6 to 4.8: 1,000,000; `claude-haiku-4-5`: 200,000; the source
+is the Claude API reference's models table, https://platform.claude.com/docs/en/about-claude/models/overview,
+cached 2026-11-03), updated with releases and never fetched. A model matches by
+id, whole and case-insensitively, after dropping a leading `anthropic/`, with an
+optional `-YYYYMMDD` or `-latest` snapshot suffix; an endpoint on this machine
+(loopback) never matches, and a model not in the table is not guessed. A
+catalog window is a resolved window (the pre-call trim applies to it) and
+raises no warning and no `context_window_unresolved` degradation; the
+`[context]` line says it came from the catalog. The table is pinned entry for
+entry in the fixture.
 
 **What the hash no longer fixes.** A number is part of the surface hash;
 `"auto"` is not a number but a question asked at run time. Two runs under one

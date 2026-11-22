@@ -1,8 +1,8 @@
 /**
  * Context windows of well-known hosted models: harness data, not surface.
  *
- * Some providers publish no window on their listing (the Anthropic API's
- * `/v1/models` carries none gnomon reads), so an endpoint that declares no
+ * Some providers publish no window on their listing (a metering relay that
+ * 404s its listing), so an endpoint that declares no
  * number fell back to `[defaults] max_context_tokens` (65,536, sized for a
  * local model) and, with the honest token estimate, trimmed a Claude run at
  * ~39k real tokens against a 200k window. This table is the resolution source
@@ -13,12 +13,9 @@
  *  - Data only, dated, each with the source it was taken from. Updated with
  *    releases, never fetched at run time; a table older than `KNOWN_WINDOWS_AS_OF`
  *    can be stale, which is why a number on the endpoint, and a listing, win.
- *  - A conservative number is the right number. A window too small only trims
- *    earlier; one too large is refused by the provider ("prompt is too long"),
- *    and gnomon recovers from that, but it costs a failed request. Where a model
- *    offers a larger window that is opt-in (a beta flag, a long-context tier),
- *    the entry carries the standard one, and an operator who has the larger one
- *    declares it on the endpoint.
+ *  - The figure is the one the provider's models table states for the model.
+ *    The live listing (`listing:anthropic`, `max_input_tokens`) is asked first
+ *    and wins; this table is the fallback when it is unreachable.
  *  - A model whose window is not known with a source is left out.
  *
  * Lives in gnomon-core, not in gnomon-cli/catalog/models.toml: that file is the
@@ -41,15 +38,17 @@ export interface KnownWindow {
 export const KNOWN_WINDOWS_AS_OF = "2026-11-22";
 
 const ANTHROPIC_MODELS =
-  "https://platform.claude.com/docs/en/about-claude/models/overview (context window per model; the standard 200,000-token " +
-  "window, not the opt-in 1M tier). Corroborated by the provider's own error text, kept as a fixture in " +
-  "packages/gnomon-core/src/context_robustness.test.ts: \"prompt is too long: 215000 tokens > 200000 maximum\"";
+  "https://platform.claude.com/docs/en/about-claude/models/overview (the models table's context window column, " +
+  "as cached 2026-11-03)";
+
+const CLAUDE_1M = [
+  "claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2", "claude-fable-5-1",
+  "claude-opus-5", "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6",
+];
 
 export const KNOWN_HOSTED_WINDOWS: readonly KnownWindow[] = [
-  { model: "claude-haiku-5-5", tokens: 200_000, source: ANTHROPIC_MODELS, as_of: "2026-11-22" },
-  { model: "claude-sonnet-5-5", tokens: 200_000, source: ANTHROPIC_MODELS, as_of: "2026-11-22" },
-  { model: "claude-opus-5-5", tokens: 200_000, source: ANTHROPIC_MODELS, as_of: "2026-11-22" },
-  { model: "claude-fable-5-2", tokens: 200_000, source: ANTHROPIC_MODELS, as_of: "2026-11-22" },
+  ...CLAUDE_1M.map((model) => ({ model, tokens: 1_000_000, source: ANTHROPIC_MODELS, as_of: "2026-11-03" })),
+  { model: "claude-haiku-4-5", tokens: 200_000, source: ANTHROPIC_MODELS, as_of: "2026-11-03" },
   {
     model: "deepseek-v4.1-flash",
     tokens: 1_000_000,
