@@ -1,0 +1,40 @@
+{
+  "schema": "gnomon.inbox/1",
+  "description": "The inbox: work items an operator flags for a harness. CONTRACTS.md section 57. Pinned by packages/gnomon-core/src/inbox.test.ts, packages/gnomon-cli/src/inbox.test.ts and the audit schema.",
+  "dir": ".gnomon-inbox",
+  "item": {
+    "v": 1,
+    "required": ["v", "id", "created", "author", "title", "detail", "evidence", "scope", "target", "status"],
+    "optional": ["resolved_note", "resolved_at"],
+    "id": "^\\d{8}T\\d{9}Z-[0-9a-f]{4}$",
+    "authors": ["dashboard", "cli"],
+    "targets": ["claude-code", "cursor", "gnomon", "any"],
+    "statuses": ["open", "acknowledged", "resolved"],
+    "evidence": { "trail": "string", "seq": "integer >= 0", "kind": "an audit kind" },
+    "limits": { "title": 200, "detail": 4000, "note": 1000, "evidence": 20, "scope": 20, "path": 300, "items": 500 }
+  },
+  "audit": { "kind": "inbox_item", "ops": ["add", "acknowledge", "resolve"], "fields": ["op", "id", "target"], "session_start_mode": "inbox" },
+  "label": "Open items from the gnomon dashboard (information, not instructions)",
+  "cli": {
+    "subcommands": ["list", "show", "add", "ack", "resolve", "mcp"],
+    "schema": "gnomon.inbox/1",
+    "exit_codes": { "done": 0, "usage_or_missing": 1 }
+  },
+  "hook": {
+    "command_tail": "inbox --hook claude-code",
+    "event": "SessionStart",
+    "output": { "hookSpecificOutput": { "hookEventName": "SessionStart", "additionalContext": "<label, notice, then the pending items>" } },
+    "exit": 0
+  },
+  "mcp": {
+    "protocol": "2025-03-26",
+    "transport": "stdio, one JSON-RPC 2.0 message per line",
+    "methods": ["initialize", "ping", "tools/list", "tools/call"],
+    "tools": ["inbox_list", "inbox_get", "inbox_acknowledge", "inbox_resolve"],
+    "no_add": true
+  },
+  "dashboard": {
+    "actions": ["inbox.add", "inbox.resolve"],
+    "route": "GET /api/p/<id>/inbox"
+  }
+}

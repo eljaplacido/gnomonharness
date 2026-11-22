@@ -31,10 +31,11 @@ import type { ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { harnessBuild, loadTrust, trustPath as defaultTrustPath } from "gnomon-core";
+import { harnessBuild, loadTrust, trustPath as defaultTrustPath, getItem as getInboxItem, INBOX_DIR } from "gnomon-core";
 import {
   contractsView,
   ensureProject,
+  inboxView,
   governanceView,
   measurementsView,
   projectOverview,
@@ -103,6 +104,7 @@ export const DASHBOARD_ROUTES = {
     "GET /api/p/<id>/contracts",
     "GET /api/p/<id>/lens?trail=<trail>",
     "GET /api/p/<id>/lens/run?name=<trail>",
+    "GET /api/p/<id>/inbox",
     "POST /api/actions/<name>",
     "GET /api/jobs/<id>",
   ],
@@ -427,6 +429,27 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
           "Nothing is committed. Add --local in a terminal to keep the hook out of git.",
         ]);
       }
+      case "inbox.add": {
+        const where = `${join(p.root, INBOX_DIR)}/<new id>.json`;
+        return ask(
+          { dir: INBOX_DIR, item: { title: params.title, detail: params.detail ?? "", target: params.target, evidence: params.evidence ?? [], scope: params.scope ?? [] } },
+          [
+            `Writes one file, ${where} (gitignored; never in .gnomon/ or the surface hash), holding exactly the text shown here.`,
+            `Title "${params.title}", for ${params.target === "any" ? "any harness" : params.target}${params.detail ? `, ${params.detail.length} characters of detail` : ""}, ${params.evidence?.length ?? 0} evidence reference${params.evidence?.length === 1 ? "" : "s"}, ${params.scope?.length ?? 0} scope path${params.scope?.length === 1 ? "" : "s"}.`,
+            "A harness working in this project reads it as information from you. It grants nothing, lifts no rule and approves no call; the harness's own rules still decide what it may do.",
+            "Recorded as an inbox_item record (the id and target, never the text) when [audit] is on.",
+          ]
+        );
+      }
+      case "inbox.resolve": {
+        const item = getInboxItem(p.root, params.id!);
+        if (!item) return fail(res, 404, "no such inbox item");
+        if (item.status === "resolved") return fail(res, 409, "this item is already resolved");
+        return ask({ dir: INBOX_DIR, item: { id: item.id, title: item.title, status: item.status, target: item.target } }, [
+          `Marks ${INBOX_DIR}/${item.id}.json resolved${params.note ? ` with the note "${params.note}"` : " with no note"}; a resolved item is not delivered to harnesses again.`,
+          "Nothing else changes. Recorded as an inbox_item record (id and target) when [audit] is on.",
+        ]);
+      }
       default:
         return fail(res, 409, `${action.name} has no confirmation in this build`);
     }
@@ -532,7 +555,7 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
         key_store: keyStorePath(),
       });
     }
-    const m = /^\/api\/p\/([0-9a-f]{12})\/(surface|sessions|trail|governance|measurements|contracts|lens|lens\/run)$/.exec(path);
+    const m = /^\/api\/p\/([0-9a-f]{12})\/(surface|sessions|trail|governance|measurements|contracts|lens|lens\/run|inbox)$/.exec(path);
     if (req.method === "GET" && m) {
       const p = projectById(m[1]!);
       if (!p) return fail(res, 404, "no such project");
@@ -559,6 +582,8 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
           const d = lensRun(p, url.searchParams.get("name") ?? "");
           return d ? json(res, 200, d) : fail(res, 404, "no such trail");
         }
+        case "inbox":
+          return json(res, 200, inboxView(p));
       }
     }
     const j = /^\/api\/jobs\/([A-Za-z0-9_-]{12})$/.exec(path);

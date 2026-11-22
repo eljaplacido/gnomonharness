@@ -46,6 +46,7 @@ import {
   recomputeManifest,
   describeEndpoints,
 } from "gnomon-core";
+import { validateInput, INBOX_ID, INBOX_LIMITS, InboxError, type InboxEvidence } from "gnomon-core";
 import { ENDPOINT_PRESETS } from "./setup.js";
 import { loadCatalog, defaultCatalogPath, type Catalog } from "./catalog.js";
 import { diskFree } from "./setup_host.js";
@@ -92,6 +93,11 @@ export const DASHBOARD_ACTIONS = [
   { name: "trust.revoke", argv: ["trust", "revoke", "--dir", "<dir>"], state: "enabled", confirm: "required" },
   // One completion of one token: on a cloud endpoint that is billed.
   { name: "endpoint.test", argv: ["endpoint", "test", "<endpoint>", "--dir", "<dir>"], state: "enabled", confirm: "required" },
+  // "Flag for fix": one gitignored file in <project>/.gnomon-inbox/ for a
+  // harness to read as information, never as an instruction (inbox.ts). <inbox>
+  // is --title, --detail, --target, --evidence and --scope, from typed params.
+  { name: "inbox.add", argv: ["inbox", "add", "--json", "--author", "dashboard", "<inbox>", "--dir", "<dir>"], state: "enabled", confirm: "required" },
+  { name: "inbox.resolve", argv: ["inbox", "resolve", "<id>", "--json", "<inbox>", "--dir", "<dir>"], state: "enabled", confirm: "required" },
   // Scaffolds .gnomon/ (and .gitignore / .gitattributes lines) in a directory.
   // Refuses, as the command does, where a .gnomon/ already exists: no --force.
   { name: "init", argv: ["init", "--dir", "<dir>"], state: "enabled", confirm: "required" },
@@ -127,6 +133,15 @@ export interface ActionParams {
   harness?: string;
   /** init only: an absolute directory the person typed; the server turns it into a project. */
   dir?: string;
+  /** inbox.add */
+  title?: string;
+  detail?: string;
+  target?: string;
+  evidence?: InboxEvidence[];
+  scope?: string[];
+  /** inbox.resolve */
+  id?: string;
+  note?: string;
 }
 
 /** The host harnesses `gnomon guard install` knows. */
@@ -157,6 +172,10 @@ const PARAMS: Record<ActionName, readonly (keyof ActionParams | "value")[]> = {
   "trust.grant": [],
   "trust.revoke": [],
   "endpoint.test": ["endpoint"],
+  "inbox.add": ["title", "detail", "target", "evidence", "scope"],
+  "inbox.resolve": ["id", "note"],
+  init: [],
+  "guard.install": [],
   init: ["dir"],
   "guard.install": ["harness"],
 };
@@ -315,6 +334,29 @@ export function readParams(
     if (!declaredEndpointNames(p).includes(params.endpoint)) return { error: `"${params.endpoint}" is not an endpoint this project declares` };
   }
 
+  if (name === "inbox.add") {
+    try {
+      for (const k of ["title", "detail", "target"] as const) if (body[k] !== undefined && typeof body[k] !== "string") throw new InboxError(`"${k}" must be a string`);
+      if (Array.isArray(body.scope) && body.scope.some((x) => typeof x === "string" && x.includes(","))) throw new InboxError("a scope path may not hold a comma");
+      const v = validateInput({ title: body.title, detail: body.detail, target: body.target, evidence: body.evidence, scope: body.scope, author: "dashboard" });
+      params.title = v.title;
+      if (v.detail) params.detail = v.detail;
+      params.target = v.target;
+      if (v.evidence.length) params.evidence = v.evidence;
+      if (v.scope.length) params.scope = v.scope;
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  if (name === "inbox.resolve") {
+    if (typeof body.id !== "string" || !INBOX_ID.test(body.id)) return { error: 'inbox.resolve needs "id": an item id' };
+    params.id = body.id;
+    if (body.note !== undefined && body.note !== "") {
+      if (typeof body.note !== "string" || body.note.length > INBOX_LIMITS.note || body.note.includes("\u0000")) return { error: `"note" is a string of at most ${INBOX_LIMITS.note} characters` };
+      params.note = body.note.trim();
+    }
+  }
+
   let value: string | undefined;
   if (name === "key.set" && body.value !== undefined) {
     if (typeof body.value !== "string") return { error: '"value" must be a string' };
@@ -335,6 +377,24 @@ function choiceFlags(c: SetupChoices | undefined): string[] {
   if (c.cloud_key_env) out.push("--cloud-key-env", c.cloud_key_env);
   if (c.mode) out.push("--mode", c.mode);
   if (c.hybrid_control) out.push("--hybrid-control", c.hybrid_control);
+  return out;
+}
+
+/**
+ * A value as `gnomon`'s option parser will read it: one that starts with a
+ * dash would be taken for the next option, so it gets a leading space, which
+ * the command trims.
+ */
+const dashSafe = (v: string): string => (v.startsWith("-") ? ` ${v}` : v);
+
+function inboxFlags(p: ActionParams): string[] {
+  const out: string[] = [];
+  if (p.title !== undefined) out.push("--title", dashSafe(p.title));
+  if (p.detail !== undefined) out.push("--detail", dashSafe(p.detail));
+  if (p.target !== undefined) out.push("--target", p.target);
+  if (p.evidence?.length) out.push("--evidence", p.evidence.map((e) => `${e.trail}:${e.seq}:${e.kind}`).join(","));
+  if (p.scope?.length) out.push("--scope", dashSafe(p.scope.join(",")));
+  if (p.note !== undefined) out.push("--note", dashSafe(p.note));
   return out;
 }
 
@@ -367,6 +427,12 @@ export function argvFor(action: DashboardAction, p: DashboardProject, params: Ac
       case "<digest>":
         out.push(digest!);
         break;
+      case "<id>":
+        out.push(params.id!);
+        break;
+      case "<inbox>":
+        out.push(...inboxFlags(params));
+        break;
       default:
         if (part.startsWith("<")) throw new Error(`no value for ${part}`);
         out.push(part);
@@ -393,6 +459,7 @@ export function paramsKey(name: string, projectId: string, params: ActionParams)
     params.endpoint ?? null,
     params.harness ?? null,
     CHOICE_KEYS.map((k) => c[k] ?? null),
+    [params.title ?? null, params.detail ?? null, params.target ?? null, params.evidence ?? null, params.scope ?? null, params.id ?? null, params.note ?? null],
   ]);
 }
 
@@ -580,6 +647,8 @@ export const TIMEOUT_MS: Record<ActionName, number> = {
   "trust.grant": 30_000,
   "trust.revoke": 30_000,
   "endpoint.test": 120_000,
+  "inbox.add": 30_000,
+  "inbox.resolve": 30_000,
   init: 60_000,
   "guard.install": 30_000,
 };

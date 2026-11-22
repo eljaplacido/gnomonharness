@@ -87,6 +87,8 @@ export * from "./skill_trial.js";
 // `gnomon eval`: the trial's cells, for a profile or a surface instead of a skill.
 export * from "./eval.js";
 export * from "./audit.js";
+// The inbox: work items an operator flags for a harness (`gnomon inbox`).
+export * from "./inbox.js";
 // [audit.anchor]: sealed heads copied to a witness the trail's writer cannot
 // rewrite (a remote ref, an RFC 3161 authority, an operator command).
 export * from "./anchor.js";

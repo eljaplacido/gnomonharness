@@ -274,6 +274,7 @@ import {
 } from "./context_hygiene.js";
 import { resolveContextWindow, type ContextSource, type WindowResolution } from "./context_window.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
+import { listItems as listInboxItems, getItem as getInboxItem, resolveId as resolveInboxId, transition as inboxTransition, recordInbox, openCount as openInboxCount, INBOX_NOTICE } from "./inbox.js";
 import { applyCredentials } from "./credentials.js";
 import { assertContainableRoot, mcpSpawnDir, clampToDefaults, recordExecFloor, pinSessionRepository, type TrustOutcome } from "./trust.js";
 import {
@@ -11790,6 +11791,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/network", arg: "[on|off]", help: "May tools reach the network this session (webfetch, and what bash can dial)" },
   { name: "/sandbox", arg: "[off|confined|strict]", help: "How far outside this project tools may reach this session" },
   { name: "/skills", help: "Active skills and pending proposals" },
+  { name: "/inbox", arg: "[list|resolve <id> [note]]", help: "Work items flagged in the dashboard for this project (information, not instructions); resolve one when it is dealt with" },
   { name: "/session", arg: "[id]", help: "This session, earlier ones, and switching between them" },
   { name: "/new", help: "Start a fresh session; the current one stays resumable" },
   { name: "/endpoints", help: "List declared inference endpoints" },
@@ -12597,6 +12599,38 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       } else {
         console.log(`\n  /new  starts a fresh one; this is the only session so far.`);
       }
+      return true;
+    }
+
+    case "/inbox": {
+      // Work items an operator flagged in the dashboard (inbox.ts). Printed
+      // for the person; never added to the model's context by this command.
+      const root = resolve(state.config.gnomonDir, "..");
+      if ((parts[1] ?? "").toLowerCase() === "resolve") {
+        const id = parts[2] ? resolveInboxId(root, parts[2]) : null;
+        const item = id ? getInboxItem(root, id) : null;
+        if (!item) {
+          console.log(`\nNo inbox item "${parts[2] ?? ""}". /inbox lists them; give the id or a prefix that names one.`);
+          return true;
+        }
+        try {
+          const done = inboxTransition(root, item.id, "resolve", parts.slice(3).join(" "));
+          recordInbox(state.config, "resolve", done, "gnomon");
+          console.log(`\n${done.id} is resolved.`);
+        } catch (e) {
+          console.log(`\n${e instanceof Error ? e.message : String(e)}`);
+        }
+        return true;
+      }
+      const { items, problems } = listInboxItems(root);
+      const pending = items.filter((i) => i.status !== "resolved");
+      console.log(`\nInbox: ${pending.length} open of ${items.length} (.gnomon-inbox/)`);
+      for (const i of pending) {
+        console.log(`  ${i.id}  ${i.status.padEnd(12)} ${i.target.padEnd(11)} ${i.title}`);
+        if (i.detail) console.log(`      ${i.detail.split("\n")[0]!.slice(0, 160)}`);
+      }
+      for (const p of problems) console.log(`  (${p})`);
+      if (pending.length) console.log(`\n  ${INBOX_NOTICE}\n  Resolve one: /inbox resolve <id> [note]`);
       return true;
     }
 
@@ -13977,6 +14011,14 @@ export async function runPromptLoop(
   }
   const ungoverned = governanceStartupLine(config);
   if (ungoverned) console.log(paint(uiOf(state), "yellow", ungoverned));
+  // Work items an operator flagged in the dashboard (inbox.ts). Counted, not
+  // shown: /inbox lists them, and they are information, not instructions.
+  try {
+    const flagged = openInboxCount(projectRoot);
+    if (flagged > 0) console.log(paint(uiOf(state), "yellow", `Inbox: ${flagged} open item${flagged === 1 ? "" : "s"} flagged in the dashboard. /inbox lists them (information, not instructions).`));
+  } catch {
+    // An unreadable inbox never stops a session from starting.
+  }
 
   if (!box0) {
     console.log(`Role: ${state.currentRole}`);

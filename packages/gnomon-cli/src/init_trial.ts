@@ -23,7 +23,7 @@ import { join, relative, sep } from "node:path";
 
 const SKIP_DIRS = new Set([
   ".git", "node_modules", "dist", "build", "target", "vendor", ".venv", "venv", "__pycache__",
-  ".next", "coverage", ".gnomon", ".gnomon-audit", ".gnomon-sessions", ".gnomon-trials", ".gnomon-loops",
+  ".next", "coverage", ".gnomon", ".gnomon-audit", ".gnomon-sessions", ".gnomon-trials", ".gnomon-loops", ".gnomon-inbox",
 ]);
 const MAX_FILES = 4000;
 const MAX_BYTES = 256 * 1024;

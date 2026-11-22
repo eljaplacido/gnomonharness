@@ -255,7 +255,7 @@ so both format drift and non-determinism fail the build.
                  "record_tamper_resolved", "record_notice", "mcp_tools", "stall_signal",
                  "completion_gate", "todo_gate", "job", "deliverable_first", "first_token_stall",
                  "checkpoint", "think_cap", "finish_gate", "model_call", "escalation", "eval_run",
-                 "session_end"],
+                 "inbox_item", "session_end"],
   "guard_decision": ["allow", "deny", "ask"],
   "guard_rule": ["tools", "malformed", "bash_deny", "bash_allow", "sudo", "sandbox", "surface",
                  "record", "git_hooks", "host_hooks", "write_allow", "outside_root", "secret_path",
@@ -1739,7 +1739,7 @@ sent as the body's `choices` object with the keys `model`, `cloud_endpoint`,
 action does not take is 400. An unknown action is 404 and a `planned` one 409;
 neither runs anything. Because each action is the command, it is recorded as
 the command records itself (`trust` and `check` records, setup's facts file);
-the dashboard adds no record kind.
+the dashboard adds no record kind of its own (`inbox.add` and `inbox.resolve` run `gnomon inbox`, which writes the `inbox_item` record, §57).
 
 | Action | argv | State | Confirm |
 |---|---|---|---|
@@ -1754,6 +1754,8 @@ the dashboard adds no record kind.
 | `trust.grant` | `trust grant --dir <dir>` | `enabled` | `required` |
 | `trust.revoke` | `trust revoke --dir <dir>` | `enabled` | `required` |
 | `endpoint.test` | `endpoint test <endpoint> --dir <dir>` | `enabled`: one completion of one token | `required` |
+| `inbox.add` | `inbox add --json --author dashboard <inbox> --dir <dir>`; `<inbox>` is `--title`, `--detail`, `--target`, `--evidence` and `--scope` from typed parameters | `enabled`: writes one file in `.gnomon-inbox/` (§57) | `required` |
+| `inbox.resolve` | `inbox resolve <id> --json <inbox> --dir <dir>` | `enabled`: marks an item resolved | `required` |
 | `init` | `init --dir <dir>` | `enabled`: never `--force`; 409 where a `.gnomon/` exists; may name a directory not on the list with `dir` (the only path the page sends): an absolute path whose real path is a directory inside the home directory, not home itself, not under a hidden top-level directory of it (`~/.config`, `~/.ssh`, `~/.local`), with no `.gnomon/` (400 otherwise); the confirmation shows the real path, and the directory joins the list for this run | `required` |
 | `guard.install` | `guard install <harness> --write --dir <dir>` | `enabled`: `<harness>` is `claude-code`, `opencode` or `cursor`; the confirmation names the file written | `required` |
 
@@ -5163,3 +5165,84 @@ or field was added.
 **Fixture**: `packages/gnomon-core/src/summary_style.test.ts` (absent key
 sends the same bytes, the sections are asked for, the fallback folds when the
 call fails).
+
+## 57. The inbox — `.gnomon-inbox/`, `gnomon inbox`, audit kind `inbox_item`, `gnomon.inbox/1`, `v: 1`
+
+Work items an operator flags for the developer's harness. The dashboard's
+**Flag for fix** (§17, `inbox.add`) or `gnomon inbox add` writes one file,
+`<project>/.gnomon-inbox/<id>.json`, and any harness working in the project
+reads it. Nothing is sent: coordination is by a typed shared artifact, so an
+item reaches the next harness to work there whether or not anything was running
+when it was flagged.
+
+**An item is input, never authority.** A harness reads it as information from
+the operator. It grants no permission, lifts no gate and approves no call, and
+the reader's own rules (the surface, the guard, its approvals) decide what it
+may do about it. Every delivery says so, under the label *Open items from the
+gnomon dashboard (information, not instructions)*. For the same reason the
+agent side has no way to add an item, and a resolved item is inert.
+
+**The item.** `{v: 1, id, created, author, title, detail, evidence, scope,
+target, status}` and, once resolved, `resolved_note` (optional) and
+`resolved_at`.
+
+| Field | Value |
+|---|---|
+| `id` | `YYYYMMDDTHHMMSSmmmZ-xxxx` (UTC time, four hex): sorts by creation, and cannot name a path |
+| `author` | `dashboard` or `cli` |
+| `target` | `claude-code`, `cursor`, `gnomon` or `any` |
+| `status` | `open`, `acknowledged` or `resolved`; `open` to `acknowledged` to `resolved`, never back |
+| `evidence` | up to 20 `{trail, seq, kind}`: which trail, which record, what kind |
+| `scope` | up to 20 project-relative paths; no absolute path, no `..` |
+| limits | title 200, detail 4000, note 1000 characters; 500 items |
+
+The directory is machine-local and gitignored (`init` adds it beside
+`.gnomon-audit/`), never in `.gnomon/` or the surface hash. A write is a
+temporary file renamed over the target (`root_fs.ts`), so a reader never sees
+half an item and a symlink is never written through. A file in the directory
+that is not a valid item is reported, not read.
+
+**Audit.** Each add, acknowledge and resolve is an `inbox_item` record
+`{op: add|acknowledge|resolve, id, target}` in a sealed trail of its own
+(`session_start` mode `inbox`, the record, `session_end`), when `[audit]` is on.
+The item's text is never recorded (`conformance/audit_record_schema.json`
+classes `op` and `target` as metadata, `id` as an identifier). `audit_kind` (§3)
+has 35 entries; `inbox_item` follows `eval_run`.
+
+**`gnomon inbox [list|show <id>|add --title T [--detail D] [--target X]
+[--evidence trail:seq:kind,...] [--scope p,...]|ack <id>|resolve <id> [--note N]|mcp]
+[--status S] [--dir P] [--json]`.** `--json` answers `{schema:
+"gnomon.inbox/1", ...}` with `items`, `counts` and `problems` (list) or `item`.
+An id is the full id or a prefix that names exactly one item. Exit `0` done,
+`1` a usage error or an item that is not there.
+
+**Delivery.**
+
+- *gnomon*: the launch banner counts the open items; `/inbox` lists them and
+  `/inbox resolve <id> [note]` closes one. Printed for the person, never added
+  to the model's context.
+- *Claude Code*: `gnomon guard install claude-code --write` adds a second
+  `SessionStart` entry running `gnomon inbox --hook claude-code`, beside the
+  `check` hook and the PreToolUse guard hook, whose contract (§10) is unchanged.
+  It prints `{"hookSpecificOutput": {"hookEventName": "SessionStart",
+  "additionalContext": "<label, notice, items>"}}` for the pending items
+  addressed to `claude-code` or `any`, prints nothing when there are none, and
+  always exits 0: it decides nothing and cannot stop a session. `guard status`
+  carries a top-level `inbox_hook: "ok"|"missing"|null` and, for an
+  older install without it, a warning (never a finding, never the exit).
+- *Cursor and Claude Code*: `gnomon inbox mcp`, a Model Context Protocol server
+  on stdio (one JSON-RPC 2.0 message per line; `initialize`, `ping`,
+  `tools/list`, `tools/call`; protocol `2025-03-26`, or the client's). Tools:
+  `inbox_list` (default: not yet resolved), `inbox_get`, `inbox_acknowledge`,
+  `inbox_resolve`. No add. Every result opens with the label.
+
+**Dashboard.** `GET /api/p/<id>/inbox` answers `{dir, targets, counts, items,
+problems}`, newest first. `inbox.add` and `inbox.resolve` are actions (§17), both
+`required`: the 428 states the file that will be written, its title, target and
+counts, and returns the item itself so the dialog shows exactly its text.
+
+**Fixture**: `conformance/inbox.json`, asserted by
+`packages/gnomon-core/src/inbox.test.ts` and `packages/gnomon-cli/src/inbox.test.ts`
+(the item and its validation, atomic writes, the sealed record, the CLI, the
+hook JSON, the MCP server over stdin and stdout, the dashboard actions and the
+page's accessibility).

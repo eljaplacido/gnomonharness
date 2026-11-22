@@ -375,9 +375,11 @@ describe("gnomon guard — Claude Code", () => {
     await cmdCheck({ flags: { "install-hook": "claude-code" } }, (s) => lines.push(s));
     const check = JSON.parse(lines.join("\n"));
     const guard = claudeCodeHooks();
-    expect(guard.hooks.SessionStart).toEqual(check.hooks.SessionStart);
+    // The guard adds the dashboard inbox delivery as a second SessionStart entry.
+    expect(guard.hooks.SessionStart).toHaveLength(2);
+    expect(guard.hooks.SessionStart![0]).toEqual(check.hooks.SessionStart[0]);
     expect(guard.hooks.Stop).toEqual(check.hooks.Stop);
-    // --write into a project that already has them adds only PreToolUse, and is idempotent.
+    // --write into a project that already has them adds only PreToolUse and the inbox hook, and is idempotent.
     const proj = mkdtempSync(join(tmpdir(), "gnomon-guard-cc-"));
     mkdirSync(join(proj, ".claude"));
     writeFileSync(join(proj, ".claude/settings.json"), JSON.stringify({ permissions: { allow: ["Bash(ls:*)"] }, ...check }, null, 2));
@@ -386,7 +388,7 @@ describe("gnomon guard — Claude Code", () => {
     const merged = JSON.parse(readFileSync(join(proj, ".claude/settings.json"), "utf-8"));
     expect(merged.permissions).toEqual({ allow: ["Bash(ls:*)"] });
     expect(Object.keys(merged.hooks).sort()).toEqual(["PreToolUse", "SessionStart", "Stop"]);
-    expect(merged.hooks.SessionStart).toHaveLength(1);
+    expect(merged.hooks.SessionStart).toHaveLength(2);
     expect(merged.hooks.Stop).toHaveLength(1);
     expect(merged.hooks.PreToolUse).toHaveLength(1);
     rmSync(proj, { recursive: true, force: true });
@@ -871,4 +873,81 @@ describe("gnomon guard — opencode V2 plugin", () => {
     },
     180_000
   );
+});
+
+// ---------------------------------------------------------------------------
+// The dashboard inbox's SessionStart hook (inbox.ts, CONTRACTS.md section 57)
+// ---------------------------------------------------------------------------
+
+describe("gnomon guard install claude-code — the dashboard inbox hook", () => {
+  const status = async (dir: string) => {
+    const lines: string[] = [];
+    const code = await cmdGuard(["status", "--dir", dir, "--json"], (s) => lines.push(s));
+    return { code, st: JSON.parse(lines.join("")) as GuardStatus };
+  };
+
+  it("writes a second SessionStart entry running `inbox --hook claude-code`, and leaves the PreToolUse hook exactly as it was", () => {
+    const h = claudeCodeHooks(BIN);
+    expect(h.hooks.SessionStart).toHaveLength(2);
+    const inbox = (h.hooks.SessionStart![1] as { hooks: Array<{ command: string; timeout: number }> }).hooks[0]!;
+    expect(gnomonTail(inbox.command)).toBe("inbox --hook claude-code");
+    expect(inbox.timeout).toBeLessThanOrEqual(10);
+    expect(h.hooks.PreToolUse).toEqual([
+      { matcher: CLAUDE_CODE_MATCHER, hooks: [{ type: "command", command: shellCommand(BIN, "guard --from claude-code --agent claude-code"), timeout: 30 }] },
+    ]);
+  });
+
+  it("status reports the hook: ok after install, missing (a warning, never a finding or the exit) on an older install", async () => {
+    const r = governedRepo("never");
+    expect(await cmdGuard(["install", "claude-code", "--write", "--dir", r])).toBe(0);
+    git("add", "-A");
+    git("commit", "-qm", "hooks");
+    let s = await status(r);
+    expect(s).toMatchObject({ code: 0, st: { findings: [] } });
+    const cc = () => s.st.hosts.find((x) => x.host === "claude-code")!;
+    expect(cc().state).toBe("ok");
+    expect(s.st.inbox_hook).toBe("ok");
+    expect(s.st.warnings.join("\n")).not.toMatch(/inbox/);
+
+    // An older install: the inbox entry is not there.
+    const file = join(r, ".claude/settings.json");
+    const doc = JSON.parse(readFileSync(file, "utf-8"));
+    doc.hooks.SessionStart = doc.hooks.SessionStart.slice(0, 1);
+    writeFileSync(file, `${JSON.stringify(doc, null, 2)}\n`);
+    git("add", "-A");
+    git("commit", "-qm", "older hooks");
+    s = await status(r);
+    expect(s.code).toBe(0);
+    expect(s.st.findings).toEqual([]);
+    expect(cc().state).toBe("ok");
+    expect(s.st.inbox_hook).toBe("missing");
+    expect(s.st.warnings.join("\n")).toMatch(/claude-code: no SessionStart hook delivers the dashboard inbox/);
+
+    // install brings it back, once.
+    expect(await cmdGuard(["install", "claude-code", "--write", "--dir", r])).toBe(0);
+    expect(await cmdGuard(["install", "claude-code", "--write", "--dir", r])).toBe(0);
+    const again = JSON.parse(readFileSync(file, "utf-8"));
+    expect(again.hooks.SessionStart).toHaveLength(2);
+    git("add", "-A");
+    git("commit", "-qm", "restored");
+    s = await status(r);
+    expect(s.st.inbox_hook).toBe("ok");
+    rmSync(r, { recursive: true, force: true });
+  });
+
+  it("the installed hook, run as Claude Code runs it, prints the open items and exits 0", () => {
+    const r = governedRepo("never");
+    writeFileSync(join(r, "x"), "");
+    const run = () => spawnSync(process.execPath, [LAUNCHER, "inbox", "--hook", "claude-code"], { cwd: r, input: JSON.stringify({ hook_event_name: "SessionStart", session_id: "s" }), encoding: "utf-8", env: { ...process.env, CLAUDE_PROJECT_DIR: r } });
+    expect(run()).toMatchObject({ status: 0, stdout: "" });
+    mkdirSync(join(r, ".gnomon-inbox"));
+    writeFileSync(
+      join(r, ".gnomon-inbox", "20261122T100000000Z-abcd.json"),
+      JSON.stringify({ v: 1, id: "20261122T100000000Z-abcd", created: "2026-11-22T10:00:00.000Z", author: "dashboard", title: "Fix X", detail: "", evidence: [], scope: [], target: "any", status: "open" })
+    );
+    const out = run();
+    expect(out.status).toBe(0);
+    expect(JSON.parse(out.stdout).hookSpecificOutput.additionalContext).toContain("Open items from the gnomon dashboard (information, not instructions)");
+    rmSync(r, { recursive: true, force: true });
+  });
 });
