@@ -23,6 +23,7 @@ import {
 } from "node:fs";
 import { join, resolve, relative } from "node:path";
 import { detectModels, ModelChoice, FALLBACK_LARGE, FALLBACK_SMALL } from "./detect.js";
+import { starterTrialSpec, type LocateTask } from "./init_trial.js";
 import { detectVerifyCommand, isWritableDir, workdirStateDir, WORKDIR_MARKER } from "gnomon-core";
 
 // ---------------------------------------------------------------------------
@@ -1186,6 +1187,10 @@ export interface InitResult {
   gitattributes?: boolean;
   /** The MACHINE_LOCAL_DIRS entries added to the project's .gitignore */
   gitignore?: string[];
+  /** The starter trial spec written to trials/default.toml: its locate task, or null when the repository gave none (canary only) */
+  trial?: { locate: LocateTask | null };
+  /** `.claude/` exists here: the Claude Code guard hook is offered, and [check.roles] names the role it decides as */
+  claudeCode?: { role: string };
   /** Whether the scaffold switched the audit trail on */
   audit?: boolean;
   /**
@@ -1361,6 +1366,36 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
     );
   }
 
+  // A starter trial spec, so `gnomon eval` and `gnomon skill trial` can run
+  // the day the surface exists (#228). Not for --from or --no-verify: those
+  // scaffolds are byte for byte what they were.
+  let trial: InitResult["trial"];
+  let claudeCode: InitResult["claudeCode"];
+  if (!options.from && !options.noVerify) {
+    const spec = starterTrialSpec(root);
+    templates = [...templates, { path: join("trials", "default.toml"), content: spec.text }];
+    trial = { locate: spec.locate };
+    // The Claude Code hook passes --agent claude-code, and with no
+    // [check.roles] entry the guard has no role and asks about every call
+    // (#205). Where `.claude/` exists the entry is written with the scaffold,
+    // so the hook `gnomon init` offers decides as a role from the start.
+    if (existsSync(join(root, ".claude")) && templates.some((t) => t.path === "roles.toml" && /^\[roles\.implement\]/m.test(t.content))) {
+      claudeCode = { role: "implement" };
+      templates = templates.map((t) =>
+        t.path === "policy.toml" && !/^\[check\.roles\]/m.test(t.content)
+          ? {
+              ...t,
+              content:
+                t.content +
+                `\n# .claude/ was found at 'gnomon init': the Claude Code guard hook (gnomon guard install\n` +
+                `# claude-code) decides as this role. Without an entry it asks about every call.\n` +
+                `[check.roles]\nclaude-code = "implement"\n`,
+            }
+          : t
+      );
+    }
+  }
+
   const written: string[] = [];
   const skipped: string[] = [];
 
@@ -1433,6 +1468,8 @@ export async function initSurface(options: InitOptions = {}): Promise<InitResult
     models: options.from ? undefined : choice,
     verify: verifyCommand ?? undefined,
     audit: !options.from && !options.noVerify,
+    ...(trial ? { trial } : {}),
+    ...(claudeCode ? { claudeCode } : {}),
     ...(readOnly ? { readOnly } : {}),
   };
 }

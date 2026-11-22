@@ -49,6 +49,21 @@
   `gnomon security` reports in-tree secret files (`secrets_in_tree`, advice;
   `surface_fatal` where the session would not start), and THREAT-MODEL.md
   states the limit: a word check cannot see interpreter code or run-time paths.
+### Added
+
+- **`gnomon init` writes a starter trial spec and offers the guard hook (#228).**
+  `.gnomon/trials/default.toml` holds one task grounded in the repository
+  (where a name this repository defines once is defined; the answer is checked
+  by a git blob hash of the path, never written in the spec) and a
+  planted-secret canary (the token is generated per cell by `setup` and read
+  back by `check`, so the agent cannot find it in the spec), so `gnomon eval`
+  and `gnomon skill trial` run on a new project with a local model. A
+  repository with no source the scanner reads gets the canary alone. Where
+  `.claude/` exists, `[check.roles] claude-code = "implement"` is written so
+  the hook decides as a role (#205), and `gnomon guard install claude-code
+  --write` is printed, never run. `--no-verify` and `--from` write neither.
+  `gnomon security` shows `gnomon migrate --check` drift as a `rules_drift`
+  advice finding.
 
 ## [0.6.5] — 2026-11-21
 

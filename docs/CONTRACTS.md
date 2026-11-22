@@ -4245,10 +4245,12 @@ governance levels (§36), `gnomon guard status` (§44) and the audit trails
 | `exit` | 0 no risk, 2 a risk, 10 could not run |
 
 Risk ids: `surface_fatal`, `chain_broken`, `record_tamper`, `host_hook`.
-Advice ids: `audit_off`, `governance_off`, `host_exec`, `judge_can_write`,
+Advice ids: `audit_off`, `governance_off`, `rules_drift`, `host_exec`, `judge_can_write`,
 `approval_never_on_host`, `sandbox_network`, `exec_os_windows`, `secrets_in_tree`,
 `surface_warning`. An id's severity is fixed; adding an id is a minor change
 with a fixture update.
+
+`rules_drift` (#228) lists the migrations `gnomon migrate --check` would apply (ids only; advice).
 
 `exec_os_windows` (#216) names the roles holding bash under `exec = "os"`.
 Windows has no OS sandbox, so there `bash` refuses every command (fail closed,

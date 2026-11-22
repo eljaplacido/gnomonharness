@@ -1055,7 +1055,7 @@ nothing; `gnomon --help` prints all of it.
 | `gnomon task "TEXT" [--role R] [--yes] [--json] [--profile N] [--trust] [--deadline S]` | One task, no terminal. Gated calls are refused unless `--yes`. An untrusted loosening surface runs clamped to the defaults unless `--trust`. `--deadline` (seconds or an ISO time) stops it cleanly before a time cap (§7.2). `--task-file PATH` (or `-` for stdin) takes the text from a file instead of the command line, where a model's `pkill -f <a word from the task>` would match a wrapper's shell; gnomon's own command line reads `gnomon task` while it runs. | Scripts, CI, cron, benchmarks |
 | `gnomon setup [--json] [--yes] [--pull TAG] [--speed-check] [--mode local\|hybrid\|cloud] [--cloud-endpoint URL --cloud-model NAME]` | Scans the machine, recommends a local model it can run, pulls only on a yes, speed-checks it, connects an optional cloud model, suggests a mode, and writes `.gnomon/` after you accept the diff ([4.0](#40-get-started-in-3-steps)) | First run; a new machine |
 | `gnomon doctor [--json]` | Read-only: the machine, whether every role's model answers, drift since setup, and what would fix each problem. Exit 0 clear, 1 attention, 10 could not run. | "Why does nothing answer?"; after moving machines |
-| `gnomon init [--from P] [--force] [--no-verify]` | Writes a surface. `--from` copies another project's `.gnomon/`. | New project; team template |
+| `gnomon init [--from P] [--force] [--no-verify]` | Writes a surface, and a starter `.gnomon/trials/default.toml` (a locate task checked by hash, and a planted-secret canary whose token is random per cell; `gnomon eval --against REF` runs it with a local model). Where `.claude/` exists it also maps Claude Code's hook to a role (`[check.roles] claude-code = "implement"`) and prints `gnomon guard install claude-code --write`, which it never runs. `--from` copies another project's `.gnomon/`; `--no-verify` writes neither. | New project; team template |
 | `gnomon migrate [--check]` | Brings a surface up to current scaffold defaults. `--check` writes nothing and exits 1 if anything is pending. | After `gnomon update` |
 | `gnomon endpoint [list \| test NAME \| add …]` | Lists endpoints and keys and cross-checks model ids; runs one token; declares an endpoint end to end | Model setup, diagnosis |
 | `gnomon key [set \| list \| unset] NAME` | The machine-local credential store | Keys |
@@ -1178,6 +1178,8 @@ esac
   (`volatile.tool_calls`) and on its `tool_call` audit record (`started_at`,
   `duration_ms`); a partial record names the call in flight
   (`volatile.tool_in_flight`).
+- `gnomon security` lists a surface that lags this gnomon's defaults as `rules_drift`
+  (the migrations `gnomon migrate --check` would apply; advice, exit unchanged).
 - In a directory gnomon cannot write (a read-only mount), `gnomon init` keeps
   the surface and gnomon's records in `$XDG_STATE_HOME/gnomon/workdirs/<key>`
   (else `~/.local/state/...`), keyed by the directory's path; `gnomon task`
