@@ -2134,6 +2134,14 @@ declared at their defaults, a turn sends the same request bytes as before.
 - `[turn] todo_gate = true`: an answer given while this turn's checklist has
   open items is handed back once, naming them; skipped when less than
   `completion_min_remaining` of the budget is left.
+- `[skills] inline_max_tokens = N` in `policy.toml`: a matched skill larger
+  than N tokens goes into the prompt as its name, one-line description and path
+  instead of its whole body, and the model opens it with `read` when the task
+  needs it. Skills at or under N stay inline. Absent: every matched skill in
+  full, as before. The turn's `counters.skills.stubbed` lists what was left
+  out and the tokens saved; the read counts as the skill being used. The
+  trade-off is that the model may not open the note; compare a `gnomon skill
+  trial` pair before turning it on for a skill that matters.
 - `variant = "compat"` on the `edit` tool: `old_string`/`new_string`, and an
   edit that does not match exactly is matched with whitespace, then
   indentation, ignored, always uniquely.

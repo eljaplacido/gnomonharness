@@ -5002,6 +5002,20 @@ the `skill` tool). A delegated sub-turn's data is merged into its parent's.
 present (once per chain stage), with `turn`, `role` and the same four fields.
 It is hash-chained like any record.
 
+**Progressive skills — `[skills] inline_max_tokens = N`** (`policy.toml`, a
+positive whole number). Absent, zero, negative or not a number: a matched skill
+is injected in full, as before, and the prompt is unchanged. When set, a
+matched skill whose block (`### name`, description, body) is estimated at more
+than N tokens enters the system prompt as its name, a one-line description
+(the declared one, else the body's first line) and its path
+`.gnomon/skills/<id>.md`; the model opens it with `read` when it needs it. That
+read is the skill's use: it shows as `◆ skill` and counts in `read`. A skill at
+or under N stays inline. `fired[].tokens` is then the stub's estimate, and the
+optional `stubbed` field (`[{name, tokens_saved}]`, on `counters.skills` and on
+`skill_use`; `identifier` class) lists the stubbed skills with the estimated
+tokens each saved. Absent when none was stubbed. No write path changes: the
+`skill` tool still only proposes.
+
 `gnomon skill mine` reads these records and returns, besides candidates,
 `skill_signals`: `fires_never_cited` (at least 5 firings, never cited) and
 `cited_often` (at least 3 citations and at least half of firings). They are

@@ -242,6 +242,9 @@ import {
   roleSkills,
   applySkills,
   skillBlock,
+  skillInjected,
+  isStubbed,
+  inlineMaxTokens,
   skillId as skillIdOf,
   SKILLS_DIR,
   withWorkingContext,
@@ -4198,7 +4201,9 @@ export function skillsRow(
   input: string,
   columns: number = terminalWidth(),
   /** Skills this role may use, loaded or not: what `none matched · N available` counts. */
-  available: number = active.length
+  available: number = active.length,
+  /** `[skills] inline_max_tokens`, so the row shows what is actually injected */
+  inlineLimit?: number
 ): string | null {
   if (active.length === 0) {
     // Only where the operator asked to see the work: at brief and tools the
@@ -4215,7 +4220,7 @@ export function skillsRow(
       return "matched";
     }
   };
-  const cost = active.map(skillTokens);
+  const cost = active.map((sk) => skillTokens(sk, inlineLimit));
   return fitRow(
     paint(ui, "magenta", "  ◆ skills") + "  " +
       active.map((sk, i) => `${safeForPrompt(sk.name)} ${paint(ui, "gray", `(${why(sk)}) ~${cost[i]} tok`)}`).join(", ") +
@@ -4275,14 +4280,14 @@ export function skillUsageLines(sk: Skill, exchanges: PromptExchange[], past: Sk
 }
 
 /** What a loaded skill costs the prompt: the estimate of the block applySkills adds. */
-export function skillTokens(sk: Skill): number {
-  return estimateTokens(skillBlock(sk));
+export function skillTokens(sk: Skill, limit?: number): number {
+  return estimateTokens(skillInjected(sk, limit));
 }
 
 /** The `◆ skills` row for `role` and `input`, read from the surface. */
 function skillsRowFor(ui: ResolvedUi, config: GnomonConfig, role: string, input: string): string | null {
   const all = loadSkills(config);
-  return skillsRow(ui, selectSkills(all, role, input), input, terminalWidth(), roleSkills(all, role).length);
+  return skillsRow(ui, selectSkills(all, role, input), input, terminalWidth(), roleSkills(all, role).length, inlineMaxTokens(config));
 }
 
 /**
@@ -5893,7 +5898,8 @@ export function buildSystemPrompt(
       applyPromptProfile(state.config.system.content ?? "", profile).text,
       active,
       dormant,
-      `${basename(state.config.gnomonDir)}/${SKILLS_DIR}`
+      `${basename(state.config.gnomonDir)}/${SKILLS_DIR}`,
+      inlineMaxTokens(state.config)
     ) + runNotesBlock(state)
   ) + platformBlock() + `\n\n${sessionModeBlock(state.interactive === true && !opts.delegated)}` +
     promptProfileBlock(profile) +
@@ -6077,9 +6083,13 @@ async function agenticTurn(
   const skillUse = (held.skills = (() => {
     const input = [...messages].reverse().find((m) => m.role === "user")?.content;
     const fired = selectSkills(loadSkills(config), role, typeof input === "string" ? input : "");
+    const limit = inlineMaxTokens(config);
     return new SkillUse(
-      fired.map((sk) => ({ id: sk.id, tokens: skillTokens(sk) })),
+      fired.map((sk) => ({ id: sk.id, tokens: skillTokens(sk, limit) })),
+      fired,
       fired
+        .filter((sk) => isStubbed(sk, limit))
+        .map((sk) => ({ id: sk.id, saved: estimateTokens(skillBlock(sk)) - skillTokens(sk, limit) }))
     );
   })());
   // `gnomon task --deadline`'s stopping clock, when the caller set one. A

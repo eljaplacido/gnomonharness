@@ -23,6 +23,12 @@ export interface SkillCounters {
   cited_in_reasoning: string[];
   /** Skills the model proposed with the `skill` tool this turn, by id */
   proposed: string[];
+  /**
+   * Fired skills injected as a stub under `[skills] inline_max_tokens`, with
+   * the estimated tokens each saved against its full block. Absent when none
+   * was stubbed, so a surface without the key writes the record it always did.
+   */
+  stubbed?: Array<{ name: string; tokens_saved: number }>;
 }
 
 /**
@@ -83,13 +89,17 @@ export class SkillUse {
   private read = new Map<string, number>();
   private cited = new Set<string>();
   private proposed = new Set<string>();
+  private stubbed = new Map<string, number>();
 
   constructor(
     firedSkills: Array<{ id: string; tokens: number }>,
     /** Skills the reasoning may be matched against: the fired ones, and any the model opens */
-    private readonly known: Array<Pick<Skill, "id" | "name">>
+    private readonly known: Array<Pick<Skill, "id" | "name">>,
+    /** Fired skills that went in as stubs, with the tokens that saved */
+    stubbed: Array<{ id: string; saved: number }> = []
   ) {
     for (const f of firedSkills) this.fired.set(f.id, { name: f.id, tokens: f.tokens });
+    for (const s of stubbed) this.stubbed.set(s.id, s.saved);
   }
 
   noteRead(id: string): void {
@@ -119,6 +129,7 @@ export class SkillUse {
     for (const [id, n] of Object.entries(sub.read)) this.read.set(id, (this.read.get(id) ?? 0) + n);
     for (const c of sub.cited_in_reasoning) this.cited.add(c);
     for (const p of sub.proposed) this.proposed.add(p);
+    for (const s of sub.stubbed ?? []) if (!this.stubbed.has(s.name)) this.stubbed.set(s.name, s.tokens_saved);
   }
 
   /** Absent when no skill fired, was opened or was proposed. */
@@ -131,6 +142,13 @@ export class SkillUse {
       read: Object.fromEntries([...Object.entries(Object.fromEntries(this.read))].sort(([a], [b]) => order(a, b))),
       cited_in_reasoning: [...this.cited].sort(order),
       proposed: [...this.proposed].sort(order),
+      ...(this.stubbed.size
+        ? {
+            stubbed: [...this.stubbed.entries()]
+              .sort(([a], [b]) => order(a, b))
+              .map(([name, tokens_saved]) => ({ name, tokens_saved })),
+          }
+        : {}),
     };
   }
 }
@@ -144,7 +162,7 @@ export function skillsUsedText(c: SkillCounters): string {
   const parts = [...ids].map((id) => {
     const f = c.fired.find((x) => x.name === id);
     const bits = [
-      ...(f ? [`loaded ~${f.tokens} tok`] : []),
+      ...(f ? [`${c.stubbed?.some((x) => x.name === id) ? "stub" : "loaded"} ~${f.tokens} tok`] : []),
       ...(c.read[id] ? [`read ${c.read[id]}×`] : []),
       ...(c.cited_in_reasoning.includes(id) ? ["cited"] : []),
     ];
