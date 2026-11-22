@@ -79,7 +79,8 @@ describe("a proposal is inert", () => {
     expect(hash(config)).toBe(before);
     expect(tree(join(root, ".gnomon")).sort()).toEqual(filesBefore);
     expect(existsSync(join(root, PROPOSALS_DIR, `${p.id}.json`))).toBe(true);
-    expect(lstatSync(join(root, PROPOSALS_DIR, `${p.id}.json`)).mode & 0o077).toBe(0);
+    // POSIX permission bits only: Windows reports 0o666 for any writable file.
+    if (process.platform !== "win32") expect(lstatSync(join(root, PROPOSALS_DIR, `${p.id}.json`)).mode & 0o077).toBe(0);
     expect(readProposal(config, p.id)?.id).toBe(p.id);
     expect(readProposal(config, p.id.slice(0, 12))?.id).toBe(p.id);
     expect(listProposals(config).proposals.map((x) => x.id)).toEqual([p.id]);

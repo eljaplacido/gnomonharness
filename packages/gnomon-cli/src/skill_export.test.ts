@@ -6,7 +6,7 @@
 
 import { describe, it, expect, afterAll } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,7 +52,8 @@ describe("gnomon skill export", () => {
     expect(cli(root, ["skill", "export", "--write"]).stdout).toContain("unchanged tidy-commits/SKILL.md");
     const json = JSON.parse(cli(root, ["skill", "export", "--to", ".agents/skills", "--json"]).stdout);
     expect(json).toMatchObject({ written: false, format: "skill-md" });
-    expect(json.dir).toBe(join(root, ".agents/skills"));
+    // The command reports the real path; macOS tmpdir() is a symlink (/var → /private/var).
+    expect(json.dir).toBe(join(realpathSync(root), ".agents/skills"));
     expect(existsSync(join(root, ".agents"))).toBe(false);
   });
 
