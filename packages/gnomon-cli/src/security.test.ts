@@ -194,6 +194,30 @@ describe("gnomon security: the contract", () => {
     expect(formatSecurity(win).join("\n")).toMatch(/exec_os_windows|no OS sandbox/);
   });
 
+  it("a declared secret inside the repository is advice, and a risk under exec = os at prevent (#227)", async () => {
+    const dir = await project();
+    expect(buildSecurityReport(dir, {}, "linux").findings.map((f) => f.id)).not.toContain("secrets_in_tree");
+    writeFileSync(join(dir, ".env"), "TOKEN=x\n");
+    const r = buildSecurityReport(dir, {}, "linux");
+    shapeHolds(r);
+    const f = r.findings.find((x) => x.id === "secrets_in_tree")!;
+    expect(f.severity).toBe("advice");
+    expect(f.message).toMatch(/\.env .*readable by any interpreter the role may run/);
+    expect(f.fix).toMatch(/move it out of the repository/);
+    expect(r.exit).toBe(0);
+    // exec = "os" under governance prevent: the session would not start, so it is a risk.
+    const p = join(dir, ".gnomon/policy.toml");
+    const plain = readFileSync(p, "utf-8");
+    writeFileSync(p, plain.replace(/^\[sandbox\]\n/m, '[sandbox]\nexec = "os"\n') + '\n[governance]\nlevel = "prevent"\n');
+    const os = buildSecurityReport(dir, {}, "linux");
+    expect(os.findings.some((x) => x.id === "surface_fatal" && /declared secret sits inside it/.test(x.message))).toBe(true);
+    expect(os.findings.map((x) => x.id)).not.toContain("secrets_in_tree");
+    expect(os.exit).toBe(SECURITY_EXIT.risk);
+    // exec = "docker" hides it: nothing to report.
+    writeFileSync(p, plain.replace(/^\[sandbox\]\n/m, '[sandbox]\nexec = "docker"\n') + '\n[governance]\nlevel = "prevent"\n');
+    expect(buildSecurityReport(dir, {}, "linux").findings.map((x) => x.id)).not.toContain("secrets_in_tree");
+  });
+
   it("a trail whose chain does not hold is a risk: exit 2", async () => {
     const dir = await project();
     const auditDir = resolveAudit(loadConfig(dir)).dir;

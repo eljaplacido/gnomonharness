@@ -2150,6 +2150,10 @@ export function sandboxCommand(
         ]
       : []),
     ...readonly.map((p) => `-v ${shq(p)}:${shq(p)}:ro`),
+    // Declared secrets in the root, hidden: an empty file over each, so no
+    // route inside the container (an interpreter building the path at run
+    // time included) reads one. Only where the secrets family is at prevent.
+    ...hiddenSecretMounts(ctx).map((p) => `-v ${shq(emptySecretFile())}:${shq(p)}:ro`),
     `-w ${shq(ctx.root)}`,
     // Which project the container can write, for any gnomon process to ask
     // (git_safe liveContainer): the dashboard, `gnomon check`, `gnomon
@@ -4527,6 +4531,42 @@ function shellExpand(base: string, rest: string): string[] {
     frontier = next;
   }
   return globbed ? frontier.filter((p) => existsSync(p)) : frontier;
+}
+
+/**
+ * Declared secret files (`[governance.paths] secrets`) inside `root`: real
+ * regular files only (walkFiles skips symlinks and the never-walked trees).
+ * Exceptions (`!.env.example`) apply, in order, as everywhere.
+ */
+export function secretFilesInRoot(root: string, list: readonly string[] | undefined): string[] {
+  if (!list || list.length === 0) return [];
+  const base = resolve(root);
+  const could = couldBeListed(list, base, base);
+  const out: string[] = [];
+  for (const rel of walkFiles(base, base)) {
+    const parts = rel.split("/");
+    if (!could(rel, parts[parts.length - 1]!)) continue;
+    const at = join(base, rel);
+    if (pathListed(list, base, at)) out.push(at);
+  }
+  return out;
+}
+
+/** Secret files a docker command must not see: declared, in the root, secrets family at prevent or above. */
+function hiddenSecretMounts(ctx: Pick<ToolContext, "root" | "protectedPaths" | "governance">): string[] {
+  if (ctx.protectedPaths === undefined) return [];
+  if (ctx.governance && !levelAtLeast(ctx.governance.levels.secrets, "prevent")) return [];
+  return secretFilesInRoot(ctx.root, ctx.protectedPaths.secrets);
+}
+
+let emptyFile: string | undefined;
+/** An empty, read-only file of this process's own, to mount over a secret. */
+function emptySecretFile(): string {
+  if (emptyFile && existsSync(emptyFile)) return emptyFile;
+  const dir = mkdtempSync(join(tmpdir(), "gnomon-empty-"));
+  emptyFile = join(dir, "empty");
+  writeFileSync(emptyFile, "", { mode: 0o444 });
+  return emptyFile;
 }
 
 /**

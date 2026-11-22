@@ -26,6 +26,24 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **A secret read through an interpreter no longer gets through at
+  `[governance] level = "prevent"` where the sandbox can stop it (#227).**
+  `python3 -c "print(open('.env'+'.matrix').read())"` names no secret in its
+  text, and Landlock under `exec = "os"` grants the whole root, so the word check
+  held 1 of 34 surfaces. Under `exec = "docker"` an empty read-only file is now
+  mounted over each in-root file the `[governance.paths] secrets` globs name, so
+  no route inside the container reads it. Under `exec = "os"` with the secrets
+  family at prevent or above, the session refuses to start while a declared
+  secret sits inside the root (the message names the files and the fix: move
+  them out of the repository); `[governance] secrets_in_root = "allow"` accepts
+  the risk and is recorded in `session_start.resolved.secrets_in_root`. Nothing
+  changes below prevent, without `exec = "os"`, or without `[governance]`.
+  `gnomon security` reports in-tree secret files (`secrets_in_tree`, advice;
+  `surface_fatal` where the session would not start), and THREAT-MODEL.md
+  states the limit: a word check cannot see interpreter code or run-time paths.
+
 ## [0.6.5] — 2026-11-21
 
 One fix, found by rerunning the 34-project capability matrix on v0.6.4: the
