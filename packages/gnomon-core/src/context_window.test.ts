@@ -18,6 +18,10 @@ import {
   CONTEXT_SOURCES,
   LISTING_SHAPES,
   WINDOW_PROBE_TIMEOUT_MS,
+  WINDOW_LOOKUP_DEADLINE_MS,
+  WINDOW_HEDGE_MS,
+  WINDOW_CACHE_TTL_MS,
+  WINDOW_CACHE_NEGATIVE_TTL_MS,
   windowFromModelList,
   windowFromLlamaProps,
   windowFromAnthropicModel,
@@ -208,6 +212,8 @@ describe("the listing shapes — conformance/endpoint_window.json", () => {
     expect([...CONTEXT_SOURCES]).toEqual(FIXTURE.sources);
     expect([...new Set(FIXTURE.shapes.map((s: { shape: string }) => s.shape))].sort()).toEqual([...LISTING_SHAPES].sort());
     expect(WINDOW_PROBE_TIMEOUT_MS).toBe(FIXTURE.probe_timeout_ms);
+    expect({ deadline_ms: WINDOW_LOOKUP_DEADLINE_MS, hedge_ms: WINDOW_HEDGE_MS, cache_ttl_ms: WINDOW_CACHE_TTL_MS, negative_ttl_ms: WINDOW_CACHE_NEGATIVE_TTL_MS })
+      .toEqual({ deadline_ms: FIXTURE.lookup.deadline_ms, hedge_ms: FIXTURE.lookup.hedge_ms, cache_ttl_ms: FIXTURE.lookup.cache_ttl_ms, negative_ttl_ms: FIXTURE.lookup.negative_ttl_ms });
     expect(AUTO_WINDOW).toBe(FIXTURE.value);
     expect(Object.keys(DEGRADATIONS)).toContain(FIXTURE.degradation);
 

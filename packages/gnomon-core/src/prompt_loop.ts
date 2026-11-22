@@ -80,7 +80,7 @@ import {
   type EscalateRoute,
 } from "./config.js";
 import { thinkCapNote, thinkCapRecord, resolveThinkCap, type ThinkCapCounters } from "./think_cap.js";
-import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence,
+import { Progress, renderExchange, splitThinking, paint, THEMES, glyphsOf, terminalThemeSequence,
   safeForPrompt, traceLines, isToolTagStub, isEmptyReasoning, terminalWidth, summaryResult, fitRow, metaText, wordWrap,
 } from "./render.js";
 import {
@@ -181,6 +181,7 @@ import {
   CallLedger,
   legBudget,
   overflowBudget,
+  PRE_CALL_SAFETY,
   readUsageDetail,
   type CallObserver,
   type ModelCallsMeasured,
@@ -272,7 +273,8 @@ import {
   type BootstrapOutcome,
   type ObservationMeta,
 } from "./context_hygiene.js";
-import { resolveContextWindow, type ContextSource, type WindowResolution } from "./context_window.js";
+import { rememberedWindow, resolveContextWindow, startWindowLookup, type ContextSource, type WindowResolution } from "./context_window.js";
+import { knownHostedWindow } from "./known_windows.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
 import { listProposals, proposalPaths } from "./proposals.js";
 import { loadMemory, memoryIndexBlock, memoryRead, memoryId, MemoryUse, MEMORY_DIR, type MemoryCounters } from "./memory.js";
@@ -3207,6 +3209,9 @@ function currentTarget(state: PromptState): RouteTarget | undefined {
   }
 }
 
+/** What the system prompt's tools and skills add to a request estimate made before they are built */
+const TOOL_SCHEMA_ALLOWANCE = 8_000;
+
 /** Where settleContextWindows says what it found. */
 export interface WindowHooks {
   ui: ResolvedUi;
@@ -3215,6 +3220,29 @@ export interface WindowHooks {
   /** A channel `--json` does not silence: `"auto"` found nothing */
   warn: (line: string) => void;
   audit?: DegradationSink;
+  /**
+   * gnomon's estimate (tokens, unscaled) of the request about to go out. When
+   * given, and the endpoint declared no window (a declared "auto" asks for the
+   * answer and waits for it, bounded), a lookup that has not finished does not
+   * hold a request below half
+   * of the best window known without it: it is sent now on the catalog's
+   * window (or `[defaults]`), and says so in its source.
+   */
+  estimate?: () => number;
+}
+
+/**
+ * Put a window the lookup has found since this target was settled into it, in
+ * place, so the later requests of a turn use it. A no-op once settled.
+ */
+export function refreshSettledWindow(t: RouteTarget): void {
+  if (!t.contextAuto || t.kind === "ollama") return;
+  if (t.contextSource !== "default" && t.contextSource !== "catalog") return;
+  const r = rememberedWindow(t);
+  if (r?.tokens && r.source !== t.contextSource) {
+    t.contextTokens = r.tokens;
+    t.contextSource = r.source;
+  }
 }
 
 /**
@@ -3239,7 +3267,20 @@ export async function settleContextWindows<R extends { target: RouteTarget; fall
   const defaultsDeclared = typeof config.config.defaults?.max_context_tokens === "number";
   const settle = async (t: RouteTarget | undefined): Promise<RouteTarget | undefined> => {
     if (!t || !needs(t)) return t;
-    const { resolution, fresh } = await resolveContextWindow(t);
+    const best = knownHostedWindow(t)?.tokens ?? fallbackWindow;
+    const early =
+      hooks.estimate && t.kind !== "ollama" && t.contextImplicit === true
+        ? { estimate: hooks.estimate() * PRE_CALL_SAFETY, best }
+        : undefined;
+    const got = await resolveContextWindow(t, { early });
+    if (got.early || !got.resolution) {
+      // Not awaited: the lookup is still running and this request is small.
+      const known = knownHostedWindow(t);
+      return known
+        ? { ...t, contextTokens: known.tokens, contextSource: "catalog" }
+        : { ...t, contextTokens: fallbackWindow, contextSource: "default" };
+    }
+    const { resolution, fresh } = { resolution: got.resolution, fresh: got.fresh };
     const where = `${t.endpoint ?? "endpoint"} · ${t.model}`;
     if (fresh && resolution.tokens) {
       hooks.say(
@@ -3273,14 +3314,16 @@ export async function settleContextWindows<R extends { target: RouteTarget; fall
 }
 
 /**
- * Settle every listed role's "auto" windows at session start, so what they
- * found is said before the first prompt rather than in the middle of it.
+ * Start every listed role's "auto" window lookups at session start, in the
+ * background. The first request settles the route: it takes the answer if it
+ * has landed, waits for it (bounded) if the request is large enough for the
+ * window to matter, and goes ahead without it otherwise.
  */
-export async function prepareContextWindows(
+export function prepareContextWindows(
   config: GnomonConfig,
   roles: string[],
-  hooks: WindowHooks
-): Promise<void> {
+  _hooks?: WindowHooks
+): void {
   const routes = roles.flatMap((role) => {
     try {
       return [routeRole(config, role)];
@@ -3288,7 +3331,11 @@ export async function prepareContextWindows(
       return []; // an unknown endpoint is the surface audit's to report
     }
   });
-  await Promise.all(routes.map((r) => settleContextWindows(config, r, hooks)));
+  // Background only: nothing waits. What the lookup found is said by the first
+  // request that settles the route after it lands.
+  for (const r of routes) {
+    for (const t of [r.target, r.fallback]) if (t?.contextAuto) startWindowLookup(t);
+  }
 }
 
 /**
@@ -4188,7 +4235,7 @@ export function reasoningOf(channel: string | undefined, inline: string): string
 export function stepCallRow(ui: ResolvedUi, tool: string, describe: string, columns: number = terminalWidth()): string {
   // A skill the model opened is drawn as a skill, not as one more read.
   if (tool === SKILL_STEP) return fitRow(paint(ui, "magenta", `  ◆ skill`) + `  ${safeForPrompt(describe)}`, columns);
-  return fitRow(paint(ui, "cyan", `  ⚙ ${tool}`) + (describe ? `  ${safeForPrompt(describe)}` : ""), columns);
+  return fitRow(paint(ui, "cyan", `  ${glyphsOf(ui).tool} ${tool}`) + (describe ? `  ${safeForPrompt(describe)}` : ""), columns);
 }
 
 /** FoldStep.tool for a `read` of a skill file (skillRead). */
@@ -6189,7 +6236,7 @@ async function agenticTurn(
     const paths = [...new Set(steps_.map((st) => st.path).filter(Boolean))] as string[];
     const shown = paths.slice(0, 3).join(", ") + (paths.length > 3 ? `, +${paths.length - 3}` : "");
     deps.say(
-      paint(deps.ui, "cyan", `  ⚙ ${steps_.length} steps folded`) +
+      paint(deps.ui, "cyan", `  ${glyphsOf(deps.ui).tool} ${steps_.length} steps folded`) +
         paint(deps.ui, "gray", ` · ${byTool}${paths.length ? ` · ${shown}` : ""} · nothing changed`) +
         paint(deps.ui, "gray", `  /expand`)
     );
@@ -6214,7 +6261,7 @@ async function agenticTurn(
       reserve: 6 + (deps.gutter ?? 0),
       hint: takeThinkHint(),
     }).forEach((line, i) =>
-      say(paint(deps.ui, "gray", `  ${i === 0 ? "✻" : " "} ${line}`) + (i === 0 && tag ? paint(deps.ui, "magenta", tag) : ""))
+      say(paint(deps.ui, "gray", `  ${i === 0 ? glyphsOf(deps.ui).think : " "} ${line}`) + (i === 0 && tag ? paint(deps.ui, "magenta", tag) : ""))
     );
   };
   // The "how to see more" hint names two commands; once a turn is enough.
@@ -6245,7 +6292,13 @@ async function agenticTurn(
   // process and cached, so a caller that settled the route already (runTask,
   // runSessionTurn, the session start) costs nothing here. Sub-turns and chain
   // stages build their own routes and are settled by this line.
-  route = await settleContextWindows(config, route, { ui: deps.ui, say, warn, audit: deps.audit });
+  route = await settleContextWindows(config, route, {
+    ui: deps.ui,
+    say,
+    warn,
+    audit: deps.audit,
+    estimate: () => messagesTokens(messages),
+  });
 
   // The loop's own numbers, from the surface rather than from this file. Read
   // once per turn so a `[loop]` block is hashed into the record that describes
@@ -7786,6 +7839,7 @@ async function agenticTurn(
     // there the checkpoint and the overflow retry stay the only decision points.
     {
       const next = escalation ? active : onFallback && route.fallback ? route.fallback : route.target;
+      refreshSettledWindow(next);
       if (windowKnown(next)) {
         const window = resolveContext(config, next).max_context_tokens;
         // The estimate runs low against real tokenizers (~1.4x), so against a
@@ -11210,7 +11264,13 @@ export async function runTask(
   for (const line of undeclaredWindowNotes(config, chain.length >= 2 ? chain : [role])) {
     note(`  ${line}`);
   }
-  route = await settleContextWindows(config, route, { ui, say: note, warn, audit: auditForTurn });
+  route = await settleContextWindows(config, route, {
+    ui,
+    say: note,
+    warn,
+    audit: auditForTurn,
+    estimate: () => estimateTokens(systemPrompt) + estimateTokens(input) + TOOL_SCHEMA_ALLOWANCE,
+  });
   built = buildMessages(state, systemPrompt, input, route.target);
 
   // Connect declared MCP servers here too. They were wired only in
@@ -11840,7 +11900,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/think", arg: "[mode]", help: "Chain-of-thought: hide | collapse | show" },
   { name: "/cot", arg: "[mode]", help: "Live trace while it works: off | brief | tools | think | work | full" },
   { name: "/expand", help: "List the steps inside the last folded run" },
-  { name: "/theme", arg: "[name]", help: "Colour theme — dark, dim, light, high-contrast, mono, tokyonight, catppuccin, gruvbox, nord (the last four recolour the whole terminal)" },
+  { name: "/theme", arg: "[name]", help: "Colour theme — dark, dim, light, high-contrast, mono, tokyonight, catppuccin, gruvbox, nord (each with its own border, glyphs, chip, spinner and palette; the last four recolour the whole terminal)" },
   { name: "/explain", arg: "[topic]", help: "What a feature is, how this repo has it set, and what to do with it" },
   { name: "/reflect", arg: "[topic]", help: "Alias for /explain" },
   { name: "/models", help: "Pick a model for a role (arrows, type to filter)" },
@@ -13044,7 +13104,7 @@ export function processCommand(cmd: string, state: PromptState): boolean {
           traceLines(b.text, "show", columns).forEach((line, i) =>
             console.log(
               b.kind === "reasoning"
-                ? paint(ui, "gray", `  ${i === 0 ? "✻" : " "} ${line}`)
+                ? paint(ui, "gray", `  ${i === 0 ? glyphsOf(ui).think : " "} ${line}`)
                 : i === 0
                   ? `  ${paint(ui, "bold", "●")} ${line}`
                   : `    ${line}`
@@ -13417,6 +13477,11 @@ export async function runSessionTurn(
     say: deps.log,
     warn: deps.log,
     audit: deps.audit,
+    estimate: () =>
+      estimateTokens(cleanedInput) +
+      estimateTokens(state.summary ?? "") +
+      state.exchanges.reduce((n, e) => n + exchangeCost(e), 0) +
+      TOOL_SCHEMA_ALLOWANCE,
   });
 
   const ui = uiOf(state);
@@ -14438,9 +14503,9 @@ export async function runPromptLoop(
     for (const raw of req.preview.slice(0, 60)) {
       const line = safeForPrompt(raw);
       const colour = line.startsWith("+ ")
-        ? "green"
+        ? "add"
         : line.startsWith("- ")
-          ? "red"
+          ? "del"
           : "gray";
       console.log(paint(ui, colour, `  │ ${line}`));
     }
@@ -14522,9 +14587,9 @@ export async function runPromptLoop(
         for (const raw of req.preview) {
           const line = safeForPrompt(raw);
           const colour = line.startsWith("+ ")
-            ? "green"
+            ? "add"
             : line.startsWith("- ")
-              ? "red"
+              ? "del"
               : "gray";
           console.log(paint(ui, colour, `  │ ${line}`));
         }
@@ -14690,12 +14755,7 @@ export async function runPromptLoop(
     for (const line of undeclaredWindowNotes(config, listRoles(config))) {
       console.log(paint(ui, "yellow", `  ${line}`));
     }
-    await prepareContextWindows(config, listRoles(config), {
-      ui,
-      say: (line) => console.log(line),
-      warn: (line) => console.log(line),
-      audit,
-    });
+    prepareContextWindows(config, listRoles(config));
     if (resumedFrom) {
     const ui0 = uiOf(state);
     console.log(

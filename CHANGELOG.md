@@ -26,6 +26,14 @@
 
 ## [Unreleased]
 
+### Added — nine distinctive terminal themes
+
+- Each theme now has its own border, rail glyph, tool-row and reasoning glyph, role chip (bold, inverse, pill or
+  `[bracketed]`), spinner and, except `dark`, a semantic palette (ok/err/warn/info/muted and `+`/`-` diff sides)
+  from its own scheme, checked at WCAG 4.5:1 against the theme background. `dark` is unchanged. 16-colour terminals,
+  `NO_COLOR`, `mono` and ascii borders keep working; the terminal's own palette is never touched. No wire, record,
+  `--json` or `gnomon task` output changes.
+
 ### Fixed — a piped session prints what it printed in 0.6.5
 
 - With input from a pipe, the "⏎ queued — runs when the harness is free" receipt no longer prints (a pipe delivers
@@ -280,6 +288,21 @@ list no new host, `security test --host all` runs the same three hosts, and the
   listing publishes one. It is used only when the lookup finds nothing (relay 404, no listing route). To cap a model's
   context, set `max_context_tokens` on its endpoint, which still wins and asks nothing. Without this, #252's
   corrected estimate would trim hosted models at about 39k real tokens.
+
+### Fixed — the window lookup no longer holds the first request (UX4)
+
+- The lookup added with the window resolution below blocked the first model request and ran `/models` then `/props`
+  in sequence, once per process: +276 ms at a 200 ms listing (+468 ms when the listing gave no window), +1 to +2 s at
+  1 s, +10 s for an endpoint that never answers, on every new process; the RC's warm turn cost +70 ms CPU, +18 MB RSS
+  and its first prompt row +38 ms over 0.6.5 (UX4). Now the lookup starts in the background; a request whose
+  estimate (with the pre-call safety factor) is below half of the best window known without it (the catalog's, else
+  `[defaults]`) is sent at once on that window, recorded as `catalog` or `default`, and later requests take the
+  listing's window when it lands (an endpoint that declares `"auto"` still waits, bounded). `/models` and `/props` run
+  together under one 1.5 s deadline. Results persist per (URL, model, provider) in `window-cache.json` in gnomon's
+  machine data directory (7 days for a window, 1 day for "no window" or no answer; `GNOMON_WINDOW_LOOKUP=off` still
+  disables lookup and cache). Plain-http endpoints are probed over `node:http`: fetch's second concurrent connection
+  was the whole of the +70 ms CPU and +18 MB. Window values and precedence (declared, listing, catalog, defaults) are
+  unchanged. Tests: `window_lookup.test.ts`; UX4 re-run in `benchmarks/results/ux4-2026-11/RESULT-fix.md`.
 
 ### Fixed — context-window defaults (B1, B2)
 

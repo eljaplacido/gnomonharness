@@ -717,6 +717,20 @@ number the fallback is 65,536 and an unresolved lookup also prints the stderr
 note and records `context_window_unresolved`. A URL with no listing route
 records neither key, as before.
 
+**The lookup is background and cached.** It starts when the session does and
+never holds a request that does not need it: a request whose estimated size is
+under half of the best window known without it (the catalog's, else `[defaults]`)
+is sent at once, and says so in its source (`catalog` or `default`); later
+requests use the listing's window once it lands. A large request waits for the
+lookup, at most 1.5 s in all (the listing and the llama.cpp props route are asked together). The
+answer is remembered per endpoint URL, model and provider in
+`window-cache.json` in gnomon's machine data directory
+(`$XDG_DATA_HOME/gnomon`, else `~/.local/share/gnomon`; `%APPDATA%\gnomon` on
+Windows): a window for 7 days, "no window" or "no answer" for 1 day, so a dead
+endpoint costs one bounded wait a day. A cached window is the listing's
+window and keeps its `listing:<shape>` source. To ask again, delete the
+file; `GNOMON_WINDOW_LOOKUP=off` turns the lookup and the cache off.
+
 **Ollama.** gnomon calls Ollama's native `/api/chat`, which takes the context
 the model runs with as `options.num_ctx`; without it Ollama uses its own
 default (a few thousand tokens, depending on version and VRAM) and silently
@@ -1222,13 +1236,29 @@ below the input line, because readline redraws that line and would erase it.
 wide with colour allowed. `classic` is the plain output, byte for byte, and is
 what `gnomon task`, `--json`, pipes and `NO_COLOR` always get.
 
-Every theme has an accent, a rail colour, a border set (rounded `╭╮╰╯`, sharp
-`┌┐└┘`, heavy `┏┓┗┛`, double `╔╗╚╝`, or ascii `+-|`) and a header chip. `dark` is
-brass on a warm grey rail, `dim` a slate sharp-cornered one, `light` deep blue,
-`high-contrast` bright with heavy borders and an inverse chip, `mono` no colour
-with the box kept, `gruvbox` warm and `nord` cool and sharp. `/theme` with no
-argument prints each theme with a swatch; `/theme nord` applies it for the
-session.
+Every theme has its own identity beyond an accent colour: a border set (rounded
+`╭╮╰╯`, sharp `┌┐└┘`, heavy `┏┓┗┛`, double `╔╗╚╝`, or ascii `+-|`), a rail glyph,
+a tool-row glyph and reasoning glyph, a chip style, a spinner, and (except
+`dark`) its own semantic palette for ok, error, warning, info, muted text and
+diff sides, from the scheme's own colours. Only gnomon's text is painted; the
+terminal's palette is never changed. On a 16-colour terminal the palette steps
+aside for the usual ANSI codes.
+
+| theme | border | rail | tool / reasoning | chip | spinner |
+|---|---|---|---|---|---|
+| `dark` (default) | rounded | `│` | `⚙` `✻` | bold | `◐◓◑◒` |
+| `dim` | sharp | `╎` | `·` `∴` | plain | `◜◝◞◟` |
+| `light` | rounded | `▏` | `▸` `❖` | pill | `◴◷◶◵` |
+| `high-contrast` | heavy | `┃` | `▶` `✱` | inverse | `▁▃▅▇▅▃` |
+| `mono` | rounded | `\|` | `›` `~` | `[bracketed]` | `\| / - \\` |
+| `tokyonight` | rounded | `▎` | `◇` `◌` | pill | braille |
+| `catppuccin` | rounded | `┊` | `✦` `☾` | pill | `✶✸✹✺` |
+| `gruvbox` | double | `║` | `▸` `§` | pill | `▖▘▝▗` |
+| `nord` | sharp | `│` | `›` `∿` | `[bracketed]` | `◢◣◤◥` |
+
+A pill is the accent as a background with the theme's own background as the
+text. `/theme` with no argument prints each theme with a swatch; `/theme nord`
+applies it for the session. The gate rows (`verify`, `checkpoint`, ...) keep `⚙`.
 
 Colour depth follows the terminal: truecolor when `COLORTERM` is `truecolor` or
 `24bit`, 256 colours when `TERM` names `256color`, otherwise the 16 ANSI
@@ -1238,8 +1268,9 @@ the legacy Windows console (no `WT_SESSION` and no VT-capable terminal); Windows
 Terminal draws the box characters.
 
 `spinner` sets what animates while the model works: `sundial` (the default) is
-`◐ ◓ ◑ ◒`, the shaded half turning clockwise like the shadow on the mark in the
-startup card, 150 ms a frame, in the theme's accent; `clock` is `🕛 🕐 … 🕚`
+`◐ ◓ ◑ ◒` on `dark`, the shaded half turning clockwise like the shadow on the mark in the
+startup card, 150 ms a frame, in the theme's accent (every other theme draws its own
+frames, above; `clock`, `braille` and `ascii` override the theme); `clock` is `🕛 🕐 … 🕚`
 (two columns wide); `braille` is the old dots; `ascii` is `| / - \`. The legacy
 Windows console always gets ascii, and the line stays one row:
 `◐ thinking · 12s · esc cancels`. `spinner = false` turns it off, and nothing is
