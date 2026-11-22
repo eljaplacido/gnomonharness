@@ -102,6 +102,7 @@ export * from "./failure_attribution.js";
 export * from "./incident_trials.js";
 export * from "./improve_mine.js";
 export * from "./improve.js";
+export * from "./ablate.js";
 export * from "./memory.js";
 // [audit.anchor]: sealed heads copied to a witness the trail's writer cannot
 // rewrite (a remote ref, an RFC 3161 authority, an operator command).

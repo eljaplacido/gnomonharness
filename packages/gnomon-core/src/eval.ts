@@ -353,6 +353,8 @@ export interface EvalOptions {
    * billed-endpoint check asks whether the spec declared one.
    */
   maxRequests?: number;
+  /** The role every cell runs as, in place of the spec's (`gnomon eval --ablate --families`). */
+  role?: string;
   /** Checked before each cell: true stops the eval, `budget_exhausted`, as a spent request budget does. */
   stop?: () => boolean;
 }
@@ -423,7 +425,7 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
   }
   const gnomonBase = !cmdOf.base;
   const runCommand = opts.runCommand ?? runHarnessCommand;
-  const role = spec.role ?? resolveRouting(config).default;
+  const role = opts.role ?? spec.role ?? resolveRouting(config).default;
   const baseProfile = spec.model_profile ?? (config.profile?.overridden ? config.profile.requested : undefined);
   const baseConfig = spec.model_profile ? loadConfig(root, spec.model_profile) : config;
   if (spec.model_profile && baseConfig.profile?.problem) {

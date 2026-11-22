@@ -2171,6 +2171,37 @@ recreate the failing state, so it says so in its head and asks you to add a `set
 accept one, run it on later builds with `gnomon eval --spec <name>`.
 Contract: [CONTRACTS.md §60](CONTRACTS.md).
 
+### 7.13 What still earns its keep: `gnomon eval --ablate`
+
+A skill, a system.md section or a gate that helped a weaker model can be dead weight on a
+stronger one. `gnomon eval --ablate` measures that on your own tasks. It builds one arm per
+component, each your surface with exactly one thing removed or neutralised (a `##` section of
+system.md, a skill, `[verify]`, approval mode in the eval clone only, observation masking, the
+think cap, the structured summary, each non-essential tool, the memory index), runs each against
+the base on `.gnomon/trials/` with the eval's paired machinery, and prints per component the
+change in pass rate, steps, tokens and refusals, with the eval's Wilson intervals and McNemar p.
+
+```
+gnomon eval --ablate                          # the plan: arms, estimated cells. No model call, no write.
+gnomon eval --ablate skills,tools --run       # measure those arms
+gnomon eval --ablate --families qwen,claude --run --max-requests 400
+gnomon eval --ablate skills --run --propose   # also write retirement proposals
+```
+
+Each verdict is one of `load_bearing` (removing it cost passes the eval can see),
+`neutral` (nothing it can see changed: a candidate for removal, especially when it is also
+cheaper), `harmful` (removing it helped) or `inconclusive` (too few pairs, a partial run, or a
+drop within noise). Nothing is applied. With `--propose`, a neutral-and-cheaper skill or system.md
+section becomes a proposal you accept in `gnomon proposals`.
+
+Governance is never ablated: the policy's deny rules, the sandbox, the guard and the audit trail
+are not components, and asking for one is refused. `--run` refuses as `gnomon improve --run` does:
+inside an agent session, without a confined `[sandbox]` (or `--allow-host-probes`), and for a role
+that can reach a billed endpoint without declared `[improve]` rates or `--max-requests`. With
+`--families`, each family runs as the declared role of that family. Contract:
+[CONTRACTS.md §61](CONTRACTS.md).
+
+
 ---
 
 ## 8. Configuration essentials
