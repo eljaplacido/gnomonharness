@@ -48,6 +48,14 @@
   model (task, files changed, last actions, failing check). `counters.compaction` on the next turn record says
   how many passes ran and whether the summary role or the fallback wrote them. Absent key: the original prose
   summary, byte-identical request. Adopted from a reverse-engineering study of Hermes Agent's compressor.
+### Added — `[skills] inline_max_tokens` (opt-in), progressive skills, CONTRACTS §54
+
+- With `inline_max_tokens = N` in `policy.toml`, a matched skill larger than N tokens is injected as its name, a
+  one-line description and its path; the model reads the file when it needs it (shown as `◆ skill`, counted in
+  `read`). Small skills stay inline. `counters.skills.stubbed` and the `skill_use` record's optional `stubbed`
+  field (`[{name, tokens_saved}]`) count the savings; `conformance/audit_record_schema.json` and
+  `conformance/skill_use.json` list it. Absent key: the prompt and records are unchanged. No new write path.
+  Adopted from a reverse-engineering study of Hermes Agent's skill disclosure, without its mandatory-load wording.
 
 ### Added — the audit record schema, and the skill enumerations (#113), CONTRACTS §55
 

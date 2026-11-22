@@ -32,6 +32,7 @@ import {
 } from "node:fs";
 import { join, resolve, relative, isAbsolute, sep } from "node:path";
 import { escapesBase } from "./rel_path.js";
+import { estimateTokens } from "./message_tokens.js";
 import { createHash, randomBytes } from "node:crypto";
 import { hostname, userInfo } from "node:os";
 import { GnomonConfig, parseToml, recomputeManifest, manifestHash } from "./config.js";
@@ -247,6 +248,46 @@ export function skillBlock(s: Skill): string {
   return `### ${s.name}\n${s.description ? `${s.description}\n\n` : ""}${s.body}`;
 }
 
+/**
+ * `[skills] inline_max_tokens` in policy.toml: a positive whole number, or
+ * undefined. Absent (or anything else) means a matched skill is injected in
+ * full, as it always was. Read from policy.toml, so it is part of the surface
+ * hash like every other control.
+ */
+export function inlineMaxTokens(config: GnomonConfig): number | undefined {
+  const v = (config.policy as { skills?: { inline_max_tokens?: unknown } } | undefined)?.skills?.inline_max_tokens;
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? Math.floor(v) : undefined;
+}
+
+/**
+ * Whether a skill enters the prompt as a stub: only when a limit is declared
+ * and the full block is larger than it. Small skills stay inline.
+ */
+export function isStubbed(s: Skill, limit: number | undefined): boolean {
+  return limit !== undefined && estimateTokens(skillBlock(s)) > limit;
+}
+
+/**
+ * A skill that is too big to inline: its name, its one-line description and
+ * where it lives. The body stays in the file; the model opens it with `read`
+ * when the task needs it, and that read counts as the skill's use.
+ */
+export function skillStub(s: Skill, dirRel = ".gnomon/skills"): string {
+  // The declared description; with none, the body's first line, so a stub is
+  // never just a name.
+  const first = (t: string | undefined): string => t?.split("\n").find((l) => l.trim())?.trim().slice(0, 120) ?? "";
+  const desc = first(s.description) || first(s.body);
+  return (
+    `### ${s.name}\n${desc ? `${desc}\n\n` : ""}` +
+    `Full note (~${estimateTokens(skillBlock(s))} tokens) is not loaded: \`${dirRel}/${s.id}.md\``
+  );
+}
+
+/** What a skill adds to the prompt under `limit`: its block, or its stub. */
+export function skillInjected(s: Skill, limit: number | undefined, dirRel = ".gnomon/skills"): string {
+  return isStubbed(s, limit) ? skillStub(s, dirRel) : skillBlock(s);
+}
+
 export function applySkills(
   systemPrompt: string,
   skills: Skill[],
@@ -263,11 +304,13 @@ export function applySkills(
    */
   dormant: Skill[] = [],
   /** Where those files live, relative to the root, for the model to `read`. */
-  dirRel = ".gnomon/skills"
+  dirRel = ".gnomon/skills",
+  /** `[skills] inline_max_tokens`: matched skills larger than this go in as stubs. Absent: all in full. */
+  inlineLimit?: number
 ): string {
   let out = systemPrompt;
   if (skills.length > 0) {
-    const blocks = skills.map(skillBlock);
+    const blocks = skills.map((s) => skillInjected(s, inlineLimit, dirRel));
     out +=
       `\n\n## Learned skills for this repository\n\n` +
       `These are notes accepted into .gnomon/skills/. They inform how you work ` +
