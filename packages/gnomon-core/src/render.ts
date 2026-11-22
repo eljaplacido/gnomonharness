@@ -854,6 +854,17 @@ export interface TraceOptions {
 }
 
 /**
+ * A trace note and the longest of its "how to see more" tails that still fits
+ * `room`: a note wider than the row wraps in the terminal, and a wrapped row
+ * is one the spinner's erase-line cannot see. With no tail that fits, the
+ * bare note, cut to the row if even that is too wide.
+ */
+function hintRow(note: string, tails: string[], room: number): string {
+  for (const t of tails) if ([...note + t].length <= room) return note + t;
+  return [...note].length <= room ? note : [...note].slice(0, Math.max(1, room - 1)).join("") + "…";
+}
+
+/**
  * Model prose shown while a turn works, as lines ready for a `  │ ` prefix.
  *
  * - `collapse`: the first three lines, one row each, cut at a word boundary.
@@ -894,7 +905,7 @@ export function traceLines(
       shown++;
     }
     const left = lines.length - shown;
-    if (left > 0) rows.push(`… ${left} more line(s)${hint ? " — /think show" : ""}`);
+    if (left > 0) rows.push(hintRow(`… ${left} more line(s)`, hint ? [" — /think show"] : [], room));
     return rows;
   }
   let cutAny = false;
@@ -904,8 +915,8 @@ export function traceLines(
     return r.text;
   });
   const hidden = lines.length - kept.length;
-  const ways = " — /think wrap (whole lines) · /think show (all)";
-  if (hidden > 0) rows.push(`… ${hidden} more line(s)${hint ? ways : ""}`);
-  else if (cutAny && hint) rows.push(`… cut at the row edge${ways}`);
+  const ways = [" — /think wrap (whole lines) · /think show (all)", " — /think wrap · /think show", " — /think show"];
+  if (hidden > 0) rows.push(hintRow(`… ${hidden} more line(s)`, hint ? ways : [], room));
+  else if (cutAny && hint) rows.push(hintRow("… cut at the row edge", ways, room));
   return rows;
 }
