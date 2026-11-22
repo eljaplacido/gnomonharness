@@ -2799,14 +2799,30 @@ export function reasoningRunaway(
   toolCalls: number,
   cap: number
 ): { tokens: number; chars: number } | undefined {
-  if (toolCalls > 0) return undefined;
+  const s = runawayState(channel, content, toolCalls, cap);
+  return typeof s === "object" ? s : undefined;
+}
+
+/**
+ * reasoningRunaway with the reason it did not cut: "acting" once the reply
+ * has answer text or a tool call. Both only grow as the stream goes on, so
+ * the stream reader stops measuring at the first "acting" rather than
+ * re-splitting the whole accumulated reply on every later chunk.
+ */
+function runawayState(
+  channel: string,
+  content: string,
+  toolCalls: number,
+  cap: number
+): { tokens: number; chars: number } | "acting" | "under" {
+  if (toolCalls > 0) return "acting";
   // Cheap gate: until the raw text could hold `cap` tokens, nothing to measure.
-  if (estimateTokens(channel) + estimateTokens(content) <= cap) return undefined;
+  if (estimateTokens(channel) + estimateTokens(content) <= cap) return "under";
   const split = content === "" ? { think: "", answer: "" } : splitThinking(content);
-  if (split.answer.trim() !== "") return undefined;
+  if (split.answer.trim() !== "") return "acting";
   const thought = reasoningOf(channel, split.think);
   const tokens = estimateTokens(thought);
-  return tokens > cap ? { tokens, chars: thought.length } : undefined;
+  return tokens > cap ? { tokens, chars: thought.length } : "under";
 }
 
 /**
@@ -2834,7 +2850,8 @@ export async function readChatStream(
   opts: { thinkCapTokens?: number } = {}
 ): Promise<StreamedReply> {
   const out: StreamedReply = { content: "", reasoning: "", toolCalls: [], complete: false, unparsed: 0 };
-  const capAt = opts.thinkCapTokens && opts.thinkCapTokens > 0 ? opts.thinkCapTokens : 0;
+  // Zeroed once the reply is acting (runawayState): it can no longer be cut.
+  let capAt = opts.thinkCapTokens && opts.thinkCapTokens > 0 ? opts.thinkCapTokens : 0;
   const decoder = new TextDecoder();
   let buffer = "";
   let data: string[] = [];
@@ -2952,8 +2969,9 @@ export async function readChatStream(
       out.complete = true;
     }
     if (capAt > 0 && !out.complete) {
-      const run = reasoningRunaway(out.reasoning, out.content, out.toolCalls.length, capAt);
-      if (run) {
+      const run = runawayState(out.reasoning, out.content, out.toolCalls.length, capAt);
+      if (run === "acting") capAt = 0;
+      else if (run !== "under") {
         out.thinkCut = run;
         done = true;
       }
