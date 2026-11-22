@@ -4730,8 +4730,8 @@ record.
 | Key | Value | Effect |
 |---|---|---|
 | `timeout_seconds` | a positive number | The check's own budget in place of the bash tool's. Applies to the check and to the `test_must_fail_first` re-run. A timeout is `unrunnable` (§1). Anything else is ignored, with a surface warning. |
-| `setup` | a shell command | Runs once per worktree (per process) before the first check. Its text is in the hashed surface, so changing it moves the surface hash; the model cannot set it. Not bound by the role's `write_allow` or `bash_allow` (an install writes `node_modules`); the sandbox root and `bash_deny` still bind it. A setup that does not exit 0 makes the check `unrunnable`: the check is not run, nothing is handed back, and the work is not blamed. |
-| `setup_network` | `none` (default) or `registry` | `registry` opens the network for the `setup` command only; the check and the agent keep the surface's network setting. gnomon does not filter hosts, so the name is the declared purpose, not an allowlist. Any other value reads as `none` (surface audit: the value is not one of the enumeration). |
+| `setup` | a shell command | Runs once per worktree (per process), at the start of the turn before the model's first call, so before any write the turn makes (an install runs lifecycle scripts, build backends and `.npmrc`/`pip.conf` from the working tree, and must see the manifests as they were, not as the model left them). The check reads the remembered result. Its text is in the hashed surface, so changing it moves the surface hash; the model cannot set it. Not bound by the role's `write_allow` or `bash_allow` (an install writes `node_modules`); the sandbox root and `bash_deny` still bind it. A setup that does not exit 0 makes the check `unrunnable`: the check is not run, nothing is handed back, and the work is not blamed. |
+| `setup_network` | `none` (default) or `registry` | `registry` opens the network for the `setup` command only; the check and the agent keep the surface's network setting. It applies only where bash runs on the host (`exec` off): under `exec = "docker"` or `"os"` the floor stays as declared and the effective network is `none` (one function, `effectiveSetupNetwork`, for the loop and `gnomon check`). gnomon does not filter hosts, so the name is the declared purpose, not an allowlist. Any other value reads as `none` (surface audit: the value is not one of the enumeration). |
 | `setup_timeout_seconds` | a positive number | The budget for `setup`; absent, `timeout_seconds`, else the tool's. |
 
 Each setup run is a `verify` audit record with `phase: "setup"`, `command`,
@@ -4743,7 +4743,21 @@ like a declined check.
 that is not checked out (which has no installed dependencies), never in the
 worktree it judges in place, and opens the network for it only where `[verify]`
 runs on the host (`exec = "off"`). A failed setup is `verify` = `error`
-("the check could not run: [verify] setup ..."), exit 10.
+("the check could not run: [verify] setup ..."), exit 10. The verdict carries
+`setup: {command_sha256, network, exit, ok}` and the check's trail record the
+same; the failure finding names the network and the hash too.
+
+**The limit, stated plainly.** In `gnomon check` the tree setup runs in is the
+head being judged, and the head is someone else's change. With
+`setup_network = "registry"` on a host `[verify]`, an install that runs
+lifecycle scripts executes that head's `package.json` scripts, build backend
+and registry config with network access. Do not judge an untrusted head with a
+networked setup on the host: leave `setup_network` at `none`, run `[verify]`
+under `exec = "docker"` (where the network stays as the floor left it), or write
+setup so it cannot run the head's code: `pnpm install --frozen-lockfile
+--ignore-scripts`, `npm ci --ignore-scripts`, `uv sync --frozen`. In the loop the
+pre-turn ordering above removes the model's own edits from this; it does not
+make a cloned repository's own manifests trustworthy.
 
 **Fixture**: `conformance/verify_contract.json`;
 `packages/gnomon-core/src/verify_setup.test.ts`.

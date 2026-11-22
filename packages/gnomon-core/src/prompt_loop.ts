@@ -6028,6 +6028,19 @@ async function agenticTurn(
   // the gate exists to prevent. Nothing else reads it.
   let shellMayHaveTouched = false;
   const verify = resolveVerify(config);
+  // `[verify] setup` runs HERE, before the model's first call and so before any
+  // write of the turn: an install executes lifecycle scripts, build backends and
+  // .npmrc/pip.conf from the working tree, and must see the manifests as they
+  // were, not as the model left them. Once per fresh worktree (memoised by
+  // root); the check later reads the remembered result.
+  if (verify?.setup && !sub?.readOnly && depth === 0) {
+    await runVerifySetup(
+      verify,
+      { ...verifyContext(ctx, verify), gate: gate === "always" ? "always" : "never", allow: "strict" as SurfaceConsent },
+      (command, sctx) => executeTool("bash", { command }, sctx, new Set(["bash"])),
+      { audit: deps.audit, role }
+    );
+  }
   // An unattended `gnomon task` waits out a provider outage longer
   // (taskResilience); a session keeps the declared grace.
   const resilience = deps.unattended ? taskResilience(resolveResilience(config)) : resolveResilience(config);
