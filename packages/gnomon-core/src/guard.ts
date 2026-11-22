@@ -1480,11 +1480,24 @@ export function fromOpencode(raw: Record<string, unknown>): HarnessRequest {
 }
 
 /**
- * Cursor hooks (`.cursor/hooks.json`, version 1): `beforeShellExecution`
- * (`command`, `cwd`) and `beforeReadFile` (`file_path`). Cursor's documented
- * events give no file write BEFORE it happens — `afterFileEdit` is after the
- * fact, and `preToolUse` does not document Write's input — so writes in
- * Cursor are left to `gnomon check`.
+ * Cursor hooks (`.cursor/hooks.json`, version 1; https://cursor.com/docs/agent/hooks).
+ * The events gnomon decides, each before the call runs:
+ *
+ *   - `beforeShellExecution` (`command`, `cwd`) and `beforeReadFile` (`file_path`);
+ *   - `preToolUse` (`tool_name`, `tool_input`, `cwd`, `tool_use_id`), which
+ *     fires before every tool call and so is how a file WRITE is reached.
+ *     Cursor names its tools Shell, Read, Write (edits go through it too),
+ *     Delete, Grep, Task, Fetch/WebFetch and `MCP:<tool>`. Its docs do not
+ *     show every tool's input; the shapes read here are the ones
+ *     cursor-agent-exec 3.0.16 builds: Write `{ file_path, content }`,
+ *     Delete and Read `{ file_path }`, Grep `{ pattern, file_path, glob }`,
+ *     Shell `{ command, cwd }`, Fetch `{ url }`;
+ *   - `beforeMCPExecution` (`tool_name`, `tool_input` as a JSON string,
+ *     `mcp_server_name`): MCP is not a tool gnomon has rules for, so it is
+ *     decided as an ungoverned tool, by its name.
+ *
+ * Earlier releases read only the first two and left Cursor writes to
+ * `gnomon check`; that stopped being true when Cursor added `preToolUse`.
  */
 export function fromCursor(raw: Record<string, unknown>): HarnessRequest {
   const event = str(raw.hook_event_name) ?? "";
@@ -1503,6 +1516,39 @@ export function fromCursor(raw: Record<string, unknown>): HarnessRequest {
   };
   if (event === "beforeShellExecution") return { ...base, calls: [{ tool: "bash", input: { command: raw.command } }] };
   if (event === "beforeReadFile") return { ...base, calls: [{ tool: "read", input: { path: raw.file_path } }] };
+  if (event === "beforeMCPExecution") {
+    // Decided by its name, as ungoverned (and asked under a declared [governance]).
+    return { ...base, harnessTool: `MCP:${str(raw.tool_name) ?? ""}`, calls: [] };
+  }
+  if (event === "preToolUse") {
+    const name = str(raw.tool_name) ?? "";
+    const input = obj(raw.tool_input);
+    const at = { ...base, harnessTool: name, ...(str(raw.tool_use_id) ? { callId: str(raw.tool_use_id) } : {}) };
+    const file = input.file_path ?? input.path;
+    switch (name) {
+      case "Shell":
+        return { ...at, calls: [{ tool: "bash", input: { command: input.command } }] };
+      case "Write":
+        return { ...at, calls: [{ tool: "write", input: { path: file, content: input.content ?? "" } }] };
+      case "Delete":
+        // A deletion is decided by write's rules (write_allow, secret_path, ci_path), as an opencode patch's Delete is.
+        return { ...at, calls: [{ tool: "write", input: { path: file, content: "" } }] };
+      case "Read":
+        return { ...at, calls: [{ tool: "read", input: { path: file } }] };
+      case "Grep":
+        return { ...at, calls: [{ tool: "grep", input: { pattern: input.pattern, path: file } }] };
+      case "Fetch":
+      case "WebFetch":
+        return { ...at, calls: [{ tool: "webfetch", input: { url: input.url } }] };
+      case "WebSearch":
+        return { ...at, calls: [{ tool: "websearch", input: { query: input.query } }] };
+      case "Task":
+        return { ...at, calls: [{ tool: "agent", input: { description: input.description, subagent_type: input.subagent_type } }] };
+      default:
+        // MCP:<tool> and anything else: decided by its own name, as ungoverned.
+        return { ...at, calls: [] };
+    }
+  }
   return { ...base, calls: [] };
 }
 
@@ -1613,18 +1659,24 @@ export function toClaudeCode(v: GuardVerdict): string {
 /**
  * Cursor's answer. On allow, `{}`: Cursor's validator (cursor-agent-exec,
  * 3.0.16) accepts an absent `permission`, which leaves the call to Cursor's
- * own flow — the same "no opinion" Claude Code gets. `beforeReadFile` takes
- * only allow or deny: an `ask` there becomes a deny that says a person must
- * approve the read, the tighter of the two. Its answer carries no
+ * own flow — the same "no opinion" Claude Code gets. Two events cannot ask:
+ * `beforeReadFile` takes only allow or deny, and `preToolUse` accepts "ask"
+ * but does not enforce it (cursor.com/docs/agent/hooks; in 3.0.16 only a deny
+ * stops the call). So an `ask` there becomes a deny that says a person must
+ * approve it, the tighter of the two, with one exception: at `preToolUse` an
+ * ask from the [approval] gate (rule "approval") is passed on as `ask`, which
+ * Cursor runs under its own approval flow. Turned into a deny, the default
+ * gate would refuse every write Cursor makes. Every other ask (a role without
+ * the tool, no role mapped) is a deny. `beforeReadFile`'s answer carries no
  * agent_message, which that event does not define.
  */
 export function toCursor(v: GuardVerdict, event?: string): string {
   if (v.decision === "allow") return "{}";
   const read = event === "beforeReadFile";
-  const out: Record<string, string> = {
-    permission: read && v.decision === "ask" ? "deny" : v.decision,
-    user_message: said(v),
-  };
-  if (!read) out.agent_message = said(v);
+  const cannotAsk = read || event === "preToolUse";
+  const refused = cannotAsk && v.decision === "ask" && !(event === "preToolUse" && v.rule === "approval");
+  const message = refused ? `${said(v)} A person must approve this; Cursor cannot ask at this point.` : said(v);
+  const out: Record<string, string> = { permission: refused ? "deny" : v.decision, user_message: message };
+  if (!read) out.agent_message = message;
   return JSON.stringify(out);
 }

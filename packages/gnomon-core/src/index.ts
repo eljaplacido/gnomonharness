@@ -77,6 +77,7 @@ export * from "./check.js";
 export * from "./guard.js";
 export * from "./transcripts.js";
 export * from "./skills.js";
+export * from "./skill_export.js";
 export * from "./record_guard.js";
 export * from "./record_tamper.js";
 // A turn's record on disk while it runs, and the signals that flush it.

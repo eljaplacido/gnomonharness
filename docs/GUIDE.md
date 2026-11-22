@@ -1116,14 +1116,15 @@ nothing; `gnomon --help` prints all of it.
 | `gnomon check --base REV [--head REV] [--role R \| --agent N] [--transcript F --format FMT] [--json]` | Judges a change by this surface's rules as they stood at `REV`. Exit 0 held, 2 failed, 10 no verdict. `FMT`: `claude-code`, `opencode`, `goose`, `qwen-code`, `mini-swe-agent` or `gnomon` (its own chained, sealed audit trail). | CI, hooks, other harnesses |
 | `gnomon check --install-hook claude-code` | Prints the Claude Code hooks JSON and writes nothing | Governing Claude Code |
 | `gnomon guard --tool T --input JSON [--role R \| --agent N]`, or `--from claude-code\|opencode\|cursor\|generic` with the call on stdin | Decides one tool call another harness is about to make, by the committed rules: exit 0 allow, 2 deny, 3 ask, 10 no decision (answered as ask) | Governing another agent at run time |
-| `gnomon guard install claude-code\|opencode\|cursor [--write [--local]]` | Prints the hook or plugin for that harness; `--write` adds it to this project's config, `--local` keeps it out of git | Setting up `guard` |
+| `gnomon guard install claude-code\|opencode\|cursor [--write [--local]]` | Prints the hook or plugin for that harness; `--write` adds it to this project's config, `--local` keeps it out of git. For Cursor, `--write` merges into an existing `.cursor/hooks.json` (your other hooks stay) and brings an older gnomon install up to date | Setting up `guard` |
 | `gnomon acp [--role R] [--profile N]` | Serves the Agent Client Protocol on stdin/stdout for an editor. Same surface, roles, approvals and audit as `prompt`. | Zed, JetBrains IDEs |
 | `gnomon trust [list \| grant \| revoke]` | What this project's `.gnomon/` grants beyond the defaults, and whether this machine trusts it | A repository you did not write |
-| `gnomon inbox [list \| show ID \| add --title T \| ack ID \| resolve ID \| mcp] [--json]` | Work items the dashboard's **Flag for fix** (or you) wrote to `.gnomon-inbox/` for a harness to read as information, never as an instruction. `gnomon guard install claude-code --write` hands the open ones to Claude Code at session start; `gnomon inbox mcp` serves them to Cursor and Claude Code (list, get, acknowledge, resolve; no add) | Telling a harness what to fix |
+| `gnomon inbox [list \| show ID \| add --title T \| ack ID \| resolve ID \| mcp] [--json]` | Work items the dashboard's **Flag for fix** (or you) wrote to `.gnomon-inbox/` for a harness to read as information, never as an instruction. `gnomon guard install claude-code --write` (and `install cursor --write`, via Cursor's `sessionStart` hook) hands the open ones to the harness at session start; `gnomon inbox mcp` serves them to Cursor and Claude Code (list, get, acknowledge, resolve; no add) | Telling a harness what to fix |
 | `gnomon audit [show \| verify]` | Lists trails; checks every chain, seal and signature anchor. `verify` exits 1 on a break or when there is nothing to verify. | Review, release gates |
 | `gnomon dashboard [--port N] [--no-open] [--dir P]` | A command center in the browser on 127.0.0.1: projects, sessions as a timeline, refusals by rule, audit verification, contracts, token measurements (alias `ui`); a one-click local quick start, `init`, `guard install`, setup, check, trust and endpoint test as buttons that run those same commands, each change confirmed first; a Ctrl/Cmd+K palette and a light theme. | Reviewing what happened without reading JSONL; first-run setup without a terminal wizard |
 | `gnomon sessions` | Saved interactive sessions, newest last | Find one to resume |
 | `gnomon skill [list \| accept ID \| reject ID \| mine]` | Active skills and the proposals the agent made; `mine` also reports skills that fire but are never cited, skills worth trialling, and context cost per firing | Reviewing what it learned |
+| `gnomon skill export [--to DIR] [--format skill-md] [--write]` | Writes each active skill as `<name>/SKILL.md` (the Agent Skills layout Claude Code, Codex, Cursor and opencode read) with a provenance comment naming the surface hash. A dry run unless `--write`; default `.claude/skills`, `--to .agents/skills` for Codex; never overwrites a `SKILL.md` gnomon did not write | Giving the other harnesses gnomon's skills |
 | `gnomon loop [list \| status \| dry-run N \| run N \| install N \| uninstall N \| reset N \| kill]` | Cron-scheduled guard/act loops declared in `.gnomon/loops/` (alias `loops`) | Unattended supervision |
 | `gnomon surface [hash \| manifest \| paths]` | The surface hash, the manifest, the hashed paths | Pinning, drift, bug reports |
 | `gnomon enumerations` | The published legal values (alias `enums`) | Contract checks |
@@ -1406,8 +1407,25 @@ CI, run it in the job where the agent ran and add `--require-guard`. Details:
 |---|---|
 | Claude Code | a `PreToolUse` hook on Bash, Write, Edit, MultiEdit, NotebookEdit, Read, Grep, Glob, WebFetch, WebSearch, Agent/Task and every MCP tool (`mcp__.*`), beside the `check` hooks, in `.claude/settings.json` (or `.claude/settings.local.json` with `--local`) |
 | opencode 2.2 | a plugin, `.opencode/plugins/gnomon-guard.js` |
-| Cursor | `.cursor/hooks.json` for shell commands and file reads; writes are left to `check` |
+| Cursor | `.cursor/hooks.json`: `beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution` and `preToolUse` (file writes, decided before they happen), all `failClosed`, plus a `sessionStart` hook that hands Cursor the dashboard inbox. No `stop` hook: Cursor would submit its follow-up as a new prompt. Hooks: <https://cursor.com/docs/agent/hooks> |
 | anything with a pre-tool hook | `gnomon guard --from generic`, with `{"tool": "bash", "input": {"command": "…"}, "cwd": "…", "session_id": "…"}` on stdin |
+
+Cursor's `preToolUse` accepts `ask` but does not enforce it, so gnomon turns an
+ask into a deny there, except the `[approval]` gate's, which is left to Cursor's
+own approval flow. `gnomon guard status` lists each Cursor hook as `ok`,
+`missing` or `not_fail_closed`; an install from before these hooks shows as
+`outdated`, a warning, and `install cursor --write` updates it in place.
+
+**Skills for the other harnesses.** `gnomon skill export` writes your active
+skills as `<name>/SKILL.md` (YAML `name` and `description`, then the skill's
+text, then a comment with the surface hash it was exported at), the layout
+Claude Code (`.claude/skills/`), Codex (`.agents/skills`), Cursor
+(`.agents/skills`, `.cursor/skills`, `.claude/skills`) and opencode
+(`.opencode/skills`, `.claude/skills`, `.agents/skills`) load. It lists what it
+would write and writes nothing until `--write`; `--to <dir>` picks the
+directory (default `.claude/skills`); it never touches `.gnomon/` and never
+overwrites a `SKILL.md` gnomon did not write. Proposed skills are not exported.
+Sources are in [GOVERNING-OTHER-HARNESSES.md](GOVERNING-OTHER-HARNESSES.md#skills-for-the-other-harnesses).
 
 **Audit first, then gates: governance levels** (since v0.5.0). To watch what the rules would
 refuse before you let them refuse it, declare a level per family (CONTRACTS.md
@@ -2578,7 +2596,8 @@ extension for other editors, and no background mode: the unattended paths are
 **Can gnomon stop another agent before it acts, not only judge it after?**
 Yes, where that agent has a pre-tool hook: `gnomon guard` decides each call
 by this repository's committed rules ([7.3](#73-governing-claude-code-opencode-and-other-harnesses)).
-Adapters exist for Claude Code, opencode 2.2 and Cursor (shell and reads).
+Adapters exist for Claude Code, opencode 2.2 and Cursor (shell, reads, file
+writes via `preToolUse`, and MCP calls).
 
 **I cloned a repository and gnomon says it is running clamped. Why?**
 Its `.gnomon/` grants more than gnomon's defaults, and this machine has not
