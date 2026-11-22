@@ -863,7 +863,8 @@ describe("actions: each one is a gnomon command, and one that changes anything a
     const cases: Array<[string, RegExp]> = [
       [outside, /outside the home directory/],
       ["/", /outside the home directory/],
-      ["/etc", /outside the home directory/],
+      // A system directory that exists outside home on every platform (Windows has no /etc).
+      [process.platform === "win32" ? process.env.SystemRoot || "C:\\Windows" : "/etc", /outside the home directory/],
       [home, /home directory itself/],
       [join(home, ".config"), /hidden configuration directory/],
       [join(home, ".ssh"), /hidden configuration directory/],
