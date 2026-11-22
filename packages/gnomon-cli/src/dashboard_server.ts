@@ -96,7 +96,7 @@ export const DASHBOARD_ROUTES = {
     "GET /api/p/<id>/governance",
     "GET /api/p/<id>/measurements",
     "GET /api/p/<id>/contracts",
-    "GET /api/p/<id>/lens",
+    "GET /api/p/<id>/lens?trail=<trail>",
     "GET /api/p/<id>/lens/run?name=<trail>",
     "POST /api/actions/<name>",
     "GET /api/jobs/<id>",
@@ -515,7 +515,7 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
         case "contracts":
           return json(res, 200, contractsView(p, { sourceRoot: opts.sourceRoot }));
         case "lens":
-          return json(res, 200, lensView(p, t));
+          return json(res, 200, lensView(p, { ...t, focus: url.searchParams.get("trail") ?? undefined }));
         case "lens/run": {
           const d = lensRun(p, url.searchParams.get("name") ?? "");
           return d ? json(res, 200, d) : fail(res, 404, "no such trail");

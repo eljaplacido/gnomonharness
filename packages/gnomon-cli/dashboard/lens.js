@@ -96,7 +96,7 @@ function resetFor(pid) {
 async function fetchLens(ctx) {
   resetFor(ctx.pid);
   if (!ctx.P || !ctx.P.hasSurface) return { none: true };
-  return projectApi("lens");
+  return projectApi("lens", ctx.S.trail ? `?trail=${encodeURIComponent(ctx.S.trail)}` : "");
 }
 
 // ── 0. coverage tiles ───────────────────────────────────────────────────────
@@ -149,20 +149,78 @@ function requestRow(r) {
     h("td", { text: words(r.stop_reason) || "–" }),
     h("td", null, meter(r.evidence, r.quorum)));
 }
-function intentSection(d) {
+const openGroups = new Set();
+const openGaps = new Set();
+const QUORUM_ORDER = ["verified", "single_source", "contradicted", "failing", "insufficient"];
+function quorumSummary(q) {
+  return QUORUM_ORDER.filter((k) => q[k]).map((k) => `${q[k]} ${QUORUM[k][0]}`).join(" · ") || "nothing recorded";
+}
+/** Consecutive rows with no kept request text fold into one line; every row stays one click away. */
+function requestRows(rows, key) {
+  const out = [];
+  for (let i = 0; i < rows.length;) {
+    if (rows[i].ask) { out.push(requestRow(rows[i])); i++; continue; }
+    let j = i;
+    while (j < rows.length && !rows[j].ask) j++;
+    const run = rows.slice(i, j);
+    if (run.length < 2) { out.push(requestRow(run[0])); i = j; continue; }
+    const gk = `${key}:${rows[i].turn}`;
+    if (openGaps.has(gk)) {
+      out.push(...run.map(requestRow));
+    } else {
+      out.push(h("tr", null,
+        h("td", { colspan: 4 }, h("button", { type: "button", class: "btn toggle", "aria-expanded": "false",
+          onClick: () => { openGaps.add(gk); ctxLoad(); } }, `${run.length} turns without kept request text — show`))));
+    }
+    i = j;
+  }
+  return out;
+}
+let ctxLoad = () => {};
+function groupItem(g, focus, first) {
+  const key = g.trail;
+  const open = openGroups.has(key) || focus === key || (first && !focus && !openGroups.has("~touched"));
+  const det = h("details", { class: "run", open: open ? true : null },
+    h("summary", null,
+      h("strong", { text: g.harness }), " ",
+      h("span", { class: "muted small", text: `${when(g.started)} · ${plural(g.turns, "turn")} · ${quorumSummary(g.quorums)}` }),
+      h("a", { class: "muted tiny", href: `#/lens/${S_pid()}/${encodeURIComponent(g.trail)}`, text: "link", title: "deep link to this session" })),
+    h("div", { class: "rl-box" },
+      table([{ label: "Request" }, { label: "Steps", num: true }, { label: "Ended" }, { label: "Quorum of evidence" }],
+        requestRows(g.requests, key), `Requests in the session of ${when(g.started)}`)));
+  det.addEventListener("toggle", () => {
+    openGroups.add("~touched");
+    if (det.open) openGroups.add(key); else openGroups.delete(key);
+  });
+  return h("li", { id: `s-${key}` }, det);
+}
+let pidNow = "";
+const S_pid = () => pidNow;
+const VERIFY_SNIPPET = '[verify]\ncommand = "npm test"\nprotects = ["tests/**"]';
+function noSpec() {
+  return h("div", { class: "empty" },
+    h("p", { text: "No spec is declared, so nothing here says what \"done\" means for this project. Declare a [verify] check in .gnomon/policy.toml, then run it once to see it work:" }),
+    h("pre", { class: "mono small", text: VERIFY_SNIPPET }),
+    h("p", { class: "small" }, h("code", { class: "mono", text: "gnomon doctor verify" }), " runs the declared check once and says whether it is runnable. ",
+      h("a", { href: `#/setup/${S_pid()}`, text: "Open Setup" }), ". A trial spec under .gnomon/trials/ also counts."));
+}
+function intentSection(d, ctx) {
   const i = d.intent;
+  pidNow = d.project.id;
+  ctxLoad = () => ctx.load();
   const rows = i.specs.map(specRow);
   const g = i.gates;
+  const focus = ctx.S.trail || null;
   return section("lens-intent", "Intent: what was asked, and what would show it was done",
     "Specs are what the project declares; requests are what a person asked, shown on this machine only",
     h("p", { class: "muted small", text: "Each meter is a quorum, never a score: a segment lights only for evidence of that kind. A request is \"verified\" when two independent kinds agree and one of them judges the work (a test run, a [verify] verdict or a check). Review and policy show how it was governed; they cannot verify it alone." }),
     i.specs.length
       ? table([{ label: "Spec" }, { label: "Declared" }, { label: "Coverage" }, { label: "Latest evidence" }, { label: "Quorum of evidence" }], rows, "Specs the project declares, with coverage and evidence")
-      : emptyNote("No spec is declared. Add a [verify] check to .gnomon/policy.toml, or a trial under .gnomon/trials/, and the lens will show what ran against it."),
-    h("div", { class: "sechead" }, h("h3", { text: "Requests" }),
-      h("span", { class: "muted small", text: `${plural(d.coverage.requests_verified, "request")} of the ${d.coverage.requests_shown} shown verified` })),
-    i.requests.length
-      ? table([{ label: "Request" }, { label: "Steps", num: true }, { label: "Ended" }, { label: "Quorum of evidence" }], i.requests.map(requestRow), "Recent requests with the evidence for each")
+      : noSpec(),
+    h("div", { class: "sechead" }, h("h3", { text: "Requests, by session" }),
+      h("span", { class: "muted small", text: `${plural(d.coverage.requests_verified, "request")} of the ${d.coverage.requests_shown} listed verified` })),
+    i.request_groups.length
+      ? h("ul", { class: "plain runs" }, i.request_groups.map((g2, n) => groupItem(g2, focus, n === 0)))
       : emptyNote("No working session has recorded a turn yet."),
     g.rounds
       ? h("p", { class: "muted small", text: `Requirement and finish gates ran ${plural(g.rounds, "round")} and raised ${plural(g.findings, "finding")}. The records keep the counts, not the requirement text.` })
@@ -353,7 +411,7 @@ function renderLens(d, ctx) {
       "How gnomon covers this project end to end: what was specified, how agents ran, what validated the work and under which rules. Read from the records gnomon keeps; where nothing was recorded the page says so rather than guess.",
       h("button", { type: "button", class: "btn big", text: "Refresh", onClick: () => { runCache.clear(); ctx.load(true); } })),
     coverageTiles(d),
-    intentSection(d),
+    intentSection(d, ctx),
     runsSection(d),
     evidenceSection(d),
     governanceSection(d),

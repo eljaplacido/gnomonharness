@@ -542,9 +542,10 @@ function intact(config: GnomonConfig, name: string): boolean {
 }
 
 const RUNS_SHOWN = 14;
-const REQUESTS_SHOWN = 60;
+const GROUPS_SHOWN = 30;
+const REQUESTS_PER_SESSION = 150;
 
-export function lensView(p: DashboardProject, opts: { trustPath?: string } = {}): Record<string, unknown> {
+export function lensView(p: DashboardProject, opts: { trustPath?: string; focus?: string } = {}): Record<string, unknown> {
   const config = configOf(p);
   const trails = lensTrails(config);
   const verify = resolveVerify(config);
@@ -552,21 +553,32 @@ export function lensView(p: DashboardProject, opts: { trustPath?: string } = {})
   const sessions = trails.filter((t) => ["prompt", "task", "acp", "guard"].includes(t.mode) || t.agent);
 
   // -- 1. Intent -------------------------------------------------------------
-  const requests = [];
-  outer: for (const t of working.slice().reverse()) {
+  // Requests grouped by session, newest session first. A session with no work has no group.
+  const groups = [];
+  const order = working.slice().reverse();
+  const shown = order.slice(0, GROUPS_SHOWN);
+  const focusTrail = order.find((t) => t.name === opts.focus);
+  if (focusTrail && !shown.includes(focusTrail)) shown.push(focusTrail);
+  for (const t of shown) {
     const asks = requestsOf(config, t.name);
-    for (const s of t.segments.slice().reverse()) {
-      if (requests.length >= REQUESTS_SHOWN) break outer;
-      if (s.turn === null && s.steps.length === 0) continue;
-      const ev = segmentEvidence(s);
-      requests.push({
-        trail: t.name, turn: s.turn, ts: s.ts, role: s.role,
-        ask: s.turn !== null ? asks.get(s.turn) ?? null : null,
-        stop_reason: s.stop_reason || (s.turn === null ? "did not finish" : ""),
-        steps: s.steps.length, evidence: ev, quorum: quorumOf(statesOf(ev)),
+    const rows = [];
+    for (const seg of t.segments.slice().reverse()) {
+      if (rows.length >= REQUESTS_PER_SESSION) break;
+      if (seg.turn === null && seg.steps.length === 0) continue;
+      const ev = segmentEvidence(seg);
+      rows.push({
+        trail: t.name, turn: seg.turn, ts: seg.ts, role: seg.role,
+        ask: seg.turn !== null ? asks.get(seg.turn) ?? null : null,
+        stop_reason: seg.stop_reason || (seg.turn === null ? "did not finish" : ""),
+        steps: seg.steps.length, evidence: ev, quorum: quorumOf(statesOf(ev)),
       });
     }
+    if (rows.length === 0) continue;
+    const quorums: Record<string, number> = {};
+    for (const r of rows) inc(quorums, r.quorum);
+    groups.push({ trail: t.name, harness: harnessOf(t), mode: t.mode, started: t.started, turns: t.segments.filter((x) => x.turn !== null).length, quorums, requests: rows });
   }
+  const requests = groups.flatMap((g) => g.requests);
   const allVerifies = trails.flatMap((t) => t.verifies.map((v) => ({ ...v, trail: t.name })));
   const lastVerify = allVerifies[allVerifies.length - 1];
   const verifyTrails = trails.filter((t) => t.verifies.length > 0);
@@ -703,7 +715,7 @@ export function lensView(p: DashboardProject, opts: { trustPath?: string } = {})
     intent: {
       verify_declared: verify !== null,
       specs,
-      requests,
+      request_groups: groups,
       gates: { rounds: reviewGates.length, findings: reviewGates.reduce((n, g) => n + (g.findings ?? 0), 0), outcomes: gateOutcomes },
     },
     runs: {

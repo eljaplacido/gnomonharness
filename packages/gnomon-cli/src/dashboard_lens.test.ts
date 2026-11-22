@@ -148,7 +148,10 @@ describe("lensView on a fixture project", () => {
     expect(verify.latest.protects_changed).toBe(1);
     expect(trial).toMatchObject({ kind: "trial", name: "default", quorum: "single_source" });
     expect(trial.tasks[0]).toMatchObject({ id: "locate" });
-    const asks = v.intent.requests.map((r: any) => r.ask);
+    const reqs = v.intent.request_groups.flatMap((g: any) => g.requests);
+    expect(v.intent.request_groups[0]).toMatchObject({ harness: "gnomon", turns: 2, trail: "2026-11-01T10-00-00-000Z-1.jsonl" });
+    expect(v.intent.request_groups[0].quorums.verified).toBe(1);
+    const asks = reqs.map((r: any) => r.ask);
     expect(asks).toContain("add a parse function");
     expect(v.evidence.verify.verdicts).toEqual({ passed: 1, passed_unverified: 1 });
     expect(v.evidence.tests).toMatchObject({ total: 1, passed: 1 });
@@ -160,9 +163,9 @@ describe("lensView on a fixture project", () => {
     expect(v.measures.cost_usd).toBeNull();
     expect(JSON.stringify(v)).not.toContain("SECRET");
     // the first request has a test run and a verify verdict that agree
-    const first = v.intent.requests.find((r: any) => r.turn === 1);
+    const first = reqs.find((r: any) => r.turn === 1);
     expect(first.quorum).toBe("verified");
-    const second = v.intent.requests.find((r: any) => r.turn === 2);
+    const second = reqs.find((r: any) => r.turn === 2);
     expect(second.evidence.verify.state).toBe("partial");
 
     const run = lensRun(p, "2026-11-01T10-00-00-000Z-1.jsonl") as Record<string, any>;
@@ -197,7 +200,9 @@ describe("lensView on a fixture project", () => {
     const t1 = performance.now();
     lensView(p);
     expect(performance.now() - t1).toBeLessThan(200);
-    expect(cold.intent.requests.length).toBeLessThanOrEqual(60);
+    expect(cold.intent.request_groups[0].requests.length).toBeLessThanOrEqual(150);
+    const focused = lensView(p, { focus: "nope.jsonl" }) as Record<string, any>;
+    expect(focused.intent.request_groups).toHaveLength(1);
   });
 });
 
@@ -247,6 +252,14 @@ describe("the lens page, checked without a browser", () => {
   it("registers the lens screen and builds DOM through h(), with no inline script, style or handler string", () => {
     expect(LENS_JS).toMatch(/registerScreen\("lens", "Lens"/);
     expect(LENS_JS).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write|eval\(|new Function|setAttribute\("on|\.style\.cssText|<script|<style/);
+  });
+  it("groups requests by session, collapsing runs of unkept text, and points an empty spec panel at Setup with the [verify] snippet", () => {
+    expect(LENS_JS).toMatch(/request_groups/);
+    expect(LENS_JS).toMatch(/without kept request text/);
+    expect(LENS_JS).toMatch(/gnomon doctor verify/);
+    expect(LENS_JS).toMatch(/\[verify\]\\ncommand = /);
+    expect(LENS_JS).toMatch(/#\/setup\//);
+    expect(LENS_JS).toMatch(/#\/lens\/\$\{/);
   });
   it("a quorum segment is never colour alone: each carries a glyph and a text reading", () => {
     expect(LENS_JS).toMatch(/GLYPH = \{ pass: "✓", fail: "✕", partial: "~", none: "·" \}/);
