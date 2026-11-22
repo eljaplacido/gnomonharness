@@ -194,6 +194,19 @@ describe("gnomon security: the contract", () => {
     expect(formatSecurity(win).join("\n")).toMatch(/exec_os_windows|no OS sandbox/);
   });
 
+  it("rule drift against this gnomon's defaults is advice naming the migrations (#228)", async () => {
+    const current = buildSecurityReport(await project(), {}, "linux");
+    expect(current.findings.map((f) => f.id)).not.toContain("rules_drift");
+    // --no-verify writes the scaffold as it was before the governance defaults.
+    const old = buildSecurityReport(await project({ noVerify: true }), {}, "linux");
+    shapeHolds(old);
+    const d = old.findings.find((f) => f.id === "rules_drift")!;
+    expect(d.severity).toBe("advice");
+    expect(d.message).toMatch(/\d+ migration\(s\) pending.*gnomon migrate --check/);
+    expect(d.fix).toMatch(/gnomon migrate/);
+    expect(old.exit).toBe(0);
+  });
+
   it("a trail whose chain does not hold is a risk: exit 2", async () => {
     const dir = await project();
     const auditDir = resolveAudit(loadConfig(dir)).dir;

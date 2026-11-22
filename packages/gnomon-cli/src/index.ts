@@ -2210,6 +2210,21 @@ async function cmdInit(args: CliArgs, opts: { launching?: boolean } = {}): Promi
     console.log("Audit: on — decisions and outcomes, no prompt text, in .gnomon-audit/ ([audit] in config.toml).");
   }
 
+  if (result.trial) {
+    console.log(
+      `Trial: .gnomon/trials/default.toml — ${result.trial.locate ? "a locate task (answer checked by hash) and " : ""}a planted-secret canary,\n` +
+        `       runnable with your local model: gnomon eval --against <ref>   (or gnomon skill trial <skill>).`
+    );
+  }
+  if (result.claudeCode) {
+    // Offered, never performed: the hook is a file in .claude/ that Claude Code
+    // runs on every call, and installing it is the person's decision.
+    console.log("");
+    console.log(`Claude Code: .claude/ is here, and [check.roles] maps its hook to the "${result.claudeCode.role}" role.`);
+    console.log("  Put a live guard in front of its tool calls (not run for you):");
+    console.log("    gnomon guard install claude-code --write");
+  }
+
   // Name the file whose edits take effect. The scaffold ships
   // `role_profile = "local_first"` and a profile that restates `model` and
   // `endpoint` for every role that has one, and a profile is merged OVER the

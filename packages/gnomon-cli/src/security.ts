@@ -40,6 +40,7 @@ import {
   type TrustOptions,
 } from "gnomon-core";
 import { guardStatus } from "./guard.js";
+import { pendingMigrations } from "./migrate.js";
 
 export const SECURITY_SCHEMA = "gnomon.security/1";
 export const SECURITY_EXIT = { clean: 0, risk: 2, couldNotRun: 10 } as const;
@@ -50,6 +51,7 @@ export const SECURITY_FINDING_IDS = [
   "host_hook",
   "audit_off",
   "governance_off",
+  "rules_drift",
   "host_exec",
   "judge_can_write",
   "approval_never_on_host",
@@ -222,6 +224,23 @@ export function buildSecurityReport(dir: string, trust: TrustOptions = {}, platf
           ? `${names} run${osRoles.length === 1 ? "s" : ""} bash under exec = "os", and Windows has no OS sandbox: on this machine every shell command is refused (fail closed), so there is no bash here, and [verify] and gnomon check cannot run either (check gives no verdict)`
           : `${names} run${osRoles.length === 1 ? "s" : ""} bash under exec = "os": on a Windows machine that runs this surface every shell command is refused (Windows has no OS sandbox), so a repository shared with Windows has no bash there, and no [verify] or gnomon check verdict either`,
       fix: 'for Windows: exec = "docker" ([sandbox] in .gnomon/policy.toml, or per role in roles.toml), or run gnomon inside WSL2',
+    });
+  }
+
+  // Rule drift (#228): the surface lags the defaults this gnomon ships (15 of 16
+  // surveyed projects with their own rules did). Read-only, as `migrate --check`.
+  let drift: ReturnType<typeof pendingMigrations> = [];
+  try {
+    drift = pendingMigrations(config.gnomonDir);
+  } catch {
+    drift = []; // a file that will not read is surface_fatal's to say
+  }
+  if (drift.length > 0) {
+    findings.push({
+      id: "rules_drift",
+      severity: "advice",
+      message: `${drift.length} migration(s) pending against this gnomon's defaults: ${drift.map((d) => d.id).join(", ")} (gnomon migrate --check lists what each changes)`,
+      fix: "gnomon migrate --check, then gnomon migrate, review `git diff .gnomon/` and commit it",
     });
   }
 
