@@ -1477,7 +1477,9 @@ allowed. To let the agent write a neighbouring directory, grant it:
 extra_roots = ["../shared-fixtures"]
 ```
 
-or name it in the role's `write_allow` (`"../shared-fixtures/**"`). To watch
+or name it in the role's `write_allow` (`"../shared-fixtures/**"`; shell writes only). A refused call says this itself: the
+refusal text the model and you see names `extra_roots`, the restart it needs, `/sandbox off` (this session only) and the
+safest fallback. To watch
 before refusing, level the family: `[governance] write = "advise"`.
 
 `guard` stops only what a hook shows it; a harness without one is judged after

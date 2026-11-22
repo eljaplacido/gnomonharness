@@ -1630,7 +1630,7 @@ export function readPrecheck(
     const refusal: Precheck = {
       rule: "sandbox",
       code: TOOL_OUT_OF_SANDBOX,
-      content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
+      content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}. ${outsideRootGrantHint()}`,
       summary: `read ${path} — refused (outside sandbox)`,
     };
     if (applies(ctx, "read", refusal)) return { refusal };
@@ -3702,6 +3702,29 @@ function bashWriteRefusal(command: string, ctx: ToolContext, deferred: Precheck[
 const REMOVES_THE_NAME = new Set(["rm", "unlink", "rmdir", "mv (source)", "find -delete"]);
 
 /**
+ * How the operator grants a second root, in the words a refused call carries
+ * to the model and to the user. One text for every refusal that is "this
+ * reaches outside the project root" (the file tools' `sandbox` rule and the
+ * shell's `outside_root`), so the way out is never left for the model to guess.
+ *
+ * What gnomon supports today: `[sandbox] extra_roots` in .gnomon/policy.toml
+ * (a relative path to another checkout; read, write, edit and shell writes all
+ * honour it; the session pins its sandbox at start, so a grant added mid-run
+ * takes effect after the operator restarts gnomon) and the operator's own
+ * `/sandbox off` for this session only. The agent edits neither.
+ */
+export function outsideRootGrantHint(): string {
+  return (
+    `To work in a second repository the operator grants it: add [sandbox] extra_roots = ["../other-repo"] ` +
+    `to .gnomon/policy.toml (a relative path, hashed with the surface so the grant shows in the trail) and ` +
+    `restart gnomon, or type /sandbox off to lift the boundary for this session only. Do not edit ` +
+    `policy.toml yourself -- a running session cannot loosen its own sandbox. Without a grant the safest ` +
+    `route is to run gnomon from the other repository, or to leave the change as a patch or file inside ` +
+    `this project for the operator to apply there.`
+  );
+}
+
+/**
  * `outside_root` (shared-governance; CONTRACTS.md §38): does a shell write or
  * removal land outside every place this session may change?
  *
@@ -3777,8 +3800,8 @@ function outsideRootRefusal(ctx: ToolContext, path: string, abs: string, how: st
       `A session changes its own project. Another project, the home directory and the rest of the ` +
       `machine are not this task's to change -- the write and edit tools refuse the same paths. ` +
       `Scratch files belong in the system temp directory. Do not reach the same place another way: ` +
-      `a different command writing it is the same change. If the task needs it, say so plainly; the ` +
-      `operator can grant a directory with [sandbox] extra_roots in .gnomon/policy.toml.`,
+      `a different command writing it is the same change. If the task needs it, say so plainly. ` +
+      outsideRootGrantHint(),
     summary: `bash ${path.slice(0, 80)} — refused (outside the root)`,
   };
 }
@@ -7463,7 +7486,7 @@ export function searchPrecheck(
       const r: Precheck = {
         rule: "sandbox",
         code: TOOL_OUT_OF_SANDBOX,
-        content: `Refused: "${scope}" is outside the repository root and sandbox=${ctx.sandbox}.`,
+        content: `Refused: "${scope}" is outside the repository root and sandbox=${ctx.sandbox}. ${outsideRootGrantHint()}`,
         summary: `search ${scope} — refused (outside sandbox)`,
       };
       if (applies(ctx, tool, r)) return r;
@@ -7746,7 +7769,7 @@ export function writePrecheck(
     const refusal: Precheck = {
       rule: "sandbox",
       code: TOOL_OUT_OF_SANDBOX,
-      content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}.`,
+      content: `Refused: "${path}" is outside the repository root and sandbox=${ctx.sandbox}. ${outsideRootGrantHint()}`,
       summary: `${tool} ${path} — refused (outside sandbox)`,
     };
     if (applies(ctx, tool, refusal)) return { refusal };
