@@ -1747,6 +1747,26 @@ cannot come out `unrunnable` in one and `failed` in the other. In `gnomon check`
 `regressed` is a `fail` (no model to hand it to). Nothing can make a non-zero
 exit pass.
 
+**Opt-in: tell a green check from a weakened one.** The check runs code the
+agent can edit in the same turn: `package.json` scripts, `conftest.py`, pytest
+`addopts`, your `scripts/verify.sh`, a `.septacore.json`. `protects` names them;
+a turn that changes one cannot come out `passed` ([CONTRACTS.md §52](CONTRACTS.md)):
+
+```toml
+# policy.toml: inside the existing [verify] block
+[verify]
+protects = ["@detected", "scripts/verify.sh"]   # @detected: conftest.py, pytest.ini, pyproject.toml,
+                                                # package.json, .septacore.json, and the command's own script
+```
+
+The files are hashed before and after the turn, by `write`, `edit` or the shell.
+A green check over a changed one is `passed_unverified`, and the answer is handed
+back once, naming the file: revert it, or say why it does not weaken the check.
+Only `package.json` `scripts` and `pyproject.toml` `[tool.pytest*]` count as
+changes in those two files; any other file counts by its bytes. `gnomon check`
+reads the list from the base commit and reports a change to it as a `fail`
+(`passed_unverified`). Not declared, nothing is snapshotted.
+
 **Opt-in: the completion gate** (since v0.5.0). Off unless declared. When a turn that changed
 the worktree first answers "done" with budget left, gnomon does not accept it:
 it hands the turn back with a checklist lifted from the task's own text (each

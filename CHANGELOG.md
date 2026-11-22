@@ -28,6 +28,16 @@
 
 ### Added
 
+- **`[verify] protects` and the `passed_unverified` verdict** (#234). A check
+  runs code the agent can edit in the same turn (`package.json` scripts,
+  `conftest.py`, pytest `addopts`, a `scripts/verify.sh`, `.septacore.json`).
+  `protects = ["@detected", ...]` names the files; a turn that changes one, by
+  `write`, `edit` or the shell, cannot come out `passed`: a green run is
+  `passed_unverified`, the answer is handed back once naming the file, and the
+  `verify` audit record carries `protects_changed`. `gnomon check` reads the
+  list from the base commit and reports a change to it as a `fail`. Opt-in:
+  nothing is snapshotted unless declared. CONTRACTS §52.
+
 - **A four-outcome `[verify]` verdict: `contract`, `[verify.exit_map]`,
   `regressed_hand_back`** (#232). `passed`, `failed`, `unrunnable` and the new
   `regressed`. `contract = "septacore"` or `"pytest"` and `[verify.exit_map]`

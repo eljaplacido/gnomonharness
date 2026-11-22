@@ -61,6 +61,7 @@ import { parseSurfaceTree, readSurfaceBlobs, SurfaceTreeError, writeSurfaceTree,
 import { AuditTrail, redact, resolveAudit, verifyTrail } from "./audit.js";
 import { harnessBuild } from "./build.js";
 import { runVerifySetup, verifyContext } from "./verify_run.js";
+import { protectedChange } from "./verify_protects.js";
 import { mustFailFirst, readVerifyRun, isTestPath, unwritablePreImage, type PreImage } from "./must_fail_first.js";
 import {
   bashPolicy,
@@ -786,7 +787,41 @@ async function judge(
     const v = readVerifyRun(out, verify);
     const tail = out.content.split("\n").slice(-20).join("\n");
     const named = verify.exit_map ? { verdict: v.verdict } : {};
-    if (v.passed) {
+    // `[verify] protects` (#234): files the check executes that the change
+    // edited. The rules are the base's, so the head cannot widen the list.
+    const protectedChanged: string[] = [];
+    if (verify.protects) {
+      for (const c of paths) {
+        const rel = posix(relative(projRoot, abs(c.path)));
+        let after: Buffer | null = null;
+        try {
+          after = c.status === "D" ? null : readFileSync(abs(c.path));
+        } catch {
+          after = null;
+        }
+        let before: Buffer | null = null;
+        if (c.status !== "A") {
+          try {
+            before = git(toplevel, ["show", `${from}:${c.path}`]) as unknown as Buffer;
+          } catch {
+            before = null;
+          }
+        }
+        if (protectedChange(verify, rel, before, after)) protectedChanged.push(rel);
+      }
+    }
+    if (v.passed && protectedChanged.length > 0) {
+      verifyPassed = true; // it ran green: must-fail-first still has something to re-run
+      // Green, but the change edited what the check executes: the pass says
+      // nothing about the work. `fail` rather than `error`: the check ran.
+      verdict.checks.push({
+        id: "verify",
+        status: "fail",
+        inspected: 1,
+        reason: `passed_unverified: the change edited ${protectedChanged.join(", ")}, which the check executes, so its pass cannot be told from a weakened check`,
+        findings: [{ command: verify.command, exit: 0, verdict: "passed_unverified", protects_changed: protectedChanged }],
+      });
+    } else if (v.passed) {
       verifyPassed = true;
       verdict.checks.push({ id: "verify", status: "pass", inspected: 1, findings: [{ command: verify.command, exit: 0 }] });
     } else if (v.verdict === "unrunnable") {

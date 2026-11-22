@@ -13,6 +13,7 @@ import { safeGit } from "./git_safe.js";
 import { checkCitations } from "./citations.js";
 import { mustFailFirst, readVerifyExit, readVerifyRun } from "./must_fail_first.js";
 import { runVerifySetup, verifyContext } from "./verify_run.js";
+import { changedProtected, protectedHandBack, snapshotProtected } from "./verify_protects.js";
 import { resolve, dirname, join, basename, sep, relative } from "node:path";
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, realpathSync, renameSync } from "node:fs";
 import { readRegular } from "./root_fs.js";
@@ -4121,7 +4122,7 @@ export interface TurnResult {
    * could not tell that from a clean pass. Same silent-success shape as `exit
    * null` read as a clean zero, one level up.
    */
-  verify?: "passed" | "failed" | "unrunnable" | "regressed" | "declined" | "skipped";
+  verify?: "passed" | "passed_unverified" | "failed" | "unrunnable" | "regressed" | "declined" | "skipped";
   toolSteps: number;
   toolLog: string[];
   /**
@@ -6028,6 +6029,9 @@ async function agenticTurn(
   // the gate exists to prevent. Nothing else reads it.
   let shellMayHaveTouched = false;
   const verify = resolveVerify(config);
+  // `[verify] protects` (#234): what the check executes, as it stood before the
+  // turn changed anything. Taken only when declared; read at the end of the turn.
+  const protectsBefore = verify?.protects ? snapshotProtected(ctx.root, verify) : null;
   // An unattended `gnomon task` waits out a provider outage longer
   // (taskResilience); a session keeps the declared grace.
   const resilience = deps.unattended ? taskResilience(resolveResilience(config)) : resolveResilience(config);
@@ -7982,12 +7986,15 @@ async function agenticTurn(
             }
           }
 
+          // Files the check executes that this turn changed (verify_protects.ts).
+          const protChanged = protectsBefore ? changedProtected(protectsBefore, ctx.root, verify) : [];
           toolLog.push(`verify — ${check.summary}${pinsNothing ? " · test pins nothing" : ""}`);
           deps.audit?.write("verify", {
             role,
             command: verify.command,
             exit: notRun ? null : shellExit,
             passed,
+            ...(protChanged.length > 0 ? { protects_changed: protChanged } : {}),
             // Only when the surface declared a table: a record a surface that
             // declares none writes is the record it always wrote.
             ...(verify.exit_map ? { verdict: verifyExit.verdict } : {}),
@@ -8021,6 +8028,14 @@ async function agenticTurn(
                 `Your answer is not accepted while this fails. Fix what it shows, ` +
                 `or say plainly that you cannot and why.`,
             };
+          }
+          // A green run of a check this turn edited: not `passed`. The model is
+          // handed the file names once per round, and may revert or explain.
+          if (passed && protChanged.length > 0) {
+            verifyOutcome = "passed_unverified";
+            warn(paint(deps.ui, "yellow",
+              `    ⚠ verify passed, but the turn changed ${protChanged.join(", ")}, which the check executes — passed_unverified`));
+            return { stage: "verify", role: "system", content: protectedHandBack(verify.command, protChanged) };
           }
           // Only say it passed when it actually ran and passed. A check that
           // could not run has already reported itself, and calling that "passed"

@@ -5,7 +5,8 @@
     "Each case is a policy.toml [verify] block (after `command = \"x\"`) and `resolves`: the fields the",
     "resolved block must carry. `absent` lists fields it must not carry, because a key nobody declared",
     "adds nothing to what runs. Asserted by packages/gnomon-core/src/verify_setup.test.ts.",
-    "Since #232: the verdict table (`verdicts`, `contracts`) and `exit_cases`: one run of the check with an exit, read by the loop (`gnomon task`) and by `gnomon check` through the same table. `check_status` is the `verify` entry's status in a `gnomon check` verdict (regressed is a fail there: a judge of someone else's change has no model to hand it to)."
+    "Since #232: the verdict table (`verdicts`, `contracts`) and `exit_cases`: one run of the check with an exit, read by the loop (`gnomon task`) and by `gnomon check` through the same table. `check_status` is the `verify` entry's status in a `gnomon check` verdict (regressed is a fail there: a judge of someone else's change has no model to hand it to).",
+    "Since #234: `protects` (docs/CONTRACTS.md section 52). `detected` is what the token `@detected` names besides the files the command itself runs (`command_files`); `digest_cases` say what counts as a change to a protected file, by file. A turn that changes one cannot come out `passed`: `passed_unverified`. Asserted by packages/gnomon-core/src/verify_protects.test.ts."
   ],
   "setup_network": [
     "none",
@@ -280,5 +281,106 @@
       "handed_back": true,
       "check_status": "fail"
     }
-  ]
+  ],
+  "verdicts_task": [
+    "passed",
+    "passed_unverified",
+    "failed",
+    "unrunnable",
+    "regressed",
+    "declined",
+    "skipped"
+  ],
+  "protects": {
+    "token": "@detected",
+    "detected": [
+      "**/conftest.py",
+      "pytest.ini",
+      "pyproject.toml",
+      "package.json",
+      ".septacore.json"
+    ],
+    "command_files": [
+      {
+        "command": "bash scripts/verify.sh",
+        "files": [
+          "scripts/verify.sh"
+        ]
+      },
+      {
+        "command": "./run_tests.sh --fast",
+        "files": [
+          "run_tests.sh"
+        ]
+      },
+      {
+        "command": "pytest -q tests/",
+        "files": [
+          "tests/"
+        ]
+      },
+      {
+        "command": "pnpm test",
+        "files": []
+      }
+    ],
+    "digest_cases": [
+      {
+        "name": "a conftest.py edit",
+        "file": "conftest.py",
+        "before": "a",
+        "after": "b",
+        "changed": true
+      },
+      {
+        "name": "a conftest.py left alone",
+        "file": "tests/conftest.py",
+        "before": "a",
+        "after": "a",
+        "changed": false
+      },
+      {
+        "name": "a file created",
+        "file": "pytest.ini",
+        "before": null,
+        "after": "[pytest]\n",
+        "changed": true
+      },
+      {
+        "name": "a file deleted",
+        "file": ".septacore.json",
+        "before": "{}",
+        "after": null,
+        "changed": true
+      },
+      {
+        "name": "package.json: a script",
+        "file": "package.json",
+        "before": "{\"scripts\":{\"test\":\"a\"}}",
+        "after": "{\"scripts\":{\"test\":\"b\"}}",
+        "changed": true
+      },
+      {
+        "name": "package.json: a dependency is not a change",
+        "file": "package.json",
+        "before": "{\"scripts\":{\"test\":\"a\"}}",
+        "after": "{\"scripts\":{\"test\":\"a\"},\"dependencies\":{\"x\":\"1\"}}",
+        "changed": false
+      },
+      {
+        "name": "pyproject.toml: addopts",
+        "file": "pyproject.toml",
+        "before": "[tool.pytest.ini_options]\naddopts = \"-q\"\n",
+        "after": "[tool.pytest.ini_options]\naddopts = \"-k nothing\"\n",
+        "changed": true
+      },
+      {
+        "name": "pyproject.toml: another table is not a change",
+        "file": "pyproject.toml",
+        "before": "[project]\nname = \"a\"\n[tool.pytest.ini_options]\naddopts = \"-q\"\n",
+        "after": "[project]\nname = \"b\"\n[tool.pytest.ini_options]\naddopts = \"-q\"\n",
+        "changed": false
+      }
+    ]
+  }
 }

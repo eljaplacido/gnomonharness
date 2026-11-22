@@ -186,6 +186,25 @@ export function auditVerifyKeys(config: GnomonConfig): VerifyKeyProblem[] {
       fatal: false,
     });
   }
+  if (v.protects !== undefined) {
+    const list = Array.isArray(v.protects) ? v.protects : null;
+    const bad = list ? list.filter((g) => typeof g !== "string" || !g.trim()) : [v.protects];
+    if (!list || bad.length > 0) {
+      out.push({
+        where: `${where} protects`,
+        problem: `protects is a list of globs; ${list ? `${bad.length} entr${bad.length === 1 ? "y is" : "ies are"} not a non-empty string and ignored` : `got ${JSON.stringify(v.protects)}, so nothing is protected`}.`,
+        fix: 'protects = ["@detected", "scripts/verify.sh"]',
+        fatal: false,
+      });
+    } else if (list.length === 0) {
+      out.push({
+        where: `${where} protects`,
+        problem: "protects is an empty list, so nothing is protected.",
+        fix: 'protects = ["@detected"]',
+        fatal: false,
+      });
+    }
+  }
   const hasSetup = typeof v.setup === "string" && v.setup.trim() !== "";
   for (const key of ["setup_network", "setup_timeout_seconds"]) {
     if (v[key] !== undefined && !hasSetup) {

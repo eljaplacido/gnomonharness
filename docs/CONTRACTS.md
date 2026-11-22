@@ -144,8 +144,9 @@ round exits by its bucket like any other: the model answered, so it is a
 `result` (`0`) with `stop_reason: "answered"` and `verify: "failed"` on the
 record. The exit does not carry the check; a refusal floor is never demoted,
 so a failed check at `2` would leave every unverified run there. Read `verify`
-beside the bucket: one of `passed`, `failed`, `unrunnable`, `regressed`,
-`declined`, `skipped`, absent when no check ran (§20, §52). `declined` means the person asked
+beside the bucket: one of `passed`, `passed_unverified`, `failed`,
+`unrunnable`, `regressed`, `declined`, `skipped`, absent when no check ran
+(§20, §52). `declined` means the person asked
 (`approval = "always"`) said no; `unrunnable` means the check never ran to an
 exit -- not found or not executable (126/127), timed out and killed, or refused
 by the sandbox or a rule -- the same reading `gnomon check` gives (§6). Neither
@@ -576,7 +577,7 @@ change.
 | `abort` | after each scored tool call (every call up to 30, then every 5th) | `subject_id` `<session>.<turn>:<k>`, `model`, `question` `gnomon_abort.v1`, `order`, `labels`, `probs`?, `live` `continue`, `excerpt`, `latency_ms`, `error` |
 | `role` | once per prompt | as `abort`; `subject_id` `<session>.<turn>`, `question` `gnomon_routing.v1`, `live` = the role that ran or `chain:<a>><b>…` |
 | `approval` | after each tool call | as `abort`; `question` `needs_approval.v1`, `live` one of `not_gated`, `asked:approved`, `asked:declined`, `standing:approved`, `flag:approved`, `default:declined`, `policy:<bucket>` |
-| `turn_end` | once per turn, or per chain stage | `subject_id`, `stop_reason`, `code`, `bucket`, `verify` (`pass`, `fail`, `none`, or the raw `unrunnable`/`regressed`/`declined`/`skipped`), `tool_steps`, `tokens`, `duration_ms` |
+| `turn_end` | once per turn, or per chain stage | `subject_id`, `stop_reason`, `code`, `bucket`, `verify` (`pass`, `fail`, `none`, or the raw `unrunnable`/`regressed`/`passed_unverified`/`declined`/`skipped`), `tool_steps`, `tokens`, `duration_ms` |
 | `shadow` | once, when the shadow stops: unreachable at session start, or after three connection failures in a row | `error` |
 
 **Common keys:**
@@ -4787,3 +4788,46 @@ values.
 **Fixture**: `conformance/verify_contract.json` (`verdicts`, `contracts`,
 `exit_cases`); `packages/gnomon-core/src/verify_exit_map.test.ts` runs every
 case through the shared table, the real turn loop and `gnomon check`.
+
+
+### A green check the turn edited (`[verify] protects`, verdict `passed_unverified`)
+
+`[verify]` runs code the agent can edit in the same turn: `package.json`
+scripts, `conftest.py`, pytest's `addopts`, a project's `scripts/verify.sh`, a
+`.septacore.json`. The surface protects `.gnomon/` and must-fail-first catches a
+test that already passed, and neither notices a turn that weakens the check
+itself. The more the check can do (§52 above: a longer timeout, a setup with
+network), the more such an edit is worth to a model that wants the gate green.
+
+`[verify] protects = ["@detected", "scripts/verify.sh"]` lists globs (repo
+relative, `/`-separated; gnomon's glob dialect, `**/` matches zero or more
+directories). `"@detected"` stands for the known runners' config
+(`**/conftest.py`, `pytest.ini`, `pyproject.toml`, `package.json`,
+`.septacore.json`) and the files the declared command itself names
+(`bash scripts/verify.sh`, `./run_tests.sh`). Nothing is protected unless the
+key is declared: a surface without it takes no snapshot and adds nothing to any
+record or request.
+
+What counts as a change: for `package.json`, the `scripts` object (adding a
+dependency is not a change); for `pyproject.toml`, the `[tool.pytest*]` tables;
+for any other file, its bytes. A file created or deleted is a change. Files over
+4 MiB, `node_modules`, `.git`, virtualenvs, build output and gnomon's own
+directories are not read.
+
+- **`gnomon task` and sessions.** The protected files are hashed before the turn
+  and after it, by any route: `write`, `edit` or the shell. A check that exits 0
+  while one changed is `verify: "passed_unverified"`, not `passed`. The answer is
+  handed back, by the same rounds as a failed check (`max_rounds`), naming the
+  files and asking the model to revert or say why the change does not weaken the
+  check. If it reverts and the check passes again, the verdict is `passed`. The
+  `verify` audit record carries `protects_changed` (sorted paths) whatever the
+  verdict, when any changed. A chain's `gate = "on_check"` treats
+  `passed_unverified` as not passed.
+- **`gnomon check`.** The list comes from the base surface (a head cannot widen
+  or empty it), and each changed path between base and head is compared. A
+  green `verify` over a changed protected file is `fail` (the check ran; exit 2)
+  with `reason` beginning `passed_unverified` and a finding
+  `{command, exit: 0, verdict: "passed_unverified", protects_changed}`.
+
+**Fixture**: `conformance/verify_contract.json` (`protects`, `verdicts_task`);
+`packages/gnomon-core/src/verify_protects.test.ts`.

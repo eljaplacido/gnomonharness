@@ -489,6 +489,12 @@ export interface Policy {
     exit_map?: Record<string, string>;
     /** true: a `regressed` verdict is handed back to the model like `failed`. */
     regressed_hand_back?: boolean;
+    /**
+     * Globs for the files the check executes (verify_protects.ts); `"@detected"`
+     * stands for the known test runners' config and the command's own script.
+     * A turn that changes one cannot come out `passed`: `passed_unverified`.
+     */
+    protects?: string[];
     /** The completion gate (completion_gate.ts): "off", "checklist", "review" or "review_only". */
     completion_gate?: string;
     completion_rounds?: number;
@@ -3038,6 +3044,7 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "contract",
       "exit_map",
       "regressed_hand_back",
+      "protects",
       "completion_gate",
       "completion_rounds",
       "completion_min_remaining",
@@ -6374,6 +6381,8 @@ export interface ResolvedVerify {
   contract?: VerifyContract;
   /** `[verify] regressed_hand_back = true`. */
   regressed_hand_back?: true;
+  /** `[verify] protects`, the non-empty strings of it, when any (verify_protects.ts). */
+  protects?: string[];
 }
 
 /** A positive, finite number of seconds, or undefined. */
@@ -6419,6 +6428,9 @@ export function resolveVerify(config: GnomonConfig): ResolvedVerify | null {
       return r ? { exit_map: r.map, ...(r.contract ? { contract: r.contract } : {}) } : {};
     })(),
     ...(v?.regressed_hand_back === true ? { regressed_hand_back: true as const } : {}),
+    ...(Array.isArray(v?.protects) && v.protects.some((g) => typeof g === "string" && g.trim())
+      ? { protects: (v.protects as unknown[]).filter((g): g is string => typeof g === "string" && g.trim() !== "").map((g) => g.trim()) }
+      : {}),
   };
 }
 
