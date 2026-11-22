@@ -22,8 +22,19 @@ import { CORPUS, SECURITY_TEST_HOSTS, SECURITY_TEST_OPT_IN_HOSTS, hostPayload, r
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(here, "../../..");
 const LAUNCHER = join(ROOT, "gnomon");
-process.env.GNOMON_GUARD_BIN = LAUNCHER;
-const BIN = [LAUNCHER];
+// The program a hook runs. On Windows the repo's launcher (a node script with a
+// shebang) cannot be started directly, so the hooks get a .cmd wrapper, as npm's
+// gnomon.cmd shim is for an installed gnomon (same as guard.test.ts).
+const GUARD_BIN =
+  process.platform === "win32"
+    ? (() => {
+        const f = join(mkdtempSync(join(tmpdir(), "gnomon-bin-")), "gnomon.cmd");
+        writeFileSync(f, `@"${process.execPath}" "${LAUNCHER}" %*\r\n`);
+        return f;
+      })()
+    : LAUNCHER;
+process.env.GNOMON_GUARD_BIN = GUARD_BIN;
+const BIN = [GUARD_BIN];
 const CASES = JSON.parse(readFileSync(join(ROOT, "conformance/guard_cases.json"), "utf-8"));
 
 const made: string[] = [];
