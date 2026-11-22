@@ -2395,7 +2395,11 @@ needs the window fixed declares the number.
 a trailing `/v1` for llama.cpp, and the Ollama URL without `/api/chat`. A shape
 names the fields, not the vendor: any server that answers in them is read the
 same way. `id` must equal the model the role names. An OpenAI-shaped endpoint
-is asked for `/models` first and `/props` second, each probe bounded at 5 s.
+is asked for `/models` and `/props` together (the second 100 ms after the first, if the first has not
+answered), under one deadline of 1.5 s for the whole lookup; the first answer with a window wins. The
+fixture's `probe_timeout_ms` (5 s) is the ceiling of one probe, never reached by a lookup. The lookup runs
+in the background and is remembered per machine (GUIDE, "The window, read from the endpoint"); neither
+changes what a window is or its source.
 llama.cpp's `/v1/models` `meta.n_ctx_train` is not read, because it is the
 length the model was trained to and not the one the server runs.
 
