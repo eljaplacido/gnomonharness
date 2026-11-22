@@ -56,6 +56,7 @@ import {
   type SkillDecisionOptions,
 } from "./skills.js";
 import { MEMORY_LIMITS, memoryContentProblem, memoryId, renderMemory } from "./memory.js";
+import { AUTO_ACCEPT_RULE, autoAcceptVerdict, type AutoAcceptEvidence } from "./improve_policy.js";
 
 export const PROPOSALS_DIR = ".gnomon-proposals";
 export const PROPOSAL_SCHEMA_VERSION = 1;
@@ -66,7 +67,7 @@ export const PROPOSAL_STATUSES = ["pending", "accepted", "rejected"] as const;
 export type ProposalKind = (typeof PROPOSAL_KINDS)[number];
 export type ProposalSource = (typeof PROPOSAL_SOURCES)[number];
 export type ProposalStatus = (typeof PROPOSAL_STATUSES)[number];
-/** Who decided: a person, or (not enabled in this build) a named policy rule. */
+/** Who decided: a person, or a policy rule the surface declares (only `policy:improve.auto_accept` exists). */
 export type ProposalDecidedBy = "human" | `policy:${string}`;
 
 export interface ProposalDiffEntry {
@@ -74,8 +75,14 @@ export interface ProposalDiffEntry {
   path: string;
   /** sha256 of the file the proposal was written against; null when the file did not exist. */
   before_sha256: string | null;
-  /** The whole new content of the file. */
+  /** The whole new content of the file. Empty for a deletion. */
   after: string;
+  /**
+   * A retirement: accepting removes the file. Only a `skill` proposal may carry
+   * it, `before_sha256` must name the file being removed, and `after` is empty.
+   * Policy never accepts one (improve_policy.ts): a retirement is a person's.
+   */
+  delete?: true;
 }
 
 export interface ProposalEvidence {
@@ -99,8 +106,86 @@ export interface Proposal {
   decided_by?: ProposalDecidedBy;
   /** A rejection's note. */
   note?: string;
+  /**
+   * What `gnomon improve` measured about this proposal: its lint verdict, its
+   * probe against the base surface and, for a composed proposal, which
+   * proposals it combines (improve.ts). Information, never authority: only
+   * a declared policy reads it (improve_policy.ts), and it re-derives what it needs.
+   */
+  improve?: ProposalImprove;
   /** Not stored: true for a skill proposal found in `.gnomon/skills/proposed/`. */
   legacy?: boolean;
+}
+
+/** The lint verdict `gnomon improve` records on a proposal (improve_lint.ts). */
+export interface ProposalLint {
+  clean: boolean;
+  problems: string[];
+}
+
+/** One arm of a probe: what its cells did. */
+export interface ProbeArm {
+  passes: number;
+  n: number;
+  tokens_out: number | null;
+  requests: number | null;
+  /** Cells whose run ended in a refusal. */
+  refusals: number;
+  /** The spec's check on each cell: a cell's verify verdict is its check's exit code. */
+  checks: { pass: number; fail: number; invalid: number };
+}
+
+export const PROBE_STATUSES = ["probed", "unprobed", "failed", "skipped"] as const;
+export type ProbeStatus = (typeof PROBE_STATUSES)[number];
+
+/** A probe: the candidate surface against the base surface on the project's trial spec. */
+export interface ProposalProbe {
+  status: ProbeStatus;
+  /** Why it is not "probed". */
+  reason?: string;
+  /** What to do about it. */
+  hint?: string;
+  spec?: string;
+  /** Attempts per task per arm. */
+  k?: number;
+  pairs?: { planned: number; valid: number };
+  /** The eval's own status: complete, budget_exhausted or apparatus_failure. */
+  eval_status?: string;
+  base?: ProbeArm;
+  candidate?: ProbeArm;
+  /** Candidate pass rate minus base pass rate, over valid cells. */
+  pass_delta?: number;
+  /** Candidate output tokens over base output tokens, minus 1; null when not metered. */
+  token_delta?: number | null;
+  /** Candidate requests over base requests, minus 1; null when not metered. */
+  request_delta?: number | null;
+  /** Fewer passes, or more refusals, than the base. */
+  regressed?: boolean;
+  /** More passes, or as many with fewer output tokens, and not regressed. */
+  improved?: boolean;
+  report?: string;
+  report_sha256?: string;
+}
+
+export const IMPROVE_CANDIDATES = ["skill", "retire", "memory", "harness", "composed"] as const;
+export type ImproveCandidate = (typeof IMPROVE_CANDIDATES)[number];
+
+export interface ProposalImprove {
+  v: 1;
+  /** The improve run that wrote it. */
+  run: string;
+  candidate: ImproveCandidate;
+  /** The mined signal, e.g. `repeated_refusal`, `build_command`, `fires_never_cited`. */
+  signal: string;
+  /** Stable across runs, so a rerun does not propose the same thing twice. */
+  signature: string;
+  counts: Record<string, number | string>;
+  /** How the text was written: `model:<role>` or `template`. */
+  drafted_by: string;
+  lint: ProposalLint;
+  probe: ProposalProbe;
+  /** For a composed proposal: the proposals it combines. */
+  composed_of?: string[];
 }
 
 export type NewProposal = {
@@ -108,10 +193,11 @@ export type NewProposal = {
   title: string;
   rationale?: string;
   source: ProposalSource;
-  diff: Array<{ path: string; after: string; before_sha256?: string | null }>;
+  diff: Array<{ path: string; after: string; before_sha256?: string | null; delete?: true }>;
   evidence?: ProposalEvidence[];
   /** Preset id, so content that names its own proposal (memory provenance) can be rendered first. */
   id?: string;
+  improve?: ProposalImprove;
 };
 
 export const PROPOSAL_LIMITS = { title: 200, rationale: 2000, after: 20000, files: 5, evidence: 20, pending: 200, path: 200, note: 1000 } as const;
@@ -226,6 +312,12 @@ function checkDiff(config: GnomonConfig, kind: ProposalKind, diff: unknown): voi
     seen.add(d.path);
     if (d.before_sha256 !== null && !(typeof d.before_sha256 === "string" && /^[0-9a-f]{64}$/.test(d.before_sha256))) {
       throw new ProposalError(`${d.path}: before_sha256 is a sha256 or null`);
+    }
+    if (d.delete !== undefined) {
+      if (d.delete !== true) throw new ProposalError(`${d.path}: delete is true or absent`);
+      if (kind !== "skill") throw new ProposalError(`${d.path}: only a skill proposal may retire a file`);
+      if (d.before_sha256 === null) throw new ProposalError(`${d.path}: there is no such file to retire`);
+      if (d.after !== "") throw new ProposalError(`${d.path}: a retirement carries no content`);
     }
     if (typeof d.after !== "string") throw new ProposalError(`${d.path}: after must be the file's new content`);
     if (d.after.length > PROPOSAL_LIMITS.after) throw new ProposalError(`${d.path}: after is longer than ${PROPOSAL_LIMITS.after} characters`);
@@ -399,9 +491,16 @@ export function writeProposal(config: GnomonConfig, input: NewProposal, now: Dat
     rationale: text(input.rationale, "rationale", PROPOSAL_LIMITS.rationale),
     created: now.toISOString(),
     source: input.source,
-    diff: (input.diff as ProposalDiffEntry[]).map((d) => ({ path: d?.path, before_sha256: d?.before_sha256 as string | null, after: d?.after })),
+    diff: (input.diff as ProposalDiffEntry[]).map((d) => ({ path: d?.path, before_sha256: d?.before_sha256 as string | null, after: d?.after, ...(d?.delete ? { delete: true as const } : {}) })),
     status: "pending",
   };
+  if (input.improve !== undefined) {
+    const im = input.improve;
+    if (!im || typeof im !== "object" || im.v !== 1 || JSON.stringify(im).length > 20000) {
+      throw new ProposalError("improve is the evidence object gnomon improve writes (v 1, at most 20000 characters)");
+    }
+    p.improve = im;
+  }
   const evidence = checkEvidence(input.evidence);
   if (evidence?.length) p.evidence = evidence;
   checkStored(config, p);
@@ -485,7 +584,14 @@ export function proposeHarness(
 const SUBJECT: DecisionSubject = { what: "a proposal", cmd: (verb) => `gnomon proposals ${verb} <id>` };
 
 export interface ProposalDecisionOptions extends SkillDecisionOptions {
-  /** Only "human" is enabled. A `policy:<rule>` decision is refused: no policy may accept in this build. */
+  /**
+   * "human" (the default), or `policy:improve.auto_accept`: the one declared
+   * rule that may accept (improve_policy.ts). Accepting under it re-checks the
+   * whole declaration here, whoever calls: the surface must list the proposal's
+   * kind under `[improve] auto_accept`, the proposal must be lint clean and
+   * probed, and its probe must meet the declared thresholds. Any other
+   * `policy:<rule>` is refused, and so is a reject.
+   */
   decidedBy?: ProposalDecidedBy;
 }
 
@@ -502,10 +608,13 @@ export interface ProposalDecision {
   sealed: boolean;
 }
 
-function humanOnly(opts: ProposalDecisionOptions): void {
-  if (opts.decidedBy !== undefined && opts.decidedBy !== "human") {
-    throw new ProposalRefusal(`Not decided: policy acceptance (${opts.decidedBy}) is not enabled in this build; a proposal is decided by a person.`);
-  }
+/** Whether this decision is the declared policy's. Any other non-human decider is refused here. */
+function byPolicy(opts: ProposalDecisionOptions, verb: "accept" | "reject"): boolean {
+  if (opts.decidedBy === undefined || opts.decidedBy === "human") return false;
+  if (verb === "accept" && opts.decidedBy === `policy:${AUTO_ACCEPT_RULE}`) return true;
+  throw new ProposalRefusal(
+    `Not decided: ${opts.decidedBy} may not ${verb} a proposal. Only \`policy:${AUTO_ACCEPT_RULE}\`, declared in the surface ([improve] auto_accept), accepts; a rejection is a person's.`
+  );
 }
 
 function pendingOrThrow(config: GnomonConfig, given: string): Proposal {
@@ -528,9 +637,10 @@ export const proposalPaths = (p: Pick<Proposal, "diff">): string[] => p.diff.map
  * effect on the next session.
  */
 export function acceptProposal(config: GnomonConfig, given: string, opts: ProposalDecisionOptions = {}): ProposalDecision {
-  humanOnly(opts);
+  const policy = byPolicy(opts, "accept");
   const first = readProposal(config, given);
   if (first?.legacy) {
+    if (policy) throw new ProposalRefusal("Not accepted: a skill proposal made with the skill tool is a person's decision; policy does not accept it.");
     // A skill proposal from `.gnomon/skills/proposed/`: the decision it has always had.
     const before = recomputeManifest(config.gnomonDir).surface_hash;
     const r = acceptSkill(config, first.id, opts);
@@ -540,9 +650,18 @@ export function acceptProposal(config: GnomonConfig, given: string, opts: Propos
     };
   }
   refuseInAgentSession("accept", SUBJECT);
-  const person = requirePerson(config, "accept", opts, SUBJECT);
+  // Under the declared policy nobody is at a terminal (a schedule runs it), and
+  // the rule is the decider. The checks that make it the surface's own decision
+  // are below, run here and not trusted from the caller.
+  const person = policy ? { interactive: false, authorised_by: "policy" as const } : requirePerson(config, "accept", opts, SUBJECT);
   refuseOnTamperedRecords(config);
   const p = pendingOrThrow(config, given);
+  let grant: AutoAcceptEvidence | null = null;
+  if (policy) {
+    const v = autoAcceptVerdict(config, p);
+    if (!v.ok) throw new ProposalRefusal(`Not accepted: [improve] auto_accept does not cover this proposal: ${v.reasons.join("; ")}.`);
+    grant = v.evidence;
+  }
   try {
     checkStored(config, p);
   } catch (err) {
@@ -557,9 +676,10 @@ export function acceptProposal(config: GnomonConfig, given: string, opts: Propos
     }
   }
   const { manifest, surface_hash: before } = recomputeManifest(config.gnomonDir);
-  const touched = new Map<string, string>(p.diff.map((d) => [`.gnomon/${d.path}`, sha256Hex(d.after)]));
+  const touched = new Map<string, string>(p.diff.filter((d) => !d.delete).map((d) => [`.gnomon/${d.path}`, sha256Hex(d.after)]));
+  const removed = new Set<string>(p.diff.filter((d) => d.delete).map((d) => `.gnomon/${d.path}`));
   const after = manifestHash([
-    ...manifest.filter((s) => !touched.has(s.path)),
+    ...manifest.filter((s) => !touched.has(s.path) && !removed.has(s.path)),
     ...[...touched].map(([path, sha256]) => ({ path: path as `.gnomon/${string}`, sha256 })),
   ]);
   const paths = proposalPaths(p);
@@ -568,7 +688,17 @@ export function acceptProposal(config: GnomonConfig, given: string, opts: Propos
     open = openSkillDecision(
       config,
       "proposal_decision",
-      { id: p.id, proposal_kind: p.kind, decision: "accept", decided_by: "human", paths, surface_hash_before: before, surface_hash_after: after, ...whoDecided(opts, person) },
+      {
+        id: p.id,
+        proposal_kind: p.kind,
+        decision: "accept",
+        decided_by: policy ? opts.decidedBy : "human",
+        paths,
+        surface_hash_before: before,
+        surface_hash_after: after,
+        ...(grant ? { policy_rule: AUTO_ACCEPT_RULE, policy_evidence: grant } : {}),
+        ...whoDecided(policy ? { ...opts, by: opts.by ?? "improve" } : opts, person),
+      },
       before,
       "proposal"
     );
@@ -585,12 +715,16 @@ export function acceptProposal(config: GnomonConfig, given: string, opts: Propos
     for (const d of p.diff) {
       const file = join(config.gnomonDir, ...d.path.split("/"));
       originals.set(d.path, existsSync(file) ? readFileSync(file, "utf-8") : null);
+      if (d.delete) {
+        rmSync(file, { force: true });
+        continue;
+      }
       ensureDirIn(root, join(file, ".."));
       writeFileIn(root, file, d.after);
     }
     p.status = "accepted";
     p.decided_at = new Date().toISOString();
-    p.decided_by = "human";
+    p.decided_by = policy ? (opts.decidedBy as ProposalDecidedBy) : "human";
     save(config, p);
   } catch (err) {
     for (const [path, was] of originals) {
@@ -613,7 +747,7 @@ export function acceptProposal(config: GnomonConfig, given: string, opts: Propos
 
 /** Reject: the proposal stays in the store, marked rejected with the note; `.gnomon/` is untouched. */
 export function rejectProposal(config: GnomonConfig, given: string, opts: ProposalDecisionOptions = {}): ProposalDecision {
-  humanOnly(opts);
+  byPolicy(opts, "reject");
   const first = readProposal(config, given);
   if (first?.legacy) {
     const hash = recomputeManifest(config.gnomonDir).surface_hash;
@@ -665,7 +799,8 @@ export function renderDiff(config: GnomonConfig, p: Proposal): string {
       before = [];
     }
     if (before.length) out.push(...before.map((l) => `- ${l}`));
-    out.push(...d.after.split("\n").map((l) => `+ ${l}`));
+    if (d.delete) out.push("+ (the file is removed)");
+    else out.push(...d.after.split("\n").map((l) => `+ ${l}`));
   }
   return out.join("\n");
 }

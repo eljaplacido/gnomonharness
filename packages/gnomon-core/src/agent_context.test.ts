@@ -49,6 +49,8 @@ describe("isGnomonAncestor", () => {
     [["node", "/r/packages/gnomon-cli/gnomon.js", "skill", "accept", "x"]],
     [["/bin/sh", "/usr/local/bin/gnomon", "skill", "reject", "x", "--reason", "no"]],
     [["node", "/r/gnomon.js", "audit", "resolve", "a.jsonl:3", "--reason", "r"]],
+    // The schedule a person installed: `gnomon loop run improve`, whose child may accept under [improve] auto_accept.
+    [["node", "/r/gnomon.js", "loop", "run", "improve"]],
     // Not gnomon at all, or an inline program whose text happens to end in it.
     [["bash", "-c", "cd ~/gnomon"]],
     [["/bin/bash", "-lc", "ls /x/gnomon"]],

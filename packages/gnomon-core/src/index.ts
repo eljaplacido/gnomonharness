@@ -92,6 +92,12 @@ export * from "./audit.js";
 export * from "./inbox.js";
 // Proposals (the one path by which the surface changes itself) and governed memory.
 export * from "./proposals.js";
+// `gnomon improve`: mine, propose, probe, compose, and the declared policy that may accept (CONTRACTS.md section 59).
+export { agentReason, decisionContext } from "./agent_context.js";
+export * from "./improve_lint.js";
+export * from "./improve_policy.js";
+export * from "./improve_mine.js";
+export * from "./improve.js";
 export * from "./memory.js";
 // [audit.anchor]: sealed heads copied to a witness the trail's writer cannot
 // rewrite (a remote ref, an RFC 3161 authority, an operator command).

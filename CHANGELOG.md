@@ -88,6 +88,42 @@ list no new host, `security test --host all` runs the same three hosts, and the
   written. The schemas are from each host's documentation (URLs in
   `packages/gnomon-core/src/guard.ts` and GOVERNING-OTHER-HARNESSES.md). Kimi Code's
   hook schema could not be verified, so no adapter.
+### Added — governed self-improvement, step 2: `gnomon improve`
+
+- **`gnomon improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--schedule nightly|weekly] [--json]`**
+  (CONTRACTS §59, `gnomon.improve/1`). Harness^2's Propose, Probe, Compose over the
+  hashed surface, with Hermes Agent's skill-authoring rules as a deterministic lint
+  and its usage-based retirement as a proposal. **Mine** (deterministic, from the audit
+  trails): a repeated refusal (skill), a skill that fires and is never cited
+  (retire), a recurring build command, the files sessions open first or an approval a
+  person keeps declining (memory), a failure class (a `system.md` note); each with its
+  trail and record numbers. **Propose**: a local role (a cloud role only when named)
+  drafts the text, or a template does; every proposal is linted (class-level name, rule
+  plus why, no incident, no secret, nothing that loosens a limit, length caps; a
+  finding blocks auto-accept). **Probe**: each candidate surface against the base on
+  `.gnomon/trials/` through `gnomon eval`'s machinery (a commit built with git plumbing,
+  paired cells in temporary clones, `k` attempts, a USD/request budget), recording pass
+  rate, output tokens, steps, refusals and check verdicts; with no trial spec the
+  proposal is `unprobed`. **Compose**: candidates of one kind that each improved without
+  regressing become one probed proposal. Output is proposals plus one inbox item; a
+  dry run (the default) calls no model and writes nothing.
+- **Declared policy acceptance, opt-in**: `[improve] auto_accept = [skill, memory]`
+  with `min_probe_runs`, `min_pass_delta`, `max_token_increase` lets `improve --run`
+  accept as `policy:improve.auto_accept`, only for a lint-clean, probed proposal whose
+  cited eval report is intact and for this exact diff and surface, meeting the thresholds,
+  on a skill, memory or `system.md` path (harness only if listed). Never a retirement,
+  an unprobed proposal, or a policy/roles/tools/config/trials/loops file. `proposal_decision`
+  gains `policy_rule` and `policy_evidence`. This lifts #282's refusal of policy deciders
+  for exactly that rule.
+- A retirement is a `skill` proposal whose diff entry carries `delete: true`.
+- `gnomon improve --schedule nightly|weekly` writes `.gnomon/loops/improve.toml` (a person,
+  at a terminal; installing it in cron stays `gnomon loop install improve`); `--scheduled` is
+  a dry run unless `[improve] scheduled = run`. `gnomon loop run improve` is the one gnomon
+  ancestor a policy acceptance may have.
+- Dashboard Proposals section: lint, probe status and a base-against-candidate contrasts
+  table per proposal, and the recent improve runs. `gnomon eval` gains the internal options
+  `attempts`, `maxRequests` and `stop` that a probe uses.
+
 ### Added — governed self-improvement, step 1: proposals and memory
 
 - **One proposal path** (`gnomon proposals [list|show|accept|reject]`, `/proposals`,

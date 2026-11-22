@@ -51,6 +51,16 @@ function show(config: GnomonConfig, p: Proposal): string {
   ];
   if (p.rationale) out.push("", ...p.rationale.split("\n").map((l) => `  ${l}`));
   if (p.evidence?.length) out.push("", `  evidence: ${p.evidence.map((e) => [e.trail, e.seq !== undefined ? `#${e.seq}` : "", e.note ?? ""].join("")).join(", ")}`);
+  const im = p.improve;
+  if (im) {
+    const pr = im.probe;
+    out.push("", `  gnomon improve (${im.run}): ${im.candidate}, drafted by ${im.drafted_by}; lint ${im.lint.clean ? "clean" : im.lint.problems.join("; ")}`);
+    if (pr.status === "probed" && pr.base && pr.candidate) {
+      const pct = (v: number | null | undefined) => (v === null || v === undefined ? "n/a" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`);
+      out.push(`  probe on ${pr.spec}, k = ${pr.k}, ${pr.pairs?.valid}/${pr.pairs?.planned} pairs: pass ${pr.base.passes}/${pr.base.n} -> ${pr.candidate.passes}/${pr.candidate.n} (${pct(pr.pass_delta)}), output tokens ${pct(pr.token_delta)}, steps ${pct(pr.request_delta)}, refusals ${pr.base.refusals} -> ${pr.candidate.refusals}${pr.regressed ? ", REGRESSED" : pr.improved ? ", improved" : ""}`);
+    } else out.push(`  probe: ${pr.status}${pr.reason ? ` (${pr.reason})` : ""}${pr.hint ? `; ${pr.hint}` : ""}`);
+    if (im.composed_of?.length) out.push(`  combines: ${im.composed_of.join(", ")}`);
+  }
   out.push("", renderDiff(config, p));
   if (p.decided_at) out.push("", `  ${p.status} ${p.decided_at} by ${p.decided_by}${p.note ? `: ${p.note}` : ""}`);
   return out.join("\n");

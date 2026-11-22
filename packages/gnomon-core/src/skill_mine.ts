@@ -213,7 +213,7 @@ function commandHead(command: string): string {
 // Mining
 // ---------------------------------------------------------------------------
 
-function readRecords(file: string): AuditRecord[] {
+export function readRecords(file: string): AuditRecord[] {
   const out: AuditRecord[] = [];
   for (const line of readFileSync(file, "utf-8").split("\n")) {
     if (!line.trim()) continue;
