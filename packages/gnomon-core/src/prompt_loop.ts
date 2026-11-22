@@ -75,6 +75,7 @@ import {
   type EscalateTrigger,
   type EscalateRoute,
 } from "./config.js";
+import { thinkCapNote, thinkCapRecord, resolveThinkCap, type ThinkCapCounters } from "./think_cap.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence,
   safeForPrompt, traceLines, isEmptyReasoning, terminalWidth, summaryResult, fitRow,
 } from "./render.js";
@@ -1003,6 +1004,12 @@ interface InferenceResult {
    * an answer is reading the model think.
    */
   reasoningOnly?: boolean;
+  /**
+   * `[turn] max_reasoning_tokens_without_action` (think_cap.ts): the streamed
+   * reply was stopped because its reasoning passed the cap with no answer text
+   * and no tool call. Code 0, nothing usable: the loop sends one note and asks again.
+   */
+  thinkCut?: { tokens: number; chars: number };
   /**
    * The reply's reasoning channel (reasoning_content, or reasoning), when it
    * had one and it did not stand in for the content. Replayed on the
@@ -2388,11 +2395,17 @@ async function callEndpointOnce(
           trace.firstByteAt ??= Date.now();
           rearm();
         },
-        tokenClock ? firstToken : undefined
+        tokenClock ? firstToken : undefined,
+        target.thinkCapTokens ? { thinkCapTokens: target.thinkCapTokens } : {}
       );
       drained = s.complete;
       trace.detail = s.usageDetail;
       trace.reasoningChars = s.reasoning.length;
+      // A runaway reply: not drained, so the finally below closes the
+      // connection and the server stops generating it.
+      if (s.thinkCut) {
+        return { content: "", code: 0, toolCalls: [], thinkCut: s.thinkCut, usage: s.usage };
+      }
       if (s.error) {
         // An error sent in place of a chunk: the request was accepted and
         // failed on the way. Read exactly as the same text in a non-2xx body.
@@ -2756,6 +2769,11 @@ export interface StreamedReply {
    * answers 422.
    */
   reasoningFromParts?: boolean;
+  /**
+   * Reading stopped because the reasoning passed `opts.thinkCapTokens` with no
+   * answer text and no tool call (think_cap.ts). `complete` stays false.
+   */
+  thinkCut?: { tokens: number; chars: number };
 
   /**
    * `data:` lines that were not JSON. Each was a chunk of the reply, and its
@@ -2764,6 +2782,31 @@ export interface StreamedReply {
    * (gnomon chaos, corrupt.stream).
    */
   unparsed: number;
+}
+
+/**
+ * Whether a streamed reply has run away (think_cap.ts): reasoning past `cap`
+ * tokens with no answer text and no tool call yet. The reasoning is counted
+ * as the trace shows it -- the provider's channel (reasoning_content,
+ * reasoning, thinking, reasoning_details text, thinking parts) and any inline
+ * markup in the content (`reasoningOf`, `splitThinking`) -- at estimateTokens'
+ * rate. Answer text outside the markup, or any tool call, means the reply is
+ * acting and it is never cut.
+ */
+export function reasoningRunaway(
+  channel: string,
+  content: string,
+  toolCalls: number,
+  cap: number
+): { tokens: number; chars: number } | undefined {
+  if (toolCalls > 0) return undefined;
+  // Cheap gate: until the raw text could hold `cap` tokens, nothing to measure.
+  if (estimateTokens(channel) + estimateTokens(content) <= cap) return undefined;
+  const split = content === "" ? { think: "", answer: "" } : splitThinking(content);
+  if (split.answer.trim() !== "") return undefined;
+  const thought = reasoningOf(channel, split.think);
+  const tokens = estimateTokens(thought);
+  return tokens > cap ? { tokens, chars: thought.length } : undefined;
 }
 
 /**
@@ -2786,9 +2829,12 @@ export async function readChatStream(
    * reasoning or a tool call -- and never for a keep-alive comment or an
    * empty role chunk. The first-token watchdog reads it.
    */
-  onToken?: () => void
+  onToken?: () => void,
+  /** `thinkCapTokens`: stop reading once a reply runs away (reasoningRunaway). */
+  opts: { thinkCapTokens?: number } = {}
 ): Promise<StreamedReply> {
   const out: StreamedReply = { content: "", reasoning: "", toolCalls: [], complete: false, unparsed: 0 };
+  const capAt = opts.thinkCapTokens && opts.thinkCapTokens > 0 ? opts.thinkCapTokens : 0;
   const decoder = new TextDecoder();
   let buffer = "";
   let data: string[] = [];
@@ -2904,6 +2950,13 @@ export async function readChatStream(
     if (typeof choice.finish_reason === "string" && choice.finish_reason) {
       out.finishReason = choice.finish_reason;
       out.complete = true;
+    }
+    if (capAt > 0 && !out.complete) {
+      const run = reasoningRunaway(out.reasoning, out.content, out.toolCalls.length, capAt);
+      if (run) {
+        out.thinkCut = run;
+        done = true;
+      }
     }
   };
 
@@ -5087,6 +5140,12 @@ export interface TurnCounters {
    */
   checkpoint?: CheckpointCounters;
   /**
+   * `[turn] max_reasoning_tokens_without_action` (think_cap.ts, CONTRACTS §52):
+   * replies stopped this turn and the reasoning tokens each had reached.
+   * Absent when the key is not declared.
+   */
+  think_cap?: ThinkCapCounters;
+  /**
    * Streamed requests aborted because no token arrived within `[resilience]
    * first_token_timeout_ms`, and asked again under the retry budget. Absent
    * when none were.
@@ -5583,6 +5642,9 @@ export function resolvedSessionRecord(config: GnomonConfig, roles: string[]): Re
     // `[sandbox] profile = "container"`: which protections it relaxed and
     // which it kept. Absent under "default".
     ...(sandboxProfile ? { sandbox_profile: sandboxProfile } : {}),
+    // `[turn] max_reasoning_tokens_without_action` (think_cap.ts, CONTRACTS §52).
+    // Absent unless declared.
+    ...(thinkCapRecord(config) ? { think_cap: thinkCapRecord(config) } : {}),
   };
 }
 
@@ -6185,6 +6247,13 @@ async function agenticTurn(
   // The most recent test command the model ran with exit 0 in this turn.
   let lastPassingTest: string | undefined;
   if (grindOn) counters.checkpoint = { v: 1, outcome: "not_reached" };
+  // The think cap (think_cap.ts): off unless declared. Replies in a row it
+  // stopped; at [turn] max_consecutive_malformed the next call runs uncapped,
+  // so a model that can only think long is not stopped forever, and any reply
+  // that was not stopped re-arms it.
+  const thinkCap = resolveThinkCap(config);
+  if (thinkCap !== undefined) counters.think_cap = { v: 1, cuts: 0, tokens_at_cut: [] };
+  let consecutiveThinkCuts = 0;
   // Run the checkpoint's check as the declared [verify] check runs: through
   // the bash tool, sandbox and governance included, ungated unless approval
   // is "always". Never as a job, never cut by the turn's own abort (the end
@@ -6608,6 +6677,9 @@ async function agenticTurn(
   const announceRetry = deps.warn ?? deps.say;
   const call = async (declared: typeof route.target) => {
     let target = adaptTarget(state, declared);
+    if (thinkCap !== undefined && consecutiveThinkCuts < loop.max_consecutive_malformed) {
+      target = { ...target, thinkCapTokens: thinkCap };
+    }
     const offer = noTools.has(target.model) ? [] : toolSet.schemas;
     let r = await callEndpointWithRetry(
       target,
@@ -7400,6 +7472,37 @@ async function agenticTurn(
     // stop_reason "answered". Ask once for the rest, bounded like the blank
     // retry, then let it stand rather than looping.
     lastFinishReason = result.finishReason;
+
+    // `[turn] max_reasoning_tokens_without_action` (think_cap.ts): the reply
+    // was stopped mid-stream for thinking past the cap with nothing to show.
+    // Its reasoning is not echoed (it is the problem); one short note asks for
+    // a script or a command instead, and the model is asked again.
+    if (result.code === 0 && result.thinkCut) {
+      consecutiveThinkCuts++;
+      const tc = counters.think_cap!;
+      tc.cuts++;
+      tc.tokens_at_cut.push(result.thinkCut.tokens);
+      deps.audit?.write("think_cap", {
+        role,
+        step: steps,
+        cap: thinkCap,
+        reasoning_tokens: result.thinkCut.tokens,
+        reasoning_chars: result.thinkCut.chars,
+        consecutive: consecutiveThinkCuts,
+        rearmed: consecutiveThinkCuts < loop.max_consecutive_malformed,
+        model: usedModel,
+      });
+      warn(
+        paint(
+          deps.ui,
+          "yellow",
+          `  [loop] reasoning passed ${thinkCap} tokens with no tool call — stopped it, asking for a script or a command`
+        )
+      );
+      working.push({ role: "user", content: thinkCapNote(thinkCap!) });
+      continue;
+    }
+    consecutiveThinkCuts = 0;
 
     // Set when a reply with no usable tool call arrives and the repair budget
     // is spent. The turn then ends through the same no-tools wrap-up as the

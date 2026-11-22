@@ -1,0 +1,16 @@
+{
+  "v": 1,
+  "_comment": [
+    "docs/CONTRACTS.md section 52: the think cap, one opt-in key, ported alone from the OC-mode bundle.",
+    "packages/gnomon-core/src/think_cap.test.ts asserts the code equals this file."
+  ],
+  "key": { "name": "config.toml [turn] max_reasoning_tokens_without_action", "values": "an integer >= 1000", "default": null },
+  "token_rate": "ceil(chars / 4)",
+  "event": "think_cap",
+  "event_fields": ["role", "step", "cap", "reasoning_tokens", "reasoning_chars", "consecutive", "rearmed", "model"],
+  "record": "session_start.resolved.think_cap {max_reasoning_tokens_without_action}",
+  "counters": "counters.think_cap {v, cuts, tokens_at_cut[]}",
+  "uncapped_after": "[turn] max_consecutive_malformed cuts in a row",
+  "note": "Your last reply reasoned for over {cap} tokens without a tool call or any text, so it was stopped. Stop reasoning at length; write a script or run a command to get the answer.",
+  "trace_notice": "  [loop] reasoning passed {cap} tokens with no tool call — stopped it, asking for a script or a command"
+}

@@ -237,7 +237,7 @@ so both format drift and non-determinism fail the build.
                  "skill_accept", "skill_reject", "skill_trial", "record_tamper",
                  "record_tamper_resolved", "record_notice", "mcp_tools", "stall_signal",
                  "completion_gate", "todo_gate", "job", "deliverable_first", "first_token_stall",
-                 "checkpoint", "finish_gate", "model_call", "escalation", "eval_run",
+                 "checkpoint", "think_cap", "finish_gate", "model_call", "escalation", "eval_run",
                  "session_end"],
   "guard_decision": ["allow", "deny", "ask"],
   "guard_rule": ["tools", "malformed", "bash_deny", "bash_allow", "sudo", "sandbox", "surface",
@@ -4715,3 +4715,45 @@ run. The pack changes nothing in the project and never says compliant.
 
 **Fixture**: `conformance/evidence_pack.json`;
 `packages/gnomon-cli/src/pack.test.ts`.
+
+## 52. The think cap — `[turn] max_reasoning_tokens_without_action`, audit kind `think_cap`, `counters.think_cap`, `v: 1`
+
+**Why.** A model that reasons for minutes before its first action burns the
+turn's wall clock and tokens on one reply (on the CB3 wire, 21% of gnomon's
+model time was in calls over 120 s). This key, one of the OC-mode mechanics
+from the bench branch, is ported alone so it can be measured as a single
+variable. It is opt-in and unmeasured.
+
+| key | file, block | values | absent |
+|---|---|---|---|
+| `max_reasoning_tokens_without_action` | config.toml `[turn]` | an integer of at least 1000 | no cap |
+
+**The cap.** It applies only to streamed calls on an OpenAI-shaped endpoint.
+After each chunk, a reply is stopped when it has no tool call, no answer text
+and reasoning of more than the cap in tokens (`ceil(chars/4)`). Reasoning is
+counted as the trace shows it: the provider's channel (`reasoning_content`,
+`reasoning`, `thinking`, `reasoning_details` text and summaries, thinking
+parts) together with inline markup in the content (`<think>`, `<thinking>`,
+`[THINK]` and the other forms `splitThinking` reads). Any answer text outside
+the markup, or any tool call, means the reply is acting and it is never
+stopped. The connection is closed so the server stops generating. The
+reasoning is not echoed back and the reply is not part of the history. The next
+request ends with one user message: "Your last reply reasoned for over {cap}
+tokens without a tool call or any text, so it was stopped. Stop reasoning at
+length; write a script or run a command to get the answer." The live trace
+shows `  [loop] reasoning passed {cap} tokens with no tool call — stopped it,
+asking for a script or a command`. After `[turn] max_consecutive_malformed`
+stops in a row, the next call runs uncapped; any reply that was not stopped
+re-arms the cap. A stop does not count as a step.
+
+**Recorded.** Each stop writes a `think_cap` audit record: `role`, `step`,
+`cap`, `reasoning_tokens`, `reasoning_chars`, `consecutive`, `rearmed` and
+`model`. `counters.think_cap = {v: 1, cuts, tokens_at_cut: [..]}` is on the
+turn record when the key is declared, and `session_start.resolved.think_cap`
+holds the cap. The key is in `BLOCK_KEYS`, so declaring it moves the surface
+hash. A value that is not an integer of at least 1000 is a fatal surface
+finding. Absent, the request bodies, the audit trail and the turn record are
+byte for byte what they were (`think_cap.test.ts`, "absent").
+
+**Fixture**: `conformance/think_cap.json`;
+`packages/gnomon-core/src/think_cap.test.ts` asserts the code equals it.
