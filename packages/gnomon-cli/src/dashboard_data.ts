@@ -122,7 +122,7 @@ export function knownProjects(opts: { cwd: string; dir?: string; trustPath?: str
   return out;
 }
 
-function configOf(p: DashboardProject): GnomonConfig {
+export function configOf(p: DashboardProject): GnomonConfig {
   return loadConfig(p.root);
 }
 
@@ -202,9 +202,9 @@ export interface TrailSummary {
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
-const clip = (s: string, n = 240): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+export const clip = (s: string, n = 240): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-function readRecords(path: string): { records: AuditRecord[]; unreadable: number } {
+export function readRecords(path: string): { records: AuditRecord[]; unreadable: number } {
   const records: AuditRecord[] = [];
   let unreadable = 0;
   let text = "";

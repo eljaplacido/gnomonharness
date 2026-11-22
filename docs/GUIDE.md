@@ -1631,6 +1631,28 @@ are stored in this browser's localStorage and nowhere else. Every screen state
 is in the address bar: `#/session/<project>/<trail>`,
 `#/setup/<project>/step-3`, `#/setup/<project>/init`.
 
+**The Lens: spec to verify, per project.** Each project card links to its
+Lens (`#/lens/<project>`), which shows how gnomon covers that project end to
+end, read from the records and never scored: the *intent* (the declared
+`[verify]` check, the `.gnomon/trials/*.toml` specs, and each request a person
+made, shown on this machine only), the *runs* (sessions per harness, including
+other harnesses under `gnomon guard`, roles, `task` delegations, models local
+or cloud, skills fired, read and cited, hand-offs, stop reasons, a per-session
+swimlane and a path map of each request's tool calls with dead ends marked),
+the *evidence* (test commands and their exits, `[verify]` verdicts including
+`passed_unverified`, `gnomon check` and eval results, review gates), the
+*governance* (guard decisions and refusals by rule, approvals, trust posture)
+and the *measures* (tokens, cache share, latency, context fill and trims, cost
+only when a record carries one). Every request and spec carries a **quorum of
+evidence** meter: one segment each for test run, `[verify]`, check or eval,
+review and policy, each lit only by evidence of its own kind. A request reads
+"verified" only when two independent kinds agree and one of them judges the
+work (test, verify or check); otherwise it says "single source", "contradicted",
+"failing" or "insufficient evidence". Four tiles summarise coverage: sessions
+under guard, turns with verify evidence, specs with passing evidence, and
+trails whose hash chain verifies. The API is `GET /api/p/<id>/lens` and
+`/api/p/<id>/lens/run?name=<trail>`.
+
 ### 7.6 Containment: what it is, and what it is not
 
 | Control | Governs | Does not govern |
