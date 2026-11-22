@@ -56,6 +56,15 @@
   field (`[{name, tokens_saved}]`) count the savings; `conformance/audit_record_schema.json` and
   `conformance/skill_use.json` list it. Absent key: the prompt and records are unchanged. No new write path.
   Adopted from a reverse-engineering study of Hermes Agent's skill disclosure, without its mandatory-load wording.
+### Fixed — hosted models with no published window no longer trim at ~39k: the live listing, then a dated catalog
+
+- A Claude run trimmed at ~39k real tokens (the `[defaults]` 65,536 fallback) against a 1,000,000-token window, earlier
+  than 0.6.5. On `api.anthropic.com` gnomon now asks the Models API (`GET /v1/models/<id>`, `max_input_tokens`,
+  `x-api-key`): `max_context_tokens_source: "listing:anthropic"`. When that is unreachable (a metering relay) a
+  dated, data-only table of known hosted windows applies (Claude 5.x and 4.6 to 4.8: 1,000,000, `claude-haiku-4-5`:
+  200,000, `deepseek-v4.1-flash`: 1,000,000), recorded as `"catalog"`. Order: declared number, listing, catalog,
+  `[defaults]`; a loopback endpoint never matches the catalog and an unknown model falls to `[defaults]`. CONTRACTS §24,
+  GUIDE and `conformance/endpoint_window.json` (sources, anthropic shape, table, precedence cases) move with it.
 
 ### Added — the audit record schema, and the skill enumerations (#113), CONTRACTS §55
 
