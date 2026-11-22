@@ -4795,6 +4795,10 @@ An unknown subcommand is exit 10.
   project is asked about rather than refused, so `bash_write_outside`
   expects `blocked` there (`expect_win32`).
 
+**`--sandbox`** (opt-in, §61) adds a `sandbox_probes` object to the `--json` report and the sandbox-escape
+probes to the text report, and makes the exit 2 when a claimed containment did not hold. Without the flag
+the report, `gnomon.security_test/2` and the exit are unchanged.
+
 **Fixture**: `conformance/security_test.json`, which holds the corpus ids,
 expectations, families, OWASP ids, keys and exits.
 `packages/gnomon-cli/src/security_test.test.ts` covers:
@@ -5647,3 +5651,110 @@ scripted model, k, regression, composition, the budget, the policy's every
 refusal, retirement, byte-identity of a normal run with an `[improve]` table) and
 `packages/gnomon-cli/src/improve_cmd.test.ts` (flags, refusals, the schedule file,
 output, the dashboard view).
+
+## 60. Trajectory scan — `gnomon audit scan`, `gnomon.audit_scan/1`, `v: 1`
+
+An offline, deterministic, advisory reader of trails for multi-step patterns that a
+per-call guard cannot see. It runs no model, loads no surface, writes nothing and
+blocks nothing: a finding is a pointer to steps to read, never a verdict.
+
+**Command.** `gnomon audit scan [<trail.jsonl | dir>] [--min-severity low|medium|high] [--json]`.
+A directory is walked recursively for `*.jsonl` (no symlinks, no `node_modules`, no
+`.git`); the default path is `<dir>/.gnomon-audit`. A file with no audit record is
+listed under `skipped`. The hash chain is not verified (`gnomon audit verify` does
+that). Exit 0 no finding at or above `--min-severity` (`info`, `low`, `medium` or `high`; default
+`low`), 2 a finding, 10 could not run (no such path, a bad `--min-severity`).
+
+**What it reads.** Two kinds of trail: a gnomon session (`tool_call` records: `tool`,
+`target`, `bucket`, `governance`, and `result` under `record = "full"`) and the
+cross-harness feed (§44: `guard` records with `tool`, `target`, `decision`, from
+Claude Code, opencode, Cursor, Codex and the others governed through `gnomon guard`).
+A step is *denied* when a gnomon call's bucket is `refusal` or its governance
+decision is `deny`, or a guard record's decision is `deny`; an `ask` in a feed is
+treated as having run, because the feed does not record whether a person approved
+it. A refusal whose summary says the role may not use the tool is a limit of the
+role, not an attempt, and is not counted as one. `session_start.cwd` is the project
+root. A metadata-only trail keeps each call's tool and target, which is enough for
+every rule but `injection_followed_by_action`; a trail with no recorded tool output
+is reported (`results_recorded: false`), never as clean.
+
+**Rules and severities** (`rule`, `severity`, evidence steps in order):
+
+| Rule | Fires when | Severity |
+|---|---|---|
+| `slow_exfiltration` | an allowed read of a credential location (`.env`, `~/.ssh`, cloud and token files, private keys, shell history, an environment dump) is followed later by network (an upload: `curl -d`, `nc`, `scp`, `ssh`, an interpreter's socket code; a fetch; a web tool), a write outside the project root (temp directories excepted) or an encoding step (`base64`, `xxd`, `zip`, `tar c`) | `high` an upload, or an encoding step then a network call that sends; `medium` a fetch, an outside write or an encoding step; `low` a web-tool fetch; loopback targets and `.env.example`-style files never count |
+| `staged_payload` | a file written (tool, redirect, `tee`, a download's output, `cp`/`mv`) is made executable (`chmod +x`, a mode with an x bit) | `info` inside the project (`chmod +x script; ./script` is ordinary work, hidden at the default `--min-severity low`); in a temp or dot directory `low`, `medium` when it is then run (`./f`, an absolute path, `sh f`); downloaded `medium`, `high` when run. A script run through an interpreter without `chmod` does not fire |
+| `privilege_creep` | three or more different targets of one tool refused within twelve steps (a refusal that says the role may not use the tool does not count) | `low` 3-4, `medium` 5-9, `high` 10 or more |
+| `credential_probing` | three or more credential locations of at least two kinds through at least two tools; or two or more refused with three or more locations | `medium`; `high` with a refusal and four or more locations |
+| `injection_followed_by_action` | recorded tool output carries an instruction-like phrase ("ignore previous instructions", "disregard your rules", a role-switch, "do not tell the user", a chat-template tag) and within six steps a network call, a credential touch, a write outside the root, a refusal, `git push`, `chmod +x` or `rm -r` follows | `high` an upload, a credential touch or a refusal; `medium` otherwise |
+| `guard_evasion` | (a) a `cd` that leaves the root toward an ancestor, the home or a system tree, then a relative-path change in the same command; (b) a symlink to outside the root or a credential, then a write through it; (c) a call refused through one tool and the same path then reached through another (a write retried as a shell redirect, a read as `cat`) | (a) `low` (weak alone); (b) `high`; (c) `high` when the refused path is a credential, `.gnomon/`, a git hook, CI or a host's config, else `medium`, `low` when it is a temp file; for a refused shell command only paths outside the root or secrets count |
+
+**Report** (`--json`): `schema` (`gnomon.audit_scan/1`), `path`, `min_severity`,
+`trails` (`trail`, `host`, `steps`, `denied`, `results_recorded`, `findings`),
+`skipped`, `findings` (`rule`, `severity`, `trail`, `summary`, `evidence`:
+`seq`, `tool`, `target`, `as`), `by_rule`, `by_severity`, `limits`, `exit`. Findings are
+ordered by trail, first evidence step, rule, so the same files give byte-identical
+output. An evidence `target` is shortened to 140 characters with bearer tokens,
+`token=`/`key=`/`password=` values and `-u` credentials masked; it is not a secret store.
+
+**Limits, stated by the report.** It reads each call's tool and target: a path built at
+run time or code an interpreter runs is not seen; a heredoc body is dropped as text, so
+code written that way is judged only by what the command does with it; a container
+whose working directory differs from `session_start.cwd` can read paths as outside the
+root. It is advisory and after the fact. The false-positive rate on real trails is
+measured per change, not asserted here.
+
+**Fixture**: `conformance/audit_scan.json` (synthetic trails and the findings a reader must
+produce, with the cases that must stay silent); `packages/gnomon-cli/src/audit_scan.test.ts`
+(the fixture, the metadata-only trail, masking, the command's exits, determinism, that
+scanning writes nothing).
+
+## 61. Sandbox-escape probes — `gnomon security test --sandbox`, `gnomon.sandbox_probes/1`, `v: 1`
+
+An opt-in group of the security test (§50): without `--sandbox` the report, its exit and
+`gnomon.security_test/2` are byte-identical to before. With it, the report gains a
+`sandbox_probes` object and the exit is 2 when a claimed containment did not hold.
+
+**Safety.** The probes are configuration and containment checks. They run no exploit
+and no kernel exploit, attempt no breakout, need no root, and touch only a temp
+directory the test creates and removes: a canary file outside a project root it made,
+a fake credential in a substituted HOME (the real one is never read), a loopback port
+and one on this machine's own address that it opened, one `connect()` to the docker
+socket closed at once with nothing sent, `/proc/self` reads, and `test -w` (an `access(2)`
+call that writes nothing) on `/proc/sys/kernel/core_pattern`, `/proc/sysrq-trigger` and
+the cgroup files. Docker is used only if the image is already present (default
+`debian:stable-slim`, `--image REF`); nothing is pulled.
+
+**Configurations** (`configs`): `tools_off`, `tools_confined`, `tools_strict` (the
+`read`/`write` tool paths at each `[sandbox] level`), `exec_off`, `exec_os`
+(`reads = all`), `exec_os_scoped` (`reads = scoped`) and `exec_docker` (`network = false`),
+the last four for `bash`. One that cannot be measured here (no docker or image, no
+Landlock, Windows) is `skipped` with the reason in `configs[].skipped`, never passed.
+
+**Probes** (`probes`, with the survey's escape class: SandboxEscapeBench's
+misconfiguration, privilege allocation and runtime/orchestration, plus the
+permission boundary an OS sandbox draws): a canary outside the root read and written
+through the tools and through `bash`; a symlink out of the root; a fake credential in
+HOME; network egress to a non-loopback address and to loopback with `network = false`;
+the docker socket; `no_new_privs`; effective capabilities (CAP_SYS_ADMIN, privileged);
+host PID and network namespaces; writable host mounts besides the root; `/proc/sys` and
+cgroup writability. Each lists where it `applies` and where gnomon `claimed` it holds.
+
+**Cells.** Each probe on each configuration is `pass` (claimed, held), `FAIL` (claimed,
+did not hold: exit 2), `open` (not claimed, and it is open: the documented limit),
+`contained_unclaimed`, `skipped` (could not be measured: with the reason) or `n/a`.
+Each probe has a control where one is possible (a file inside the root must read and
+write, an unsandboxed run must escape), and a sandbox that refuses to start is
+`skipped`, not a pass. A refused connection to the loopback port under `exec = os` is
+not expected: loopback is open by design there, and the report says `open`.
+
+**Matrix.** `matrix` is the claim per sandbox level and threat (`file_escape`,
+`network`, `process`, `credential`, `container_breakout`): `covered`, `partially` or
+`not covered`, the same table as docs/THREAT-MODEL.md (a test holds the two equal). It
+states that docker here is a shared-kernel container, that there is no microVM or
+gVisor backend, and that kernel flaws and side channels are not probed.
+
+**Fixture**: `conformance/sandbox_probes.json`; `packages/gnomon-cli/src/sandbox_probes.test.ts`
+(the contract, the docs matrix, the tool paths, a negative control that proves an
+escape under a claimed level is a FAIL, and the `os` and `docker` probes where the
+machine has them).

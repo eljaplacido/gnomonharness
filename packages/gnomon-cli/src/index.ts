@@ -1492,6 +1492,25 @@ async function cmdAudit(args: CliArgs): Promise<void> {
     }
     return;
   }
+  // The trajectory scan (audit_scan.ts): offline, over trails named on the
+  // command line, so it needs no surface and loads none.
+  if (args.subcommand === "scan") {
+    const { scanPath, formatScan, AUDIT_SCAN_SCHEMA, AUDIT_SCAN_EXIT, SEVERITIES } = await import("./audit_scan.js");
+    const min = args.flags["min-severity"];
+    if (min !== undefined && !(SEVERITIES as readonly string[]).includes(min)) {
+      process.exit(commandError(args, AUDIT_SCAN_SCHEMA, `--min-severity ${min}: use one of ${SEVERITIES.join(", ")}.`, AUDIT_SCAN_EXIT.couldNotRun));
+    }
+    try {
+      const target = args.positional[0] ?? join(projectRoot(args), ".gnomon-audit");
+      const report = scanPath(target, { minSeverity: min as (typeof SEVERITIES)[number] | undefined });
+      if (args.json) console.log(JSON.stringify(report, null, 2));
+      else for (const l of formatScan(report)) console.log(l);
+      if (report.exit !== 0) process.exit(report.exit);
+    } catch (err) {
+      process.exit(commandError(args, AUDIT_SCAN_SCHEMA, `audit scan could not run: ${err instanceof Error ? err.message : String(err)}`, AUDIT_SCAN_EXIT.couldNotRun));
+    }
+    return;
+  }
   const config = loadConfig(args.dir, args.flags['profile']);
   const settings = resolveAudit(config);
   // [audit.anchor] pushes to a remote, posts to an authority or runs a
@@ -2622,6 +2641,20 @@ async function cmdSecurity(args: CliArgs): Promise<number> {
     try {
       const hosts = host === "all" ? SECURITY_TEST_HOSTS : ([host] as Array<(typeof named)[number]>);
       const report = runSecurityTest(dir, { role: args.role, hosts });
+      // Opt-in: the sandbox-escape probes (sandbox_probes.ts). Without the flag the
+      // report and its exit are what they always were.
+      if (args.flags.sandbox === "true") {
+        const { runSandboxProbes, formatSandboxProbes } = await import("./sandbox_probes.js");
+        const image = args.flags.image && args.flags.image !== "true" ? args.flags.image : undefined;
+        const probes = await runSandboxProbes({ image });
+        const exit = report.exit !== 0 && report.exit !== 10 ? report.exit : probes.exit !== 0 ? probes.exit : report.exit;
+        if (args.json) console.log(JSON.stringify({ ...report, exit, sandbox_probes: probes }, null, 2));
+        else {
+          for (const l of formatSecurityTest(report)) console.log(l);
+          for (const l of formatSandboxProbes(probes)) console.log(l);
+        }
+        return exit;
+      }
       if (args.json) console.log(JSON.stringify(report, null, 2));
       else for (const l of formatSecurityTest(report)) console.log(l);
       return report.exit;
@@ -3184,7 +3217,7 @@ Commands:
           report what came back. A model listing is not a test of a key —
           some providers serve one to no key at all.
 
-  audit [show|verify|anchor|tamper|metrics|schema|resolve <trail>:<seq> --reason <text>] [--dir <path>]
+  audit [show|verify|anchor|tamper|metrics|scan|schema|resolve <trail>:<seq> --reason <text>] [--dir <path>]
     Audit trails, when [audit] is enabled. 'verify' re-hashes each record
     and checks the chain, so a trail altered after the fact is detectable.
     With [audit.anchor] declared it also checks every sealed head against
@@ -3205,6 +3238,18 @@ Commands:
     guard's trails, other harnesses' sessions (Claude Code, opencode,
     Cursor): calls, decisions, rules and tools per host. Model-free. Exit 0,
     2 when a trail failed verification (left out), 10 could not run.
+    'scan [<trail.jsonl|dir>] [--min-severity info|low|medium|high] [--json]' reads
+    trails offline for multi-step patterns a per-call guard cannot see:
+    a credential read followed later by network, a write outside the
+    project or an encoding step; a file written, made executable, then run;
+    repeated refusals with variations; credential locations probed across
+    tools; an injection-like marker in tool output followed by a risky
+    action (record = "full" trails only); a cd out of the root, a symlink
+    out then a write through it, a refusal retried through another tool.
+    Works on gnomon trails and the guard feed of other harnesses; a
+    metadata-only trail is enough for every rule but the marker one.
+    Advisory and model-free; nothing is blocked. Default path:
+    .gnomon-audit/. Exit 0 no finding, 2 a finding, 10 could not run.
 
   skill [list [--candidates]|accept <id> [--evidence <report.json>]|reject <id> [--reason <text>]|mine [--json]] [--dir <path>]
     Skills the harness has learned. An agent proposes into
@@ -3377,7 +3422,7 @@ Commands:
     surface problem); advice names a setting that would contain more. Runs
     no model and changes nothing. Exit 0 no risk, 2 a risk, 10 could not run.
 
-  security test [--host claude-code|opencode|cursor|codex|qwen-code|copilot|all] [--role <r>] [--json] [--dir <path>]
+  security test [--host claude-code|opencode|cursor|codex|qwen-code|copilot|all] [--role <r>] [--sandbox [--image <ref>]] [--json] [--dir <path>]
     A model-free attack corpus run through the real guard against a scratch
     copy of this surface (bait .env, CI workflow, a precious directory, an
     isolated HOME; all removed afterwards): destructive commands,
@@ -3386,6 +3431,17 @@ Commands:
     bypassPermissions, and controls against over-blocking. Each case is
     mapped to OWASP LLM Top 10 ids and says what it expected and got.
     Exit 0 every case held, 2 one did not, 10 could not run.
+    --sandbox adds the sandbox-escape probes: configuration and containment
+    checks (never exploits) of every place a command runs: tool paths at
+    each [sandbox] level, and bash under exec = off, os, os with reads =
+    scoped, and docker (the image must already be present; --image names
+    another). Canary files outside the project root, a fake credential in a
+    substituted HOME, network egress with network = false, the docker
+    socket, capabilities and no_new_privs, host PID/network namespaces,
+    writable host mounts, /proc/sys and cgroup. Each probe is reported per
+    level as pass, FAIL (a claimed containment that did not hold: exit 2),
+    open (not claimed, a documented limit), or skipped with why. Needs no
+    root; skips where docker or the OS sandbox is unavailable.
 
   compliance [--framework <id,...>] [--json] [--catalog <file>] [--dir <path>]
     Which controls of which frameworks this project has gnomon evidence for:

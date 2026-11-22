@@ -26,6 +26,47 @@
 
 ## [Unreleased]
 
+### Security: trajectory scan and sandbox-escape probes
+
+Two additions from the 2026-11 harness survey (ideas #7 and #8). Both are opt-in
+commands or flags; with neither, every session, every record, the prompt, the tool
+definitions and `gnomon security test` itself are byte-identical to 0.6.6.
+
+- **`gnomon audit scan [<trail|dir>] [--min-severity ...] [--json]`**
+  ([CONTRACTS §60](docs/CONTRACTS.md)): an offline, deterministic, advisory reader that finds
+  multi-step patterns a per-call guard cannot see. Six rules: `slow_exfiltration` (a credential
+  read, later network, a write outside the project or an encoding step), `staged_payload` (write,
+  `chmod +x`, run), `privilege_creep` (refusals with variations), `credential_probing` (several
+  credential locations across tools), `injection_followed_by_action` (an instruction-like marker
+  in recorded tool output, then a risky action; needs `record = "full"`), `guard_evasion` (a `cd`
+  out of the root, a symlink out then a write through it, a refusal retried through another tool).
+  It reads gnomon trails and the cross-harness guard feed (Claude Code, opencode, Cursor, Codex...);
+  a metadata-only trail is enough for every rule but the marker one, which is reported as not run,
+  never as clean. Findings carry the trail, the evidence seqs and a severity; it blocks nothing.
+  `conformance/audit_scan.json` holds synthetic trails and the findings each must produce, with
+  eleven cases that must stay silent. **Measured false-positive rate** on 10,325 unique benign
+  benchmark sessions (204,640 steps, read in place): 2.07% of sessions at the default `low`, 0.69% at
+  `medium`, 0.01% at `high`; on the 676 sessions of the daily-dev shape 0.3%. There is no labelled
+  attack set in those trails, so this is an alert rate on benign traffic and the rules were tuned on
+  the same data; recall rests on the synthetic cases only.
+- **`gnomon security test --sandbox [--image REF]`** ([CONTRACTS §61](docs/CONTRACTS.md)):
+  non-destructive sandbox-escape probes. They run no exploit and attempt no breakout, need no root
+  and touch only a temp directory they create: a canary outside the project root read and written
+  through the tools and through `bash`, a symlink out of the root, a fake credential in a
+  substituted HOME, egress with `network = false`, the docker socket, `no_new_privs`, capabilities
+  (privileged, CAP_SYS_ADMIN), host PID and network namespaces, writable host mounts, `/proc/sys`
+  and cgroup. Each runs for the tool paths at each `[sandbox] level` and for `bash` under
+  `exec = off`, `os`, `os` with `reads = scoped` and `docker`, and reports pass, FAIL (a claimed
+  containment that did not hold: exit 2), open (a documented limit) or skipped with why. Where
+  docker or Landlock is missing the tests skip with the reason. On gx10 every claimed containment
+  held; the probes also confirm, as `open`, what the docs say: `exec = os` leaves loopback and
+  reads (under `reads = all`) open, and `exec = off` contains nothing.
+- **docs/THREAT-MODEL.md** gains the sandbox level x threat matrix (file escape, network, process,
+  credential, container breakout; covered / partially / not covered), the survey's two-strategy
+  framing (an OS permission boundary for a mistaken or injected model, a microVM or gVisor for
+  hostile code, plain docker as the shrinking middle), and a plain statement that gnomon has no
+  microVM or gVisor backend. A test holds the table equal to the one the probes report.
+
 ## [0.6.6] — 2026-11-22
 
 The daily-runtime release, audited against v0.6.5 before it was cut. With no new
