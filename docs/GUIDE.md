@@ -1132,6 +1132,7 @@ nothing; `gnomon --help` prints all of it.
 | `gnomon endpoint [list \| test NAME \| add …]` | Lists endpoints and keys and cross-checks model ids; runs one token; declares an endpoint end to end | Model setup, diagnosis |
 | `gnomon key [set \| list \| unset] NAME` | The machine-local credential store | Keys |
 | `gnomon check --base REV [--head REV] [--role R \| --agent N] [--transcript F --format FMT] [--json]` | Judges a change by this surface's rules as they stood at `REV`. Exit 0 held, 2 failed, 10 no verdict. `FMT`: `claude-code`, `opencode`, `goose`, `qwen-code`, `mini-swe-agent` or `gnomon` (its own chained, sealed audit trail). | CI, hooks, other harnesses |
+| `gnomon check --policy-lint [--strict-policy] [--json]` | Lints the surface's own rules: contradictory, shadowed, never-matching, uncovered and granted-but-always-denied. Warnings; `--strict-policy` exits 2 on any finding. The same findings ride `check --base`'s verdict as `policy_lint`. | Reviewing a surface; CI |
 | `gnomon check --install-hook claude-code` | Prints the Claude Code hooks JSON and writes nothing | Governing Claude Code |
 | `gnomon guard --tool T --input JSON [--role R \| --agent N]`, or `--from claude-code\|opencode\|cursor\|generic` with the call on stdin | Decides one tool call another harness is about to make, by the committed rules: exit 0 allow, 2 deny, 3 ask, 10 no decision (answered as ask) | Governing another agent at run time |
 | `gnomon guard install claude-code\|opencode\|cursor [--write [--local]]` | Prints the hook or plugin for that harness; `--write` adds it to this project's config, `--local` keeps it out of git. For Cursor, `--write` merges into an existing `.cursor/hooks.json` (your other hooks stay) and brings an older gnomon install up to date | Setting up `guard` |
@@ -1279,6 +1280,88 @@ frames, above; `clock`, `braille` and `ascii` override the theme); `clock` is `�
 Windows console always gets ascii, and the line stays one row:
 `◐ thinking · 12s · esc cancels`. `spinner = false` turns it off, and nothing is
 drawn when output is not a TTY.
+
+### The harness signature
+
+A score is a property of a model and a harness together, so an evaluation
+report should say which harness. The survey *Agent Harness Engineering* (2026,
+Table 3, p.32) lists, per layer (E execution, T tools, C context, L loop
+control, O observability, V verification, G governance), the minimum
+configuration to report. gnomon already holds and hashes every fact it can
+report, and assembles them into one block, `harness_signature`
+(`gnomon.harness_signature/1`):
+
+- every `gnomon eval` report carries `harness_signature.base` and `.candidate`
+  (null for a command arm: another harness is not gnomon's to describe);
+- `gnomon compliance pack` writes it as `signature.json`;
+- it holds the build (version and revision), the surface hash, the role's model,
+  endpoint name, provider and host, the resolved context window and where the
+  number came from, the edit format, a hash over the offered tool schemas, the
+  sandbox level and exec mode, the approval gate, the verify gate, the context
+  policy, compaction, masking and think cap, the skills inline cap, the step
+  budgets, and the attempts `k`.
+
+It never holds a credential, a URL's userinfo, a command or the system prompt
+(each is a sha256), or a path. Two runs with equal signatures were run under
+the same harness. Adding it changes nothing in a session: it is read from the
+loaded surface, never sent to a model.
+
+| Layer | Table 3 row | Signature field | Note |
+|---|---|---|---|
+| E Execution | Execution image | `environment.exec` | mode and, under docker, the image name; a digest is not recorded |
+| E Execution | Dependencies | **not reported** | the project's own; a [verify] setup is named by hash under validation.verify |
+| E Execution | Reset policy | `environment.reset` | a fresh clone per eval cell; a live session has none |
+| E Execution | Resource limits | `environment.tool_timeout_seconds` | the bash timeout; no CPU or memory limit is set by gnomon |
+| E Execution | Isolation boundary | `environment.sandbox` | level, network, exec mode, reads scope, profile |
+| T Tools | Tool names | `tools.names` | the tools offered to the reporting role |
+| T Tools | Schemas | `tools.hash` | sha256 over the offered definitions (tools_hash.ts) |
+| T Tools | Versions | `build.version` | tools are versioned with the build; there is no per-tool version |
+| T Tools | Routing or discovery policy | `tools.mcp_servers` | gnomon offers a role's list; MCP servers are named, never discovered |
+| T Tools | Session semantics | `tools.edit_format` | edit variant; every other tool is stateless per call |
+| C Context | System prompt | `context.system_prompt_sha256` | hash, never the text |
+| C Context | Retrieval source | **not reported** | gnomon has no retrieval layer |
+| C Context | Memory policy | **not reported** | gnomon keeps no cross-session memory the model reads |
+| C Context | Compaction rule | `context.compaction` | policy, compaction, retain_after, reserve, masking, think cap, skills inline cap |
+| C Context | Model-visible state | `context.window` | the resolved window and where the number came from |
+| L Loop control | Control graph | `control.task_allow` | which roles may delegate to which |
+| L Loop control | Retry and stopping rules | `control.max_steps_total` | step budgets, verify rounds, attempts |
+| L Loop control | Checkpoints | `control.max_steps` | a leg's checkpoint; sessions resume from the record |
+| L Loop control | Handoffs | `control.task_allow` | task delegation and escalation declared in the role |
+| L Loop control | Durable task state | **not reported** | the session record is the state; it is not part of the signature |
+| O Observability | Trace schema | `observability.record_schemas` | the schemas the run's records carry |
+| O Observability | Identifiers | **not reported** | session and trail ids are per run, so not a configuration |
+| O Observability | Sampling policy | **not reported** | gnomon records every turn; there is no sampling |
+| O Observability | Cost and latency fields | `observability.record_schemas` | tokens, requests and wall time are in every record |
+| O Observability | Retention window | **not reported** | the project's; gnomon never deletes a trail |
+| V Verification | Task version | `validation.task_spec_sha256` | the trial spec's hash (an eval), else null |
+| V Verification | Environment checks | `validation.verify` | the [verify] gate: hash of the command, when, rounds |
+| V Verification | Grader or judge version | `validation.verify.command_sha256` | the declared check; gnomon has no model judge |
+| V Verification | Repeats | `validation.attempts` | k per task (an eval), else null |
+| V Verification | Aggregation rule | `validation.aggregation` | how an eval aggregates; null outside one |
+| G Governance | Principal identity | **not reported** | gnomon records the OS user's session, not a principal |
+| G Governance | Permission scope | `governance.rules` | bash_allow/bash_deny/write_allow counts and the surface hash |
+| G Governance | Approval policy | `governance.approval` | the gate |
+| G Governance | Audit fields | `observability.record_schemas` | the hash-chained audit trail's kinds are published |
+| G Governance | Escalation path | `control.escalate` | declared escalation, when the role has one |
+
+The `not_reported` list in the signature names the rows above that gnomon
+cannot fill, so an absent row is never mistaken for a clean one.
+`conformance/harness_signature.json` pins the shape and this mapping.
+
+### Policy lint
+
+`gnomon check` lints the surface's own rules, and `gnomon check --policy-lint`
+does only that (no `--base`). It reasons with the matchers the loop and
+`gnomon guard` use, never its own, and reports, per role: the same pattern
+allowed and denied (`contradiction`), a pattern a broader one already covers
+(`shadowed`), a pattern that cannot match (`never_matches`: an invalid regular
+expression, an impossible anchor, a glob such as `src/` or `{a,b}/*.ts`), a rule
+for a tool the role does not hold (`unreachable`), a tool the role is granted
+and the policy then always refuses (`always_denied`), and a category nothing
+covers (`uncovered`: no `[governance]`, MCP tools offered to a role with no
+`tools` list, bash with no rule). Findings are warnings and the exit is
+unchanged; `--strict-policy` makes any finding exit 2. `--json` carries them as
+`policy_lint`.
 
 ---
 

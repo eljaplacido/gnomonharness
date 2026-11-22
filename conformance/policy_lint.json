@@ -1,0 +1,483 @@
+{
+  "version": "0.1.0",
+  "_comment": [
+    "Policy lint (docs/CONTRACTS.md section 6): surfaces -> the findings packages/gnomon-core/src/policy_lint.ts reports.",
+    "`expected` is compared as a multiset of {kind, role?, rule, pattern?}; the message is prose and not part of the contract.",
+    "`kinds` is the published enumeration."
+  ],
+  "schema": "gnomon.policy_lint/1",
+  "kinds": [
+    "contradiction",
+    "shadowed",
+    "never_matches",
+    "unreachable",
+    "always_denied",
+    "uncovered"
+  ],
+  "finding_keys": {
+    "required": [
+      "kind",
+      "where",
+      "rule",
+      "message"
+    ],
+    "optional": [
+      "role",
+      "pattern"
+    ]
+  },
+  "summary_keys": {
+    "required": [
+      "schema",
+      "count",
+      "by_kind",
+      "findings"
+    ],
+    "optional": []
+  },
+  "cases": [
+    {
+      "name": "clean surface: nothing to say",
+      "policy": {
+        "sandbox": {
+          "network": false
+        },
+        "governance": {
+          "level": "prevent"
+        }
+      },
+      "roles": {
+        "dev": {
+          "tools": [
+            "read",
+            "write",
+            "bash"
+          ],
+          "bash_deny": [
+            "\\bgit\\s+push\\b"
+          ],
+          "write_allow": [
+            "src/**",
+            "docs/*.md"
+          ]
+        }
+      },
+      "expected": []
+    },
+    {
+      "name": "same pattern allowed and denied; allow entry refused by a deny",
+      "policy": {
+        "governance": {
+          "level": "prevent"
+        }
+      },
+      "roles": {
+        "dev": {
+          "tools": [
+            "bash"
+          ],
+          "bash_allow": [
+            "git status",
+            "npm test"
+          ],
+          "bash_deny": [
+            "git status",
+            "npm test"
+          ]
+        },
+        "ops": {
+          "tools": [
+            "bash"
+          ],
+          "bash_allow": [
+            "git push origin dev"
+          ],
+          "bash_deny": [
+            "\\bgit\\s+push\\b"
+          ]
+        }
+      },
+      "expected": [
+        {
+          "kind": "contradiction",
+          "role": "dev",
+          "rule": "bash_allow",
+          "pattern": "git status"
+        },
+        {
+          "kind": "contradiction",
+          "role": "dev",
+          "rule": "bash_allow",
+          "pattern": "npm test"
+        },
+        {
+          "kind": "contradiction",
+          "role": "ops",
+          "rule": "bash_allow",
+          "pattern": "git push origin dev"
+        }
+      ]
+    },
+    {
+      "name": "shadowed: duplicates, a broader pattern, match-all, covered globs",
+      "policy": {
+        "governance": {
+          "level": "prevent"
+        }
+      },
+      "roles": {
+        "dev": {
+          "tools": [
+            "bash",
+            "write"
+          ],
+          "bash_allow": [
+            "git",
+            "git status",
+            "git"
+          ],
+          "write_allow": [
+            "src/**",
+            "src/a/b.ts",
+            "src/**",
+            "**"
+          ]
+        },
+        "wide": {
+          "tools": [
+            "bash"
+          ],
+          "bash_allow": [
+            ".*",
+            "ls"
+          ]
+        }
+      },
+      "expected": [
+        {
+          "kind": "shadowed",
+          "role": "dev",
+          "rule": "bash_allow",
+          "pattern": "git status"
+        },
+        {
+          "kind": "shadowed",
+          "role": "dev",
+          "rule": "bash_allow",
+          "pattern": "git"
+        },
+        {
+          "kind": "shadowed",
+          "role": "dev",
+          "rule": "write_allow",
+          "pattern": "src/**"
+        },
+        {
+          "kind": "shadowed",
+          "role": "dev",
+          "rule": "write_allow",
+          "pattern": "src/a/b.ts"
+        },
+        {
+          "kind": "shadowed",
+          "role": "dev",
+          "rule": "write_allow",
+          "pattern": "src/**"
+        },
+        {
+          "kind": "shadowed",
+          "role": "wide",
+          "rule": "bash_allow",
+          "pattern": ".*"
+        },
+        {
+          "kind": "shadowed",
+          "role": "wide",
+          "rule": "bash_allow",
+          "pattern": "ls"
+        }
+      ]
+    },
+    {
+      "name": "patterns that can never match",
+      "policy": {
+        "governance": {
+          "level": "prevent"
+        }
+      },
+      "roles": {
+        "dev": {
+          "tools": [
+            "bash",
+            "write",
+            "task",
+            "mcp__nope"
+          ],
+          "bash_allow": [
+            "(unclosed",
+            "ls$ -la",
+            "a^b"
+          ],
+          "write_allow": [
+            "src/",
+            "../x/**",
+            "{a,b}/*.ts",
+            "docs/../src/*",
+            "/abs/**"
+          ],
+          "task_allow": [
+            "ghost"
+          ]
+        }
+      },
+      "expected": [
+        {
+          "kind": "never_matches",
+          "role": "dev",
+          "rule": "bash_allow",
+          "pattern": "(unclosed"
+        },
+        {
+          "kind": "never_matches",
+          "role": "dev",
+          "rule": "bash_allow",
+          "pattern": "ls$ -la"
+        },
+        {
+          "kind": "never_matches",
+          "role": "dev",
+          "rule": "bash_allow",
+          "pattern": "a^b"
+        },
+        {
+          "kind": "never_matches",
+          "role": "dev",
+          "rule": "write_allow",
+          "pattern": "src/"
+        },
+        {
+          "kind": "never_matches",
+          "role": "dev",
+          "rule": "write_allow",
+          "pattern": "{a,b}/*.ts"
+        },
+        {
+          "kind": "never_matches",
+          "role": "dev",
+          "rule": "write_allow",
+          "pattern": "docs/../src/*"
+        },
+        {
+          "kind": "never_matches",
+          "role": "dev",
+          "rule": "tools",
+          "pattern": "mcp__nope"
+        },
+        {
+          "kind": "never_matches",
+          "role": "dev",
+          "rule": "task_allow",
+          "pattern": "ghost"
+        },
+        {
+          "kind": "always_denied",
+          "role": "dev",
+          "rule": "bash_allow"
+        }
+      ]
+    },
+    {
+      "name": "granted a tool the policy then always denies",
+      "policy": {
+        "sandbox": {
+          "network": false
+        },
+        "governance": {
+          "level": "prevent"
+        }
+      },
+      "tools": {
+        "tools": [
+          {
+            "name": "webfetch",
+            "enabled": true
+          },
+          {
+            "name": "todo",
+            "enabled": false
+          }
+        ]
+      },
+      "roles": {
+        "web": {
+          "tools": [
+            "webfetch",
+            "todo"
+          ]
+        },
+        "deny_all": {
+          "tools": [
+            "bash"
+          ],
+          "bash_deny": [
+            ".*"
+          ]
+        },
+        "bad_deny": {
+          "tools": [
+            "bash"
+          ],
+          "bash_deny": [
+            "(oops"
+          ]
+        },
+        "nowhere": {
+          "tools": [
+            "write"
+          ],
+          "write_allow": [
+            "dir/"
+          ]
+        },
+        "lead": {
+          "tools": [
+            "task"
+          ],
+          "task_allow": []
+        }
+      },
+      "expected": [
+        {
+          "kind": "always_denied",
+          "role": "web",
+          "rule": "tools",
+          "pattern": "webfetch"
+        },
+        {
+          "kind": "always_denied",
+          "role": "web",
+          "rule": "tools",
+          "pattern": "todo"
+        },
+        {
+          "kind": "always_denied",
+          "role": "deny_all",
+          "rule": "bash_deny",
+          "pattern": ".*"
+        },
+        {
+          "kind": "always_denied",
+          "role": "bad_deny",
+          "rule": "bash_deny",
+          "pattern": "(oops"
+        },
+        {
+          "kind": "never_matches",
+          "role": "nowhere",
+          "rule": "write_allow",
+          "pattern": "dir/"
+        },
+        {
+          "kind": "always_denied",
+          "role": "nowhere",
+          "rule": "write_allow"
+        },
+        {
+          "kind": "always_denied",
+          "role": "lead",
+          "rule": "task_allow"
+        }
+      ]
+    },
+    {
+      "name": "rules for a tool the role does not hold",
+      "policy": {
+        "governance": {
+          "level": "prevent"
+        }
+      },
+      "roles": {
+        "reader": {
+          "tools": [
+            "read"
+          ],
+          "bash_deny": [
+            "rm"
+          ],
+          "write_allow": [
+            "src/**"
+          ]
+        }
+      },
+      "expected": [
+        {
+          "kind": "unreachable",
+          "role": "reader",
+          "rule": "bash_deny"
+        },
+        {
+          "kind": "unreachable",
+          "role": "reader",
+          "rule": "write_allow"
+        }
+      ]
+    },
+    {
+      "name": "uncovered: no governance, open network, sandbox off, bash with no rule, MCP to every role",
+      "policy": {
+        "sandbox": {
+          "network": true,
+          "level": "off"
+        }
+      },
+      "tools": {
+        "mcp_servers": {
+          "github": {
+            "command": "x"
+          }
+        }
+      },
+      "roles": {
+        "dev": {
+          "tools": [
+            "bash",
+            "write"
+          ]
+        },
+        "free": {}
+      },
+      "expected": [
+        {
+          "kind": "uncovered",
+          "rule": "governance",
+          "pattern": "secrets, ci, outside_root_writes"
+        },
+        {
+          "kind": "uncovered",
+          "rule": "sandbox",
+          "pattern": "outside_root_writes"
+        },
+        {
+          "kind": "uncovered",
+          "rule": "sandbox",
+          "pattern": "network"
+        },
+        {
+          "kind": "uncovered",
+          "role": "dev",
+          "rule": "bash"
+        },
+        {
+          "kind": "uncovered",
+          "role": "free",
+          "rule": "bash"
+        },
+        {
+          "kind": "uncovered",
+          "role": "free",
+          "rule": "mcp"
+        }
+      ]
+    }
+  ]
+}

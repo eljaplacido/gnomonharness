@@ -36,6 +36,16 @@
   is byte-identical (tool schemas, descriptions, read output). The surface
   audit no longer calls hashline inert (`ast` still is); the spec is pinned by
   `conformance/edit_hashline.json`.
+- **Harness signature:** `gnomon eval` reports carry `harness_signature` (per
+  gnomon arm) and `gnomon compliance pack` writes `signature.json`: build,
+  surface hash, role model/endpoint/provider, resolved window and its source,
+  edit format, tool-set hash, sandbox and exec mode, approval gate, verify gate,
+  context policy, budgets and attempts, mapped to the survey's Table 3 with the
+  unfillable rows marked (GUIDE, CONTRACTS section 47). No secret, no path.
+- **Policy lint:** `gnomon check` (and `--json`, as `policy_lint`) reports
+  contradictory, shadowed, never-matching, unreachable, always-denied and
+  uncovered rules, using the real matchers; `gnomon check --policy-lint` lints
+  alone. Warnings; `--strict-policy` exits 2. Sessions are byte-identical.
 
 ## [0.6.6] — 2026-11-22
 

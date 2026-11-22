@@ -3332,6 +3332,10 @@ Commands:
     --require-guard fails (exit 2) a session that made calls the guard hook
     selects and that gnomon guard never decided (--session, or the
     transcript's own session; else every Claude Code session since install).
+    Policy lint: the surface's rules are linted (contradictory, shadowed,
+    never-matching, uncovered, granted-but-always-denied) and findings ride
+    the verdict as warnings and a "policy_lint" key; --strict-policy makes
+    any finding exit 2. "check --policy-lint" runs the lint alone, no --base.
   check --scorecard [--session <id>] [--transcript <file>] [--json]
     Summarise a foreign harness's run: guard decisions by family and verdict,
     tools seen vs governed, hook and session liveness, the audit trails'
