@@ -298,7 +298,13 @@
       "pytest.ini",
       "pyproject.toml",
       "package.json",
-      ".septacore.json"
+      ".septacore.json",
+      "**/vitest.config.*",
+      "**/jest.config.*",
+      "tox.ini",
+      "setup.cfg",
+      "noxfile.py",
+      ".coveragerc"
     ],
     "command_files": [
       {
@@ -322,6 +328,14 @@
       {
         "command": "pnpm test",
         "files": []
+      },
+      {
+        "command": "make test",
+        "files": [
+          "Makefile",
+          "makefile",
+          "GNUmakefile"
+        ]
       }
     ],
     "digest_cases": [
@@ -380,6 +394,49 @@
         "before": "[project]\nname = \"a\"\n[tool.pytest.ini_options]\naddopts = \"-q\"\n",
         "after": "[project]\nname = \"b\"\n[tool.pytest.ini_options]\naddopts = \"-q\"\n",
         "changed": false
+      },
+      {
+        "name": "package.json: the jest key",
+        "file": "package.json",
+        "before": "{\"jest\":{\"bail\":1}}",
+        "after": "{\"jest\":{\"bail\":0,\"testPathIgnorePatterns\":[\"x\"]}}",
+        "changed": true
+      },
+      {
+        "name": "setup.cfg: [tool:pytest]",
+        "file": "setup.cfg",
+        "before": "[tool:pytest]\naddopts = -q\n",
+        "after": "[tool:pytest]\naddopts = -k nothing\n",
+        "changed": true
+      },
+      {
+        "name": "setup.cfg: another section is not a change",
+        "file": "setup.cfg",
+        "before": "[metadata]\nname = a\n[tool:pytest]\naddopts = -q\n",
+        "after": "[metadata]\nname = b\n[tool:pytest]\naddopts = -q\n",
+        "changed": false
+      },
+      {
+        "name": "a vitest config",
+        "file": "vitest.config.ts",
+        "before": "a",
+        "after": "b",
+        "changed": true
+      },
+      {
+        "name": "a nested jest config",
+        "file": "packages/x/jest.config.js",
+        "before": "a",
+        "after": "b",
+        "changed": true
+      },
+      {
+        "name": "a Makefile under make",
+        "file": "Makefile",
+        "before": "a",
+        "after": "b",
+        "changed": true,
+        "command": "make test"
       }
     ]
   }

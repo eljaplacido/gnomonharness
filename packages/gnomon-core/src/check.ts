@@ -136,6 +136,13 @@ export interface CheckVerdict {
   rules_rev?: string;
   /** Where [verify] and the must-fail-first re-run ran, after this machine's floors. */
   exec?: { mode: string; image: string; network: boolean };
+  /**
+   * `[verify] setup`, when it ran in the temporary worktree: the command's
+   * sha256, the network it had (`none` unless `registry` was declared AND
+   * [verify] runs on the host), its exit, and whether it completed. Absent
+   * when no setup ran.
+   */
+  setup?: { command_sha256: string; network: "none" | "registry"; exit: number | null; ok: boolean };
   /** Things a person should know about how this verdict was reached. */
   warnings?: string[];
 }
@@ -761,19 +768,22 @@ async function judge(
     // The network opens for it only where [verify] runs on the host; under a
     // container or sandbox floor it stays as the floor left it.
     if (verify.setup && !inPlace) {
-      const effective = exec.mode === "off" ? verify : { ...verify, setup_network: "none" as const };
       const setup = await runVerifySetup(
-        effective,
+        verify,
         vctx,
         (command, c) => executeTool("bash", { command }, c, new Set(["bash"])),
         { force: true }
       );
+      // Said in the verdict and the trail, whatever it came to.
+      if (setup) {
+        verdict.setup = { command_sha256: setup.command_sha256, network: setup.network, exit: setup.exit, ok: setup.ok };
+      }
       if (setup && !setup.ok) {
         verdict.checks.push({
           id: "verify",
           status: "error",
           reason: `the check could not run: [verify] setup ${setup.reason ?? "did not complete"}`,
-          findings: [{ command: verify.setup, exit: setup.exit, output: setup.output ?? "" }],
+          findings: [{ command: verify.setup, exit: setup.exit, network: setup.network, command_sha256: setup.command_sha256, output: setup.output ?? "" }],
         });
         verdict.checks.push({ id: "must_fail_first", status: "skipped", reason: "[verify] setup did not complete" });
         return;
@@ -1008,6 +1018,7 @@ function appendVerdict(
       role_source: meta.roleSource,
       agent: meta.agent,
       surface_hash: verdict.surface_hash,
+      ...(verdict.setup ? { setup: verdict.setup } : {}),
       checks: verdict.checks.map((c) => ({
         id: c.id,
         status: c.status,

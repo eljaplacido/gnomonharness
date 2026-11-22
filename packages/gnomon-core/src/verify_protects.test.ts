@@ -20,7 +20,7 @@ import * as promptLoop from "./prompt_loop.js";
 const fixture = JSON.parse(readFileSync(join("..", "..", "conformance", "verify_contract.json"), "utf-8")) as {
   protects: {
     detected: string[];
-    digest_cases: Array<{ name: string; file: string; before: string | null; after: string | null; changed: boolean }>;
+    digest_cases: Array<{ command?: string; name: string; file: string; before: string | null; after: string | null; changed: boolean }>;
     command_files: Array<{ command: string; files: string[] }>;
   };
 };
@@ -145,7 +145,7 @@ describe("verify_protects (#234)", () => {
   for (const c of fixture.protects.digest_cases) {
     it(`what counts as changed: ${c.name}`, () => {
       expect(protectedDigest(c.file, c.before) !== protectedDigest(c.file, c.after)).toBe(c.changed);
-      expect(protectedChange({ protects: ["@detected"], command: "x" }, c.file, c.before, c.after)).toBe(c.changed);
+      expect(protectedChange({ protects: ["@detected"], command: c.command ?? "x" }, c.file, c.before, c.after)).toBe(c.changed);
     });
   }
 
@@ -162,7 +162,10 @@ describe("verify_protects (#234)", () => {
       writeFileSync(join(root, "node_modules/x/conftest.py"), "a");
       const v = { protects: ["@detected"], command: "pytest" };
       const before = snapshotProtected(root, v);
-      expect([...before.keys()].sort()).toEqual([".septacore.json", "package.json", "pyproject.toml", "pytest.ini", "tests/sub/conftest.py"]);
+      expect(before.truncated).toBe(false);
+      expect([...before.files.keys()].sort()).toEqual([
+        ".coveragerc", ".septacore.json", "noxfile.py", "package.json", "pyproject.toml", "pytest.ini", "setup.cfg", "tests/sub/conftest.py", "tox.ini",
+      ]);
       expect(changedProtected(before, root, v)).toEqual([]);
       writeFileSync(join(root, "tests/sub/conftest.py"), "b");
       writeFileSync(join(root, "pytest.ini"), "[pytest]\naddopts = -k nothing\n");
@@ -243,5 +246,31 @@ describe("gnomon check reports a change to what the check executes (#234)", () =
     put("package.json", JSON.stringify({ scripts: { test: "true" }, dependencies: {} }));
     const v = await runCheck({ dir: repo, base, role: "implement" });
     expect(verifyOf(v)).toMatchObject({ status: "fail", findings: [{ protects_changed: ["package.json"] }] });
+  });
+});
+
+describe("the walk says when it stopped early (#234 review)", () => {
+  it("a tree deeper than the walk's limit is reported truncated, not read as unchanged", () => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-protects-deep-"));
+    try {
+      mkdirSync(join(root, "a/b/c/d/e/f/g/h/i/j"), { recursive: true });
+      writeFileSync(join(root, "a/b/c/d/e/f/g/h/i/j/conftest.py"), "x");
+      const snap = snapshotProtected(root, { protects: ["@detected"], command: "pytest" });
+      expect(snap.truncated).toBe(true);
+      expect([...snap.files.keys()].some((k) => k.endsWith("conftest.py"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("the loop records protects_truncated in the verify record", async () => {
+    const deep = join(SURFACE, "a/b/c/d/e/f/g/h/i/j");
+    mkdirSync(deep, { recursive: true });
+    try {
+      const t = await turnWith([writeCall("/app/out.txt")], { protects: ["@detected"] });
+      expect(t.records[0]).toMatchObject({ protects_truncated: true });
+    } finally {
+      rmSync(join(SURFACE, "a"), { recursive: true, force: true });
+    }
   });
 });
