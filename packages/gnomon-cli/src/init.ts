@@ -48,7 +48,7 @@ edit_format = "str_replace"       # ast (INERT) | hashline (INERT) | str_replace
 sandbox = "confined"              # off | confined | strict
 approval = "on_write"             # never | on_write | always
 role_profile = "local_first"      # local_first | frontier_plan | all_remote
-max_context_tokens = 65536        # an [endpoints.<name>] block may declare its model's own window
+max_context_tokens = 65536        # the FALLBACK window, used only when an endpoint's own cannot be read; to cap a model, set it on its [endpoints.<name>]
 stream = true                     # stream replies from kind = "openai" endpoints; an endpoint may say stream = false
 max_tokens = 32768                # output limit per reply, thinking included; a role or endpoint may declare its own (0 = none)
 compaction = "summary"            # discard | summary | truncate

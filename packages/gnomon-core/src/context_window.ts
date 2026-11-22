@@ -71,6 +71,9 @@ export interface WindowHit {
   shape: ListingShape;
   /** The field it came from, e.g. `limit.context` */
   field: string;
+  /** Ollama only, see ollamaShowExtras */
+  trained?: number;
+  modelfile?: true;
 }
 
 /** Why a listing gave no window. */
@@ -85,6 +88,10 @@ export interface WindowResolution {
   source: ContextSource;
   /** Where it was read, e.g. `GET https://…/models → limit.context` */
   from?: string;
+  /** Ollama only: the model's trained `context_length`, the most `num_ctx` can usefully be */
+  trained?: number;
+  /** Ollama only: `tokens` is a Modelfile `num_ctx`, what the model runs with */
+  modelfile?: true;
   /** Each probe that gave no window, and why, in the order they ran. */
   misses: string[];
 }
@@ -163,12 +170,34 @@ export function windowFromOllamaShow(body: unknown): WindowHit | WindowMiss {
   return { miss: "no num_ctx parameter and no model_info.*.context_length" };
 }
 
+/**
+ * What else /api/show says about the window, for the `num_ctx` an Ollama
+ * request carries (B2): the model's trained length, and whether the window
+ * windowFromOllamaShow read is the Modelfile's own `num_ctx`.
+ */
+export function ollamaShowExtras(body: unknown): { trained?: number; modelfile?: true } {
+  const hit = windowFromOllamaShow(body);
+  const info = obj(obj(body)?.model_info);
+  let trained: number | undefined;
+  for (const key of Object.keys(info ?? {}).sort()) {
+    if (!key.endsWith(".context_length")) continue;
+    trained = tokensOf(info![key]);
+    if (trained) break;
+  }
+  return {
+    ...(trained ? { trained } : {}),
+    ...("miss" in hit || hit.field !== "parameters num_ctx" ? {} : { modelfile: true as const }),
+  };
+}
+
 /** One request that may answer with a window. */
 export interface WindowProbe {
   method: "GET" | "POST";
   url: string;
   body?: string;
   read: (json: unknown) => WindowHit | WindowMiss;
+  /** More the same body says, merged into the hit (Ollama's trained length) */
+  extras?: (json: unknown) => { trained?: number; modelfile?: true };
 }
 
 /** A URL without its query and fragment, for path surgery. */
@@ -200,6 +229,7 @@ export function windowProbes(target: { url: string; kind?: EndpointKind; model: 
         // `name` is what Ollama before 0.4 read; both are accepted since.
         body: JSON.stringify({ model: target.model, name: target.model }),
         read: windowFromOllamaShow,
+        extras: ollamaShowExtras,
       },
     ];
   }
@@ -245,7 +275,7 @@ async function runProbe(
       return { miss: `${where} → not JSON` };
     }
     const r = probe.read(json);
-    return "miss" in r ? { miss: `${where} → ${r.miss}` } : r;
+    return "miss" in r ? { miss: `${where} → ${r.miss}` } : { ...r, ...(probe.extras?.(json) ?? {}) };
   } catch (err) {
     const why = err instanceof Error ? (err.name === "TimeoutError" ? `no answer in ${timeoutMs} ms` : err.message) : String(err);
     return { miss: `${where} → ${why}` };
@@ -286,6 +316,8 @@ export async function probeContextWindow(
       tokens: r.tokens,
       source: `listing:${r.shape}`,
       from: `${probe.method} ${probe.url} → ${r.field}`,
+      ...(r.trained ? { trained: r.trained } : {}),
+      ...(r.modelfile ? { modelfile: true as const } : {}),
       misses,
     };
   }

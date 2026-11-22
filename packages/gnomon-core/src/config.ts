@@ -19,7 +19,7 @@ import { SourceEntry } from "./session.js";
 // exactly what the turn will see.
 import { loadSkills } from "./skills.js";
 import { harnessBuild } from "./build.js";
-import { AUTO_WINDOW, rememberedWindow, type ContextSource } from "./context_window.js";
+import { AUTO_WINDOW, rememberedWindow, windowProbes, type ContextSource } from "./context_window.js";
 import { COMPLETION_GATE_MODES, auditCompletionGate } from "./completion_gate.js";
 import { auditVerifyKeys } from "./verify_run.js";
 import { resolveExitMap, type ExitMap, type VerifyContract } from "./verify_outcome.js";
@@ -1801,21 +1801,54 @@ export function defaultContextWindow(config: GnomonConfig): number {
  * for the URL and model (settleContextWindows in prompt_loop.ts does the
  * asking); until then, or when nothing was found, it is `[defaults]
  * max_context_tokens` marked `default`, which trims exactly as an undeclared
- * endpoint does. Anything else is the object an undeclared endpoint always got.
+ * endpoint does. No key on the endpoint, on a kind with a listing, is treated
+ * as "auto" (`contextImplicit`) with `[defaults]` as the fallback; a number on
+ * the endpoint always wins. Anything else is the object an undeclared endpoint
+ * always got.
  */
 function contextWindowOf(
   config: GnomonConfig,
   declared: unknown,
   at: { url: string; kind?: EndpointKind; model: string }
-): Pick<RouteTarget, "contextTokens" | "contextSource" | "contextAuto"> {
-  if (declared === AUTO_WINDOW) {
-    const known = rememberedWindow(at);
-    return known?.tokens
-      ? { contextTokens: known.tokens, contextSource: known.source, contextAuto: true }
-      : { contextTokens: defaultContextWindow(config), contextSource: "default", contextAuto: true };
-  }
+): Pick<RouteTarget, "contextTokens" | "contextSource" | "contextAuto" | "contextImplicit" | "ollamaCtx"> {
   const tokens = positiveInt(declared);
-  return tokens ? { contextTokens: tokens, contextSource: "declared" } : { contextTokens: undefined };
+  // B1 (2026-11-22): a window not declared on the endpoint is asked of the
+  // endpoint, as "auto" does, when its kind has a listing that can answer.
+  // `[defaults] max_context_tokens` is only the fallback for when it cannot;
+  // a number on the endpoint is the surface's word and wins.
+  const asks =
+    declared === AUTO_WINDOW ||
+    (declared === undefined &&
+      // The test suite's switch (vitest.setup.ts): most suites script one fetch per
+      // model call, and a listing probe would be an extra call they did not script.
+      process.env.GNOMON_WINDOW_LOOKUP !== "off" &&
+      windowProbes(at).length > 0);
+  if (asks) {
+    const known = rememberedWindow(at);
+    const ollamaCtx = at.kind === "ollama" && known?.modelfile ? known.tokens : undefined;
+    return known?.tokens
+      ? {
+          contextTokens: known.tokens,
+          contextSource: known.source,
+          contextAuto: true,
+          ...(declared === AUTO_WINDOW ? {} : { contextImplicit: true as const }),
+          ...(ollamaCtx ? { ollamaCtx } : {}),
+        }
+      : {
+          contextTokens: defaultContextWindow(config),
+          contextSource: "default",
+          contextAuto: true,
+          ...(declared === AUTO_WINDOW ? {} : { contextImplicit: true as const }),
+        };
+  }
+  // B2: Ollama runs a model with its own context unless the request names one,
+  // so a number the endpoint declared is also what the request carries. The
+  // `[defaults]` number is a fallback, not an instruction to allocate.
+  const sent = at.kind === "ollama" ? tokens : undefined;
+  return {
+    ...(tokens ? { contextTokens: tokens, contextSource: "declared" as const } : { contextTokens: undefined }),
+    ...(sent ? { ollamaCtx: sent } : {}),
+  };
 }
 
 /**
@@ -2164,6 +2197,15 @@ export interface RouteTarget {
   contextSource?: ContextSource;
   /** The endpoint declares `max_context_tokens = "auto"`. See settleContextWindows. */
   contextAuto?: true;
+  /** `contextAuto` without the key: nothing declared a window, so the endpoint is asked (B1). */
+  contextImplicit?: true;
+  /**
+   * Ollama only: the `options.num_ctx` the request carries. The number the
+   * surface declared (endpoint, else `[defaults]`) or the Modelfile's own
+   * `num_ctx`, bounded by the model's trained length once /api/show is read
+   * (settleContextWindows). Absent otherwise, and never set on another kind.
+   */
+  ollamaCtx?: number;
   /** Replay reasoning_content on assistant messages. See resolveReplayReasoning. */
   replayReasoning?: boolean;
   /**
