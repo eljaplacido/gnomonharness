@@ -26,6 +26,18 @@
 
 ## [Unreleased]
 
+### Added — dashboard v2: a read-only local chat drawer over the project's records
+
+- `c` (or **Ask the records** in the sidebar) opens a drawer on every project screen. `POST /api/p/<id>/chat` builds a
+  brief of at most 10,000 characters from the same views the screens show and sends it, under an extractive system
+  prompt (answer only from the brief, cite the panel for each claim, "not in the records" otherwise), to a local
+  endpoint of the surface: `[dashboard] chat_role` (new optional key, checked by the surface audit) or the first role
+  on a local endpoint; with none, the drawer says how to set one. An answer that cites no panel is withheld. The model
+  has no tools. A cloud endpoint is used only for a question whose box is ticked: the server answers `sent: false` with the exact
+  text, sends it only on a confirmation, and records the send (endpoint, model, characters, no text) as a `model_call`
+  in a trail of its own (`mode: "dashboard_chat"`). Cockpit pattern (agenticobservabilitystack, "Ask what to fix
+  first"). Routes `GET`/`POST /api/p/<id>/chat` are in `conformance/dashboard.json`; CONTRACTS §17.
+
 ### Fixed — two trace rows wrapped at 80 columns
 
 - The once-per-session "0 cached prompt tokens" notice now wraps to the terminal width with a hanging indent under

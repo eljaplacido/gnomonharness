@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 4739 TypeScript tests (4043 core, 671 cli, 18
-> natives, 7 tui) and 120 Rust tests — **4859 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 4759 TypeScript tests (4043 core, 691 cli, 18
+> natives, 7 tui) and 120 Rust tests — **4879 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -3481,6 +3481,10 @@ Six screens, ported from the approved design (#105, Part II):
   bucket, tokens local against cloud, policy refusals and check verdicts. The
   list is this project plus the roots in this machine's trust store; nothing
   else is tracked to build it.
+- **Ask the records** (press `c`, on any project screen) — a read-only chat
+  drawer over the project's own records. It asks a local model, cites the panel
+  each claim came from, and can run nothing; a cloud endpoint only when ticked
+  for one question, after showing exactly what would leave.
 - **Setup** — `gnomon setup`, one step per screen: scan (`gnomon doctor
   --json`), the recommended local model, a download you confirm with its size,
   a speed check, an optional cloud model whose key goes to `gnomon key set` on

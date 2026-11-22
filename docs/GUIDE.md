@@ -1596,6 +1596,24 @@ the same port (`ssh -L 4890:127.0.0.1:4890 host`) and start it with
 `--no-open --port 4890`. The projects it lists are this one plus those this
 machine trusts (`gnomon trust grant`); it keeps no list of its own.
 
+**Asking the records.** Press `c` (or **Ask the records** in the sidebar) on
+any project screen for a chat drawer. It answers from this project's recorded
+data only (sessions, governance, measurements, contracts), names the panel each
+claim came from as a link, and says "not in the records" when they do not
+answer. It cannot run anything and has no tools. It asks a local model: the
+role named by `chat_role` below, else the first role whose endpoint is on this
+machine or your LAN; with none, the drawer says how to set one
+(`gnomon setup`). A cloud endpoint is used only when you tick **Send to a cloud
+endpoint for this question**: you then see the exact text that would leave,
+sent only after you confirm, and the send (endpoint, model, characters, no
+text) is recorded in the audit trail.
+
+```toml
+# .gnomon/config.toml
+[dashboard]
+chat_role = "critique"   # optional; the role the dashboard chat asks
+```
+
 ### 7.6 Containment: what it is, and what it is not
 
 | Control | Governs | Does not govern |

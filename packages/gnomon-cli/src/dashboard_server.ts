@@ -45,6 +45,23 @@ import {
   type DashboardProject,
 } from "./dashboard_data.js";
 import {
+  CHAT_TIMEOUT_MS,
+  ChatConfirmations,
+  QUESTION_MAX_CHARS,
+  buildBrief,
+  chatMessages,
+  chatStatus,
+  charsOf,
+  cleanHistory,
+  cloudKeyRefusal,
+  loadChatConfig,
+  messagesDigest,
+  planChat,
+  recordEgress,
+  sendChat,
+  shapeAnswer,
+} from "./dashboard_chat.js";
+import {
   DASHBOARD_ACTIONS,
   ACTION_STATES,
   ACTION_CONFIRMS,
@@ -95,6 +112,8 @@ export const DASHBOARD_ROUTES = {
     "GET /api/p/<id>/governance",
     "GET /api/p/<id>/measurements",
     "GET /api/p/<id>/contracts",
+    "GET /api/p/<id>/chat",
+    "POST /api/p/<id>/chat",
     "POST /api/actions/<name>",
     "GET /api/jobs/<id>",
   ],
@@ -156,6 +175,8 @@ export interface DashboardOptions {
   bootstrapTtlMs?: number;
   /** How long a confirmation stays valid. */
   confirmTtlMs?: number;
+  /** How long the chat waits for a model to answer (default 150 s). */
+  chatTimeoutMs?: number;
 }
 
 export interface DashboardServer {
@@ -200,6 +221,9 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
   const children = new Set<ChildProcess>();
   /** Projects with a spawned action running: one at a time each. */
   const busy = new Set<string>();
+  /** Projects with a chat question in flight: one at a time each. */
+  const chatBusy = new Set<string>();
+  const chatConfirms = new ChatConfirmations(opts.confirmTtlMs);
   let port = 0;
   let commands: Promise<Set<string>> | null = null;
 
@@ -214,13 +238,13 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
     send(res, status, JSON.stringify({ schema: DASHBOARD_SCHEMA, ...(value as object) }), "application/json; charset=utf-8");
   const fail = (res: ServerResponse, status: number, error: string, more: object = {}): void => json(res, status, { error, ...more });
 
-  const readBody = (req: IncomingMessage): Promise<unknown> =>
+  const readBody = (req: IncomingMessage, limit = 8192): Promise<unknown> =>
     new Promise((done, reject) => {
       let size = 0;
       const parts: Buffer[] = [];
       req.on("data", (d: Buffer) => {
         size += d.length;
-        if (size > 8192) {
+        if (size > limit) {
           reject(new Error("body too large"));
           req.destroy();
         } else parts.push(d);
@@ -458,8 +482,102 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
     return execute(res, action, p, read.params, null);
   }
 
+  /**
+   * `POST /api/p/<id>/chat`: a question about the project's records, answered
+   * by a model with no tools. Local unless the body ticks `cloud`, which
+   * answers `sent: false` with the exact messages to be sent and sends them only with
+   * the confirmation that answer carried.
+   */
+  async function chat(req: IncomingMessage, res: ServerResponse, p: DashboardProject): Promise<void> {
+    if (!/^application\/json\b/.test(req.headers["content-type"] ?? "")) return fail(res, 415, "send JSON");
+    if (req.headers.origin === undefined) return fail(res, 403, "the chat must be asked from this page (no Origin)");
+    let body: Record<string, unknown>;
+    try {
+      const b = await readBody(req, 65536);
+      if (!b || typeof b !== "object" || Array.isArray(b)) throw new Error("body is not a JSON object");
+      body = b as Record<string, unknown>;
+    } catch (err) {
+      return fail(res, 400, err instanceof Error ? err.message : "bad body");
+    }
+    const question = typeof body.question === "string" ? body.question.trim() : "";
+    if (!question) return fail(res, 400, "ask a question");
+    if (question.length > QUESTION_MAX_CHARS) return fail(res, 400, `a question is at most ${QUESTION_MAX_CHARS} characters`);
+    if (body.cloud !== undefined && typeof body.cloud !== "boolean") return fail(res, 400, "cloud is true or false");
+    const wantCloud = body.cloud === true;
+    if (chatBusy.has(p.id)) return fail(res, 409, "a question is still being answered for this project; wait for it");
+
+    const config = loadChatConfig(p);
+    const plan = planChat(config);
+    const ep = wantCloud ? plan.cloud : plan.local;
+    if (!ep) {
+      return fail(res, 409, wantCloud ? "this surface declares no cloud endpoint to send to" : (plan.why ?? "no local endpoint"), {
+        no_endpoint: true,
+        cloud: wantCloud,
+      });
+    }
+    if (wantCloud) {
+      const refusal = cloudKeyRefusal(config, ep, opts.trustPath);
+      if (refusal) return fail(res, 403, refusal);
+    }
+    chatBusy.add(p.id);
+    try {
+      const brief = await buildBrief(p, { text: !wantCloud, trustPath: opts.trustPath, sourceRoot: opts.sourceRoot });
+      const messages = chatMessages(brief, cleanHistory(body.history), question);
+      const view = { role: ep.role, endpoint: ep.endpoint, model: ep.model, url: ep.url, local: ep.local, source: ep.source };
+      if (wantCloud) {
+        const key = messagesDigest(ep.endpoint + ep.url + ep.model, messages);
+        const nonce = typeof body.confirm === "string" ? body.confirm : "";
+        if (!nonce) {
+          const issued = chatConfirms.issue(key);
+          // 200, not 428 as the actions answer: this is the page's own preview,
+          // and a 4xx is logged by the browser as a failed request.
+          return json(res, 200, {
+            ...view,
+            sent: false,
+            confirm: {
+              ...issued,
+              chars: charsOf(messages),
+              effect: [
+                `Sends the ${charsOf(messages)} characters below to ${ep.endpoint} (${ep.url}), model ${ep.model}${ep.local ? "" : ", a cloud endpoint: this leaves this machine and may be billed"}.`,
+                "The brief is metadata only: session opening lines and refusal text are left out.",
+                "The send is recorded in this project's audit trail (endpoint, model, characters sent) when [audit] is on.",
+              ],
+              messages: messages.map((m) => ({ role: m.role, content: m.content })),
+            },
+          });
+        }
+        if (!chatConfirms.take(nonce, key)) {
+          return fail(res, 409, "this confirmation is not for this question, or it was used or has expired, or the records changed: review it again");
+        }
+      }
+      const sent = await sendChat(ep, messages, opts.chatTimeoutMs ?? CHAT_TIMEOUT_MS);
+      const egress = wantCloud ? recordEgress(p, config, ep, sent) : null;
+      const egressView = wantCloud
+        ? { egress: egress ? { recorded: true, trail: egress.trail, chars: sent.chars_sent } : { recorded: false, reason: "[audit] is off for this project", chars: sent.chars_sent } }
+        : {};
+      if (!sent.ok) return fail(res, sent.status ?? 502, sent.error ?? "the endpoint did not answer", { ...view, ms: sent.ms, ...egressView });
+      return json(res, 200, {
+        ...view,
+        ...shapeAnswer(sent.content ?? ""),
+        ms: sent.ms,
+        brief_chars: brief.length,
+        chars_sent: sent.chars_sent,
+        ...egressView,
+      });
+    } finally {
+      chatBusy.delete(p.id);
+    }
+  }
+
   async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const path = url.pathname;
+    const chatRoute = /^\/api\/p\/([0-9a-f]{12})\/chat$/.exec(path);
+    if (chatRoute && (req.method === "GET" || req.method === "POST")) {
+      const p = projectById(chatRoute[1]!);
+      if (!p) return fail(res, 404, "no such project");
+      if (!p.hasSurface) return fail(res, 404, "this project has no .gnomon/");
+      return req.method === "GET" ? json(res, 200, chatStatus(p)) : chat(req, res, p);
+    }
     if (req.method === "GET" && path === "/api/meta") {
       projects.forEach(refresh);
       return json(res, 200, {
