@@ -22,6 +22,7 @@ import { harnessBuild } from "./build.js";
 import { AUTO_WINDOW, rememberedWindow, type ContextSource } from "./context_window.js";
 import { COMPLETION_GATE_MODES, auditCompletionGate } from "./completion_gate.js";
 import { auditVerifyKeys } from "./verify_run.js";
+import { resolveExitMap, type ExitMap, type VerifyContract } from "./verify_outcome.js";
 import { auditSoftShell } from "./soft_shell.js";
 import { auditSandboxProfile } from "./sandbox_profile.js";
 import { auditDeliverableFirst } from "./deliverable_first.js";
@@ -480,6 +481,14 @@ export interface Policy {
     setup_network?: string;
     /** Seconds `setup` may run. Absent: timeout_seconds, else the tool's. */
     setup_timeout_seconds?: number;
+    /**
+     * A preset exit-code table (verify_outcome.ts): "septacore" or "pytest".
+     * `[verify.exit_map]` entries (exit code = verdict) are read over it.
+     */
+    contract?: string;
+    exit_map?: Record<string, string>;
+    /** true: a `regressed` verdict is handed back to the model like `failed`. */
+    regressed_hand_back?: boolean;
     /** The completion gate (completion_gate.ts): "off", "checklist", "review" or "review_only". */
     completion_gate?: string;
     completion_rounds?: number;
@@ -2835,6 +2844,8 @@ const ENUM_KEYS: EnumSpec[] = [
   { block: "verify", key: "after", values: ["write", "change", "always"], falls_back_to: "write" },
   // resolveVerify: anything but "registry" is "none" (the network stays shut for setup).
   { block: "verify", key: "setup_network", values: ["none", "registry"], falls_back_to: "none" },
+  // resolveExitMap: an unknown preset is no preset, so the default table applies.
+  { block: "verify", key: "contract", values: ["septacore", "pytest"], falls_back_to: "no preset (the default exit table)" },
   // resolveCompletionGate (completion_gate.ts): anything else is "off", so a
   // misspelt "reveiw" would silently turn the gate off.
   { block: "verify", key: "completion_gate", values: COMPLETION_GATE_MODES, falls_back_to: "off" },
@@ -3024,6 +3035,9 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "setup",
       "setup_network",
       "setup_timeout_seconds",
+      "contract",
+      "exit_map",
+      "regressed_hand_back",
       "completion_gate",
       "completion_rounds",
       "completion_min_remaining",
@@ -6354,6 +6368,12 @@ export interface ResolvedVerify {
   setup_network?: "none" | "registry";
   /** `[verify] setup_timeout_seconds`, when declared and valid. */
   setup_timeout_seconds?: number;
+  /** The effective exit-code table (preset, then `[verify.exit_map]`), when declared. */
+  exit_map?: ExitMap;
+  /** The preset named by `[verify] contract`, when valid. */
+  contract?: VerifyContract;
+  /** `[verify] regressed_hand_back = true`. */
+  regressed_hand_back?: true;
 }
 
 /** A positive, finite number of seconds, or undefined. */
@@ -6394,6 +6414,11 @@ export function resolveVerify(config: GnomonConfig): ResolvedVerify | null {
     ...(positiveSeconds(v?.setup_timeout_seconds) !== undefined
       ? { setup_timeout_seconds: positiveSeconds(v?.setup_timeout_seconds) }
       : {}),
+    ...(() => {
+      const r = resolveExitMap({ exit_map: v?.exit_map, contract: v?.contract });
+      return r ? { exit_map: r.map, ...(r.contract ? { contract: r.contract } : {}) } : {};
+    })(),
+    ...(v?.regressed_hand_back === true ? { regressed_hand_back: true as const } : {}),
   };
 }
 

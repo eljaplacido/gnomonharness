@@ -30,6 +30,7 @@
 
 import type { GnomonConfig, ResolvedVerify } from "./config.js";
 import type { ToolContext, ToolOutcome } from "./tools.js";
+import { readExitMapEntries } from "./verify_outcome.js";
 
 /** Runs one command through the bash tool in the given context. */
 export type RunCommand = (command: string, ctx: ToolContext) => Promise<ToolOutcome>;
@@ -165,6 +166,23 @@ export function auditVerifyKeys(config: GnomonConfig): VerifyKeyProblem[] {
       where: `${where} setup`,
       problem: `setup is a shell command; got ${JSON.stringify(v.setup)}, so no setup runs.`,
       fix: 'setup = "pnpm install --frozen-lockfile --offline"',
+      fatal: false,
+    });
+  }
+  const em = readExitMapEntries(v.exit_map);
+  for (const g of em.ignored) {
+    out.push({
+      where: `${where}.exit_map ${g.key}`,
+      problem: `exit_map entry ${g.key} = ${JSON.stringify(g.value)} is ignored: ${g.why}.`,
+      fix: '[verify.exit_map]\n2 = "unrunnable"   # failed | unrunnable | regressed',
+      fatal: false,
+    });
+  }
+  if (v.regressed_hand_back !== undefined && typeof v.regressed_hand_back !== "boolean") {
+    out.push({
+      where: `${where} regressed_hand_back`,
+      problem: `regressed_hand_back is true or false; got ${JSON.stringify(v.regressed_hand_back)}, read as false.`,
+      fix: "regressed_hand_back = true",
       fatal: false,
     });
   }

@@ -1722,6 +1722,31 @@ writes `node_modules`), and is recorded as a `verify` audit record with
 `gnomon check` runs it in the temporary worktree it makes for a head that is not
 checked out.
 
+**Opt-in: what the check's other exit codes mean.** A check has four
+verdicts: `passed` (exit 0, and only exit 0), `failed` (handed back to the
+model), `unrunnable` (nothing was measured: not found, timed out, refused; never
+handed back as "fix your code") and `regressed` (measured and worse than a
+baseline the check keeps; recorded, handed back only on request). By default
+126 and 127 are `unrunnable` and every other non-zero exit is `failed`. Tools
+use other codes, so name them ([CONTRACTS.md §52](CONTRACTS.md)):
+
+```toml
+# policy.toml: inside the existing [verify] block
+[verify]
+contract = "pytest"               # "septacore" or "pytest": 2, 4, 5 are unrunnable
+regressed_hand_back = false       # true: hand a `regressed` verdict back like `failed`
+
+# the exit_map is read over the preset; a sub-table, not an inline table
+[verify.exit_map]
+4 = "unrunnable"                  # a script that prints "NOT RUN" and exits 4
+3 = "regressed"
+```
+
+`gnomon task` and `gnomon check` read a run through the same table, so a check
+cannot come out `unrunnable` in one and `failed` in the other. In `gnomon check`
+`regressed` is a `fail` (no model to hand it to). Nothing can make a non-zero
+exit pass.
+
 **Opt-in: the completion gate** (since v0.5.0). Off unless declared. When a turn that changed
 the worktree first answers "done" with budget left, gnomon does not accept it:
 it hands the turn back with a checklist lifted from the task's own text (each

@@ -28,6 +28,17 @@
 
 ### Added
 
+- **A four-outcome `[verify]` verdict: `contract`, `[verify.exit_map]`,
+  `regressed_hand_back`** (#232). `passed`, `failed`, `unrunnable` and the new
+  `regressed`. `contract = "septacore"` or `"pytest"` and `[verify.exit_map]`
+  (exit code = verdict) say what a tool's other codes mean: pytest 2/4/5 and
+  SeptaCore 2 are `unrunnable`, so a check that never measured anything no
+  longer makes the model rewrite correct code. `regressed` is recorded and not
+  handed back unless `regressed_hand_back = true`. `gnomon task` and `gnomon
+  check` now read a run through one function, so they cannot drift. Nothing
+  makes a non-zero exit pass. With none declared the table is the old one.
+  CONTRACTS §52, `conformance/verify_contract.json`.
+
 - **`[verify] timeout_seconds`, `setup`, `setup_network`, `setup_timeout_seconds`**
   (#233). The declared check no longer has to fit the bash tool's 120 s, and a
   fresh worktree can install its dependencies first. `timeout_seconds` is the

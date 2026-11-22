@@ -27,6 +27,7 @@ import {
 } from "./root_fs.js";
 import { foldTreeName, unsafeTreePath } from "./surface_tree.js";
 import type { ResolvedVerify } from "./config.js";
+import { classifyVerify, type ExitMapDecl, type VerifyReading } from "./verify_outcome.js";
 import { globToRegExp, type ToolOutcome } from "./tools.js";
 
 /**
@@ -72,6 +73,23 @@ export function readVerifyExit(outcome: Pick<ToolOutcome, "code" | "summary">): 
   const exit = exitMatch ? Number(exitMatch[1]) : killed ? 1 : null;
   const passed = outcome.code === 0 && exitMatch !== null && exit === 0;
   return { exit, passed, unrunnable: exit === 126 || exit === 127 };
+}
+
+/**
+ * One run of the declared command, read into a verdict by the table every
+ * caller shares (verify_outcome.ts). `gnomon task` and `gnomon check` both
+ * call this, so a check cannot come out `unrunnable` in one and `failed` in
+ * the other. `notRun`: the tool ran nothing to an exit (timed out and killed,
+ * refused by the sandbox or a rule).
+ */
+export function readVerifyRun(
+  outcome: Pick<ToolOutcome, "code" | "summary">,
+  decl: ExitMapDecl | null | undefined
+): VerifyExit & VerifyReading & { notRun: boolean } {
+  const v = readVerifyExit(outcome);
+  const notRun = !v.passed && outcome.code !== 0 && v.exit === null;
+  const reading = classifyVerify({ exit: v.exit, passed: v.passed, notRun }, decl);
+  return { ...v, ...reading, notRun };
 }
 
 /** Is this repo-relative path a test, by the surface's own `test_paths`? */

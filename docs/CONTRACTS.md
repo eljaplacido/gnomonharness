@@ -144,8 +144,8 @@ round exits by its bucket like any other: the model answered, so it is a
 `result` (`0`) with `stop_reason: "answered"` and `verify: "failed"` on the
 record. The exit does not carry the check; a refusal floor is never demoted,
 so a failed check at `2` would leave every unverified run there. Read `verify`
-beside the bucket: one of `passed`, `failed`, `unrunnable`, `declined`,
-`skipped`, absent when no check ran (§20). `declined` means the person asked
+beside the bucket: one of `passed`, `failed`, `unrunnable`, `regressed`,
+`declined`, `skipped`, absent when no check ran (§20, §52). `declined` means the person asked
 (`approval = "always"`) said no; `unrunnable` means the check never ran to an
 exit -- not found or not executable (126/127), timed out and killed, or refused
 by the sandbox or a rule -- the same reading `gnomon check` gives (§6). Neither
@@ -576,7 +576,7 @@ change.
 | `abort` | after each scored tool call (every call up to 30, then every 5th) | `subject_id` `<session>.<turn>:<k>`, `model`, `question` `gnomon_abort.v1`, `order`, `labels`, `probs`?, `live` `continue`, `excerpt`, `latency_ms`, `error` |
 | `role` | once per prompt | as `abort`; `subject_id` `<session>.<turn>`, `question` `gnomon_routing.v1`, `live` = the role that ran or `chain:<a>><b>…` |
 | `approval` | after each tool call | as `abort`; `question` `needs_approval.v1`, `live` one of `not_gated`, `asked:approved`, `asked:declined`, `standing:approved`, `flag:approved`, `default:declined`, `policy:<bucket>` |
-| `turn_end` | once per turn, or per chain stage | `subject_id`, `stop_reason`, `code`, `bucket`, `verify` (`pass`, `fail`, `none`, or the raw `unrunnable`/`declined`/`skipped`), `tool_steps`, `tokens`, `duration_ms` |
+| `turn_end` | once per turn, or per chain stage | `subject_id`, `stop_reason`, `code`, `bucket`, `verify` (`pass`, `fail`, `none`, or the raw `unrunnable`/`regressed`/`declined`/`skipped`), `tool_steps`, `tokens`, `duration_ms` |
 | `shadow` | once, when the shadow stops: unreachable at session start, or after three connection failures in a row | `error` |
 
 **Common keys:**
@@ -4747,3 +4747,43 @@ runs on the host (`exec = "off"`). A failed setup is `verify` = `error`
 
 **Fixture**: `conformance/verify_contract.json`;
 `packages/gnomon-core/src/verify_setup.test.ts`.
+
+
+### Four verdicts, one table (`[verify] contract`, `[verify.exit_map]`, `regressed_hand_back`)
+
+A check had three outcomes: exit 0 `passed`, 126/127 `unrunnable`, anything else
+`failed`. Tools use other codes to say "nothing was measured" (pytest 2, 4 and
+5; SeptaCore's 2) or "measured, and worse" (SeptaCore's 3), and `failed` is
+handed back to the model, so a check that measured nothing made it rewrite
+correct code. There are now four verdicts, and **one function**
+(`classifyVerify`, `verify_outcome.ts`) reads a run into one of them for both
+`gnomon task` (the loop) and `gnomon check`, so the two cannot drift. Replay
+re-derives a recorded `unrunnable` from the same table.
+
+| Verdict | Meaning | `gnomon task` | `gnomon check` `verify` status |
+|---|---|---|---|
+| `passed` | exit 0, and only exit 0 | `verify: "passed"` | `pass` |
+| `failed` | the work is wrong | handed back; `verify: "failed"` | `fail` |
+| `unrunnable` | nothing was measured | not handed back; `verify: "unrunnable"` | `error` (exit 10) |
+| `regressed` | measured, worse than a baseline the check keeps | recorded, **not** handed back unless `regressed_hand_back = true`; `verify: "regressed"` | `fail`: there is no model to hand it to |
+
+With nothing declared the table is the old one: 0 `passed`; 126, 127 and a run
+that never reached an exit (timed out and killed, refused by the sandbox or a
+rule) `unrunnable`; anything else, a signal death included, `failed`.
+
+| Key | Value | Effect |
+|---|---|---|
+| `contract` | `septacore` or `pytest` | A preset. `septacore`: 0 passed, 1 failed, 2 unrunnable, 3 regressed. `pytest`: 0 passed, 1 failed, 2, 4 and 5 unrunnable (collection or usage error, nothing collected); 3 stays failed. An unknown name is no preset (surface audit). |
+| `[verify.exit_map]` | a sub-table, exit code = `"failed"` / `"unrunnable"` / `"regressed"` | Read over the preset. A TOML sub-table, not an inline table: gnomon's TOML subset has none (§5). An entry for exit 0, one that maps a non-zero exit to `passed`, a key that is not a code, or any other value is ignored and named by the surface audit: only exit 0 passes, and a map cannot change that. |
+| `regressed_hand_back` | `true` | `regressed` is handed back to the model like `failed`. Default off. |
+
+The `verify` audit record gains `verdict` only when a table is declared (a
+surface that declares none writes the record it always wrote); a `regressed`
+run also carries `regressed: true`. A `gnomon check` `verify` finding carries
+`verdict` under the same rule. `verify` on the task record, `turn_end` in the
+shadow log and the chaos scorecard's task record list `regressed` among their
+values.
+
+**Fixture**: `conformance/verify_contract.json` (`verdicts`, `contracts`,
+`exit_cases`); `packages/gnomon-core/src/verify_exit_map.test.ts` runs every
+case through the shared table, the real turn loop and `gnomon check`.

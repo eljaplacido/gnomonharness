@@ -61,7 +61,7 @@ import { parseSurfaceTree, readSurfaceBlobs, SurfaceTreeError, writeSurfaceTree,
 import { AuditTrail, redact, resolveAudit, verifyTrail } from "./audit.js";
 import { harnessBuild } from "./build.js";
 import { runVerifySetup, verifyContext } from "./verify_run.js";
-import { mustFailFirst, readVerifyExit, isTestPath, unwritablePreImage, type PreImage } from "./must_fail_first.js";
+import { mustFailFirst, readVerifyRun, isTestPath, unwritablePreImage, type PreImage } from "./must_fail_first.js";
 import {
   bashPolicy,
   executeTool,
@@ -780,26 +780,33 @@ async function judge(
     }
     const run = (command: string) => executeTool("bash", { command }, vctx, new Set(["bash"]));
     const out = await run(verify.command);
-    const v = readVerifyExit(out);
+    // The same reading the loop gives (must_fail_first.ts readVerifyRun, one
+    // table in verify_outcome.ts), so the two cannot drift. `verdict` is added
+    // to a finding only when the surface declared a table.
+    const v = readVerifyRun(out, verify);
     const tail = out.content.split("\n").slice(-20).join("\n");
+    const named = verify.exit_map ? { verdict: v.verdict } : {};
     if (v.passed) {
       verifyPassed = true;
       verdict.checks.push({ id: "verify", status: "pass", inspected: 1, findings: [{ command: verify.command, exit: 0 }] });
-    } else if (v.unrunnable || out.code !== 0) {
+    } else if (v.verdict === "unrunnable") {
       verdict.checks.push({
         id: "verify",
         status: "error",
         reason:
           `the check could not run (${out.summary})` +
           (inPlace ? "" : " — head was judged in a temporary worktree, which has no installed dependencies"),
-        findings: [{ command: verify.command, exit: v.exit, output: tail }],
+        findings: [{ command: verify.command, exit: v.exit, output: tail, ...named }],
       });
     } else {
+      // `failed`, and `regressed`: measured and worse. `gnomon task` records a
+      // regression without handing it back to a model; a judge of someone
+      // else's change has no model to hand it to, so it is a fail.
       verdict.checks.push({
         id: "verify",
         status: "fail",
         inspected: 1,
-        findings: [{ command: verify.command, exit: v.exit, output: tail }],
+        findings: [{ command: verify.command, exit: v.exit, output: tail, ...named }],
       });
     }
 

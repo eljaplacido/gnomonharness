@@ -4,16 +4,281 @@
     "The opt-in keys of [verify] and what they resolve to (docs/CONTRACTS.md section 52).",
     "Each case is a policy.toml [verify] block (after `command = \"x\"`) and `resolves`: the fields the",
     "resolved block must carry. `absent` lists fields it must not carry, because a key nobody declared",
-    "adds nothing to what runs. Asserted by packages/gnomon-core/src/verify_setup.test.ts."
+    "adds nothing to what runs. Asserted by packages/gnomon-core/src/verify_setup.test.ts.",
+    "Since #232: the verdict table (`verdicts`, `contracts`) and `exit_cases`: one run of the check with an exit, read by the loop (`gnomon task`) and by `gnomon check` through the same table. `check_status` is the `verify` entry's status in a `gnomon check` verdict (regressed is a fail there: a judge of someone else's change has no model to hand it to)."
   ],
-  "setup_network": ["none", "registry"],
-  "setup_audit": { "kind": "verify", "phase": "setup", "network": ["none", "registry"] },
+  "setup_network": [
+    "none",
+    "registry"
+  ],
+  "setup_audit": {
+    "kind": "verify",
+    "phase": "setup",
+    "network": [
+      "none",
+      "registry"
+    ]
+  },
   "cases": [
-    { "name": "nothing declared", "verify": {}, "resolves": {}, "absent": ["timeout_seconds", "setup", "setup_network", "setup_timeout_seconds"] },
-    { "name": "a timeout of the check's own", "verify": { "timeout_seconds": 900 }, "resolves": { "timeout_seconds": 900 }, "absent": ["setup"] },
-    { "name": "a setup, network shut by default", "verify": { "setup": "uv sync --frozen" }, "resolves": { "setup": "uv sync --frozen", "setup_network": "none" }, "absent": ["timeout_seconds"] },
-    { "name": "a setup with the registry open", "verify": { "setup": "pnpm install --frozen-lockfile", "setup_network": "registry", "setup_timeout_seconds": 1200 }, "resolves": { "setup_network": "registry", "setup_timeout_seconds": 1200 }, "absent": [] },
-    { "name": "an unreadable timeout is ignored", "verify": { "timeout_seconds": -5 }, "resolves": {}, "absent": ["timeout_seconds"] },
-    { "name": "an unknown setup_network is read as none", "verify": { "setup": "make deps", "setup_network": "anywhere" }, "resolves": { "setup_network": "none" }, "absent": [] }
+    {
+      "name": "nothing declared",
+      "verify": {},
+      "resolves": {},
+      "absent": [
+        "timeout_seconds",
+        "setup",
+        "setup_network",
+        "setup_timeout_seconds"
+      ]
+    },
+    {
+      "name": "a timeout of the check's own",
+      "verify": {
+        "timeout_seconds": 900
+      },
+      "resolves": {
+        "timeout_seconds": 900
+      },
+      "absent": [
+        "setup"
+      ]
+    },
+    {
+      "name": "a setup, network shut by default",
+      "verify": {
+        "setup": "uv sync --frozen"
+      },
+      "resolves": {
+        "setup": "uv sync --frozen",
+        "setup_network": "none"
+      },
+      "absent": [
+        "timeout_seconds"
+      ]
+    },
+    {
+      "name": "a setup with the registry open",
+      "verify": {
+        "setup": "pnpm install --frozen-lockfile",
+        "setup_network": "registry",
+        "setup_timeout_seconds": 1200
+      },
+      "resolves": {
+        "setup_network": "registry",
+        "setup_timeout_seconds": 1200
+      },
+      "absent": []
+    },
+    {
+      "name": "an unreadable timeout is ignored",
+      "verify": {
+        "timeout_seconds": -5
+      },
+      "resolves": {},
+      "absent": [
+        "timeout_seconds"
+      ]
+    },
+    {
+      "name": "an unknown setup_network is read as none",
+      "verify": {
+        "setup": "make deps",
+        "setup_network": "anywhere"
+      },
+      "resolves": {
+        "setup_network": "none"
+      },
+      "absent": []
+    }
+  ],
+  "verdicts": [
+    "passed",
+    "failed",
+    "unrunnable",
+    "regressed"
+  ],
+  "contracts": {
+    "septacore": {
+      "0": "passed",
+      "1": "failed",
+      "2": "unrunnable",
+      "3": "regressed"
+    },
+    "pytest": {
+      "0": "passed",
+      "1": "failed",
+      "2": "unrunnable",
+      "4": "unrunnable",
+      "5": "unrunnable"
+    }
+  },
+  "exit_map_values": [
+    "failed",
+    "unrunnable",
+    "regressed"
+  ],
+  "exit_cases": [
+    {
+      "name": "no table: exit 0",
+      "verify": {},
+      "exit": 0,
+      "verdict": "passed",
+      "handed_back": false,
+      "check_status": "pass"
+    },
+    {
+      "name": "no table: exit 1",
+      "verify": {},
+      "exit": 1,
+      "verdict": "failed",
+      "handed_back": true,
+      "check_status": "fail"
+    },
+    {
+      "name": "no table: exit 5 is a failure as before",
+      "verify": {},
+      "exit": 5,
+      "verdict": "failed",
+      "handed_back": true,
+      "check_status": "fail"
+    },
+    {
+      "name": "no table: exit 127",
+      "verify": {},
+      "exit": 127,
+      "verdict": "unrunnable",
+      "handed_back": false,
+      "check_status": "error"
+    },
+    {
+      "name": "pytest: collection error",
+      "verify": {
+        "contract": "pytest"
+      },
+      "exit": 2,
+      "verdict": "unrunnable",
+      "handed_back": false,
+      "check_status": "error"
+    },
+    {
+      "name": "pytest: usage error",
+      "verify": {
+        "contract": "pytest"
+      },
+      "exit": 4,
+      "verdict": "unrunnable",
+      "handed_back": false,
+      "check_status": "error"
+    },
+    {
+      "name": "pytest: no tests collected",
+      "verify": {
+        "contract": "pytest"
+      },
+      "exit": 5,
+      "verdict": "unrunnable",
+      "handed_back": false,
+      "check_status": "error"
+    },
+    {
+      "name": "pytest: a failing test",
+      "verify": {
+        "contract": "pytest"
+      },
+      "exit": 1,
+      "verdict": "failed",
+      "handed_back": true,
+      "check_status": "fail"
+    },
+    {
+      "name": "septacore: could not measure",
+      "verify": {
+        "contract": "septacore"
+      },
+      "exit": 2,
+      "verdict": "unrunnable",
+      "handed_back": false,
+      "check_status": "error"
+    },
+    {
+      "name": "septacore: regressed is recorded, not handed back",
+      "verify": {
+        "contract": "septacore"
+      },
+      "exit": 3,
+      "verdict": "regressed",
+      "handed_back": false,
+      "check_status": "fail"
+    },
+    {
+      "name": "septacore: regressed handed back on request",
+      "verify": {
+        "contract": "septacore",
+        "regressed_hand_back": true
+      },
+      "exit": 3,
+      "verdict": "regressed",
+      "handed_back": true,
+      "check_status": "fail"
+    },
+    {
+      "name": "exit_map: a project script's NOT RUN",
+      "verify": {
+        "exit_map": {
+          "4": "unrunnable"
+        }
+      },
+      "exit": 4,
+      "verdict": "unrunnable",
+      "handed_back": false,
+      "check_status": "error"
+    },
+    {
+      "name": "exit_map over a preset",
+      "verify": {
+        "contract": "pytest",
+        "exit_map": {
+          "5": "failed"
+        }
+      },
+      "exit": 5,
+      "verdict": "failed",
+      "handed_back": true,
+      "check_status": "fail"
+    },
+    {
+      "name": "exit_map cannot make a non-zero exit pass",
+      "verify": {
+        "exit_map": {
+          "3": "passed"
+        }
+      },
+      "exit": 3,
+      "verdict": "failed",
+      "handed_back": true,
+      "check_status": "fail"
+    },
+    {
+      "name": "exit_map cannot touch exit 0",
+      "verify": {
+        "exit_map": {
+          "0": "failed"
+        }
+      },
+      "exit": 0,
+      "verdict": "passed",
+      "handed_back": false,
+      "check_status": "pass"
+    },
+    {
+      "name": "an unknown preset is no preset",
+      "verify": {
+        "contract": "jest"
+      },
+      "exit": 2,
+      "verdict": "failed",
+      "handed_back": true,
+      "check_status": "fail"
+    }
   ]
 }

@@ -11,7 +11,7 @@
 import * as readline from "node:readline";
 import { safeGit } from "./git_safe.js";
 import { checkCitations } from "./citations.js";
-import { mustFailFirst, readVerifyExit } from "./must_fail_first.js";
+import { mustFailFirst, readVerifyExit, readVerifyRun } from "./must_fail_first.js";
 import { runVerifySetup, verifyContext } from "./verify_run.js";
 import { resolve, dirname, join, basename, sep, relative } from "node:path";
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, realpathSync, renameSync } from "node:fs";
@@ -4121,7 +4121,7 @@ export interface TurnResult {
    * could not tell that from a clean pass. Same silent-success shape as `exit
    * null` read as a clean zero, one level up.
    */
-  verify?: "passed" | "failed" | "unrunnable" | "declined" | "skipped";
+  verify?: "passed" | "failed" | "unrunnable" | "regressed" | "declined" | "skipped";
   toolSteps: number;
   toolLog: string[];
   /**
@@ -7860,7 +7860,14 @@ async function agenticTurn(
           // The reading lives in readVerifyExit (must_fail_first.ts) because
           // `gnomon check` reads the same command's exit and must not read it
           // differently. An unreadable status is null there; 1 here, as before.
-          const verifyExit = readVerifyExit(check);
+          //
+          // The reading into a verdict is verify_outcome.ts's one table, shared
+          // with `gnomon check` (#232): exit 0 passed; 126/127 and a run that
+          // never reached an exit unrunnable; anything else failed -- unless the
+          // surface declares `[verify] contract` or `[verify.exit_map]`, which
+          // say what a tool's other codes mean (pytest 5 is "nothing collected",
+          // SeptaCore 2 is "could not measure" and 3 is "regressed").
+          const verifyExit = readVerifyRun(check, verify);
           const shellExit = verifyExit.exit ?? 1;
           const passed = verifyExit.passed;
 
@@ -7891,8 +7898,11 @@ async function agenticTurn(
           // `gnomon check` already reads it as could-not-run (check.ts), and the
           // two must agree. A run killed by a signal still has an exit (1, from
           // readVerifyExit) and stays a failure: an OOM-killed suite is not green.
-          const notRun = !passed && check.code !== 0 && verifyExit.exit === null;
-          const unrunnable = notRun || shellExit === 126 || shellExit === 127;
+          const notRun = verifyExit.notRun;
+          const unrunnable = verifyExit.verdict === "unrunnable";
+          // Measured, and worse than the baseline the check keeps: recorded, and
+          // not handed back as a failure of the work unless the surface asks.
+          const regressed = verifyExit.verdict === "regressed";
           if (!passed && unrunnable) {
             const why = notRun ? check.summary.replace(/^bash — /, "") : `exit ${shellExit}`;
             say(
@@ -7916,6 +7926,24 @@ async function agenticTurn(
             // Handing this back would spend the remaining rounds on a defect in
             // the surface rather than in the work, so stop checking.
             verifyRounds = verify.max_rounds;
+          }
+          if (regressed) {
+            say(
+              paint(
+                deps.ui,
+                "yellow",
+                `  ⚙ verify — regressed (exit ${shellExit}). ` +
+                  (verify.regressed_hand_back ? `Handing the turn back.` : `Recorded; not handed back as a failure.`)
+              )
+            );
+            deps.audit?.write("verify", {
+              command: verify.command,
+              ok: false,
+              regressed: true,
+              exit: shellExit,
+              round: verifyRounds,
+            });
+            if (!verify.regressed_hand_back) verifyRounds = verify.max_rounds;
           }
           // A test that would have passed BEFORE this turn pins nothing.
           //
@@ -7960,6 +7988,9 @@ async function agenticTurn(
             command: verify.command,
             exit: notRun ? null : shellExit,
             passed,
+            // Only when the surface declared a table: a record a surface that
+            // declares none writes is the record it always wrote.
+            ...(verify.exit_map ? { verdict: verifyExit.verdict } : {}),
           });
 
           // An unrunnable check is a defect in the surface, not in the work, and
@@ -7969,8 +8000,10 @@ async function agenticTurn(
           // with it.
           if (unrunnable && !pinsNothing) {
             // Already reported above, with the audit record saying why.
+          } else if (regressed && !verify.regressed_hand_back && !pinsNothing) {
+            verifyOutcome = "regressed";
           } else if (!passed || pinsNothing) {
-            verifyOutcome = "failed";
+            verifyOutcome = regressed ? "regressed" : "failed";
             lastVerifyOutput = `$ ${verify.command}\n${check.content}`;
             // `warn`: a declared check failing is not chatter, and on
             // `gnomon task --json` it was the one line saying so (gnomon chaos,
@@ -7993,7 +8026,7 @@ async function agenticTurn(
           // could not run has already reported itself, and calling that "passed"
           // would be the same silent success this gate exists to contradict --
           // just from the other side.
-          if (!unrunnable) {
+          if (!unrunnable && !(regressed && !verify.regressed_hand_back)) {
             verifyOutcome = "passed";
             say(paint(deps.ui, "gray", `    ✓ verify passed`));
           }
