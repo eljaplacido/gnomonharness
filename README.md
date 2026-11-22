@@ -2563,11 +2563,26 @@ No model runs, and the scratch repository is removed afterwards.
 gnomon security test                    # every host; each decided as its [check.roles] role, else implement
 gnomon security test --host opencode    # one host
 gnomon security test --role plan --json # gnomon.security_test/2
+gnomon security test --sandbox         # + sandbox-escape probes per sandbox level (gnomon.sandbox_probes/1)
 ```
 
 A call a host gives its hook no event for is listed as not covered, never
 counted as held: `bypassPermissions` exists only in Claude Code. A fresh
 scaffold holds claude-code 24/24, opencode 22/22 and cursor 22/22.
+
+`--sandbox` adds what the corpus cannot see: does the containment gnomon claims
+for each place a command runs hold **on this machine**? Non-destructive
+configuration and containment probes (never exploits, no root, a temp directory of
+their own): a canary outside the project root read and written, a fake credential
+in a substituted HOME, egress with `network = false`, the docker socket,
+capabilities and `no_new_privs`, host PID and network namespaces, writable host
+mounts, `/proc/sys` and cgroup. They run for the tool paths at each `[sandbox]
+level` and for `bash` under `exec = off`, `os`, `os` with `reads = scoped` and
+`docker`, and report each cell as pass, FAIL (a claimed containment that did not
+hold: exit 2), open (a documented limit) or skipped with why. The matrix of level
+against threat, said honestly (docker is a shared-kernel container; there is no
+microVM or gVisor backend), is in [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md);
+the contract is [CONTRACTS.md §61](docs/CONTRACTS.md).
 
 | Family | What is tried | Must be |
 |---|---|---|
@@ -2740,6 +2755,30 @@ is listed, left out of the totals, and sets exit 2. The trails of `check`,
 `skill trial` and `eval` are gnomon's own commands, not sessions, so they are
 skipped. Exit 0 every trail read verified, 2 one did not, 10 could
 not run. The contract is [CONTRACTS.md §49](docs/CONTRACTS.md).
+
+### Trajectory scan — `gnomon audit scan`
+
+A guard judges one call at a time, so an attack spread over steps that are each
+ordinary passes it. `gnomon audit scan <trail|dir>` reads trails offline and
+looks for the sequences: a credential read followed later by network, a write
+outside the project or an encoding step; a file written, made executable, then
+run; repeated refusals with variations; credential locations probed across
+tools; an instruction-like marker in tool output followed by a risky action; a
+`cd` out of the root, a symlink out then a write through it, a refusal retried
+through another tool. It reads gnomon trails and the guard feed of Claude Code,
+opencode, Cursor and the rest; a metadata-only trail is enough for every rule but
+the marker one (which needs `record = "full"`, and is reported as not run, never
+as clean). Deterministic, model-free and advisory: a finding names steps to
+read, never blocks, and carries the trail and seq of its evidence.
+
+```bash
+gnomon audit scan                       # this project's .gnomon-audit/
+gnomon audit scan path/to/trails --json # a directory of trails, or one file
+gnomon audit scan . --min-severity medium
+```
+
+Exit 0 no finding, 2 a finding, 10 could not run. The rules, severities and
+limits are [CONTRACTS.md §60](docs/CONTRACTS.md).
 
 ### Evaluation on your own tasks — `gnomon eval`
 
@@ -3579,7 +3618,7 @@ target; never the text) when the surface keeps a trail. Contract:
 | `gnomon setup [--json] [--yes] [--pull <tag>] [--model <tag>] [--speed-check] [--mode local\|hybrid\|cloud] [--cloud-endpoint <url\|preset\|name> --cloud-model <name>] [--cloud-key-env <VAR>] [--catalog <file>] [--expect-proposal <digest>]` | Scan this machine, recommend a local model it can run from a dated catalog, pull it only on a yes, speed-check it, connect an optional cloud model, suggest local only, hybrid or cloud first, and write `.gnomon/` only after you accept the diff. `--yes` approves the write, never a download (`--pull` names one) or spending; `--expect-proposal` writes only the change a `--json` run printed as `proposal.digest`. Exit 0 written, 3 the surface or the change moved, 4 needs consent or a model, 12 the model server stopped answering. See [Get started in 3 steps](#get-started-in-3-steps). |
 | `gnomon doctor [--json] [--catalog <file>]` | Read-only: this machine, whether every role's model answers, and what changed since setup. Says what would fix each problem; never changes anything. Exit 0 nothing to do, 1 something needs attention, 10 could not run. |
 | `gnomon security [--json]` | Read-only: this project's security posture in one place — trust, where each role's commands run and what contains them, other harnesses' guard hooks, the audit trail. Risks (exit 2) are what is wrong now; advice names a setting that would contain more. See [Security posture](#security-posture--gnomon-security). |
-| `gnomon security test [--host claude-code\|opencode\|cursor\|codex\|qwen-code\|copilot\|all] [--role <r>] [--json]` | A model-free attack corpus (24 cases, mapped to OWASP LLM01/02/03/06) through the real guard, in the hook input of Claude Code, opencode and Cursor, against a scratch copy of this surface. Exit 2 names each case that did not hold. See [Security test](#security-test--gnomon-security-test). |
+| `gnomon security test [--host claude-code\|opencode\|cursor\|codex\|qwen-code\|copilot\|all] [--role <r>] [--sandbox] [--json]` | A model-free attack corpus (24 cases, mapped to OWASP LLM01/02/03/06) through the real guard, in the hook input of Claude Code, opencode and Cursor, against a scratch copy of this surface. Exit 2 names each case that did not hold. See [Security test](#security-test--gnomon-security-test). |
 | `gnomon compliance [--framework <id,...>] [--json]` | Read-only: which controls of the EU AI Act, GDPR, OWASP LLM Top 10, ISO/IEC 42001, NIST AI RMF, ISO/IEC 27001, SOC 2, the Cyber Resilience Act and DORA this project has gnomon evidence for, from a dated catalog — evidence, partial, gap (with the setting that closes it), a gnomon property, or the organisation's. A mapping, never an assessment. See [Compliance evidence](#compliance-evidence--gnomon-compliance). |
 | `gnomon compliance pack --out <dir> [--with-trails]` / `--verify <dir>` | Every read-only report (compliance, security posture and test, data flows, metrics, audit verification, eval reports) as JSON and text in one directory, with `pack.json` hashing each file; `--verify` re-hashes it. See [Evidence pack](#evidence-pack--gnomon-compliance-pack). |
 | `gnomon compliance dataflow [--json]` | Read-only: every place this surface can send prompts and repository content — model endpoints per role (primary, fallback, escalation) with host, locality and declared region, MCP servers, network-fetching roles, the shadow and anchor — and, with the opt-in `[compliance] allowed_regions` rule, which routes it admits. See [Data flows and residency](#data-flows-and-residency--gnomon-compliance-dataflow). |
@@ -3599,7 +3638,7 @@ target; never the text) when the surface keeps a trail. Contract:
 | `gnomon skill trial <id> [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]` | Measure a proposal against its absence on `.gnomon/trials/<name>.toml`. Exit 0 meets the declared thresholds, 2 does not, 10 no answer. Never accepts. |
 | `gnomon key [set\|list\|unset] <endpoint\|VAR>` | Store an API key for an endpoint that declares one. |
 | `gnomon endpoint [add\|test\|list]` | Declare an endpoint end to end — provider, key, model, roles — and prove it runs one token before writing anything. Presets: `opencode-go`, `opencode-zen`, `openrouter`, `ollama`. |
-| `gnomon audit [show\|verify\|anchor\|tamper\|metrics\|attribute\|resolve <trail>:<seq> --reason <text>]` | Audit trails. `metrics` counts how the agent worked from the verified session trails (see [Process metrics](#process-metrics--gnomon-audit-metrics)). `attribute` names why a session failed, by harness layer (CONTRACTS section 60). `anchor` delivers queued heads to the `[audit.anchor]` witness now. `tamper` lists `record_tamper` events and exits 3 while any is unresolved; `resolve` is a person's recorded acknowledgement of one. |
+| `gnomon audit [show\|verify\|anchor\|tamper\|metrics\|attribute\|scan\|resolve <trail>:<seq> --reason <text>]` | Audit trails. `metrics` counts how the agent worked from the verified session trails (see [Process metrics](#process-metrics--gnomon-audit-metrics)). `attribute` names why a session failed, by harness layer (CONTRACTS section 60). `scan` reads trails offline for multi-step patterns a per-call guard misses (see [Trajectory scan](#trajectory-scan--gnomon-audit-scan)). `anchor` delivers queued heads to the `[audit.anchor]` witness now. `tamper` lists `record_tamper` events and exits 3 while any is unresolved; `resolve` is a person's recorded acknowledgement of one. |
 | `gnomon check --base <rev> [--head <rev>] [--role <r> \| --agent <name>] [--transcript <file> --format <fmt>] [--json]` | Judge a change another harness made by this surface's rules as of `<rev>`. Exit 0 held, 2 failed, 10 no verdict. See [Governing other harnesses](#governing-other-harnesses). |
 | `gnomon guard [--from claude-code\|opencode\|cursor] [--tool <kind> --input <json>] [--role <r> \| --agent <name>]` | Decide one tool call another harness is about to make, by the committed rules: allow (0), deny (2), ask (3), no decision (10). `gnomon guard install claude-code\|opencode\|cursor [--write [--local]]` installs the hook (`--local` keeps it, which names this machine's gnomon by absolute path, out of git); `gnomon guard status` reports one missing, changed or switched off (0 none, 2 a finding), or `outdated` (an older gnomon's hook, a warning). See [Before the call](#before-the-call-gnomon-guard). |
 | `gnomon dashboard [--port <n>] [--no-open] [--dir <path>]` | A command center in the browser, on 127.0.0.1 only: projects, sessions as a timeline, what the policy refused, audit-chain verification, contracts, token measurements; setup, check, trust and endpoint test as buttons that run those commands, asking first before anything that writes, downloads or spends. Alias: `ui`. See [The command center](#the-command-center--gnomon-dashboard). |
