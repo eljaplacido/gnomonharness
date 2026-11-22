@@ -44,6 +44,7 @@ import {
   listItems as listInboxItems,
   INBOX_DIR,
   listProposals,
+  listImproveRuns,
   proposalPaths,
   sha256Hex,
   PROPOSALS_DIR,
@@ -1157,7 +1158,13 @@ export function proposalsView(p: DashboardProject): Record<string, unknown> {
       return { ...d, before, moved: now !== d.before_sha256 };
     }),
   }));
-  return { dir: PROPOSALS_DIR, counts, proposals: shown, problems };
+  // The recent `gnomon improve` runs, so the page can say what produced the proposals and what a run spent.
+  const runs = listImproveRuns(config, 5).map((r) => ({
+    run: r.run, mode: r.mode, candidates: r.mined.candidates, proposals: r.proposals.length,
+    accepted_by_policy: r.policy.accepted.length, probe: r.probe.spec ? `${r.probe.spec}, k = ${r.probe.k}` : "none",
+    role: r.role ? r.role.name : null, budget: r.budget, problems: r.problems.slice(0, 5),
+  }));
+  return { dir: PROPOSALS_DIR, counts, proposals: shown, problems, improve_runs: runs };
 }
 
 // ---------------------------------------------------------------------------

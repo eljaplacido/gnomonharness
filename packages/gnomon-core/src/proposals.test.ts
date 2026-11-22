@@ -273,10 +273,12 @@ describe("accept", () => {
     expect(new ProposalRefusal()).toBeInstanceOf(SkillRefusal);
   });
 
-  it("no policy may accept in this build", () => {
+  it("no policy but the declared improve.auto_accept may decide (improve.test.ts)", () => {
     const { config } = surface();
     const p = proposeMemory(config, { name: "N", description: "d", body: "b" });
-    expect(() => acceptProposal(config, p.id, { decidedBy: "policy:auto" })).toThrow(/not enabled/);
+    expect(() => acceptProposal(config, p.id, { decidedBy: "policy:auto" })).toThrow(/may not accept a proposal/);
+    // The declared one needs the surface to declare it, and the proposal to carry evidence.
+    expect(() => acceptProposal(config, p.id, { decidedBy: "policy:improve.auto_accept" })).toThrow(/declares no \[improve\] auto_accept/);
     expect(readProposal(config, p.id)!.status).toBe("pending");
   });
 

@@ -126,6 +126,7 @@ import { readFileSync, writeFileSync, writeSync, existsSync, readdirSync, mkdirS
 import { setProcessTitle } from "./proc_title.js";
 import { runInbox, runInboxHook } from "./inbox_cmd.js";
 import { runProposals, runMemory } from "./proposals_cmd.js";
+import { runImproveCmd, bindDraftModel } from "./improve_cmd.js";
 import { serveInboxMcp } from "./inbox_mcp.js";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -3010,6 +3011,7 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "security" },
   { name: "compliance" },
   { name: "eval" },
+  { name: "improve" },
 ];
 
 /**
@@ -3392,6 +3394,24 @@ Commands:
     .gnomon-trials/_eval/<utc>/ and an eval_run audit record. Changes
     nothing. Exit 0 meets the spec, 2 does not, 10 no answer.
 
+  improve [--dry-run] [--run] [--k <n>] [--budget-usd <x>] [--role <role>]
+          [--schedule nightly|weekly] [--json] [--dir <path>]
+    Governed self-improvement (Harness^2's propose, probe, compose, over the
+    hashed surface). Mines the audit trails for what keeps recurring: a
+    refused rule (a skill), a skill that fires but is never cited (a
+    retirement), a build command or opening files (a memory entry), a
+    failure class (a note for system.md). --dry-run (the default) prints
+    what it would do: no model call, no write. --run drafts each with a
+    local role (--role names another; a cloud role only when named), lints
+    it, probes it against the base surface on .gnomon/trials/ (k attempts
+    per task, in temporary clones, under --budget-usd), composes the ones
+    that helped, and writes PROPOSALS plus one inbox item; nothing reaches
+    .gnomon/ until a person accepts (gnomon proposals) or the surface
+    declares [improve] auto_accept in policy.toml and a lint-clean, probed
+    proposal meets its thresholds. --schedule writes
+    .gnomon/loops/improve.toml for a person to commit and install. Exit 0
+    done, 1 usage, 3 refused, 10 could not run.
+
   chaos [--json] [--seed <n>] [--faults <id,...>] [--schedules <s,...>] [--out <file>]
     The fault-injection suite. A scripted model behind a loopback endpoint
     answers a fixed task set and injects one fault per case: errors, timeouts,
@@ -3674,6 +3694,19 @@ async function main(): Promise<void> {
     }
     case "eval": {
       process.exit(await cmdEval(args));
+    }
+    case "improve": {
+      const config = loadConfig(args.dir, args.flags["profile"]);
+      const code = await runImproveCmd(
+        config,
+        { flags: args.flags, json: !!args.json, dir: args.dir, role: args.role },
+        {
+          model: bindDraftModel(config),
+          settleTrust: (c) => settleTrustHeadless(c, trustOptions(args)).outcome,
+          runCell: (wt, prompt, o) => runTask(loadConfig(wt, o.profile), prompt, { role: o.role, yes: args.yes, trust: o.trust }),
+        }
+      );
+      process.exit(code);
     }
     case "chaos": {
       // Its own argv parser, like guard: subcommands and flags it alone reads.

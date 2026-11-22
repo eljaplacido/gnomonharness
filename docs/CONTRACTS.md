@@ -5310,7 +5310,7 @@ surface hash; written atomically, mode 0600, never through a symlink).
 | `status` | `pending`, `accepted` or `rejected`; never back to pending |
 | `diff` | 1 to 5 `{path, before_sha256, after}`: `path` relative to `.gnomon/` with POSIX separators, `before_sha256` the sha256 of the file it was written against (`null` when it did not exist), `after` the whole new content (at most 20000 characters) |
 | `evidence` | up to 20 `{trail?, seq?, note?}` |
-| `decided_by` | `human`; `policy:<rule>` is in the type and refused in this build |
+| `decided_by` | `human`, or `policy:improve.auto_accept`: the one declared rule that may accept (§59); any other `policy:<rule>` is refused |
 | limits | title 200, rationale 2000, note 1000 characters, path 200; 200 pending |
 
 **Which paths a kind may touch** (checked when written and again when accepted,
@@ -5401,3 +5401,193 @@ click after the diff was shown, from a server a person started at a terminal.
 `memory_loop.test.ts` (byte-identity when unused, the index, the counted read,
 an agent's proposal never writing `.gnomon/`) and
 `packages/gnomon-cli/src/proposals_cmd.test.ts` (the CLI, exit codes, the actions).
+
+
+## 59. `gnomon improve` — mine, propose, probe, compose, and the one declared policy that may accept; `[improve]`, `gnomon.improve/1`, `.gnomon-proposals/improve/`, `proposal.improve`, `v: 1`
+
+Governed self-improvement over the hashed surface (the Propose, Probe, Compose
+step of Harness^2, github.com/google-research/harness2, task-level recursion),
+with Hermes Agent's skill-authoring rules as a deterministic lint and its
+retirement of unused skills as a proposal (research_notes/rea-hermes-2026-11-22).
+Its output is never a change: it is §58 proposals. Nothing runs unless a person
+(or a schedule a person installed) invokes it. A dry run writes nothing and
+calls no model. With no `[improve]` table every other command, the prompt, the
+tool definitions and every record are byte-identical to a build without it.
+
+**Command.** `gnomon improve [--dry-run] [--run] [--k N] [--budget-usd X]
+[--role R] [--schedule nightly|weekly] [--scheduled] [--yes] [--json] [--dir P]`.
+`--dry-run` is the default: it prints what it would mine, draft and probe and
+touches nothing (no model call, no probe cell, no file). `--run` does the work.
+`--run` is refused inside an agent session (exit 3). `--k` is the attempts per
+task per arm (1 to 20; default `[improve] k`, else the spec's `attempts`),
+`--budget-usd` the spend cap, `--role` the drafting role. `--yes` approves gated
+calls inside probe clones, as `gnomon eval --yes`. Exit `0` done (a dry run, and
+a run that found nothing, included), `1` usage, `3` refused, `10` could not run.
+`--json` answers the report below.
+
+**Mine** (deterministic: the same trails give the same candidates; no model, no
+clock). From the audit trails in `[audit] dir`, each candidate carrying its
+signal, counts and up to 5 `{trail, seq}` pointers; three distinct sessions
+(`MIN_REPEATS`) are a pattern, one session repeating itself is not.
+
+| Family | Signal | From | Proposal |
+|---|---|---|---|
+| `skill` | `repeated_refusal` | the same rule refusing the same role on the same thing in 3+ sessions (§12) | `skills/<id>.md` |
+| `retire` | `fires_never_cited` | a skill loaded in 5+ `skill_use` records and never named in the reasoning (§54) | a `skill` proposal whose diff deletes `skills/<id>.md` |
+| `memory` | `build_command` | a build or test command (`npm test`, `cargo test`, `pytest`, `make x`, ...) that exited 0 in 3+ sessions and the surface does not already say | `memory/<id>.md` |
+| `memory` | `startup_reads` | files read among the first 6 reads of 3+ sessions | `memory/start-here.md` |
+| `memory` | `declined_approval` | an approval a person (`by: human*`) declined in 3+ sessions | `memory/<id>.md` |
+| `harness` | `stall`, `step_wall`, `malformed`, `truncated`, `verify_failed` | turns ending so in 3+ sessions, or a failed `verify` | one bullet under `## Notes from \`gnomon improve\`` in `system.md` |
+
+Only fields a trail records under either `[audit] record` setting are read (a
+command is an action and is recorded as one); no prompt or response text. A
+candidate whose `signature` any proposal already carries (pending, accepted or
+rejected) is `known` and is not proposed again. A run drafts at most 6 candidates
+(`MAX_CANDIDATES_PER_RUN`); the rest are `deferred`.
+
+**Propose.** A drafting role writes the text from the facts: `--role`, else
+`[improve] role`, else the first role in `roles.toml` whose endpoint is the
+operator's own hardware; a cloud role only when named. The model gets
+`DRAFT_SYSTEM` (class-level, rule plus why, no incident, no instruction that
+loosens a limit) and replies with one JSON object; anything else, or no model,
+leaves the deterministic template as the text (`drafted_by` says which). A
+retirement has no text. Every proposal is written with `source: "improve"`,
+`evidence` (the pointers) and the `improve` object below.
+
+**Lint** (`improve_lint.ts`), applied to every proposal, deterministic. Findings
+are `<rule>: <message>` in `improve.lint.problems`, `rule` one of `secret`,
+`narration` (a date, a PR or issue number, a commit hash, "yesterday", first
+person, an incident story), `negative_claim` (a tool "does not work"), `loosens_policy`
+(ignore the rules, skip or disable an approval, sandbox, check or audit, act
+"without asking", `--yes`, `sudo`, a looser setting, never run the tests, edit
+`.gnomon/` or the audit records), `name` (not class-level: a date, a number, a hash,
+an error string, a one-off), `description` (a skill or memory without one),
+`length` (skill body 1500, description 160, memory body 600, an added harness
+note 700 characters), `no_why` (a skill or a note with a rule and no
+because/so that/otherwise clause), `format` (YAML front matter), `harness_removes`
+and `harness_empty` (a `system.md` edit only adds). A finding never stops a
+proposal being written; it blocks policy acceptance.
+
+**Probe** (Harness^2's probe, on `gnomon eval`'s machinery, §13 and §47). For each
+candidate that has text, the candidate surface is the HEAD commit plus the diff,
+built as a commit with git plumbing in a temporary index (no ref, branch, index
+or working-tree change; the unreferenced objects are left for `git gc`), and run
+as `eval --against surface:<sha>` on the project's trial spec
+(`.gnomon/trials/default.toml`, else the first spec): paired, interleaved, each
+cell in a private clone, `k` attempts per task per arm, judged by the task's own
+check. The eval's report and cells are written (`.gnomon-trials/_eval/<utc>/`,
+an `eval_run` record, §47) and cited. Probes run one after another; the budget
+is checked before each cell. A dirty `.gnomon/` is a `failed` probe with a hint.
+The recorded `probe`:
+
+| Field | Meaning |
+|---|---|
+| `status` | `probed`, `unprobed` (no trial spec, no runner, or a retirement), `failed` (the eval could not start or had no valid pair), `skipped` (the budget was spent) |
+| `reason`, `hint` | why it is not `probed`; with no trial spec the hint is to add `.gnomon/trials/default.toml` (`gnomon init` scaffolds one) |
+| `spec`, `k`, `pairs {planned, valid}`, `eval_status` | what ran |
+| `base`, `candidate` | `{passes, n, tokens_out, requests, refusals, checks {pass, fail, invalid}}`: pass counts over valid cells, metered output tokens and model requests (steps), cells whose run ended in a refusal, the spec's check on each cell (a cell's verify verdict) |
+| `pass_delta` | candidate pass rate minus base pass rate |
+| `token_delta`, `request_delta` | candidate over base, minus 1; `null` when not metered |
+| `regressed` | `pass_delta < 0` or more refusals than the base |
+| `improved` | not regressed, and more passes, or as many with fewer output tokens |
+| `report`, `report_sha256` | the eval's `report.json` and its sha256 |
+
+**Compose.** Per kind (a proposal has one kind), the probed candidates that
+`improved` and did not `regress` (two or more, at most 5 files) are combined into
+one proposal with `improve.candidate: "composed"` and `composed_of` the ids it
+combines; it is probed as one surface and written only if it did not regress.
+Harness notes combine into one `system.md` edit; memory entries are rendered with
+the composed proposal's own id as `provenance`. The parts stay pending: accepting
+the composition makes a part that touches the same path stale (§58 refuses it).
+
+**The proposal's `improve` object** (§58 proposal, optional): `{v: 1, run,
+candidate (skill|retire|memory|harness|composed), signal, signature, counts,
+drafted_by (model:<role> or template...), lint {clean, problems}, probe,
+composed_of?}`. It is information: a person reads it; policy re-derives what it
+needs (below). A retirement is a `skill` proposal with a diff entry `{path,
+before_sha256, after: "", delete: true}`; accepting removes the file (`delete` is
+allowed only on `skill`, needs a `before_sha256`, and the `proposal_decision`
+record's `surface_hash_after` is the manifest without it).
+
+**Report** (`--json`, `gnomon.improve/1`): `{schema, mode (dry-run|run), run?,
+mined {trails, records, candidates, notes}, role {name, local, why}|null, probe
+{spec, k, tasks, cells_per_candidate}|{spec: null, hint}, candidates [{family,
+signal, signature, title, counts, evidence, action (propose|known|deferred),
+reason?}], proposals [{id, kind, candidate, title, paths, lint, probe, drafted_by,
+composed_of?, auto?}], policy {declared, auto_accept, accepted, problems}, budget,
+inbox?, problems}`. A run writes the report to
+`.gnomon-proposals/improve/<run>.json` (machine-local, never listed as a
+proposal), one `inbox` item for target `gnomon` (author `cli`; §57) naming the
+proposals, and nothing under `.gnomon/` except what the declared policy accepts.
+
+**Budget.** `--budget-usd` (or `[improve] budget_usd`) caps the spend: drafting
+tokens and probe-cell tokens at `usd_per_mtok_in` / `usd_per_mtok_out`; a local
+endpoint costs 0. A billed role with no declared rates cannot be metered, so a
+run under a USD cap drafts it with the template and says so. Once spent, drafting
+falls back to templates, each remaining probe is `skipped`, and an eval in
+progress ends `budget_exhausted` before its next cell. Probing a billed role also
+needs the spec's `[budget] max_requests` or `--yes-spend`, as `gnomon eval`.
+
+**`[improve]`** in `policy.toml` (all optional; a person's edit, hashed with the
+surface): `auto_accept` (list of kinds; default none), `min_probe_runs` (valid
+pairs, default 3), `min_pass_delta` (default 0), `max_token_increase` (default 0,
+a fraction: 0.10 is 10%), `role`, `k`, `budget_usd`, `usd_per_mtok_in`,
+`usd_per_mtok_out`, `scheduled` (`dry` (default) or `run`). A value out of range,
+an unknown kind or a mistyped list is reported in `policy.problems` and the
+default stands.
+
+**Policy acceptance.** `acceptProposal(config, id, {decidedBy:
+"policy:improve.auto_accept"})` is the one place §58's refusal of policy deciders
+is lifted, for exactly this declared rule; any other `policy:<rule>` is refused,
+and so is a policy reject. `gnomon improve --run` calls it for the proposals it
+just wrote (the composed one first), and only if `[improve] auto_accept` is
+declared. `acceptProposal` makes every check itself, from the proposal as stored
+and the surface as it is now, so a caller gets the same refusals (`ProposalRefusal`,
+exit 3 where a CLI reports one): the proposal's kind is listed (and `harness` only
+if `harness` itself is); each path is `skills/<id>.md`, `memory/<id>.md` or, for
+a harness edit, `system.md`, never a deletion and never `policy.toml`,
+`roles.toml`, `tools.toml`, `config.toml`, `trials/`, `loops/`, `extensions/` or
+`profiles/` even if `[proposals] harness_paths` lists them; `improve.lint` is
+clean and a fresh lint is clean; the probe is `probed`; the cited report file
+exists, its bytes hash to `report_sha256`, it is a `paired` eval that ended
+`complete`, its base arm's cell surface hash is this surface's and its candidate
+arm's is this proposal's diff applied; its pass counts give `valid pairs >=
+min_probe_runs`, `pass_delta >= min_pass_delta` and, when tokens were metered,
+`token_delta <= max_token_increase`. The decision refuses in an agent session and
+while a tamper event is open, as any decision; it needs no person present (a
+schedule runs it), and `[skills] require_trial` still refuses a skill. The
+`proposal_decision` record is written first (§58) with `decided_by:
+"policy:improve.auto_accept"`, `by: "improve"`, `authorised_by: "policy"`,
+`interactive: false`, `policy_rule: "improve.auto_accept"` and `policy_evidence`
+`{kind, probe_pairs, pass_delta, token_delta, report, report_sha256,
+min_probe_runs, min_pass_delta, max_token_increase}`; the proposal is stored
+`accepted` with `decided_by: "policy:improve.auto_accept"`.
+`conformance/audit_record_schema.json` (and its catalog copy) adds the two
+optional fields to `proposal_decision`, both `metadata`.
+
+**Schedule.** `gnomon improve --schedule nightly|weekly` (a person at a terminal;
+refused in an agent session and without one) writes `.gnomon/loops/improve.toml`
+(the loop format: `every` `1d` or `7d`, `[act] run = "gnomon improve --scheduled"`,
+`max_runs_per_hour = 1`) and nothing else: the file is a surface change to review
+and commit, and `gnomon loop install improve` is the separate step that puts it
+in cron. An existing `improve` loop is not overwritten. `--scheduled` is a dry run
+unless `policy.toml` declares `[improve] scheduled = "run"`, in which case it is
+`--run`. `gnomon loop run improve` is the one gnomon ancestor a policy acceptance
+is allowed (agent_context.ts); an agent's own `gnomon task` or marker still
+refuses.
+
+**Dashboard.** The Inbox screen's Proposals section shows, for a proposal
+written by `improve`, a block above its diff: the candidate kind, who drafted it,
+the lint verdict and findings, the probe status, and a table of base against
+candidate (pass rate, output tokens, steps, refusals, check verdicts) with the
+change; for a composed proposal the ids it combines; for one a policy accepted
+`accepted by policy:improve.auto_accept`. `GET /api/p/<id>/proposals` adds
+`improve_runs` (the 5 most recent: `run, mode, candidates, proposals,
+accepted_by_policy, probe, role, budget, problems`).
+
+**Fixture**: `conformance/improve.json`; `packages/gnomon-core/src/improve.test.ts`
+(lint, mining, the dry run writing and calling nothing, the probe against a
+scripted model, k, regression, composition, the budget, the policy's every
+refusal, retirement, byte-identity of a normal run with an `[improve]` table) and
+`packages/gnomon-cli/src/improve_cmd.test.ts` (flags, refusals, the schedule file,
+output, the dashboard view).

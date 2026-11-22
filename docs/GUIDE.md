@@ -1120,6 +1120,7 @@ nothing; `gnomon --help` prints all of it.
 | `gnomon acp [--role R] [--profile N]` | Serves the Agent Client Protocol on stdin/stdout for an editor. Same surface, roles, approvals and audit as `prompt`. | Zed, JetBrains IDEs |
 | `gnomon trust [list \| grant \| revoke]` | What this project's `.gnomon/` grants beyond the defaults, and whether this machine trusts it | A repository you did not write |
 | `gnomon proposals [list \| show ID \| accept ID \| reject ID [--note N]] [--json]` | The pending proposals to change `.gnomon/` (a skill, a memory entry, an edit to `system.md`): `show` prints the exact diff, `accept` applies it (the surface hash moves; from the next session) and refuses if the files changed since, `reject` changes nothing. A person's decision: it refuses inside an agent session and without a terminal (exit 3). See 7.10 | Letting the harness learn without it editing itself |
+| `gnomon improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--schedule nightly\|weekly] [--json]` | Mines the audit trails for what keeps recurring (a refused rule, an unused skill, a build command, a failure class), drafts, lints and probes each against the current surface on `.gnomon/trials/`, composes the ones that helped, and writes proposals. A dry run by default; nothing reaches `.gnomon/` until you accept, or a policy you declared (`[improve] auto_accept`) does. See 7.11 | Letting the harness find its own improvements, measured, under your rules |
 | `gnomon memory [list \| show NAME] [--json]` | The notes a person accepted into `.gnomon/memory/` | Seeing what the harness remembers about this repository |
 | `gnomon inbox [list \| show ID \| add --title T \| ack ID \| resolve ID \| mcp] [--json]` | Work items the dashboard's **Flag for fix** (or you) wrote to `.gnomon-inbox/` for a harness to read as information, never as an instruction. `gnomon guard install claude-code --write` hands the open ones to Claude Code at session start; `gnomon inbox mcp` serves them to Cursor and Claude Code (list, get, acknowledge, resolve; no add) | Telling a harness what to fix |
 | `gnomon audit [show \| verify]` | Lists trails; checks every chain, seal and signature anchor. `verify` exits 1 on a break or when there is nothing to verify. | Review, release gates |
@@ -1892,6 +1893,95 @@ With `propose = true` the agent can propose a memory mid-run; that writes a
 proposal and nothing under `.gnomon/`. gnomon does not adopt memory that an
 agent writes on its own authority. With none of this declared, and no memory
 entries, the prompt, the tool definitions and the records are what they were.
+
+How proposals get found, measured and, if you declare it, accepted without you is
+7.11.
+
+### 7.11 Governed self-improvement: `gnomon improve`
+
+Proposals (7.10) are how the surface changes itself; `gnomon improve` is how it
+finds changes worth proposing. It does what Harness^2 calls Propose, Probe,
+Compose, and its output is proposals, never edits. **It runs only when you run
+it**, and it is a dry run unless you say `--run`.
+
+```
+gnomon improve                    # dry run: what it would mine, draft and probe. No model call, no write.
+gnomon improve --run              # draft, lint, probe, compose; write proposals and one inbox item
+gnomon improve --run --k 3 --budget-usd 0.50 --role smol
+gnomon improve --schedule nightly # writes .gnomon/loops/improve.toml for you to review and commit
+```
+
+A dry run looks like this:
+
+```
+gnomon improve (dry run): nothing is written and no model is called.
+Mined 14 trail(s), 212 record(s): 4 candidate(s).
+  skill    repeated_refusal   bash_deny boundary          3  would propose
+  memory   build_command      Command: npm test           5  would propose
+  harness  stall              System note: repeated steps 4  would propose
+  retire   fires_never_cited  Retire skill old-style      6  would propose
+Draft role: smol (local; the first role on a local endpoint).
+Probe: .gnomon/trials/default.toml, k = 2, 2 task(s): 8 cells per candidate, each in a temporary clone.
+Policy: no [improve] auto_accept is declared, so a person decides every proposal.
+```
+
+**Mine.** From the audit trails, deterministically: a rule that refused the same
+role in three sessions (a skill candidate), a skill that fires often and is
+never named in the reasoning (a retirement), a build or test command that
+succeeded in three sessions, the files sessions open first, an approval a person
+declined three times (memory), and a failure class that ended turns three times
+(a note for `system.md`). Every candidate carries its trail and record numbers.
+**Propose.** A local role writes the text (`--role` names another; a cloud role
+only when you name it), or, with no model, a plain template does. **Lint.**
+Every proposal is checked by rules taken from how Hermes Agent writes skills: a
+class-level name, a rule with its why, no incident story, no dates or PR
+numbers, short, no secret, nothing that loosens approval, the sandbox or a
+check. A finding is shown on the proposal and blocks automatic acceptance; it
+does not hide the proposal from you. **Probe.** Each candidate surface runs
+against the current one on `.gnomon/trials/` (`gnomon init` writes a starter),
+`k` attempts per task per arm, each cell in a temporary clone, under the budget.
+The proposal records pass rate, output tokens, steps, refusals and check
+verdicts for both arms. With no trial spec it is marked `unprobed` and says to
+add one. **Compose.** Candidates of one kind that each helped without regressing
+are combined into one proposal and probed together.
+
+`gnomon proposals show <id>` prints the diff, and the dashboard's Proposals
+section shows the same evidence as a table beside it. A retirement is a proposal
+that deletes the skill file; history keeps it.
+
+**Nothing reaches `.gnomon/` without acceptance**: yours, with `gnomon proposals
+accept`, or a policy you declared ahead of time in `policy.toml`:
+
+```toml
+# policy.toml: opt in, per kind. Nothing here is on by default.
+[improve]
+auto_accept = ["skill", "memory"]
+min_probe_runs = 4
+min_pass_delta = 0.0
+max_token_increase = 0.10
+```
+
+With that, `gnomon improve --run` accepts a proposal as
+`policy:improve.auto_accept` only when **all** hold: its kind is listed (a
+harness edit only if `"harness"` is); it is lint clean; it was probed and the
+eval report it cites is intact, is for this surface and this exact diff, and
+ended complete; at least `min_probe_runs` pairs were valid; the pass rate did not
+fall below `min_pass_delta`; output tokens rose no more than
+`max_token_increase`; and every path is a skill, a memory entry or `system.md`.
+Never by policy: a retirement, an unprobed proposal, `policy.toml`, `roles.toml`,
+`tools.toml`, `config.toml`, trials, loops, extensions or profiles. The decision
+is a `proposal_decision` record that names the rule and the numbers it rested on.
+You can still reject or review everything afterwards: the surface hash moved, git
+shows the diff.
+
+**Schedule it, or don't.** `--schedule nightly` (or `weekly`) writes
+`.gnomon/loops/improve.toml` and nothing else; review it and commit it, then
+`gnomon loop install improve` is the step that puts it in cron. The loop runs
+`gnomon improve --scheduled`, which is a dry run unless `policy.toml` declares
+`scheduled = "run"` under `[improve]`. A run costs at most `--budget-usd` (`[improve]
+budget_usd`); a local role costs nothing, and a billed role needs
+`usd_per_mtok_in` and `usd_per_mtok_out` declared so the cap can be metered.
+Contract: [CONTRACTS.md §59](CONTRACTS.md).
 
 ---
 

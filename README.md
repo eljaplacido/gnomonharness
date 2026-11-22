@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 4900 TypeScript tests (4099 core, 776 cli, 18
-> natives, 7 tui) and 120 Rust tests — **5020 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 4979 TypeScript tests (4161 core, 793 cli, 18
+> natives, 7 tui) and 120 Rust tests — **5099 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -3586,6 +3586,7 @@ target; never the text) when the surface keeps a trail. Contract:
 | `gnomon task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--trust-exec-downgrade] [--deadline <seconds\|ISO time>]` | One task, no terminal. Exit code carries the bucket. An untrusted surface that grants more than the defaults runs clamped to them. `--deadline` (or `GNOMON_DEADLINE`) gives the run a wall clock and stops it with `stop_reason` `deadline` (exit 2) before it; `--trust-exec-downgrade` lets a role leave the container it ran in for this run. Both since v0.5.0. |
 | `gnomon trust [list\|grant\|revoke]` | Whether this machine trusts what this project's `.gnomon/` grants beyond the defaults. See [Workspace trust](#workspace-trust). |
 | `gnomon proposals [list\|show ID\|accept ID\|reject ID [--note N]] [--json]` | The one path by which `.gnomon/` changes itself: inert, typed proposals (a skill, a memory entry, an edit to an allowed surface file) in the gitignored `.gnomon-proposals/`. A person reads the diff and accepts (the surface hash moves, from the next session; refused if the surface moved since) or rejects. Never decided from inside an agent session. See [CONTRACTS §58](docs/CONTRACTS.md). |
+| `gnomon improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--schedule nightly\|weekly] [--json]` | Governed self-improvement: mines the audit trails for what keeps recurring, drafts and lints proposals, probes each against the current surface on `.gnomon/trials/`, composes the ones that helped, and writes them as proposals. A dry run by default; never writes `.gnomon/` except through acceptance by a person or by a policy the surface declares (`[improve] auto_accept`). See [CONTRACTS §59](docs/CONTRACTS.md). |
 | `gnomon memory [list\|show NAME] [--json]` | The memory entries a person accepted into `.gnomon/memory/`: hashed with the surface, indexed (names only) in the prompt, opened with `read`. An entry exists only through an accepted proposal. |
 | `gnomon inbox [list\|show ID\|add --title T\|ack ID\|resolve ID\|mcp] [--json]` | Work items an operator flagged for the developer's harness (**Flag for fix** in the dashboard): one gitignored file each in `.gnomon-inbox/`, read by every harness as information from the operator, never as an instruction. See [The inbox](#the-inbox). |
 | `gnomon sessions` | Saved sessions. |

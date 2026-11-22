@@ -3550,7 +3550,7 @@ export const CANCELLED = "Cancelled.";
  * and the startup banner names the override, as it already does for
  * GNOMON_MODEL_URL.
  */
-function modelTimeoutMs(config?: GnomonConfig): number {
+export function modelTimeoutMs(config?: GnomonConfig): number {
   if (config) {
     const declared = (config.config as { resilience?: { request_timeout_ms?: unknown } })
       ?.resilience?.request_timeout_ms;

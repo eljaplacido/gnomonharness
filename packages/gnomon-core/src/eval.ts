@@ -333,6 +333,16 @@ export interface EvalOptions {
   settleTrust?: (config: GnomonConfig) => TrustOutcome | undefined;
   signals?: TrialSignals;
   log?: (line: string) => void;
+  /** Attempts per task per arm, in place of the spec's `attempts` (`gnomon improve --k`). The spec's hash is unchanged. */
+  attempts?: number;
+  /**
+   * A further ceiling on model requests, beside the spec's `[budget]`. It is a
+   * cap, never a declaration: it does not stand in for `max_requests` when the
+   * billed-endpoint check asks whether the spec declared one.
+   */
+  maxRequests?: number;
+  /** Checked before each cell: true stops the eval, `budget_exhausted`, as a spent request budget does. */
+  stop?: () => boolean;
 }
 
 /** An eval that could not start: no cells, exit 10. */
@@ -373,6 +383,7 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
     // From this checkout, never a cell's: no cell holds the spec
     // (CELL_WITHHELD, skill_trial.ts). Setup, check and [harness.*] run from it.
     spec = loadTrialSpec(config, opts.spec ?? "default");
+    if (opts.attempts !== undefined) spec = { ...spec, attempts: Math.max(1, Math.floor(opts.attempts)) };
   } catch (err) {
     throw new EvalAbort(err instanceof Error ? err.message : String(err));
   }
@@ -522,7 +533,9 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
     const planned = spec.tasks.length * spec.attempts;
     let pair = 0;
     const pinned: Partial<Record<EvalArmName, { model: string; endpoint?: string }>> = {};
-    const spent = () => spec.budget.max_requests !== undefined && requestsUsed >= spec.budget.max_requests;
+    const caps = [spec.budget.max_requests, opts.maxRequests].filter((n): n is number => n !== undefined);
+    const reqCap = caps.length > 0 ? Math.min(...caps) : undefined;
+    const spent = () => (reqCap !== undefined && requestsUsed >= reqCap) || opts.stop?.() === true;
 
     outer: for (const task of spec.tasks) {
       for (let attempt = 1; attempt <= spec.attempts; attempt++) {
