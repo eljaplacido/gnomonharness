@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 4225 TypeScript tests (3532 core, 668 cli, 18
-> natives, 7 tui) and 120 Rust tests — **4345 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 4249 TypeScript tests (3556 core, 668 cli, 18
+> natives, 7 tui) and 120 Rust tests — **4369 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1137,11 +1137,47 @@ See [Roles and the Trust Dial](#roles-and-the-trust-dial).
 meta = ["turn", "role", "model", "bucket", "duration", "context", "tokens", "tools"]
 meta_style = "line"               # line | compact
 think = "collapse"                # hide | collapse | wrap | show
-spinner = true
+spinner = "sundial"               # sundial | clock | braille | ascii | false
 color = true
 markdown = true
-theme = "dark"                    # dark | dim | light | high-contrast | mono | tokyonight | catppuccin
+style = "auto"                    # auto | boxed | classic
+theme = "dark"                    # dark | dim | light | high-contrast | mono | tokyonight | catppuccin | gruvbox | nord
 ```
+
+On a colour terminal at least 60 columns wide (`style = "auto"`), the loop is
+framed. This is what a turn looks like; pipes, `gnomon task` and `NO_COLOR` get
+the plain `classic` output:
+
+```
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ ◐ gnomon 0.6.5                                                               │
+│ the shadow tells the time — a coding agent you can audit                     │
+│                                                                              │
+│ role    build · qwen3.5:122b · local                                         │
+│ surface 9f3a1c7e2b5d · prevent · audit on                                    │
+│ repo    /home/user/projects/acme-api · feat/parser                           │
+│                                                                              │
+│ /help /cot /think /skills /models · Esc cancels a turn                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+╭─ build · qwen3.5:122b ────────────────────────────── ctx 12% · feat/parser ─
+› fix the failing parser test
+╭─ ◆ build · qwen3.5:122b ──────────────────────────────────────────────────────
+│ ✻ The failing test imports parse() from the old path, so I will read the
+│   module first and then fix the import.
+│ ● read_file src/parse.ts
+│   ⎿ 84 lines · export function parse(input: string)
+│ ◆ plan · delegating the test run
+│ ┊  ● run_tests parse.test.ts
+│ ┊    ⎿ 12 passed
+│ ↲ plan: 12 passed, nothing else to change
+╰─ ✓ turn 3  ·  build  ·  qwen3.5:122b  ·  result  ·  8.4s  ·  ctx 3 turns ─────
+
+Fixed: parse() is imported from src/parse.ts; 12 pass.
+```
+
+The answer is printed below the closed frame with nothing before it, so code
+copied from it never carries a `│`.
 
 `meta` is an ordered list drawn from `turn`, `role`, `model`, `bucket`,
 `duration`, `context`, `tokens`, `think`, `tools`; an empty list shows no meta
@@ -1152,8 +1188,8 @@ writes the first three lines out whole, word-wrapped, up to 12 rows; `show`
 prints everything, wrapped. No row ever outruns the terminal.
 
 `theme` sets the palette the loop draws in — `dark` (default), `dim`, `light`,
-`high-contrast`, and `mono` recolour gnomon's own output only. `tokyonight` and
-`catppuccin` additionally recolour the **whole terminal** background and
+`high-contrast`, and `mono` recolour gnomon's own output only. `tokyonight`,
+`catppuccin`, `gruvbox` and `nord` additionally recolour the **whole terminal** background and
 foreground via OSC escapes, and reset it on a clean exit (see the caveat in
 [Known Limits](#known-limits)). Switch live with `/theme <name>`; `/theme` with
 no argument lists them.
@@ -3588,7 +3624,7 @@ undiscoverable.
 | `/think [mode]` | Chain-of-thought: `hide` \| `collapse` (one cut row per line) \| `wrap` (first lines written out whole, word-wrapped) \| `show` (everything, wrapped). `/expand think` reprints the last turn's reasoning in full. |
 | `/cot [mode]` | Live trace while it works: `off` \| `brief` \| `tools` \| `think` \| `work` \| `full`. `work` is the default: it shows reasoning and prose in full, and folds a run of steps that succeeded and changed nothing into one line. `full` never folds. |
 | `/expand` | List the steps inside the last folded run. |
-| `/theme [name]` | Colour theme; `tokyonight`/`catppuccin` recolour the whole terminal |
+| `/theme [name]` | Colour theme (a swatch each); `tokyonight`/`catppuccin`/`gruvbox`/`nord` recolour the whole terminal |
 | `/clear` `/help` `/quit` | |
 
 **Reading the live trace.** Each model response prints as one block:

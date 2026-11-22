@@ -45,6 +45,16 @@
 - **Ollama requests carry `options.num_ctx`** when the surface names the number (declared window, or a Modelfile
   `num_ctx`; a `[defaults]` number is not sent), bounded by the trained length. A window that is only the trained length is not sent; gnomon warns once
   with `OLLAMA_CONTEXT_LENGTH` / Modelfile `num_ctx` / `max_context_tokens`. No other endpoint kind sends it.
+### Added — the boxed terminal, sundial spinner, two themes
+
+- `[ui] style = "auto" | "boxed" | "classic"` (default `auto`): a startup card, a status rule above the prompt, and a
+  rail with header and footer around each turn (the meta line moves into the footer). `auto` is boxed only on a colour
+  TTY of at least 60 columns; `classic`, `gnomon task`, `--json`, pipes and `NO_COLOR` are unchanged.
+- Themes carry an accent, rail colour, border set and chip; new `gruvbox` and `nord`; truecolor / 256 / 16-colour
+  depth from `COLORTERM`/`TERM`; ASCII borders for `TERM=dumb`, a non-UTF-8 locale and the legacy Windows console.
+  `/theme` prints a swatch per theme.
+- `[ui] spinner = "sundial" | "clock" | "braille" | "ascii"` (default `sundial`, `◐ ◓ ◑ ◒` in the accent); the label
+  reads `◐ thinking · 12s · esc cancels`. `spinner = false` still turns it off.
 
 ### Added — think cap (opt-in, unmeasured), CONTRACTS §52
 

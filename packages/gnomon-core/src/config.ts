@@ -249,7 +249,9 @@ export interface UiConfig {
   meta_style?: MetaStyle;
   think?: ThinkMode;
   cot?: CotMode;
-  spinner?: boolean;
+  /** true/false, or the style: "sundial" | "clock" | "braille" | "ascii" */
+  spinner?: boolean | SpinnerStyle;
+  style?: UiStyle;
   color?: boolean;
   markdown?: boolean;
 }
@@ -2083,7 +2085,18 @@ export interface ResolvedUi {
    * want when the answer *is* the markdown you are about to paste elsewhere.
    */
   markdown: boolean;
+  /** `[ui] style`: the boxed look, or the classic one. Absent reads as "auto". */
+  style?: UiStyle;
+  /** `[ui] spinner` named a style; `spinner = false` is `spinner: false`. Absent reads as "sundial". */
+  spinner_style?: SpinnerStyle;
+  /** Runtime: is the boxed look in force this session? Set by the loop. */
+  boxed?: boolean;
 }
+
+export type UiStyle = "auto" | "boxed" | "classic";
+export const UI_STYLES: UiStyle[] = ["auto", "boxed", "classic"];
+export type SpinnerStyle = "sundial" | "clock" | "braille" | "ascii";
+export const SPINNER_STYLES: SpinnerStyle[] = ["sundial", "clock", "braille", "ascii"];
 
 export const META_FIELDS: MetaField[] = [
   "turn",
@@ -2149,6 +2162,8 @@ export function resolveUi(config: GnomonConfig): ResolvedUi {
     // write it, so this default reaches an existing surface too.
     cot: pickEnum(ui.cot, COT_MODES, "work"),
     spinner: typeof ui.spinner === "boolean" ? ui.spinner : true,
+    style: pickEnum(ui.style, UI_STYLES, "auto"),
+    spinner_style: pickEnum(ui.spinner, SPINNER_STYLES, "sundial"),
     color: typeof ui.color === "boolean" ? ui.color : true,
     markdown: typeof ui.markdown === "boolean" ? ui.markdown : true,
   };
@@ -3214,6 +3229,28 @@ const DECLARED_NOT_IMPLEMENTED: Record<string, { values: string[]; inUse: string
 export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
   const problems: SurfaceProblem[] = [];
   const declared = config.config.endpoints ?? {};
+
+  // [ui] enums: a misspelling used to fall back to the default without a word.
+  const uiBlock = (config.config.ui ?? {}) as Record<string, unknown>;
+  const uiEnums: Array<[string, string[], boolean]> = [
+    ["style", UI_STYLES, false],
+    ["spinner", SPINNER_STYLES, true],
+    ["meta_style", META_STYLES, false],
+    ["think", THINK_MODES, false],
+    ["cot", COT_MODES, false],
+  ];
+  for (const [key, legal, orBool] of uiEnums) {
+    const v = uiBlock[key];
+    if (v === undefined || (orBool && typeof v === "boolean")) continue;
+    if (typeof v !== "string" || !legal.includes(v)) {
+      problems.push({
+        where: `.gnomon/config.toml [ui] ${key}`,
+        problem: `${JSON.stringify(v)} is not one of ${legal.join(" | ")}${orBool ? " | false" : ""}; the default is used instead.`,
+        fix: `Set [ui] ${key} = "${legal[0]}" (or another of: ${legal.join(", ")}).`,
+        fatal: false,
+      });
+    }
+  }
 
   // Files under .gnomon/extensions/ are NOT hashed and NOT loaded. Inert in
   // both directions, so this is a note about what the directory is, not a
