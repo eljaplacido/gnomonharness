@@ -165,7 +165,8 @@ describe("the persistent cache", () => {
     const a = await resolveContextWindow(target(f.url));
     expect(a.resolution).toMatchObject({ tokens: 262_144, source: "listing:opencode" });
     expect(a.resolution?.cached).toBeUndefined();
-    expect(statSync(windowCachePath()).mode & 0o777).toBe(0o600);
+    // POSIX permission bits only: Windows reports 0o666 for any writable file.
+    if (process.platform !== "win32") expect(statSync(windowCachePath()).mode & 0o777).toBe(0o600);
     const body = JSON.parse(readFileSync(windowCachePath(), "utf8"));
     expect(Object.values(body.entries)[0]).toMatchObject({ tokens: 262_144, source: "listing:opencode" });
 
