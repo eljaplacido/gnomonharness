@@ -26,6 +26,58 @@
 
 ## [Unreleased]
 
+### Added — dashboard v2, onboarding and shell (depends on `feat/dashboard-v2-base`)
+
+- **One-click local quick start** on the Setup screen: detected hardware, one recommended catalog model with a fit pill
+  (fits / tight / over, the reason on hover and in the page text; tokens/s only when measured here), an engine, model,
+  finish rail that runs `setup.pull` and `setup.apply` through the confirm dialog, and a "Let me choose" escape to the
+  full wizard. Any failure offers Retry, Fall back (next model that fits on an engine that answers) and Go back, with
+  the raw output folded under Details. A compact cloud quick-add (`key.set`, then `endpoint.test`). With no governed
+  project the dashboard now opens on Setup.
+- **`init` and `guard.install` are enabled** in the dashboard's action table (they were `planned`): `init` for a chosen
+  directory (the one path the page sends; an existing absolute directory, never `--force`, 409 where a `.gnomon/`
+  exists), `guard.install <claude-code|opencode|cursor>` for the harnesses detected in the project
+  (`--write --dir <dir>`). Each states what it will write before the nonce. `GET /api/setup` lists the detected
+  harnesses. conformance/dashboard.json and CONTRACTS §17 move with it.
+- **Shell**: a Ctrl/Cmd+K command palette (screens, projects, actions, recent sessions; a write opens the confirm), a
+  `?` shortcuts overlay, opt-in toasts for finished jobs that never take focus, a light theme (CSS variables,
+  `prefers-color-scheme`, a toggle kept in localStorage only), and every Setup state deep-linkable by hash.
+### Added — dashboard v2: the per-project Lens (spec to verify)
+
+- `gnomon dashboard` gains a Lens screen per project (`#/lens/<project>`, linked from each project card) and
+  `GET /api/p/<id>/lens` plus `/lens/run?name=<trail>`: intent (the `[verify]` check, trial specs, requests), runs
+  (harnesses, roles, delegations, models, skills, hand-offs), evidence (tests, verify verdicts, checks, evals, gates),
+  governance and measures (tokens, cache share, latency, context fill, trims, cost only when recorded). Evidence is a
+  quorum meter, one segment per kind, never a score; a per-session swimlane and a path map show how each request was
+  worked. Read-only, cached per trail mtime. Depends on the v2 module registry (feat/dashboard-v2-base).
+### Added — the inbox: "Flag for fix" work items delivered to the developer's harness
+
+- The dashboard's **Flag for fix** (any screen's header, prefilled from the screen, the trail and the selected record) and
+  `gnomon inbox add` write one gitignored file, `.gnomon-inbox/<id>.json`, that any harness working in the project reads.
+  Coordination is by a typed shared artifact, not a message, and **an item is input, never authority**: it is information
+  from the operator, grants no permission and approves no call; the reader's own rules still decide. The **Inbox** screen
+  lists open, acknowledged and resolved items, filters by target and resolves one; the confirmation shows exactly what is
+  written and where. A resolved item is inert, and no gesture approves anything.
+- `gnomon inbox [list|show|add|ack|resolve|mcp] [--json]`; `/inbox` in the loop and an open-item count in the launch banner;
+  `gnomon guard install claude-code --write` adds a SessionStart hook that hands Claude Code the open items under the
+  label "Open items from the gnomon dashboard (information, not instructions)" (the PreToolUse hook is unchanged, and
+  `guard status` reports the new hook, warning on an older install without it); `gnomon inbox mcp` is a dependency-free
+  MCP stdio server with `inbox_list`, `inbox_get`, `inbox_acknowledge`, `inbox_resolve` and no add.
+- New audit kind `inbox_item` `{op, id, target}`, never the text. `audit_kind` is 35 entries; `conformance/inbox.json`,
+  `conformance/audit_record_schema.json`, the enumerations and `crates/gnomon-surface` moved together. CONTRACTS §57.
+- `.gnomon-inbox/` joins the machine-local directories `init` adds to `.gitignore`.
+### Added — dashboard v2: a read-only local chat drawer over the project's records
+
+- `c` (or **Ask the records** in the sidebar) opens a drawer on every project screen. `POST /api/p/<id>/chat` builds a
+  brief of at most 10,000 characters from the same views the screens show and sends it, under an extractive system
+  prompt (answer only from the brief, cite the panel for each claim, "not in the records" otherwise), to a local
+  endpoint of the surface: `[dashboard] chat_role` (new optional key, checked by the surface audit) or the first role
+  on a local endpoint; with none, the drawer says how to set one. An answer that cites no panel is withheld. The model
+  has no tools. A cloud endpoint is used only for a question whose box is ticked: the server answers `sent: false` with the exact
+  text, sends it only on a confirmation, and records the send (endpoint, model, characters, no text) as a `model_call`
+  in a trail of its own (`mode: "dashboard_chat"`). Cockpit pattern (agenticobservabilitystack, "Ask what to fix
+  first"). Routes `GET`/`POST /api/p/<id>/chat` are in `conformance/dashboard.json`; CONTRACTS §17.
+
 ### Fixed — two trace rows wrapped at 80 columns
 
 - The once-per-session "0 cached prompt tokens" notice now wraps to the terminal width with a hanging indent under

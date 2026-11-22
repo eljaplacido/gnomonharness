@@ -31,9 +31,11 @@ import type { ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { harnessBuild, loadTrust, trustPath as defaultTrustPath } from "gnomon-core";
+import { harnessBuild, loadTrust, trustPath as defaultTrustPath, getItem as getInboxItem, INBOX_DIR } from "gnomon-core";
 import {
   contractsView,
+  ensureProject,
+  inboxView,
   governanceView,
   measurementsView,
   projectOverview,
@@ -44,6 +46,24 @@ import {
   verifyProject,
   type DashboardProject,
 } from "./dashboard_data.js";
+import { lensView, lensRun } from "./dashboard_lens.js";
+import {
+  CHAT_TIMEOUT_MS,
+  ChatConfirmations,
+  QUESTION_MAX_CHARS,
+  buildBrief,
+  chatMessages,
+  chatStatus,
+  charsOf,
+  cleanHistory,
+  cloudKeyRefusal,
+  loadChatConfig,
+  messagesDigest,
+  planChat,
+  recordEgress,
+  sendChat,
+  shapeAnswer,
+} from "./dashboard_chat.js";
 import {
   DASHBOARD_ACTIONS,
   ACTION_STATES,
@@ -53,10 +73,14 @@ import {
   Jobs,
   actionNamed,
   argvFor,
+  dirProblem,
   catalogInfo,
   cloudPresets,
   commandText,
   declaredEndpointNames,
+  detectHarnesses,
+  GUARD_TARGETS,
+  type GuardHarness,
   endpointFacts,
   jsonOf,
   keyStorePath,
@@ -95,6 +119,11 @@ export const DASHBOARD_ROUTES = {
     "GET /api/p/<id>/governance",
     "GET /api/p/<id>/measurements",
     "GET /api/p/<id>/contracts",
+    "GET /api/p/<id>/lens?trail=<trail>",
+    "GET /api/p/<id>/lens/run?name=<trail>",
+    "GET /api/p/<id>/inbox",
+    "GET /api/p/<id>/chat",
+    "POST /api/p/<id>/chat",
     "POST /api/actions/<name>",
     "GET /api/jobs/<id>",
   ],
@@ -104,6 +133,11 @@ const STATIC: Record<string, { file: string; type: string }> = {
   "/": { file: "index.html", type: "text/html; charset=utf-8" },
   "/app.js": { file: "app.js", type: "text/javascript; charset=utf-8" },
   "/app.css": { file: "app.css", type: "text/css; charset=utf-8" },
+  // Dashboard v2 modules: each registers its screen or overlay with app.js.
+  "/lens.js": { file: "lens.js", type: "text/javascript; charset=utf-8" },
+  "/inbox.js": { file: "inbox.js", type: "text/javascript; charset=utf-8" },
+  "/chat.js": { file: "chat.js", type: "text/javascript; charset=utf-8" },
+  "/palette.js": { file: "palette.js", type: "text/javascript; charset=utf-8" },
   "/icon.svg": { file: "icon.svg", type: "image/svg+xml" },
   "/fonts/cinzel-wordmark.woff2": { file: "fonts/cinzel-wordmark.woff2", type: "font/woff2" },
   "/fonts/OFL.txt": { file: "fonts/OFL.txt", type: "text/plain; charset=utf-8" },
@@ -131,7 +165,7 @@ const SECURITY_HEADERS: Record<string, string> = {
 const SETUP_COMMANDS = ["doctor", "setup", "key", "endpoint", "trust", "check", "launch"] as const;
 
 /** Actions a project without a `.gnomon/` may run: setup is how it gets one. */
-const WITHOUT_SURFACE = new Set(["doctor.scan", "setup.plan", "setup.pull", "setup.speed_check", "setup.apply", "key.set"]);
+const WITHOUT_SURFACE = new Set(["doctor.scan", "setup.plan", "setup.pull", "setup.speed_check", "setup.apply", "key.set", "init"]);
 
 export function defaultAssetsDir(): string {
   return fileURLToPath(new URL("../dashboard/", import.meta.url));
@@ -151,6 +185,8 @@ export interface DashboardOptions {
   bootstrapTtlMs?: number;
   /** How long a confirmation stays valid. */
   confirmTtlMs?: number;
+  /** How long the chat waits for a model to answer (default 150 s). */
+  chatTimeoutMs?: number;
 }
 
 export interface DashboardServer {
@@ -195,6 +231,9 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
   const children = new Set<ChildProcess>();
   /** Projects with a spawned action running: one at a time each. */
   const busy = new Set<string>();
+  /** Projects with a chat question in flight: one at a time each. */
+  const chatBusy = new Set<string>();
+  const chatConfirms = new ChatConfirmations(opts.confirmTtlMs);
   let port = 0;
   let commands: Promise<Set<string>> | null = null;
 
@@ -209,13 +248,13 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
     send(res, status, JSON.stringify({ schema: DASHBOARD_SCHEMA, ...(value as object) }), "application/json; charset=utf-8");
   const fail = (res: ServerResponse, status: number, error: string, more: object = {}): void => json(res, status, { error, ...more });
 
-  const readBody = (req: IncomingMessage): Promise<unknown> =>
+  const readBody = (req: IncomingMessage, limit = 8192): Promise<unknown> =>
     new Promise((done, reject) => {
       let size = 0;
       const parts: Buffer[] = [];
       req.on("data", (d: Buffer) => {
         size += d.length;
-        if (size > 8192) {
+        if (size > limit) {
           reject(new Error("body too large"));
           req.destroy();
         } else parts.push(d);
@@ -302,6 +341,8 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
     };
     // The Setup screen reads doctor's report as `doctor`.
     if (action.name === "doctor.scan") Object.assign(out, { available: true, doctor: doc });
+    // The page selects the project init just made.
+    if (action.name === "init") out.project = p.id;
     if (action.name === "trust.grant" && pending?.surfaceHash) {
       // Read back what the command recorded: the surface that was confirmed,
       // and no other, is now trusted here.
@@ -391,6 +432,48 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
           f.local ? "It runs on this machine: nothing is billed." : "It is a cloud endpoint: the token is billed, a fraction of a cent.",
         ]);
       }
+      case "init": {
+        if (p.hasSurface) return fail(res, 409, `${p.root} already has a .gnomon/: init refuses to overwrite it (gnomon init --force is for a terminal)`, { action: action.name });
+        const git = existsSync(join(p.root, ".git"));
+        return ask({ dir: p.root, git }, [
+          `Creates ${join(p.root, ".gnomon")}/ (config, roles, tools, policy, rules, skills): a content-hashed surface, with audit on. Nothing existing is overwritten; init refuses where a .gnomon/ exists.`,
+          `Models are the ones found on this machine's 127.0.0.1 servers, or the catalog's pick for this hardware. Nothing is downloaded.`,
+          git
+            ? "Adds .gitattributes and .gitignore lines in this repository (machine-local state is gitignored). Nothing is committed."
+            : "This directory is not a git repository: init still scaffolds .gnomon/ here. Nothing is committed.",
+        ]);
+      }
+      case "guard.install": {
+        const h = params.harness as GuardHarness;
+        const row = detectHarnesses(p.root).find((x) => x.harness === h)!;
+        return ask({ ...row }, [
+          `Writes the guard hook into ${join(p.root, GUARD_TARGETS[h].writes)}${row.present ? " (it exists: gnomon's entry is merged, the rest is kept)" : " (it does not exist yet: it is created)"}.`,
+          "The hook names this machine's gnomon by absolute path and asks gnomon to decide every tool call that harness makes, under this project's rules.",
+          row.detected ? `${h} was detected in this project.` : `${h} was not detected in this project: the file is created anyway; it does nothing until that harness runs here.`,
+          "Nothing is committed. Add --local in a terminal to keep the hook out of git.",
+        ]);
+      }
+      case "inbox.add": {
+        const where = `${join(p.root, INBOX_DIR)}/<new id>.json`;
+        return ask(
+          { dir: INBOX_DIR, item: { title: params.title, detail: params.detail ?? "", target: params.target, evidence: params.evidence ?? [], scope: params.scope ?? [] } },
+          [
+            `Writes one file, ${where} (gitignored; never in .gnomon/ or the surface hash), holding exactly the text shown here.`,
+            `Title "${params.title}", for ${params.target === "any" ? "any harness" : params.target}${params.detail ? `, ${params.detail.length} characters of detail` : ""}, ${params.evidence?.length ?? 0} evidence reference${params.evidence?.length === 1 ? "" : "s"}, ${params.scope?.length ?? 0} scope path${params.scope?.length === 1 ? "" : "s"}.`,
+            "A harness working in this project reads it as information from you. It grants nothing, lifts no rule and approves no call; the harness's own rules still decide what it may do.",
+            "Recorded as an inbox_item record (the id and target, never the text) when [audit] is on.",
+          ]
+        );
+      }
+      case "inbox.resolve": {
+        const item = getInboxItem(p.root, params.id!);
+        if (!item) return fail(res, 404, "no such inbox item");
+        if (item.status === "resolved") return fail(res, 409, "this item is already resolved");
+        return ask({ dir: INBOX_DIR, item: { id: item.id, title: item.title, status: item.status, target: item.target } }, [
+          `Marks ${INBOX_DIR}/${item.id}.json resolved${params.note ? ` with the note "${params.note}"` : " with no note"}; a resolved item is not delivered to harnesses again.`,
+          "Nothing else changes. Recorded as an inbox_item record (id and target) when [audit] is on.",
+        ]);
+      }
       default:
         return fail(res, 409, `${action.name} has no confirmation in this build`);
     }
@@ -413,6 +496,16 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
       return fail(res, 400, err instanceof Error ? err.message : "bad body");
     }
     if (action.state !== "enabled") return fail(res, 409, `${action.name} is planned, not in this build`);
+    // `init` may name a directory that is not on the list: the one path the
+    // browser sends. It is validated, stated back in the confirmation, and
+    // only then does the directory join the list (for this run of the server).
+    if (action.name === "init" && typeof body.dir === "string" && body.dir !== "") {
+      const bad = dirProblem(body.dir);
+      if (bad) return fail(res, 400, bad);
+      if (body.project === undefined || body.project === null) body = { ...body, project: ensureProject(projects, body.dir).id };
+      else if (projectById(String(body.project))?.root !== ensureProject(projects, body.dir).root) return fail(res, 400, '"dir" is not the project named');
+      delete body.dir;
+    }
     const p = projectById(typeof body.project === "string" ? body.project : "");
     if (!p || !p.exists) return fail(res, 404, "no such project");
     if (!p.hasSurface && !WITHOUT_SURFACE.has(action.name)) return fail(res, 404, "this project has no .gnomon/");
@@ -453,8 +546,102 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
     return execute(res, action, p, read.params, null);
   }
 
+  /**
+   * `POST /api/p/<id>/chat`: a question about the project's records, answered
+   * by a model with no tools. Local unless the body ticks `cloud`, which
+   * answers `sent: false` with the exact messages to be sent and sends them only with
+   * the confirmation that answer carried.
+   */
+  async function chat(req: IncomingMessage, res: ServerResponse, p: DashboardProject): Promise<void> {
+    if (!/^application\/json\b/.test(req.headers["content-type"] ?? "")) return fail(res, 415, "send JSON");
+    if (req.headers.origin === undefined) return fail(res, 403, "the chat must be asked from this page (no Origin)");
+    let body: Record<string, unknown>;
+    try {
+      const b = await readBody(req, 65536);
+      if (!b || typeof b !== "object" || Array.isArray(b)) throw new Error("body is not a JSON object");
+      body = b as Record<string, unknown>;
+    } catch (err) {
+      return fail(res, 400, err instanceof Error ? err.message : "bad body");
+    }
+    const question = typeof body.question === "string" ? body.question.trim() : "";
+    if (!question) return fail(res, 400, "ask a question");
+    if (question.length > QUESTION_MAX_CHARS) return fail(res, 400, `a question is at most ${QUESTION_MAX_CHARS} characters`);
+    if (body.cloud !== undefined && typeof body.cloud !== "boolean") return fail(res, 400, "cloud is true or false");
+    const wantCloud = body.cloud === true;
+    if (chatBusy.has(p.id)) return fail(res, 409, "a question is still being answered for this project; wait for it");
+
+    const config = loadChatConfig(p);
+    const plan = planChat(config);
+    const ep = wantCloud ? plan.cloud : plan.local;
+    if (!ep) {
+      return fail(res, 409, wantCloud ? "this surface declares no cloud endpoint to send to" : (plan.why ?? "no local endpoint"), {
+        no_endpoint: true,
+        cloud: wantCloud,
+      });
+    }
+    if (wantCloud) {
+      const refusal = cloudKeyRefusal(config, ep, opts.trustPath);
+      if (refusal) return fail(res, 403, refusal);
+    }
+    chatBusy.add(p.id);
+    try {
+      const brief = await buildBrief(p, { text: !wantCloud, trustPath: opts.trustPath, sourceRoot: opts.sourceRoot });
+      const messages = chatMessages(brief, cleanHistory(body.history), question);
+      const view = { role: ep.role, endpoint: ep.endpoint, model: ep.model, url: ep.url, local: ep.local, source: ep.source };
+      if (wantCloud) {
+        const key = messagesDigest(ep.endpoint + ep.url + ep.model, messages);
+        const nonce = typeof body.confirm === "string" ? body.confirm : "";
+        if (!nonce) {
+          const issued = chatConfirms.issue(key);
+          // 200, not 428 as the actions answer: this is the page's own preview,
+          // and a 4xx is logged by the browser as a failed request.
+          return json(res, 200, {
+            ...view,
+            sent: false,
+            confirm: {
+              ...issued,
+              chars: charsOf(messages),
+              effect: [
+                `Sends the ${charsOf(messages)} characters below to ${ep.endpoint} (${ep.url}), model ${ep.model}${ep.local ? "" : ", a cloud endpoint: this leaves this machine and may be billed"}.`,
+                "The brief is metadata only: session opening lines and refusal text are left out.",
+                "The send is recorded in this project's audit trail (endpoint, model, characters sent) when [audit] is on.",
+              ],
+              messages: messages.map((m) => ({ role: m.role, content: m.content })),
+            },
+          });
+        }
+        if (!chatConfirms.take(nonce, key)) {
+          return fail(res, 409, "this confirmation is not for this question, or it was used or has expired, or the records changed: review it again");
+        }
+      }
+      const sent = await sendChat(ep, messages, opts.chatTimeoutMs ?? CHAT_TIMEOUT_MS);
+      const egress = wantCloud ? recordEgress(p, config, ep, sent) : null;
+      const egressView = wantCloud
+        ? { egress: egress ? { recorded: true, trail: egress.trail, chars: sent.chars_sent } : { recorded: false, reason: "[audit] is off for this project", chars: sent.chars_sent } }
+        : {};
+      if (!sent.ok) return fail(res, sent.status ?? 502, sent.error ?? "the endpoint did not answer", { ...view, ms: sent.ms, ...egressView });
+      return json(res, 200, {
+        ...view,
+        ...shapeAnswer(sent.content ?? ""),
+        ms: sent.ms,
+        brief_chars: brief.length,
+        chars_sent: sent.chars_sent,
+        ...egressView,
+      });
+    } finally {
+      chatBusy.delete(p.id);
+    }
+  }
+
   async function api(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
     const path = url.pathname;
+    const chatRoute = /^\/api\/p\/([0-9a-f]{12})\/chat$/.exec(path);
+    if (chatRoute && (req.method === "GET" || req.method === "POST")) {
+      const p = projectById(chatRoute[1]!);
+      if (!p) return fail(res, 404, "no such project");
+      if (!p.hasSurface) return fail(res, 404, "this project has no .gnomon/");
+      return req.method === "GET" ? json(res, 200, chatStatus(p)) : chat(req, res, p);
+    }
     if (req.method === "GET" && path === "/api/meta") {
       projects.forEach(refresh);
       return json(res, 200, {
@@ -480,12 +667,13 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
         project: p?.id ?? null,
         has_surface: p?.hasSurface ?? false,
         endpoints: p ? declaredEndpointNames(p) : [],
+        harnesses: p ? detectHarnesses(p.root) : [],
         catalog: catalogInfo(),
         cloud_presets: cloudPresets(),
         key_store: keyStorePath(),
       });
     }
-    const m = /^\/api\/p\/([0-9a-f]{12})\/(surface|sessions|trail|governance|measurements|contracts)$/.exec(path);
+    const m = /^\/api\/p\/([0-9a-f]{12})\/(surface|sessions|trail|governance|measurements|contracts|lens|lens\/run|inbox)$/.exec(path);
     if (req.method === "GET" && m) {
       const p = projectById(m[1]!);
       if (!p) return fail(res, 404, "no such project");
@@ -506,6 +694,14 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
           return json(res, 200, measurementsView(p));
         case "contracts":
           return json(res, 200, contractsView(p, { sourceRoot: opts.sourceRoot }));
+        case "lens":
+          return json(res, 200, lensView(p, { ...t, focus: url.searchParams.get("trail") ?? undefined }));
+        case "lens/run": {
+          const d = lensRun(p, url.searchParams.get("name") ?? "");
+          return d ? json(res, 200, d) : fail(res, 404, "no such trail");
+        }
+        case "inbox":
+          return json(res, 200, inboxView(p));
       }
     }
     const j = /^\/api\/jobs\/([A-Za-z0-9_-]{12})$/.exec(path);

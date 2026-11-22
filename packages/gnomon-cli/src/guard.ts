@@ -223,6 +223,13 @@ export const OLDER_CLAUDE_CODE_MATCHERS: readonly string[] = [
 ];
 const CC_GUARD_TAIL = "guard --from claude-code --agent claude-code";
 const CC_START_TAIL = "check --hook session-start";
+/**
+ * Delivers the dashboard inbox (inbox.ts) to Claude Code at session start, as
+ * `additionalContext` labelled "information, not instructions". It never
+ * decides anything and always exits 0: the PreToolUse hook is the only one
+ * that can refuse a call.
+ */
+export const CC_INBOX_TAIL = "inbox --hook claude-code";
 const CC_STOP_TAIL = "check --hook stop --agent claude-code";
 const CURSOR_TAIL = "guard --from cursor --agent cursor";
 export const CLAUDE_CODE_GUARD_COMMAND = `gnomon ${CC_GUARD_TAIL}`;
@@ -249,7 +256,7 @@ export function shellCommand(argv: string[], tail: string): string {
  * script — anything that names gnomon.
  */
 export function gnomonTail(command: string): string | null {
-  const m = /^(.*?)\s+((?:guard|check)(?:\s.*)?)$/.exec(command.trim());
+  const m = /^(.*?)\s+((?:guard|check|inbox)(?:\s.*)?)$/.exec(command.trim());
   if (!m || !/gnomon/i.test(m[1]!)) return null;
   return m[2]!.replace(/\s+/g, " ");
 }
@@ -272,7 +279,10 @@ function hookProgram(command: string): string | null {
 export function claudeCodeHooks(bin: string[] = ["gnomon"]): { hooks: Record<string, unknown[]> } {
   return {
     hooks: {
-      SessionStart: [{ hooks: [{ type: "command", command: shellCommand(bin, CC_START_TAIL) }] }],
+      SessionStart: [
+        { hooks: [{ type: "command", command: shellCommand(bin, CC_START_TAIL) }] },
+        { hooks: [{ type: "command", command: shellCommand(bin, CC_INBOX_TAIL), timeout: 10 }] },
+      ],
       PreToolUse: [
         {
           matcher: CLAUDE_CODE_MATCHER,
@@ -759,6 +769,8 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
           "`gnomon guard install claude-code --write` to merge it into this project's file.",
           "",
           "  SessionStart  records HEAD: the rules every call this session is decided by",
+          "  SessionStart  `gnomon inbox --hook`: prints the operator's open dashboard items as context,",
+          "                labelled information, not instructions (decides nothing, always exits 0)",
           "  PreToolUse    `gnomon guard` on each Bash/Write/Edit/Read/Grep/Glob/WebFetch/WebSearch,",
           "                Agent/Task and MCP call: deny or ask is handed to Claude Code; allow says",
           "                nothing, so Claude Code's own permission prompt still applies. MCP tools",
@@ -906,6 +918,14 @@ export interface GuardStatus {
    * not load.
    */
   governance: GovernanceGaps | null;
+  /**
+   * Whether Claude Code's hooks include the SessionStart hook that delivers the
+   * dashboard inbox (`gnomon inbox --hook claude-code`, CONTRACTS.md section 57).
+   * Null when claude-code has no hook in place. Not part of any host's `state`:
+   * an install without it still guards every call, and `warnings` says to re-run
+   * install.
+   */
+  inbox_hook: "ok" | "missing" | null;
 }
 
 const readJson = (f: string): Record<string, unknown> | null => {
@@ -977,6 +997,7 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
     sessions: [],
     unguarded_sessions: [],
     governance: null,
+    inbox_hook: null,
   };
   if (!repo) return status;
   try {
@@ -1119,6 +1140,15 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
     if (h.state === "missing" || h.state === "modified" || h.state === "disabled") status.findings.push(line);
     else if (h.state === "outdated") status.warnings.push(line);
   }
+  // The dashboard inbox's delivery (inbox.ts): reported beside the hook, and a
+  // warning, never a finding, when an older install lacks it.
+  const ccHost = status.hosts.find((h) => h.host === "claude-code");
+  if (ccHost && (ccHost.state === "ok" || ccHost.state === "outdated")) {
+    status.inbox_hook = runs(readJson(ccHost.file)?.hooks, "SessionStart", CC_INBOX_TAIL) ? "ok" : "missing";
+    if (status.inbox_hook === "missing") {
+      status.warnings.push("claude-code: no SessionStart hook delivers the dashboard inbox. fix: `gnomon guard install claude-code --write`");
+    }
+  }
   // A hook in place whose agent [check.roles] maps to no role asks about
   // every call (#205): a warning, as `outdated` is; the hook still decides.
   for (const h of status.hosts) {
@@ -1146,7 +1176,7 @@ function statusGuard(args: GuardArgs, out: (s: string) => void): number {
   if (args.flags.json === "true") out(JSON.stringify(st));
   else if (!st.governed) out(`gnomon guard status: no .gnomon/ governs ${dir}`);
   else {
-    for (const h of st.hosts) out(`${h.host.padEnd(12)} ${h.state.padEnd(14)} ${relative(st.project!, h.file)}${h.detail ? `  ${h.detail}` : ""}`);
+    for (const h of st.hosts) out(`${h.host.padEnd(12)} ${h.state.padEnd(14)} ${relative(st.project!, h.file)}${h.detail ? `  ${h.detail}` : ""}${h.host === "claude-code" && st.inbox_hook ? `  [inbox hook: ${st.inbox_hook}]` : ""}`);
     out(st.findings.length ? `\n${st.findings.length} finding(s): a host is not governed the way it was set up to be.` : "\nevery installed hook is in place.");
     for (const w of st.warnings) out(`warning: ${w}`);
     const gaps = st.governance && governanceGapLine(st.governance);

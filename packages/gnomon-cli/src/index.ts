@@ -124,6 +124,8 @@ import {
 } from "gnomon-natives";
 import { readFileSync, writeFileSync, writeSync, existsSync, readdirSync, mkdirSync} from "node:fs";
 import { setProcessTitle } from "./proc_title.js";
+import { runInbox, runInboxHook } from "./inbox_cmd.js";
+import { serveInboxMcp } from "./inbox_mcp.js";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { dirname, join, resolve } from "node:path";
@@ -2998,6 +3000,7 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "uninstall" },
   { name: "check" },
   { name: "trust" },
+  { name: "inbox" },
   { name: "guard" },
   { name: "dashboard", aliases: ["ui"] },
   { name: "chaos" },
@@ -3225,6 +3228,18 @@ Commands:
     the current surface; revoke forgets every trust for this project. Kept
     beside the key store, never in the repository or the surface hash. A
     scaffolded surface grants nothing extra and is never asked about.
+
+  inbox [list|show <id>|add --title <t> [--detail <d>] [--target <t>]|ack <id>|resolve <id> [--note <n>]|mcp] [--status <s>] [--dir <path>] [--json]
+    Work items an operator flagged for the developer's harness ("Flag for
+    fix" in the dashboard, or add here): one file each in .gnomon-inbox/
+    (gitignored). Targets: claude-code, cursor, gnomon, any. An item is
+    information from the operator, never an instruction or an approval: the
+    harness reading it keeps its own rules. gnomon shows the count at launch
+    and in /inbox; \`guard install claude-code\` adds a SessionStart hook that
+    hands Claude Code the open ones; \`inbox mcp\` serves them to Cursor or
+    Claude Code over MCP (list, get, acknowledge, resolve; no add). Each
+    change is an inbox_item audit record (id and target, never the text).
+    Exit 0 done, 1 an item that is not there or a usage error.
 
   sessions [--dir <path>]
     Saved sessions, newest last.
@@ -3597,6 +3612,20 @@ async function main(): Promise<void> {
     case "trust":
       await cmdTrust(args);
       break;
+    case "inbox": {
+      if (args.flags["hook"]) {
+        // A hook never fails the host: see runInboxHook.
+        process.exitCode = runInboxHook(args.dir ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd());
+        break;
+      }
+      if (args.subcommand === "mcp") {
+        await serveInboxMcp(args.dir);
+        break;
+      }
+      const code = runInbox({ sub: args.subcommand ?? "", positional: args.positional, flags: args.flags, dir: args.dir, json: !!args.json });
+      if (code !== 0) process.exit(code);
+      break;
+    }
     case "check": {
       const { cmdCheck } = await import("./check.js");
       process.exit(await cmdCheck(args));

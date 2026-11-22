@@ -41,6 +41,9 @@ import {
   routeRole,
   listRoles,
   GUARD_RULES,
+  listItems as listInboxItems,
+  INBOX_DIR,
+  INBOX_TARGETS,
   type GnomonConfig,
   type AuditRecord,
   safeGit,
@@ -89,6 +92,16 @@ export function projectRootAbove(start: string): string | null {
  * A project nobody trusted and that is not here is not on this list, and the
  * docs say so rather than add a registry.
  */
+/** A project for `root`, appended to the live list when it is not there yet (init names a directory). */
+export function ensureProject(projects: DashboardProject[], root: string): DashboardProject {
+  const r = real(root);
+  const found = projects.find((p) => p.root === r);
+  if (found) return found;
+  const p: DashboardProject = { id: idOf(r), root: r, name: basename(r) || r, source: "here", exists: existsSync(r), hasSurface: existsSync(join(r, ".gnomon")) };
+  projects.push(p);
+  return p;
+}
+
 export function knownProjects(opts: { cwd: string; dir?: string; trustPath?: string }): DashboardProject[] {
   const out: DashboardProject[] = [];
   const add = (root: string, source: DashboardProject["source"]): void => {
@@ -112,7 +125,7 @@ export function knownProjects(opts: { cwd: string; dir?: string; trustPath?: str
   return out;
 }
 
-function configOf(p: DashboardProject): GnomonConfig {
+export function configOf(p: DashboardProject): GnomonConfig {
   return loadConfig(p.root);
 }
 
@@ -192,9 +205,9 @@ export interface TrailSummary {
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
-const clip = (s: string, n = 240): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+export const clip = (s: string, n = 240): string => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-function readRecords(path: string): { records: AuditRecord[]; unreadable: number } {
+export function readRecords(path: string): { records: AuditRecord[]; unreadable: number } {
   const records: AuditRecord[] = [];
   let unreadable = 0;
   let text = "";
@@ -1096,6 +1109,18 @@ export function contractsView(p: DashboardProject, opts: { sourceRoot?: string |
     tests: readmeTestCounts(read("README.md")),
     clauses,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Inbox: work items flagged for a harness (gnomon-core inbox.ts)
+// ---------------------------------------------------------------------------
+
+/** Read-only: the items in `<project>/.gnomon-inbox/`, newest first, with counts. */
+export function inboxView(p: DashboardProject): Record<string, unknown> {
+  const { items, problems } = listInboxItems(p.root);
+  const counts = { open: 0, acknowledged: 0, resolved: 0 };
+  for (const i of items) counts[i.status]++;
+  return { dir: INBOX_DIR, targets: [...INBOX_TARGETS], counts, items: [...items].reverse(), problems };
 }
 
 // ---------------------------------------------------------------------------

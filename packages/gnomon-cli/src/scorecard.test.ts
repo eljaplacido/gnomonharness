@@ -171,7 +171,7 @@ describe("gnomon guard install writes an absolute gnomon path, or refuses", () =
     expect(await statusCode(r)).toBe(0);
     const s = JSON.parse(readFileSync(join(r, ".claude/settings.json"), "utf-8"));
     expect(s.hooks.PreToolUse).toHaveLength(1);
-    expect(s.hooks.SessionStart).toHaveLength(1);
+    expect(s.hooks.SessionStart).toHaveLength(2);
     expect(s.hooks.PreToolUse[0].matcher).toBe(CLAUDE_CODE_MATCHER);
     expect(s.hooks.PreToolUse[0].hooks[0].command).toBe(shellCommand([GUARD_BIN], "guard --from claude-code --agent claude-code"));
     expect(s.hooks.Stop[0].hooks[0].command).toBe(shellCommand([GUARD_BIN], "check --hook stop --agent claude-code"));

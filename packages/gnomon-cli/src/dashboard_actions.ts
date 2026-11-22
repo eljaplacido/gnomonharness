@@ -34,8 +34,9 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, join, relative, sep } from "node:path";
 import {
   loadConfig,
   listEndpoints,
@@ -45,6 +46,7 @@ import {
   recomputeManifest,
   describeEndpoints,
 } from "gnomon-core";
+import { validateInput, INBOX_ID, INBOX_LIMITS, InboxError, type InboxEvidence } from "gnomon-core";
 import { ENDPOINT_PRESETS } from "./setup.js";
 import { loadCatalog, defaultCatalogPath, type Catalog } from "./catalog.js";
 import { diskFree } from "./setup_host.js";
@@ -91,8 +93,16 @@ export const DASHBOARD_ACTIONS = [
   { name: "trust.revoke", argv: ["trust", "revoke", "--dir", "<dir>"], state: "enabled", confirm: "required" },
   // One completion of one token: on a cloud endpoint that is billed.
   { name: "endpoint.test", argv: ["endpoint", "test", "<endpoint>", "--dir", "<dir>"], state: "enabled", confirm: "required" },
-  { name: "init", argv: ["init", "--dir", "<dir>"], state: "planned", confirm: "required" },
-  { name: "guard.install", argv: ["guard", "install", "<harness>"], state: "planned", confirm: "required" },
+  // "Flag for fix": one gitignored file in <project>/.gnomon-inbox/ for a
+  // harness to read as information, never as an instruction (inbox.ts). <inbox>
+  // is --title, --detail, --target, --evidence and --scope, from typed params.
+  { name: "inbox.add", argv: ["inbox", "add", "--json", "--author", "dashboard", "<inbox>", "--dir", "<dir>"], state: "enabled", confirm: "required" },
+  { name: "inbox.resolve", argv: ["inbox", "resolve", "<id>", "--json", "<inbox>", "--dir", "<dir>"], state: "enabled", confirm: "required" },
+  // Scaffolds .gnomon/ (and .gitignore / .gitattributes lines) in a directory.
+  // Refuses, as the command does, where a .gnomon/ already exists: no --force.
+  { name: "init", argv: ["init", "--dir", "<dir>"], state: "enabled", confirm: "required" },
+  // Merges the guard hook into the host harness's own config file.
+  { name: "guard.install", argv: ["guard", "install", "<harness>", "--write", "--dir", "<dir>"], state: "enabled", confirm: "required" },
 ] as const;
 
 export type DashboardAction = (typeof DASHBOARD_ACTIONS)[number];
@@ -120,7 +130,23 @@ export interface ActionParams {
   variable?: string;
   rev?: string;
   endpoint?: string;
+  harness?: string;
+  /** init only: an absolute directory the person typed; the server turns it into a project. */
+  dir?: string;
+  /** inbox.add */
+  title?: string;
+  detail?: string;
+  target?: string;
+  evidence?: InboxEvidence[];
+  scope?: string[];
+  /** inbox.resolve */
+  id?: string;
+  note?: string;
 }
+
+/** The host harnesses `gnomon guard install` knows. */
+export const GUARD_HARNESSES = ["claude-code", "opencode", "cursor"] as const;
+export type GuardHarness = (typeof GUARD_HARNESSES)[number];
 
 /** An Ollama tag or a model id: no leading `-`, no whitespace, nothing a shell would read. */
 const TAG = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,199}$/;
@@ -146,9 +172,56 @@ const PARAMS: Record<ActionName, readonly (keyof ActionParams | "value")[]> = {
   "trust.grant": [],
   "trust.revoke": [],
   "endpoint.test": ["endpoint"],
-  init: [],
-  "guard.install": [],
+  "inbox.add": ["title", "detail", "target", "evidence", "scope"],
+  "inbox.resolve": ["id", "note"],
+  init: ["dir"],
+  "guard.install": ["harness"],
 };
+
+/**
+ * A directory `init` may be asked to scaffold: absolute, one line, a real
+ * directory (symlinks resolved) inside the home directory but not home itself
+ * or a hidden top-level directory of it, with no `.gnomon/` yet. It is the only path the browser ever names, and the confirmation
+ * states it back before anything is written.
+ */
+export function dirProblem(v: string): string | null {
+  if (v.length > 500 || /[\u0000-\u001f\u007f]/.test(v)) return '"dir" is not a path';
+  if (!isAbsolute(v)) return '"dir" must be an absolute path';
+  let real: string;
+  let home: string;
+  try {
+    real = realpathSync(v);
+    if (!statSync(real).isDirectory()) return `${v} is not a directory`;
+  } catch {
+    return `${v} does not exist`;
+  }
+  try {
+    home = realpathSync(homedir());
+  } catch {
+    return "this machine has no home directory to initialise under";
+  }
+  const rel = relative(home, real);
+  if (rel === "") return "that is the home directory itself: pick a project folder inside it";
+  if (rel.startsWith("..") || isAbsolute(rel)) return `${real} is outside the home directory (${home}): init from the dashboard only works inside it`;
+  // A dot-directory at the top of home is configuration, keys or state, never a project.
+  if (rel.split(sep)[0]!.startsWith(".")) return `${real} is under a hidden configuration directory (~/${rel.split(sep)[0]}): not a place for a project`;
+  if (existsSync(join(real, ".gnomon"))) return `${real} is already initialised — open it instead`;
+  return null;
+}
+
+/** What a directory holds that a host harness reads, and the file `guard install --write` merges into. */
+export const GUARD_TARGETS: Record<GuardHarness, { detect: string[]; writes: string }> = {
+  "claude-code": { detect: [".claude"], writes: ".claude/settings.json" },
+  opencode: { detect: [".opencode", "opencode.json", "opencode.jsonc"], writes: ".opencode/plugins/gnomon-guard.js" },
+  cursor: { detect: [".cursor"], writes: ".cursor/hooks.json" },
+};
+
+export function detectHarnesses(root: string): Array<{ harness: GuardHarness; detected: boolean; writes: string; present: boolean }> {
+  return GUARD_HARNESSES.map((harness) => {
+    const t = GUARD_TARGETS[harness];
+    return { harness, detected: t.detect.some((f) => existsSync(join(root, f))), writes: t.writes, present: existsSync(join(root, t.writes)) };
+  });
+}
 
 export const CHOICE_KEYS = ["model", "cloud_endpoint", "cloud_model", "cloud_key_env", "mode", "hybrid_control"] as const;
 
@@ -208,6 +281,19 @@ export function readParams(
     take("variable", VARIABLE, "a key variable name (A-Z, 0-9, _)");
     take("rev", REV, "a git revision");
     take("endpoint", NAME, "an endpoint name");
+    const hv = str("harness");
+    if (typeof hv === "object") throw new Error(hv.error);
+    if (hv !== undefined) {
+      if (!(GUARD_HARNESSES as readonly string[]).includes(hv)) throw new Error(`"harness" is one of ${GUARD_HARNESSES.join(", ")}`);
+      params.harness = hv;
+    }
+    const dv = str("dir");
+    if (typeof dv === "object") throw new Error(dv.error);
+    if (dv !== undefined) {
+      const bad = dirProblem(dv);
+      if (bad) throw new Error(bad);
+      params.dir = dv;
+    }
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
   }
@@ -238,11 +324,35 @@ export function readParams(
 
   // What each action needs.
   if ((name === "setup.pull" || name === "setup.speed_check") && !params.tag) return { error: `${name} needs "tag"` };
+  if (name === "guard.install" && !params.harness) return { error: 'guard.install needs "harness": claude-code, opencode or cursor' };
   if (name === "key.set" && !params.variable) return { error: 'key.set needs "variable"' };
   if (name === "check.run" && !params.rev) return { error: 'check.run needs "rev": the revision the change is judged against' };
   if (name === "endpoint.test") {
     if (!params.endpoint) return { error: 'endpoint.test needs "endpoint"' };
     if (!declaredEndpointNames(p).includes(params.endpoint)) return { error: `"${params.endpoint}" is not an endpoint this project declares` };
+  }
+
+  if (name === "inbox.add") {
+    try {
+      for (const k of ["title", "detail", "target"] as const) if (body[k] !== undefined && typeof body[k] !== "string") throw new InboxError(`"${k}" must be a string`);
+      if (Array.isArray(body.scope) && body.scope.some((x) => typeof x === "string" && x.includes(","))) throw new InboxError("a scope path may not hold a comma");
+      const v = validateInput({ title: body.title, detail: body.detail, target: body.target, evidence: body.evidence, scope: body.scope, author: "dashboard" });
+      params.title = v.title;
+      if (v.detail) params.detail = v.detail;
+      params.target = v.target;
+      if (v.evidence.length) params.evidence = v.evidence;
+      if (v.scope.length) params.scope = v.scope;
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+  if (name === "inbox.resolve") {
+    if (typeof body.id !== "string" || !INBOX_ID.test(body.id)) return { error: 'inbox.resolve needs "id": an item id' };
+    params.id = body.id;
+    if (body.note !== undefined && body.note !== "") {
+      if (typeof body.note !== "string" || body.note.length > INBOX_LIMITS.note || body.note.includes("\u0000")) return { error: `"note" is a string of at most ${INBOX_LIMITS.note} characters` };
+      params.note = body.note.trim();
+    }
   }
 
   let value: string | undefined;
@@ -265,6 +375,24 @@ function choiceFlags(c: SetupChoices | undefined): string[] {
   if (c.cloud_key_env) out.push("--cloud-key-env", c.cloud_key_env);
   if (c.mode) out.push("--mode", c.mode);
   if (c.hybrid_control) out.push("--hybrid-control", c.hybrid_control);
+  return out;
+}
+
+/**
+ * A value as `gnomon`'s option parser will read it: one that starts with a
+ * dash would be taken for the next option, so it gets a leading space, which
+ * the command trims.
+ */
+const dashSafe = (v: string): string => (v.startsWith("-") ? ` ${v}` : v);
+
+function inboxFlags(p: ActionParams): string[] {
+  const out: string[] = [];
+  if (p.title !== undefined) out.push("--title", dashSafe(p.title));
+  if (p.detail !== undefined) out.push("--detail", dashSafe(p.detail));
+  if (p.target !== undefined) out.push("--target", p.target);
+  if (p.evidence?.length) out.push("--evidence", p.evidence.map((e) => `${e.trail}:${e.seq}:${e.kind}`).join(","));
+  if (p.scope?.length) out.push("--scope", dashSafe(p.scope.join(",")));
+  if (p.note !== undefined) out.push("--note", dashSafe(p.note));
   return out;
 }
 
@@ -291,8 +419,17 @@ export function argvFor(action: DashboardAction, p: DashboardProject, params: Ac
       case "<endpoint>":
         out.push(params.endpoint!);
         break;
+      case "<harness>":
+        out.push(params.harness!);
+        break;
       case "<digest>":
         out.push(digest!);
+        break;
+      case "<id>":
+        out.push(params.id!);
+        break;
+      case "<inbox>":
+        out.push(...inboxFlags(params));
         break;
       default:
         if (part.startsWith("<")) throw new Error(`no value for ${part}`);
@@ -318,7 +455,9 @@ export function paramsKey(name: string, projectId: string, params: ActionParams)
     params.variable ?? null,
     params.rev ?? null,
     params.endpoint ?? null,
+    params.harness ?? null,
     CHOICE_KEYS.map((k) => c[k] ?? null),
+    [params.title ?? null, params.detail ?? null, params.target ?? null, params.evidence ?? null, params.scope ?? null, params.id ?? null, params.note ?? null],
   ]);
 }
 
@@ -506,6 +645,8 @@ export const TIMEOUT_MS: Record<ActionName, number> = {
   "trust.grant": 30_000,
   "trust.revoke": 30_000,
   "endpoint.test": 120_000,
+  "inbox.add": 30_000,
+  "inbox.resolve": 30_000,
   init: 60_000,
   "guard.install": 30_000,
 };

@@ -75,6 +75,17 @@ export interface Config {
   audit?: import("./audit.js").AuditConfig;
   session?: import("./session_store.js").SessionConfig;
   shadow?: ShadowConfig;
+  /** `[dashboard]`: read by `gnomon dashboard` only. */
+  dashboard?: DashboardConfig;
+}
+
+/**
+ * config.toml [dashboard]. `chat_role` names the role whose endpoint the
+ * dashboard's read-only chat drawer asks; absent, the drawer takes the first
+ * role whose endpoint is local. Read by the dashboard, never by a session.
+ */
+export interface DashboardConfig {
+  chat_role?: string;
 }
 
 /**
@@ -2844,7 +2855,7 @@ const EXECUTING_ARGS: ExecutingArg[] = [
  * [verify] block, one letter earlier.
  */
 const KNOWN_BLOCKS = new Set([
-  "endpoints", "defaults", "context", "ui", "routing", "resilience", "audit",
+  "endpoints", "defaults", "context", "ui", "dashboard", "routing", "resilience", "audit",
   "session", "process", "tools", "verify", "approval", "sandbox", "exit_codes",
   // Added with the feature, which is the point: [chain] shipped and this list
   // did not move, so every surface declaring one was told "[chain] is not a
@@ -3042,6 +3053,8 @@ const BLOCK_OWNER: Record<string, BlockOwner> = {
   defaults: { file: "config.toml", read: true },
   context: { file: "config.toml", read: true },
   ui: { file: "config.toml", read: true },
+  // chatEndpoint (gnomon-cli dashboard_chat.ts) reads config.config.dashboard.chat_role.
+  dashboard: { file: "config.toml", read: true },
   routing: { file: "config.toml", read: true },
   resilience: { file: "config.toml", read: true },
   audit: { file: "config.toml", read: true },
@@ -3264,6 +3277,21 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
         where: `.gnomon/config.toml [ui] ${key}`,
         problem: `${JSON.stringify(v)} is not one of ${legal.join(" | ")}${orBool ? " | false" : ""}; the default is used instead.`,
         fix: `Set [ui] ${key} = "${legal[0]}" (or another of: ${legal.join(", ")}).`,
+        fatal: false,
+      });
+    }
+  }
+
+  // [dashboard] chat_role: the role the dashboard's chat drawer asks. A name
+  // no role carries would leave the drawer saying it has no endpoint.
+  const chatRole = (config.config.dashboard as Record<string, unknown> | undefined)?.chat_role;
+  if (chatRole !== undefined) {
+    const roles = Object.keys(config.roles ?? {});
+    if (typeof chatRole !== "string" || !roles.includes(chatRole)) {
+      problems.push({
+        where: ".gnomon/config.toml [dashboard] chat_role",
+        problem: `${JSON.stringify(chatRole)} is not a declared role (${roles.join(", ") || "none declared"}); the dashboard chat falls back to the first role on a local endpoint.`,
+        fix: roles.length ? `Set [dashboard] chat_role to one of: ${roles.join(", ")}, or remove the key.` : "Declare a role in roles.toml, or remove the key.",
         fatal: false,
       });
     }

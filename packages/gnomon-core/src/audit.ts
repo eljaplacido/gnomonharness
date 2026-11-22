@@ -305,6 +305,9 @@ export type AuditKind =
   // `meets_thresholds`. Its own kind for the reason `skill_trial` is: no turn
   // produced it, and it compares arms of many turns against declared numbers.
   | "eval_run"
+  // An operator work item flagged for the developer's harness (inbox.ts): add,
+  // acknowledge or resolve, the item id and its target. Never the item's text.
+  | "inbox_item"
   | "session_end";
 
 /**
@@ -347,6 +350,7 @@ export const AUDIT_KINDS = [
   "model_call",
   "escalation",
   "eval_run",
+  "inbox_item",
   "session_end",
 ] as const satisfies readonly AuditKind[];
 type MissingAuditKind = Exclude<AuditKind, (typeof AUDIT_KINDS)[number]>;

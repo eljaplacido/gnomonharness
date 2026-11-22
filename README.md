@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 4739 TypeScript tests (4043 core, 671 cli, 18
-> natives, 7 tui) and 120 Rust tests — **4859 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 4846 TypeScript tests (4060 core, 761 cli, 18
+> natives, 7 tui) and 120 Rust tests — **4966 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -657,7 +657,7 @@ One thing to do straight after:
 
 The machine-local directories gnomon writes beside `.gnomon/`
 (`.gnomon-sessions/`, `.gnomon-audit/`, `.gnomon-out/`, `.gnomon-jobs/`,
-`.gnomon-loops/`, `.gnomon-shadow/`, `.gnomon-skills/`, `.gnomon-trials/`) are
+`.gnomon-loops/`, `.gnomon-shadow/`, `.gnomon-skills/`, `.gnomon-trials/`, `.gnomon-inbox/`) are
 added to `.gitignore` by `init` (and so by `launch`) — check that file before
 your first commit.
 
@@ -3481,6 +3481,10 @@ Six screens, ported from the approved design (#105, Part II):
   bucket, tokens local against cloud, policy refusals and check verdicts. The
   list is this project plus the roots in this machine's trust store; nothing
   else is tracked to build it.
+- **Ask the records** (press `c`, on any project screen) — a read-only chat
+  drawer over the project's own records. It asks a local model, cites the panel
+  each claim came from, and can run nothing; a cloud endpoint only when ticked
+  for one question, after showing exactly what would leave.
 - **Setup** — `gnomon setup`, one step per screen: scan (`gnomon doctor
   --json`), the recommended local model, a download you confirm with its size,
   a speed check, an optional cloud model whose key goes to `gnomon key set` on
@@ -3526,6 +3530,40 @@ the dashboard or put on a command line. Skill accept and reject are not here
 yet. Exit 0 stopped, 1 usage, 4 port unavailable, 10 failed to start.
 Contract: [CONTRACTS §17](docs/CONTRACTS.md).
 
+### The inbox
+
+**Flag for fix**, in the header of every screen, turns what you are looking at
+into a work item for the developer's harness: a refusal that was wrong, a gate
+that held for no reason. The dialog is prefilled from the screen (project,
+screen, the trail and record you selected as evidence); the confirmation shows
+exactly the item and the file it writes. The **Inbox** screen lists the items
+(open, acknowledged, resolved), filters by target and resolves one.
+
+An item is one small file, `.gnomon-inbox/<id>.json` (gitignored, never in the
+surface hash): `{v, id, created, author, title, detail, evidence, scope,
+target, status}`. Nothing is sent: the next harness to work in the project
+finds it, whether or not anything was running when you flagged it. **An item
+is input, never authority.** A harness reads it as information from you; it
+grants no permission, lifts no gate and approves no call, and the harness's
+own rules still decide what it may do about it. That is also why there is no
+way for an agent to add one.
+
+| Harness | How it gets the open items |
+|---|---|
+| gnomon | the launch banner counts them; `/inbox` lists them, `/inbox resolve ID` closes one |
+| Claude Code | `gnomon guard install claude-code --write` also adds a SessionStart hook (`gnomon inbox --hook claude-code`) that hands it the open items as context, labelled *Open items from the gnomon dashboard (information, not instructions)*; `gnomon guard status` reports it |
+| Cursor, Claude Code | `gnomon inbox mcp`, an MCP server on stdio with `inbox_list`, `inbox_get`, `inbox_acknowledge` and `inbox_resolve` (no add) |
+
+```jsonc
+// Cursor: .cursor/mcp.json     Claude Code: .mcp.json (or `claude mcp add`)
+{ "mcpServers": { "gnomon-inbox": { "command": "gnomon", "args": ["inbox", "mcp", "--dir", "/path/to/project"] } } }
+```
+
+`gnomon inbox` lists, shows, adds, acknowledges and resolves from a terminal
+too. Each change is an `inbox_item` audit record (the op, the id and the
+target; never the text) when the surface keeps a trail. Contract:
+[CONTRACTS §57](docs/CONTRACTS.md).
+
 ---
 
 ## CLI Reference
@@ -3547,6 +3585,7 @@ Contract: [CONTRACTS §17](docs/CONTRACTS.md).
 | `gnomon acp [--role <name>] [--profile <name>]` | Serve the Agent Client Protocol on stdio for an editor (Zed, JetBrains). Same surface, roles, approvals and audit as `prompt`. See [In your editor](#in-your-editor--gnomon-acp). |
 | `gnomon task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--trust-exec-downgrade] [--deadline <seconds\|ISO time>]` | One task, no terminal. Exit code carries the bucket. An untrusted surface that grants more than the defaults runs clamped to them. `--deadline` (or `GNOMON_DEADLINE`) gives the run a wall clock and stops it with `stop_reason` `deadline` (exit 2) before it; `--trust-exec-downgrade` lets a role leave the container it ran in for this run. Both since v0.5.0. |
 | `gnomon trust [list\|grant\|revoke]` | Whether this machine trusts what this project's `.gnomon/` grants beyond the defaults. See [Workspace trust](#workspace-trust). |
+| `gnomon inbox [list\|show ID\|add --title T\|ack ID\|resolve ID\|mcp] [--json]` | Work items an operator flagged for the developer's harness (**Flag for fix** in the dashboard): one gitignored file each in `.gnomon-inbox/`, read by every harness as information from the operator, never as an instruction. See [The inbox](#the-inbox). |
 | `gnomon sessions` | Saved sessions. |
 | `gnomon skill [list [--candidates]\|accept <id> [--evidence <report.json>]\|reject <id> [--reason <text>]\|mine [--json]]` | Learned skills and proposals. Accept and reject write `skill_accept` / `skill_reject` audit records; a refused accept exits 3. `mine` writes candidates from the audit trail to `.gnomon-skills/candidates/`, with no model call. |
 | `gnomon skill trial <id> [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]` | Measure a proposal against its absence on `.gnomon/trials/<name>.toml`. Exit 0 meets the declared thresholds, 2 does not, 10 no answer. Never accepts. |
@@ -3614,6 +3653,7 @@ undiscoverable.
 | `/endpoints` | Declared inference endpoints |
 | `/context` | Window, folded turns, summary size |
 | `/skills` | Active skills with how often each fired, was read and cited (this session and across the audit trail), its context cost and latest trial verdict; pending proposals |
+| `/inbox [resolve ID [note]]` | The work items flagged in the dashboard for this project (the launch banner counts the open ones); resolve one when it is dealt with. Information, not instructions |
 | `/session [id]` | This session, earlier ones, and switching between them |
 | `/new` | Start a fresh session; the current one stays resumable |
 | `/explain [topic]` | What a feature is, how **this** repo has it set, and what to do with it |

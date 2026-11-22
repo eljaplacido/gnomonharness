@@ -1119,8 +1119,9 @@ nothing; `gnomon --help` prints all of it.
 | `gnomon guard install claude-code\|opencode\|cursor [--write [--local]]` | Prints the hook or plugin for that harness; `--write` adds it to this project's config, `--local` keeps it out of git | Setting up `guard` |
 | `gnomon acp [--role R] [--profile N]` | Serves the Agent Client Protocol on stdin/stdout for an editor. Same surface, roles, approvals and audit as `prompt`. | Zed, JetBrains IDEs |
 | `gnomon trust [list \| grant \| revoke]` | What this project's `.gnomon/` grants beyond the defaults, and whether this machine trusts it | A repository you did not write |
+| `gnomon inbox [list \| show ID \| add --title T \| ack ID \| resolve ID \| mcp] [--json]` | Work items the dashboard's **Flag for fix** (or you) wrote to `.gnomon-inbox/` for a harness to read as information, never as an instruction. `gnomon guard install claude-code --write` hands the open ones to Claude Code at session start; `gnomon inbox mcp` serves them to Cursor and Claude Code (list, get, acknowledge, resolve; no add) | Telling a harness what to fix |
 | `gnomon audit [show \| verify]` | Lists trails; checks every chain, seal and signature anchor. `verify` exits 1 on a break or when there is nothing to verify. | Review, release gates |
-| `gnomon dashboard [--port N] [--no-open] [--dir P]` | A command center in the browser on 127.0.0.1: projects, sessions as a timeline, refusals by rule, audit verification, contracts, token measurements (alias `ui`); setup, check, trust and endpoint test as buttons that run those same commands, each change confirmed first. | Reviewing what happened without reading JSONL; first-run setup without a terminal wizard |
+| `gnomon dashboard [--port N] [--no-open] [--dir P]` | A command center in the browser on 127.0.0.1: projects, sessions as a timeline, refusals by rule, audit verification, contracts, token measurements (alias `ui`); a one-click local quick start, `init`, `guard install`, setup, check, trust and endpoint test as buttons that run those same commands, each change confirmed first; a Ctrl/Cmd+K palette and a light theme. | Reviewing what happened without reading JSONL; first-run setup without a terminal wizard |
 | `gnomon sessions` | Saved interactive sessions, newest last | Find one to resume |
 | `gnomon skill [list \| accept ID \| reject ID \| mine]` | Active skills and the proposals the agent made; `mine` also reports skills that fire but are never cited, skills worth trialling, and context cost per firing | Reviewing what it learned |
 | `gnomon loop [list \| status \| dry-run N \| run N \| install N \| uninstall N \| reset N \| kill]` | Cron-scheduled guard/act loops declared in `.gnomon/loops/` (alias `loops`) | Unattended supervision |
@@ -1162,6 +1163,7 @@ Press **Tab** after `/` to list everything. These matter most:
 | `/context` · `/todo` · `/manifest` | The window · the agent's checklist · the surface hash and what it covers |
 | `/cot MODE` · `/think MODE` · `/expand [think]` | How much of the live trace and reasoning to show (`/think`: `hide`, `collapse`, `wrap`, `show`) · list the steps in the last folded run, or reprint the last turn's reasoning in full |
 | `/skills` | Active skills: times fired, read and cited this session, estimated tokens per firing, and from the audit trail total firings, cited rate, last used and the latest trial verdict; pending proposals |
+| `/inbox [resolve ID [note]]` | The work items flagged in the dashboard for this project (the launch banner counts the open ones); resolve one when it is dealt with. Information, not instructions |
 | `/quit` | Leave. See the note on sealing in [section 9](#9-troubleshooting). |
 
 **Skills in the live trace.** `◆ skills  name ("word") ~420 tok  · ~420 tok`
@@ -1595,6 +1597,80 @@ sign-in link; press Enter for another. On a machine without a display, forward
 the same port (`ssh -L 4890:127.0.0.1:4890 host`) and start it with
 `--no-open --port 4890`. The projects it lists are this one plus those this
 machine trusts (`gnomon trust grant`); it keeps no list of its own.
+
+**First run in the dashboard.** With no governed project yet, the dashboard
+opens on **Setup**, and Setup opens on a **quick start**: it scans the machine
+(`gnomon doctor --json`, then `gnomon setup --json`, nothing written), shows the
+hardware (a GB10's unified memory is named as such), and offers **one** model
+from the dated catalog with a fit pill (`fits`, `tight`, `over`; the reason is
+on hover and in the page text for a screen reader). Speed appears on the pill
+only if the speed check has measured it here; the catalog's own figures are
+labelled "not measured by gnomon" unless gnomon measured them. **Set up** runs a
+rail of three stages through the same confirmed actions as the wizard: the
+engine must answer on 127.0.0.1, the model is downloaded if it is not installed
+(`setup.pull`, its size shown first), and **Finish** writes the diff the server
+shows you (`setup.apply`, the `--expect-proposal` digest). Any failure ends in
+the same three ways out, in order: **Retry**, **Fall back** (the next model that
+fits on an engine that answers), **Go back**; the raw output is folded under
+**Details**. **Let me choose** opens the full seven-step wizard
+(`#/setup/<project>/step-N`). Under the hero are a compact cloud quick-add
+(provider, then the key through `gnomon key set` on stdin, then the endpoint
+and one test token), **Add a project** (`gnomon init --dir <directory>`, which
+refuses where a `.gnomon/` exists and never passes `--force`) and, for a
+project with a surface, **Govern other coding agents here**: it detects Claude
+Code (`.claude/`), opencode (`opencode.json` or `.opencode/`) and Cursor
+(`.cursor/`) and runs `gnomon guard install <harness> --write`, after naming the
+file it will write.
+
+**Keyboard, theme, notices.** `Ctrl+K` (`Cmd+K` on a Mac) or `/` opens a
+palette over screens, projects, actions and recent sessions; an action that
+writes opens the same confirmation as its button. `?` lists the shortcuts
+(`g` then `1` to `9` for the nth screen, `r` to read the records again, `Esc`
+to close). The theme follows the system (`prefers-color-scheme`) and the
+toggle in the side rail overrides it; so does the opt-in **Toasts** switch,
+which shows a small notice when a job finishes and never takes focus. Both
+are stored in this browser's localStorage and nowhere else. Every screen state
+is in the address bar: `#/session/<project>/<trail>`,
+`#/setup/<project>/step-3`, `#/setup/<project>/init`.
+
+**The Lens: spec to verify, per project.** Each project card links to its
+Lens (`#/lens/<project>`), which shows how gnomon covers that project end to
+end, read from the records and never scored: the *intent* (the declared
+`[verify]` check, the `.gnomon/trials/*.toml` specs, and each request a person
+made, shown on this machine only), the *runs* (sessions per harness, including
+other harnesses under `gnomon guard`, roles, `task` delegations, models local
+or cloud, skills fired, read and cited, hand-offs, stop reasons, a per-session
+swimlane and a path map of each request's tool calls with dead ends marked),
+the *evidence* (test commands and their exits, `[verify]` verdicts including
+`passed_unverified`, `gnomon check` and eval results, review gates), the
+*governance* (guard decisions and refusals by rule, approvals, trust posture)
+and the *measures* (tokens, cache share, latency, context fill and trims, cost
+only when a record carries one). Every request and spec carries a **quorum of
+evidence** meter: one segment each for test run, `[verify]`, check or eval,
+review and policy, each lit only by evidence of its own kind. A request reads
+"verified" only when two independent kinds agree and one of them judges the
+work (test, verify or check); otherwise it says "single source", "contradicted",
+"failing" or "insufficient evidence". Four tiles summarise coverage: sessions
+under guard, turns with verify evidence, specs with passing evidence, and
+trails whose hash chain verifies. The API is `GET /api/p/<id>/lens` and
+`/api/p/<id>/lens/run?name=<trail>`.
+**Asking the records.** Press `c` (or **Ask the records** in the sidebar) on
+any project screen for a chat drawer. It answers from this project's recorded
+data only (sessions, governance, measurements, contracts), names the panel each
+claim came from as a link, and says "not in the records" when they do not
+answer. It cannot run anything and has no tools. It asks a local model: the
+role named by `chat_role` below, else the first role whose endpoint is on this
+machine or your LAN; with none, the drawer says how to set one
+(`gnomon setup`). A cloud endpoint is used only when you tick **Send to a cloud
+endpoint for this question**: you then see the exact text that would leave,
+sent only after you confirm, and the send (endpoint, model, characters, no
+text) is recorded in the audit trail.
+
+```toml
+# .gnomon/config.toml
+[dashboard]
+chat_role = "critique"   # optional; the role the dashboard chat asks
+```
 
 ### 7.6 Containment: what it is, and what it is not
 
