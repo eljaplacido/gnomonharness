@@ -471,47 +471,88 @@ function metaField(
   }
 }
 
+/**
+ * Fields dropped first when the line does not fit, lowest priority first. The
+ * bucket (how the turn ended), the duration and the token count stay longest;
+ * a field is dropped whole, so no row ever breaks mid-word.
+ */
+const META_DROP_ORDER: MetaField[] = ["think", "context", "turn", "role", "tools", "model", "tokens", "duration", "bucket"];
+
+const META_SEP = "  ·  ";
+
+/**
+ * The meta fields joined into one row of at most `room` columns. When the row
+ * is too wide the long bucket wording is abbreviated first, then whole
+ * low-priority fields are dropped in META_DROP_ORDER; the order the surface
+ * declared is kept for what remains. `room` Infinity leaves everything in.
+ */
+function fitMetaParts(exchange: PromptExchange, ui: ResolvedUi, thinkTokens: number, room: number): string {
+  let fields = [...ui.meta];
+  const build = (abbrev: boolean): string[] =>
+    fields
+      .map((f) => {
+        const v = metaField(f, exchange, thinkTokens);
+        return abbrev && f === "bucket" && v ? v.replace(" (answered anyway)", "") : v;
+      })
+      .filter((v): v is string => v !== null);
+  const width = (parts: string[]): number =>
+    parts.reduce((n, p) => n + visibleWidth(p), 0) + META_SEP.length * Math.max(0, parts.length - 1);
+  let abbrev = false;
+  let parts = build(abbrev);
+  if (width(parts) > room) {
+    abbrev = true;
+    parts = build(abbrev);
+  }
+  for (const drop of META_DROP_ORDER) {
+    if (width(parts) <= room) break;
+    if (!fields.includes(drop) || parts.length <= 1) continue;
+    fields = fields.filter((f) => f !== drop);
+    parts = build(abbrev);
+  }
+  const line = parts.join(META_SEP);
+  // One field wider than the row (a long model id): clip it with an ellipsis.
+  return width(parts) > room ? fitRow(line, room + 2) : line;
+}
+
 /** The meta fields joined as one plain string, with the exchange's status glyph. */
 export function metaText(
   exchange: PromptExchange,
   ui: ResolvedUi,
-  thinkTokens = 0
+  thinkTokens = 0,
+  room: number = Number.POSITIVE_INFINITY
 ): { text: string; glyph: string; color: string } | null {
   if (ui.meta.length === 0) return null;
-  const parts = ui.meta
-    .map((f) => metaField(f, exchange, thinkTokens))
-    .filter((v): v is string => v !== null);
-  if (parts.length === 0) return null;
+  const text = fitMetaParts(exchange, ui, thinkTokens, room);
+  if (text === "") return null;
   const status = STATUS[exchange.bucket] ?? STATUS.result;
-  return { text: parts.join("  ·  "), glyph: status.glyph, color: status.color };
+  return { text, glyph: status.glyph, color: status.color };
 }
 
 /**
  * Build the meta line(s) shown with an answer.
  *
  * `ui.meta` is an ordered list, so the line reads in the order the surface
- * declares. An empty list means no meta at all.
+ * declares. An empty list means no meta at all. `columns` is the terminal
+ * width the line must fit (default: unbounded, for callers that fit it).
  */
 export function renderMeta(
   exchange: PromptExchange,
   ui: ResolvedUi,
-  thinkTokens = 0
+  thinkTokens = 0,
+  columns: number = Number.POSITIVE_INFINITY
 ): string[] {
   if (ui.meta.length === 0) return [];
-
-  const parts = ui.meta
-    .map((f) => metaField(f, exchange, thinkTokens))
-    .filter((v): v is string => v !== null);
-  if (parts.length === 0) return [];
+  // "  ✓ " leads the rule row, and compact has two spaces.
+  const line = fitMetaParts(exchange, ui, thinkTokens, columns - 5);
+  if (line === "") return [];
 
   const status = STATUS[exchange.bucket] ?? STATUS.result;
-  const line = parts.join("  ·  ");
 
   if (ui.meta_style === "compact") {
     return [paint(ui, "gray", `  ${line}`)];
   }
   return [
-    paint(ui, "gray", `  ${"─".repeat(Math.min(60, line.length + 4))}`),
+    paint(ui, "gray", `  ${"─".repeat(Math.max(0, Math.min(60, visibleWidth(line) + 4, columns - 2)))}`),
     `  ${paint(ui, status.color, status.glyph)} ${paint(ui, "gray", line)}`,
   ];
 }
@@ -565,7 +606,7 @@ export function renderExchange(
     lines.push(answer);
   }
   lines.push("");
-  lines.push(...renderMeta(exchange, ui, thinkTokens));
+  lines.push(...renderMeta(exchange, ui, thinkTokens, terminalWidth()));
   lines.push("");
   return lines;
 }
