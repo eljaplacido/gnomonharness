@@ -12,8 +12,8 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn, spawnSync } from "node:child_process";
 import { request, createServer as createHttpServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync, realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, readdirSync, realpathSync, symlinkSync } from "node:fs";
+import { tmpdir, homedir } from "node:os";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AuditTrail, loadConfig, resolveAudit, recomputeManifest, listEndpoints, credentialsPath } from "gnomon-core";
@@ -44,6 +44,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(HERE, "..", "..", "..");
 const CLI = join(HERE, "index.ts");
 const made: string[] = [];
+/** A fresh directory inside the (test-isolated) home: the only place init from the page may scaffold. */
+const homeDir = (p: string) => {
+  const d = mkdtempSync(join(realpathSync(homedir()), p));
+  made.push(d);
+  return d;
+};
 const tmp = (p: string) => {
   const d = mkdtempSync(join(tmpdir(), p));
   made.push(d);
@@ -842,8 +848,41 @@ describe("actions: each one is a gnomon command, and one that changes anything a
     expect((await post("init", { project: F, confirm: ask.json.confirm.nonce })).status).toBe(409);
   });
 
+  it("init refuses a directory outside home, home itself, a hidden config directory, a symlink out, a file, and one already initialised", async () => {
+    const before = count();
+    const home = realpathSync(homedir());
+    const outside = tmp("gnomon-dash-outside-"); // under the OS temp dir, not home
+    mkdirSync(join(home, ".config"), { recursive: true });
+    mkdirSync(join(home, ".ssh"), { recursive: true });
+    mkdirSync(join(home, ".local", "share"), { recursive: true });
+    const inside = homeDir("gnomon-dash-refuse-");
+    symlinkSync(outside, join(inside, "link-out"));
+    writeFileSync(join(inside, "a-file"), "x");
+    const init = homeDir("gnomon-dash-inited-");
+    mkdirSync(join(init, ".gnomon"));
+    const cases: Array<[string, RegExp]> = [
+      [outside, /outside the home directory/],
+      ["/", /outside the home directory/],
+      ["/etc", /outside the home directory/],
+      [home, /home directory itself/],
+      [join(home, ".config"), /hidden configuration directory/],
+      [join(home, ".ssh"), /hidden configuration directory/],
+      [join(home, ".local", "share"), /hidden configuration directory/],
+      [join(inside, "link-out"), /outside the home directory/],
+      [join(inside, "a-file"), /not a directory/],
+      [join(inside, "nope"), /does not exist/],
+      [init, /already initialised — open it instead/],
+    ];
+    for (const [dir, why] of cases) {
+      const r = await post("init", { dir });
+      expect(r.status, dir).toBe(400);
+      expect(r.json.error, dir).toMatch(why);
+    }
+    expect(count()).toBe(before);
+  });
+
   it("init names a directory off the list only as an existing absolute directory, and it joins the list after the confirmation is shown", async () => {
-    const target = tmp("gnomon-dash-newdir-");
+    const target = homeDir("gnomon-dash-newdir-");
     mkdirSync(join(target, ".git"));
     for (const dir of ["relative/path", join(target, "missing"), "/etc/passwd", "/tmp/x\nrm", "-rf"]) {
       const r = await post("init", { dir });

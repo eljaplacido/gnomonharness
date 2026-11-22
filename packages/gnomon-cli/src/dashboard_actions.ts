@@ -34,8 +34,9 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, statSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { isAbsolute, join, relative, sep } from "node:path";
 import {
   loadConfig,
   listEndpoints,
@@ -161,18 +162,33 @@ const PARAMS: Record<ActionName, readonly (keyof ActionParams | "value")[]> = {
 };
 
 /**
- * A directory `init` may be asked to scaffold: absolute, one line, an existing
- * directory. It is the only path the browser ever names, and the confirmation
+ * A directory `init` may be asked to scaffold: absolute, one line, a real
+ * directory (symlinks resolved) inside the home directory but not home itself
+ * or a hidden top-level directory of it, with no `.gnomon/` yet. It is the only path the browser ever names, and the confirmation
  * states it back before anything is written.
  */
 export function dirProblem(v: string): string | null {
   if (v.length > 500 || /[\u0000-\u001f\u007f]/.test(v)) return '"dir" is not a path';
   if (!isAbsolute(v)) return '"dir" must be an absolute path';
+  let real: string;
+  let home: string;
   try {
-    if (!statSync(v).isDirectory()) return `${v} is not a directory`;
+    real = realpathSync(v);
+    if (!statSync(real).isDirectory()) return `${v} is not a directory`;
   } catch {
     return `${v} does not exist`;
   }
+  try {
+    home = realpathSync(homedir());
+  } catch {
+    return "this machine has no home directory to initialise under";
+  }
+  const rel = relative(home, real);
+  if (rel === "") return "that is the home directory itself: pick a project folder inside it";
+  if (rel.startsWith("..") || isAbsolute(rel)) return `${real} is outside the home directory (${home}): init from the dashboard only works inside it`;
+  // A dot-directory at the top of home is configuration, keys or state, never a project.
+  if (rel.split(sep)[0]!.startsWith(".")) return `${real} is under a hidden configuration directory (~/${rel.split(sep)[0]}): not a place for a project`;
+  if (existsSync(join(real, ".gnomon"))) return `${real} is already initialised — open it instead`;
   return null;
 }
 

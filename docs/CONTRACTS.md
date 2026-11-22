@@ -1754,7 +1754,7 @@ the dashboard adds no record kind.
 | `trust.grant` | `trust grant --dir <dir>` | `enabled` | `required` |
 | `trust.revoke` | `trust revoke --dir <dir>` | `enabled` | `required` |
 | `endpoint.test` | `endpoint test <endpoint> --dir <dir>` | `enabled`: one completion of one token | `required` |
-| `init` | `init --dir <dir>` | `enabled`: never `--force`; 409 where a `.gnomon/` exists; may name a directory not on the list with `dir` (an existing absolute path, the only path the page sends), which joins the list for this run | `required` |
+| `init` | `init --dir <dir>` | `enabled`: never `--force`; 409 where a `.gnomon/` exists; may name a directory not on the list with `dir` (the only path the page sends): an absolute path whose real path is a directory inside the home directory, not home itself, not under a hidden top-level directory of it (`~/.config`, `~/.ssh`, `~/.local`), with no `.gnomon/` (400 otherwise); the confirmation shows the real path, and the directory joins the list for this run | `required` |
 | `guard.install` | `guard install <harness> --write --dir <dir>` | `enabled`: `<harness>` is `claude-code`, `opencode` or `cursor`; the confirmation names the file written | `required` |
 
 A state is `enabled` (runs now) or `planned` (shown, disabled, with the
