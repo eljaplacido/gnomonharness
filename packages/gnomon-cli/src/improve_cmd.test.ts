@@ -141,6 +141,39 @@ describe("gnomon improve: the command", () => {
     expect(listProposals(loadConfig(root)).proposals).toHaveLength(1);
   });
 
+  it("--scheduled with scheduled = run is still refused inside an agent session: no model call, no write", async () => {
+    const root = await project();
+    writeFileSync(join(root, ".gnomon", "policy.toml"), `${readFileSync(join(root, ".gnomon", "policy.toml"), "utf-8")}\n[improve]\nscheduled = "run"\n`);
+    process.env.GNOMON_AGENT_SESSION = "x";
+    let calls = 0;
+    const r = await run(root, { scheduled: "true" }, false, { model: async () => (calls++, { ok: true, text: "{}" }) });
+    expect(r.code).toBe(IMPROVE_EXIT.refused);
+    expect(r.err).toMatch(/agent session/);
+    expect(calls).toBe(0);
+    expect(existsSync(join(root, ".gnomon-proposals"))).toBe(false);
+  });
+
+  it("--run is refused without a confined sandbox unless --allow-host-probes, which the report records", async () => {
+    const root = await project();
+    const pol = join(root, ".gnomon", "policy.toml");
+    writeFileSync(pol, readFileSync(pol, "utf-8").replace('level = "confined"', 'level = "off"'));
+    const refused = await run(root, { run: "true" });
+    expect(refused.code).toBe(IMPROVE_EXIT.refused);
+    expect(refused.err).toMatch(/\[sandbox\] is not confined.*--allow-host-probes/s);
+    expect(existsSync(join(root, ".gnomon-proposals"))).toBe(false);
+    const allowed = await run(root, { run: "true", "allow-host-probes": "true" }, true);
+    expect(allowed.code).toBe(0);
+    expect(JSON.parse(allowed.out).problems.join(" ")).toMatch(/allow-host-probes/);
+    // A dry run needs no sandbox.
+    expect((await run(root, {})).code).toBe(0);
+  });
+
+  it("--max-requests is a whole number", async () => {
+    const root = await project();
+    expect((await run(root, { run: "true", "max-requests": "0" })).code).toBe(IMPROVE_EXIT.usage);
+    expect((await run(root, { run: "true", "max-requests": "x" })).code).toBe(IMPROVE_EXIT.usage);
+  });
+
   it("--schedule writes a loop file for a person to review; it installs nothing, and refuses without a person", async () => {
     const root = await project();
     const r = await run(root, { schedule: "nightly" });

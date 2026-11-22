@@ -34,9 +34,9 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, readdirSync, renameSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { ensureDirIn, writeFileIn } from "./root_fs.js";
+import { ensureDirIn, identityOf, readExactIn, removeIn, sameIdentity, writeFileIn } from "./root_fs.js";
 import { recomputeManifest, manifestHash, type GnomonConfig } from "./config.js";
 import {
   PROPOSED_DIR,
@@ -200,7 +200,7 @@ export type NewProposal = {
   improve?: ProposalImprove;
 };
 
-export const PROPOSAL_LIMITS = { title: 200, rationale: 2000, after: 20000, files: 5, evidence: 20, pending: 200, path: 200, note: 1000 } as const;
+export const PROPOSAL_LIMITS = { title: 200, rationale: 2000, after: 20000, files: 5, evidence: 20, pending: 200, pending_per_agent: 20, path: 200, note: 1000 } as const;
 
 /** `20261122T101530123Z-a1b2`: sorts by creation time and cannot name a path. Same shape as an inbox id. */
 export const PROPOSAL_ID = /^\d{8}T\d{9}Z-[0-9a-f]{4}$/;
@@ -504,12 +504,20 @@ export function writeProposal(config: GnomonConfig, input: NewProposal, now: Dat
   const evidence = checkEvidence(input.evidence);
   if (evidence?.length) p.evidence = evidence;
   checkStored(config, p);
-  if (listProposals(config, { status: "pending" }).proposals.length >= PROPOSAL_LIMITS.pending) {
+  const pending = listProposals(config, { status: "pending" }).proposals;
+  if (pending.length >= PROPOSAL_LIMITS.pending) {
     throw new ProposalError(`${PROPOSAL_LIMITS.pending} proposals are pending; decide some first (gnomon proposals)`);
+  }
+  // One source may not fill the queue a person has to read: an agent gets a share of it.
+  if (p.source === "agent" && pending.filter((q) => q.source === "agent").length >= PROPOSAL_LIMITS.pending_per_agent) {
+    throw new ProposalError(`${PROPOSAL_LIMITS.pending_per_agent} proposals from the agent are already pending; a person has to decide some first (gnomon proposals)`);
   }
   save(config, p);
   return p;
 }
+
+/** A seam for tests: runs after every check and before the first write of an accept. */
+export const acceptHooks: { beforeApply?: () => void } = {};
 
 export interface MemoryProposalInput {
   name: string;
@@ -712,11 +720,21 @@ export function acceptProposal(config: GnomonConfig, given: string, opts: Propos
   const root = projectRoot(config);
   const originals = new Map<string, string | null>();
   try {
+    acceptHooks.beforeApply?.();
     for (const d of p.diff) {
       const file = join(config.gnomonDir, ...d.path.split("/"));
-      originals.set(d.path, existsSync(file) ? readFileSync(file, "utf-8") : null);
+      // The file as it is now, read without following anything, against the
+      // hash this proposal was made on, and again by identity just before the
+      // write: an edit in the window since the first check is not overwritten.
+      const idBefore = identityOf(file);
+      const cur = readExactIn(root, file);
+      if ((cur ? sha256Hex(cur.data) : null) !== d.before_sha256) {
+        throw new ProposalRefusal(`.gnomon/${d.path} changed since this was proposed (the surface moved); re-propose against the current file`);
+      }
+      if (!sameIdentity(idBefore, identityOf(file))) throw new ProposalRefusal(`.gnomon/${d.path} was replaced while it was being accepted`);
+      originals.set(d.path, cur ? cur.data.toString("utf-8") : null);
       if (d.delete) {
-        rmSync(file, { force: true });
+        removeIn(root, file);
         continue;
       }
       ensureDirIn(root, join(file, ".."));
@@ -730,7 +748,7 @@ export function acceptProposal(config: GnomonConfig, given: string, opts: Propos
     for (const [path, was] of originals) {
       const file = join(config.gnomonDir, ...path.split("/"));
       try {
-        if (was === null) rmSync(file, { force: true });
+        if (was === null) removeIn(root, file);
         else writeFileIn(root, file, was);
       } catch {
         // Best effort; the sealed record says the apply failed.

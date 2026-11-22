@@ -26,6 +26,21 @@
 
 ## [Unreleased]
 
+### Fixed — review of governed self-improvement (#282, #285)
+
+- `gnomon improve --scheduled` with `[improve] scheduled = "run"` no longer skips the agent-session refusal.
+- `gnomon improve --run` refuses a probe that can reach a billed role with no declared rates unless
+  `--max-requests <n>` caps it (a billed cell was charged 0, so no budget stopped it), and refuses
+  without a confined `[sandbox]` (or `exec` docker/os) unless `--allow-host-probes` (recorded).
+- Policy acceptance also needs a hash-chained `eval_run` record for the report, the trial spec's
+  sha256 unchanged (`spec_sha256` in the evidence), a report path that is not `.`/`..`, a probe that
+  did not regress with no more refusals, and, when `min_pass_delta` is not declared, a strict
+  improvement for a skill or harness edit.
+- The memory index is sanitised to one line per entry and control characters in a name or
+  description are refused; loaded memory is cached by (name, mtime, size) and at most 200 files are
+  read; an agent may hold at most 20 pending proposals; accepting re-reads each file root-safely and
+  re-checks its hash and identity just before the write, and a retirement never removes through a symlink.
+
 ### Added — governed self-improvement, step 2: `gnomon improve`
 
 - **`gnomon improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--schedule nightly|weekly] [--json]`**

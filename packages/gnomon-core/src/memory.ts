@@ -35,6 +35,8 @@ export const MEMORY_LIMITS = {
   index_line: 200,
   /** A file larger than this is not read as an entry. */
   file_bytes: 32 * 1024,
+  /** Files read from the directory at all; the sorted first this many. */
+  read_files: 200,
 } as const;
 
 export interface MemoryEntry {
@@ -130,6 +132,8 @@ export function memoryContentProblem(proposalId: string | null, content: string)
   if (content.includes("\u0000")) return "a memory entry holds a NUL character";
   const e = parseMemory("x", content);
   if (e.problem) return `the entry is not well formed: ${e.problem}`;
+  if (CONTROL.test(e.name)) return "the name holds a control character (a newline would add a line to the prompt)";
+  if (CONTROL.test(e.description)) return "the description holds a control character (a newline would add a line to the prompt)";
   if (e.name.length > MEMORY_LIMITS.name) return `the name is longer than ${MEMORY_LIMITS.name} characters`;
   if (e.description.length > MEMORY_LIMITS.description) return `the description is longer than ${MEMORY_LIMITS.description} characters`;
   if (e.body.length === 0) return "the entry has no body";
@@ -138,29 +142,63 @@ export function memoryContentProblem(proposalId: string | null, content: string)
   return null;
 }
 
-/** `.gnomon/memory/*.md`, by id. Absent directory, symlinks and oversize files: nothing. */
+const CONTROL = /[\u0000-\u001f\u007f\u0085\u2028\u2029]/;
+
+/** One line, safe to put in the prompt's index: no control characters, no line that opens a heading, list, quote or fence. */
+export function indexText(v: string): string {
+  const flat = v.replace(/[\u0000-\u001f\u007f\u0085\u2028\u2029]+/g, " ").replace(/\s+/g, " ").trim();
+  return flat.replace(/^([#>*+\-`~|]|\d+[.)])/, "\\$1");
+}
+
+/** How many times a memory file was read and parsed: tests watch the cache through it. */
+export const memoryLoadStats = { parses: 0 };
+const CACHE = new Map<string, { sig: string; entries: MemoryEntry[] }>();
+const CACHE_DIRS = 16;
+
+/**
+ * `.gnomon/memory/*.md`, by id. Absent directory, symlinks and oversize files:
+ * nothing. The first MEMORY_LIMITS.read_files names are read. The parsed
+ * entries are cached by the directory's (name, mtime, size) list, so a prompt
+ * built every turn stats the files and reads none until one changes.
+ */
 export function loadMemory(config: GnomonConfig): MemoryEntry[] {
   const dir = join(config.gnomonDir, MEMORY_DIR);
   if (!existsSync(dir)) return [];
   let names: string[];
   try {
     if (lstatSync(dir).isSymbolicLink() || !lstatSync(dir).isDirectory()) return [];
-    names = readdirSync(dir).filter((n) => n.endsWith(".md")).sort();
+    names = readdirSync(dir).filter((n) => n.endsWith(".md") && !CONTROL.test(n)).sort().slice(0, MEMORY_LIMITS.read_files);
   } catch {
     return [];
   }
-  const out: MemoryEntry[] = [];
+  const files: Array<{ n: string; size: number }> = [];
+  const sig: string[] = [];
   for (const n of names) {
     try {
-      const file = join(dir, n);
-      const st = lstatSync(file);
+      const st = lstatSync(join(dir, n));
       if (!st.isFile() || st.size > MEMORY_LIMITS.file_bytes) continue;
-      out.push(parseMemory(n.slice(0, -3), readFileSync(file, "utf-8")));
+      files.push({ n, size: st.size });
+      sig.push(`${n}:${st.mtimeMs}:${st.size}`);
     } catch {
       // An unreadable file is not an entry.
     }
   }
-  return out;
+  const key = sig.join("|");
+  const hit = CACHE.get(dir);
+  if (hit && hit.sig === key) return hit.entries.map((e) => ({ ...e }));
+  const out: MemoryEntry[] = [];
+  for (const { n } of files) {
+    try {
+      const raw = readFileSync(join(dir, n), "utf-8");
+      memoryLoadStats.parses++;
+      out.push(parseMemory(n.slice(0, -3), raw));
+    } catch {
+      // An unreadable file is not an entry.
+    }
+  }
+  if (CACHE.size >= CACHE_DIRS && !CACHE.has(dir)) CACHE.delete(CACHE.keys().next().value as string);
+  CACHE.set(dir, { sig: key, entries: out });
+  return out.map((e) => ({ ...e }));
 }
 
 /** An entry by id or by name; null when none (or two) match. */
@@ -179,7 +217,8 @@ export function memoryIndexBlock(entries: readonly MemoryEntry[], dirRel = ".gno
   if (entries.length === 0) return "";
   const shown = entries.slice(0, MEMORY_LIMITS.index_entries);
   const lines = shown.map((e) => {
-    const line = `- \`${dirRel}/${e.id}.md\` — ${e.name}${e.description ? `: ${e.description}` : ""}`;
+    const description = indexText(e.description);
+    const line = `- \`${dirRel}/${e.id}.md\` — ${indexText(e.name)}${description ? `: ${description}` : ""}`;
     return line.length > MEMORY_LIMITS.index_line ? `${line.slice(0, MEMORY_LIMITS.index_line - 1)}…` : line;
   });
   if (entries.length > shown.length) lines.push(`- (${entries.length - shown.length} more in ${dirRel}/)`);
