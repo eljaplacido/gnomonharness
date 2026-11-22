@@ -308,6 +308,11 @@ export type AuditKind =
   // An operator work item flagged for the developer's harness (inbox.ts): add,
   // acknowledge or resolve, the item id and its target. Never the item's text.
   | "inbox_item"
+  // A person's decision on a proposal (proposals.ts): accept or reject, the
+  // proposal's id and kind, who decided, the paths it touches and the surface
+  // hash before and after. Never the proposal's text. Skill proposals keep
+  // `skill_accept` / `skill_reject`.
+  | "proposal_decision"
   | "session_end";
 
 /**
@@ -351,6 +356,7 @@ export const AUDIT_KINDS = [
   "escalation",
   "eval_run",
   "inbox_item",
+  "proposal_decision",
   "session_end",
 ] as const satisfies readonly AuditKind[];
 type MissingAuditKind = Exclude<AuditKind, (typeof AUDIT_KINDS)[number]>;

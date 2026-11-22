@@ -255,7 +255,7 @@ so both format drift and non-determinism fail the build.
                  "record_tamper_resolved", "record_notice", "mcp_tools", "stall_signal",
                  "completion_gate", "todo_gate", "job", "deliverable_first", "first_token_stall",
                  "checkpoint", "think_cap", "finish_gate", "model_call", "escalation", "eval_run",
-                 "inbox_item", "session_end"],
+                 "inbox_item", "proposal_decision", "session_end"],
   "guard_decision": ["allow", "deny", "ask"],
   "guard_rule": ["tools", "malformed", "bash_deny", "bash_allow", "sudo", "sandbox", "surface",
                  "record", "git_hooks", "host_hooks", "write_allow", "outside_root", "secret_path",
@@ -1792,6 +1792,8 @@ text only in `raw`.
 | `endpoint.test` | `endpoint test <endpoint> --dir <dir>` | `enabled`: one completion of one token | `required` |
 | `inbox.add` | `inbox add --json --author dashboard <inbox> --dir <dir>`; `<inbox>` is `--title`, `--detail`, `--target`, `--evidence` and `--scope` from typed parameters | `enabled`: writes one file in `.gnomon-inbox/` (§57) | `required` |
 | `inbox.resolve` | `inbox resolve <id> --json <inbox> --dir <dir>` | `enabled`: marks an item resolved | `required` |
+| `proposal.accept` | `proposals accept <id> --dir <dir>` (shown; run IN-PROCESS, §58) | `enabled`: applies a proposal's diff to `.gnomon/`; the confirmation shows the exact diff and the paths | `required` |
+| `proposal.reject` | `proposals reject <id> <inbox> --dir <dir>` (shown; run IN-PROCESS, §58) | `enabled`: marks a proposal rejected; `.gnomon/` untouched | `required` |
 | `init` | `init --dir <dir>` | `enabled`: never `--force`; 409 where a `.gnomon/` exists; may name a directory not on the list with `dir` (the only path the page sends): an absolute path whose real path is a directory inside the home directory, not home itself, not under a hidden top-level directory of it (`~/.config`, `~/.ssh`, `~/.local`), with no `.gnomon/` (400 otherwise); the confirmation shows the real path, and the directory joins the list for this run | `required` |
 | `guard.install` | `guard install <harness> --write --dir <dir>` | `enabled`: `<harness>` is `claude-code`, `opencode` or `cursor`; the confirmation names the file written | `required` |
 
@@ -5243,7 +5245,7 @@ that is not a valid item is reported, not read.
 (`session_start` mode `inbox`, the record, `session_end`), when `[audit]` is on.
 The item's text is never recorded (`conformance/audit_record_schema.json`
 classes `op` and `target` as metadata, `id` as an identifier). `audit_kind` (§3)
-has 35 entries; `inbox_item` follows `eval_run`.
+has 36 entries; `inbox_item` follows `eval_run` and `proposal_decision` follows `inbox_item` (§58).
 
 **`gnomon inbox [list|show <id>|add --title T [--detail D] [--target X]
 [--evidence trail:seq:kind,...] [--scope p,...]|ack <id>|resolve <id> [--note N]|mcp]
@@ -5282,3 +5284,120 @@ counts, and returns the item itself so the dialog shows exactly its text.
 (the item and its validation, atomic writes, the sealed record, the CLI, the
 hook JSON, the MCP server over stdin and stdout, the dashboard actions and the
 page's accessibility).
+
+---
+
+## 58. Proposals and governed memory — `.gnomon-proposals/`, `gnomon proposals`, `gnomon memory`, audit kind `proposal_decision`, `.gnomon/memory/`, `counters.memory`, `gnomon.proposals/1`, `v: 1`
+
+The one path by which a surface changes itself. gnomon's behaviour is fixed by
+the content-hashed `.gnomon/` (README, The Six Rules), and nothing writes there
+silently. A **proposal** is an inert description of a change; a **person**
+accepts or rejects it; accepting moves the surface hash and applies from the
+next session. Everything here is opt-in: with no `[memory]` or `[proposals]`
+key and no `.gnomon/memory/` entry, the system prompt, the tool definitions on
+the wire and every record are byte-identical to a build without it.
+
+**The proposal.** `{v: 1, id, kind, title, rationale, created, source, diff,
+evidence?, status, decided_at?, decided_by?, note?}` in
+`<project>/.gnomon-proposals/<id>.json` (machine-local, gitignored, never in the
+surface hash; written atomically, mode 0600, never through a symlink).
+
+| Field | Value |
+|---|---|
+| `id` | `YYYYMMDDTHHMMSSmmmZ-xxxx` (same shape as an inbox id); a skill proposal made by the `skill` tool is shown under its skill id |
+| `kind` | `skill`, `memory` or `harness` |
+| `source` | `agent`, `mine`, `improve` or `cli` (informational: nothing is trusted for it) |
+| `status` | `pending`, `accepted` or `rejected`; never back to pending |
+| `diff` | 1 to 5 `{path, before_sha256, after}`: `path` relative to `.gnomon/` with POSIX separators, `before_sha256` the sha256 of the file it was written against (`null` when it did not exist), `after` the whole new content (at most 20000 characters) |
+| `evidence` | up to 20 `{trail?, seq?, note?}` |
+| `decided_by` | `human`; `policy:<rule>` is in the type and refused in this build |
+| limits | title 200, rationale 2000, note 1000 characters, path 200; 200 pending |
+
+**Which paths a kind may touch** (checked when written and again when accepted,
+because the file is machine-local and could be written by anything). `memory`:
+`memory/<id>.md`. `skill`: `skills/<id>.md` (`<id>` is lower-case letters, digits
+and dashes, at most 60). `harness`: `system.md`, and any file the surface itself
+lists under `[proposals] harness_paths` in `policy.toml`; never `skills/`,
+`memory/` or `extensions/`, and never policy, roles, tools or config unless a
+person listed them. No absolute path, no `..`, no hidden or non-plain segment.
+
+**Accept** (`gnomon proposals accept <id>`): refused inside an agent session and
+without a person present, exactly as a skill decision is (§11: `refused_by_gate`,
+exit 3, the same three agent-session checks, a terminal or a person-present
+signer); refused while an unresolved tamper event is open. It then checks every
+`diff` entry against the file now: `sha256(current) == before_sha256`, or the file
+absent when `before_sha256` is `null`. Any difference refuses the whole proposal,
+writing nothing: "the surface moved; re-propose". A symlink or non-file at a path
+is refused. The `proposal_decision` record is written first (write-ahead, as §11),
+then the files, each written to a temporary file and renamed; a failed write puts
+every file back and seals the record `applied: false`. `[skills] require_trial = true`
+refuses a stored `skill` proposal (it goes through `gnomon skill trial` and
+`accept --evidence`). A skill proposal found in `.gnomon/skills/proposed/` is
+decided by the §11 path and records `skill_accept` / `skill_reject`.
+
+**Reject** (`gnomon proposals reject <id> [--note T]`): same gates; `.gnomon/` is
+untouched, the proposal stays in the store as `rejected` with the note.
+
+**Audit.** `proposal_decision` (36th `audit_kind`, after `inbox_item`), in a
+sealed trail of its own (`session_start` mode `proposal`, the record,
+`session_end`), written even when `[audit]` is off, as §11. Fields: `id`,
+`proposal_kind` (not `kind`: that is the record's own), `decision` (`accept` or
+`reject`), `decided_by`, `paths`, `surface_hash_before`, `surface_hash_after`,
+`note` (reject only), and the §11 decider fields `by` (`cli`, or `dashboard`),
+`agent_session_marker`, `user`, `host`, `interactive`, `authorised_by`. The
+proposal's text is never recorded. `session_end` carries `applied` and, for an
+accept, `surface_hash_after`. `conformance/audit_record_schema.json` (and its
+byte-equal copy under `packages/gnomon-cli/catalog/`) classes the fields;
+`proposal_kind`, `decision`, `decided_by` are metadata, `id` and `paths`
+identifiers, `note` content.
+
+**Memory.** An entry is `.gnomon/memory/<id>.md`: TOML front matter between `+++`
+fences (`name`, `description`, `provenance`, `created`, and `source_trail` and
+`source_seq` when the proposal named a record), then the body (at most 4000
+characters; name 80, description 160). `provenance` is the id of the proposal that
+created it, and a memory proposal whose `provenance` is any other id is refused.
+Memory is part of the surface: hashed, versioned and changed only by an accepted
+proposal. A symlinked `memory/`, a symlinked file or one over 32 KB is not read as
+an entry.
+
+**Retrieval.** When `.gnomon/memory/` has entries, the system prompt ends its
+notes with `## Project memory`: for each entry (at most 40, then a count) one line
+``- `.gnomon/memory/<id>.md` — <name>: <description>`` of at most 200 characters,
+never a body, stated as information and not instruction. The model opens an entry
+with `read`; that read is counted. `counters.memory` is `{v: 1, indexed, read:
+{<id>: n}, proposed: [<id>]}` and is present on a turn only when `indexed` is not
+0 or the turn read or proposed an entry; a delegated sub-turn's is merged into its
+parent's. With no entries the prompt is unchanged and `counters.memory` is absent.
+
+**The agent's side.** `[memory] propose = true` (`policy.toml`, default false)
+adds two optional parameters to the `skill` tool's schema, `kind` (`skill` or
+`memory`) and `rationale`. With the key absent the schema is the same object as
+before. `kind: "memory"` with `name`, `description` and `body` writes a `memory`
+proposal with `source: "agent"` and nothing under `.gnomon/` (the surface hash does
+not move; a `surface_drift` notice fires if it did). Without the key the call is
+refused. The agent never decides a proposal and never writes a memory entry.
+
+**CLI.** `gnomon proposals [list|show <id>|accept <id>|reject <id> [--note T]]
+[--status S] [--kind K] [--dir P] [--json]`: `list` shows pending by default; an id
+is the full id or a prefix naming one. `--json` answers `{schema:
+"gnomon.proposals/1", ...}` with `proposals` and `problems` (list), `proposal`
+(show) or `decision` (accept, reject: `{id, kind, decision, paths,
+surface_hash_before, surface_hash_after, trail, sealed}`). Exit `0` done, `1` a
+usage error or a proposal that is not there, `3` a decision a rule refused.
+`gnomon memory [list|show <name>] [--json]` (`gnomon.memory/1`) reads the entries.
+`/proposals` in a session lists the pending ones, read-only.
+
+**Dashboard.** `GET /api/p/<id>/proposals` answers `{dir, counts, proposals,
+problems}`, newest first, each with `paths` and its `diff` carrying `before` (the
+file now) and `moved`. `proposal.accept` and `proposal.reject` are actions (§17),
+both `required`: the 428 states the exact diff, the paths and the effect, and the
+nonce is bound to the proposal and to the surface hash it was shown against. They
+run in-process (a spawned gnomon has a gnomon ancestor, which a decision refuses),
+keep every refusal above, record `by: "dashboard"`, and answer `exit: 3` with the
+reason when a rule refuses. The dashboard's person-gate is the confirmation: a
+click after the diff was shown, from a server a person started at a terminal.
+
+**Fixture**: `conformance/proposals.json`; `packages/gnomon-core/src/proposals.test.ts`,
+`memory_loop.test.ts` (byte-identity when unused, the index, the counted read,
+an agent's proposal never writing `.gnomon/`) and
+`packages/gnomon-cli/src/proposals_cmd.test.ts` (the CLI, exit codes, the actions).

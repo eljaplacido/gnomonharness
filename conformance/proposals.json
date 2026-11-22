@@ -1,0 +1,57 @@
+{
+  "contract": "proposals and governed memory — docs/CONTRACTS.md section 58",
+  "schema": "gnomon.proposals/1",
+  "memory_schema": "gnomon.memory/1",
+  "dir": ".gnomon-proposals",
+  "proposal": {
+    "v": 1,
+    "required": ["v", "id", "kind", "title", "rationale", "created", "source", "diff", "status"],
+    "optional": ["evidence", "decided_at", "decided_by", "note"],
+    "id": "^\\d{8}T\\d{9}Z-[0-9a-f]{4}$",
+    "kinds": ["skill", "memory", "harness"],
+    "sources": ["agent", "mine", "improve", "cli"],
+    "statuses": ["pending", "accepted", "rejected"],
+    "diff_entry": ["path", "before_sha256", "after"],
+    "limits": { "title": 200, "rationale": 2000, "after": 20000, "path": 200, "files": 5, "evidence": 20, "pending": 200, "note": 1000 }
+  },
+  "paths": {
+    "memory": "memory/<id>.md",
+    "skill": "skills/<id>.md",
+    "harness_default": ["system.md"],
+    "harness_extra": "[proposals] harness_paths in policy.toml",
+    "never_for_harness": ["skills/", "memory/", "extensions/"]
+  },
+  "memory": {
+    "dir": ".gnomon/memory",
+    "front_matter": ["name", "description", "provenance", "created"],
+    "limits": { "name": 80, "description": 160, "body": 4000, "index_entries": 40, "index_line": 200, "file_bytes": 32768 },
+    "counters": { "key": "memory", "fields": ["v", "indexed", "read", "proposed"] },
+    "propose_key": { "table": "[memory]", "key": "propose", "file": "policy.toml", "default": false }
+  },
+  "audit": {
+    "kind": "proposal_decision",
+    "fields": ["id", "proposal_kind", "decision", "decided_by", "paths", "surface_hash_before", "surface_hash_after", "by", "agent_session_marker", "user", "host", "interactive", "authorised_by"],
+    "optional": ["note"],
+    "decisions": ["accept", "reject"],
+    "session_start_mode": "proposal",
+    "skill_kind_records": ["skill_accept", "skill_reject"],
+    "order": "write-ahead: session_start and the decision are written before any file changes; session_end after"
+  },
+  "refusals": {
+    "exit": 3,
+    "surface_moved": "the surface moved; re-propose",
+    "agent_session": "refused inside an agent session",
+    "no_person": "needs a person at a terminal or a person-present signer",
+    "policy_decision": "not enabled in this build"
+  },
+  "cli": {
+    "subcommands": ["list", "show", "accept", "reject"],
+    "memory_subcommands": ["list", "show"],
+    "exit_codes": { "done": 0, "usage_or_missing": 1, "refused": 3 }
+  },
+  "dashboard": {
+    "actions": ["proposal.accept", "proposal.reject"],
+    "route": "GET /api/p/<id>/proposals",
+    "in_process": true
+  }
+}

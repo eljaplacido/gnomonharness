@@ -125,6 +125,7 @@ import {
 import { readFileSync, writeFileSync, writeSync, existsSync, readdirSync, mkdirSync} from "node:fs";
 import { setProcessTitle } from "./proc_title.js";
 import { runInbox, runInboxHook } from "./inbox_cmd.js";
+import { runProposals, runMemory } from "./proposals_cmd.js";
 import { serveInboxMcp } from "./inbox_mcp.js";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -3001,6 +3002,8 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "check" },
   { name: "trust" },
   { name: "inbox" },
+  { name: "proposals", aliases: ["proposal"] },
+  { name: "memory" },
   { name: "guard" },
   { name: "dashboard", aliases: ["ui"] },
   { name: "chaos" },
@@ -3240,6 +3243,24 @@ Commands:
     Claude Code over MCP (list, get, acknowledge, resolve; no add). Each
     change is an inbox_item audit record (id and target, never the text).
     Exit 0 done, 1 an item that is not there or a usage error.
+
+  proposals [list|show <id>|accept <id>|reject <id> [--note <text>]] [--status <s>] [--kind <k>] [--dir <path>] [--json]
+    The one path by which .gnomon/ changes itself. A proposal is an inert,
+    typed file in .gnomon-proposals/ (gitignored): a skill, a memory entry
+    or an edit to an allowed surface file, with its rationale, evidence and
+    the exact diff. list shows the pending ones; show prints the diff.
+    accept applies the diff only if every file still matches what it was
+    written against (otherwise: the surface moved, re-propose), which changes
+    the surface hash and applies from the next session; reject changes
+    nothing. Both are a person's: they refuse inside an agent session and
+    without a terminal, exit 3, and each writes a proposal_decision audit
+    record (a skill keeps skill_accept / skill_reject).
+
+  memory [list|show <name>] [--dir <path>] [--json]
+    The memory entries a person accepted into .gnomon/memory/: short notes
+    about this repository, hashed with the surface. The prompt lists their
+    names; the model opens one with read. An entry exists only through an
+    accepted proposal; nothing writes one directly.
 
   sessions [--dir <path>]
     Saved sessions, newest last.
@@ -3612,6 +3633,17 @@ async function main(): Promise<void> {
     case "trust":
       await cmdTrust(args);
       break;
+    case "proposals":
+    case "proposal": {
+      const code = runProposals(loadConfig(args.dir, args.flags["profile"]), { sub: args.subcommand ?? "", positional: args.positional, flags: args.flags, json: !!args.json });
+      if (code !== 0) process.exit(code);
+      break;
+    }
+    case "memory": {
+      const code = runMemory(loadConfig(args.dir, args.flags["profile"]), { sub: args.subcommand ?? "", positional: args.positional, flags: args.flags, json: !!args.json });
+      if (code !== 0) process.exit(code);
+      break;
+    }
     case "inbox": {
       if (args.flags["hook"]) {
         // A hook never fails the host: see runInboxHook.

@@ -499,15 +499,22 @@ export class AgentSessionRefusal extends SkillRefusal {}
 /** Refused: nobody was shown to be there. No terminal, and no person-present signer. */
 export class NoPersonRefusal extends SkillRefusal {}
 
-type Verb = "accept" | "reject";
+export type Verb = "accept" | "reject";
 const done = (verb: Verb) => (verb === "accept" ? "accepted" : "rejected");
 
-function refuseInAgentSession(verb: Verb): void {
+/** What a decision is about, for the refusal text: `a skill` / `gnomon skill accept`. */
+export interface DecisionSubject {
+  what: string;
+  cmd: (verb: Verb) => string;
+}
+const SKILL_SUBJECT: DecisionSubject = { what: "a skill", cmd: (verb) => `gnomon skill ${verb}` };
+
+export function refuseInAgentSession(verb: Verb, subject: DecisionSubject = SKILL_SUBJECT): void {
   const why = agentReason();
   if (why) {
     throw new AgentSessionRefusal(
-      `Not ${done(verb)}: ${why}. Accepting or rejecting a skill is a person's decision; ` +
-        `run \`gnomon skill ${verb}\` yourself, at a terminal, outside the agent.`
+      `Not ${done(verb)}: ${why}. Accepting or rejecting ${subject.what} is a person's decision; ` +
+        `run \`${subject.cmd(verb)}\` yourself, at a terminal, outside the agent.`
     );
   }
 }
@@ -519,18 +526,18 @@ function refuseInAgentSession(verb: Verb): void {
  * applied. `audit resolve` has had this rule since #115 (record_tamper.ts);
  * skill decisions had only the marker, which the agent's shell can drop.
  */
-function requirePerson(config: GnomonConfig, verb: Verb, opts: SkillDecisionOptions): { interactive: boolean; authorised_by: "tty" | "person_present_signer" } {
+export function requirePerson(config: GnomonConfig, verb: Verb, opts: SkillDecisionOptions, subject: DecisionSubject = SKILL_SUBJECT): { interactive: boolean; authorised_by: "tty" | "person_present_signer" } {
   const interactive = opts.interactive ?? decisionContext().interactive;
   if (interactive) return { interactive, authorised_by: "tty" };
   if (personPresentSigner(config)) return { interactive, authorised_by: "person_present_signer" };
   throw new NoPersonRefusal(
-    `Not ${done(verb)}: a skill decision needs a person -- run \`gnomon skill ${verb}\` at a terminal (stdin and ` +
+    `Not ${done(verb)}: ${subject === SKILL_SUBJECT ? "a skill" : "a proposal"} decision needs a person -- run \`${subject.cmd(verb)}\` at a terminal (stdin and ` +
       `stdout), or declare a signer that needs a person for each signature ([audit.attest] person_present = true, ` +
       `with ssh-add -c, a FIDO or hardware key, or a passphrase prompt).`
   );
 }
 
-function whoDecided(opts: SkillDecisionOptions, person: { interactive: boolean; authorised_by: string }): Record<string, unknown> {
+export function whoDecided(opts: SkillDecisionOptions, person: { interactive: boolean; authorised_by: string }): Record<string, unknown> {
   let user: string | undefined;
   try {
     user = userInfo().username;
@@ -575,11 +582,13 @@ function whoDecided(opts: SkillDecisionOptions, person: { interactive: boolean; 
  * halves of that: a crash after the move left an accept with no record, and a
  * failed session_end undid an accept whose record was already written.
  */
-function openSkillDecision(
+export function openSkillDecision(
   config: GnomonConfig,
-  kind: "skill_accept" | "skill_reject",
+  kind: "skill_accept" | "skill_reject" | "proposal_decision",
   fields: Record<string, unknown>,
-  surfaceHash: string
+  surfaceHash: string,
+  /** The `session_start` mode of the decision's own trail. */
+  mode: string = "skill"
 ): {
   record: AuditRecord | null;
   trail: string | null;
@@ -599,7 +608,7 @@ function openSkillDecision(
     surface_hash: surfaceHash,
     harness: harnessBuild(),
     cwd: process.cwd(),
-    mode: "skill",
+    mode,
   });
   const record = trail.write(kind, fields);
   return { record, trail: trail.path, seal: (end) => void trail.write("session_end", end), attest: () => {
@@ -916,6 +925,32 @@ function findTrialRecord(
 export class RecordTamperRefusal extends SkillRefusal {}
 
 /**
+ * The records against the last checkpoint a session left: a change in the gap
+ * between sessions -- a background job, a deleted tamper trail -- is recorded
+ * here as a tamper event, and then blocks like any other. Shared by every
+ * decision that changes the surface.
+ */
+export function refuseOnTamperedRecords(config: GnomonConfig): void {
+  const since = compareWithCheckpoint(config, "at_accept");
+  if (since?.changes.length) {
+    writeTamperRecord(config, {
+      when: since.when,
+      changes: describeChanges(resolve(config.gnomonDir, ".."), since.changes),
+      changed: since.changes.length,
+    });
+    writeCheckpoint(config);
+  }
+  const open = unresolvedTamper(config);
+  if (open.length > 0) {
+    throw new RecordTamperRefusal(
+      `Not accepted: gnomon's own records were changed by something other than gnomon, and ` +
+        `${open.length} such event(s) are unresolved (first: ${open[0]!.trail}:${open[0]!.seq}). ` +
+        `Look at \`gnomon audit tamper\`, then \`gnomon audit resolve <trail>:<seq> --reason "…"\`.`
+    );
+  }
+}
+
+/**
  * Accept a proposal: move it into `.gnomon/skills/`, and record that it
  * happened.
  *
@@ -936,28 +971,7 @@ export function acceptSkill(
   assertSkillId(id);
   refuseInAgentSession("accept");
   const person = requirePerson(config, "accept", opts);
-  {
-    // The records against the last checkpoint a session left: a change in
-    // the gap between sessions -- a background job, a deleted tamper trail --
-    // is recorded here as a tamper event, and then blocks like any other.
-    const since = compareWithCheckpoint(config, "at_accept");
-    if (since?.changes.length) {
-      writeTamperRecord(config, {
-        when: since.when,
-        changes: describeChanges(resolve(config.gnomonDir, ".."), since.changes),
-        changed: since.changes.length,
-      });
-      writeCheckpoint(config);
-    }
-    const open = unresolvedTamper(config);
-    if (open.length > 0) {
-      throw new RecordTamperRefusal(
-        `Not accepted: gnomon's own records were changed by something other than gnomon, and ` +
-          `${open.length} such event(s) are unresolved (first: ${open[0]!.trail}:${open[0]!.seq}). ` +
-          `Look at \`gnomon audit tamper\`, then \`gnomon audit resolve <trail>:<seq> --reason "…"\`.`
-      );
-    }
-  }
+  refuseOnTamperedRecords(config);
   const from = join(config.gnomonDir, PROPOSED_DIR, `${id}.md`);
   if (!existsSync(from)) {
     throw new Error(`No proposed skill "${id}". Run \`gnomon skill list\`.`);
@@ -1043,7 +1057,7 @@ export function acceptSkill(
  * not give (declined, or the key is not there) refuses the decision, sealed
  * `applied: false`, as a refused resolution is (record_tamper.ts).
  */
-function signedByPerson(
+export function signedByPerson(
   open: { attest: () => boolean; seal: (end: Record<string, unknown>) => void },
   person: { authorised_by: string },
   verb: Verb
@@ -1060,7 +1074,7 @@ function signedByPerson(
  * change is either made or refused, and undoing a made change because its
  * closing record failed is the inconsistency the write-ahead order removes.
  */
-function sealQuietly(open: { seal: (end: Record<string, unknown>) => void }, end: Record<string, unknown>): boolean {
+export function sealQuietly(open: { seal: (end: Record<string, unknown>) => void }, end: Record<string, unknown>): boolean {
   try {
     open.seal(end);
     return true;

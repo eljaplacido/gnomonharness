@@ -21,7 +21,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -43,6 +43,10 @@ import {
   GUARD_RULES,
   listItems as listInboxItems,
   INBOX_DIR,
+  listProposals,
+  proposalPaths,
+  sha256Hex,
+  PROPOSALS_DIR,
   INBOX_TARGETS,
   type GnomonConfig,
   type AuditRecord,
@@ -1121,6 +1125,39 @@ export function inboxView(p: DashboardProject): Record<string, unknown> {
   const counts = { open: 0, acknowledged: 0, resolved: 0 };
   for (const i of items) counts[i.status]++;
   return { dir: INBOX_DIR, targets: [...INBOX_TARGETS], counts, items: [...items].reverse(), problems };
+}
+
+/**
+ * Read-only: the proposals to change `.gnomon/` (proposals.ts), newest first,
+ * each with its exact diff. `before` is the file as it is now, so the page can
+ * show what changes; `moved` says the file is no longer what the proposal was
+ * written against (an accept would be refused).
+ */
+export function proposalsView(p: DashboardProject): Record<string, unknown> {
+  const config = configOf(p);
+  const { proposals, problems } = listProposals(config);
+  const counts = { pending: 0, accepted: 0, rejected: 0 };
+  for (const x of proposals) counts[x.status]++;
+  const shown = [...proposals].reverse().map((x) => ({
+    ...x,
+    paths: proposalPaths(x),
+    diff: x.diff.map((d) => {
+      let before: string | null = null;
+      let now: string | null = null;
+      try {
+        const file = join(config.gnomonDir, ...d.path.split("/"));
+        if (lstatSync(file).isFile()) {
+          const raw = readFileSync(file);
+          before = raw.toString("utf-8");
+          now = sha256Hex(raw);
+        }
+      } catch {
+        // Absent: a new file.
+      }
+      return { ...d, before, moved: now !== d.before_sha256 };
+    }),
+  }));
+  return { dir: PROPOSALS_DIR, counts, proposals: shown, problems };
 }
 
 // ---------------------------------------------------------------------------
