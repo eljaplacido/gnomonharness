@@ -1698,6 +1698,30 @@ enabled = true
 max_lines = 200
 ```
 
+**Opt-in: the check's own timeout and a setup command.** The declared `[verify]`
+check used to inherit the bash tool's timeout (120 s on typical surfaces) and
+whatever dependencies the worktree had, so a full suite was killed every time
+and a fresh worktree (an eval cell, `gnomon check`'s temporary worktree) failed
+for want of an install. Two keys fix that, and a surface that declares neither
+runs the check as before ([CONTRACTS.md §52](CONTRACTS.md)):
+
+```toml
+# policy.toml: inside the existing [verify] block
+[verify]
+timeout_seconds = 900             # the check's own budget; a timeout reads as `unrunnable`
+setup = "uv sync --frozen"        # once per fresh worktree, before the first check
+setup_network = "registry"        # "none" (default) or "registry": open for setup alone
+setup_timeout_seconds = 1200      # defaults to timeout_seconds
+```
+
+`setup` comes from the hashed surface (changing it moves the surface hash),
+runs once per worktree, is not bound by the role's `write_allow` (an install
+writes `node_modules`), and is recorded as a `verify` audit record with
+`phase: "setup"` and the network it had. A setup that fails makes the check
+`unrunnable`: nothing is handed back to the model as "fix your code".
+`gnomon check` runs it in the temporary worktree it makes for a head that is not
+checked out.
+
 **Opt-in: the completion gate** (since v0.5.0). Off unless declared. When a turn that changed
 the worktree first answers "done" with budget left, gnomon does not accept it:
 it hands the turn back with a checklist lifted from the task's own text (each

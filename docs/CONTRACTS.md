@@ -4715,3 +4715,35 @@ run. The pack changes nothing in the project and never says compliant.
 
 **Fixture**: `conformance/evidence_pack.json`;
 `packages/gnomon-cli/src/pack.test.ts`.
+
+
+## 52. The declared check, run properly — `[verify]` `timeout_seconds`, `setup`, `setup_network`, `setup_timeout_seconds`, audit `verify` `phase: "setup"`, `v: 1`
+
+The check used to run as one of the agent's own bash calls: the bash tool's
+timeout (120 s on typical surfaces), the agent's working tree, whatever
+dependencies it had. Full suites did not fit, and a fresh worktree had no
+dependencies (17 of 25 non-passing checks in a cross-project test). Each key is
+opt-in. A surface declaring none of them resolves to the block it always did and
+runs the check in the context it always did; nothing is added to a request or a
+record.
+
+| Key | Value | Effect |
+|---|---|---|
+| `timeout_seconds` | a positive number | The check's own budget in place of the bash tool's. Applies to the check and to the `test_must_fail_first` re-run. A timeout is `unrunnable` (§1). Anything else is ignored, with a surface warning. |
+| `setup` | a shell command | Runs once per worktree (per process) before the first check. Its text is in the hashed surface, so changing it moves the surface hash; the model cannot set it. Not bound by the role's `write_allow` or `bash_allow` (an install writes `node_modules`); the sandbox root and `bash_deny` still bind it. A setup that does not exit 0 makes the check `unrunnable`: the check is not run, nothing is handed back, and the work is not blamed. |
+| `setup_network` | `none` (default) or `registry` | `registry` opens the network for the `setup` command only; the check and the agent keep the surface's network setting. gnomon does not filter hosts, so the name is the declared purpose, not an allowlist. Any other value reads as `none` (surface audit: the value is not one of the enumeration). |
+| `setup_timeout_seconds` | a positive number | The budget for `setup`; absent, `timeout_seconds`, else the tool's. |
+
+Each setup run is a `verify` audit record with `phase: "setup"`, `command`,
+`network` (`none` or `registry`), `exit`, `ok` and, when it failed, `reason`. No
+new audit kind. A declined setup (`approval = "always"`) reads as `declined`,
+like a declined check.
+
+`gnomon check` runs `setup` in the temporary worktree it creates for a head
+that is not checked out (which has no installed dependencies), never in the
+worktree it judges in place, and opens the network for it only where `[verify]`
+runs on the host (`exec = "off"`). A failed setup is `verify` = `error`
+("the check could not run: [verify] setup ..."), exit 10.
+
+**Fixture**: `conformance/verify_contract.json`;
+`packages/gnomon-core/src/verify_setup.test.ts`.

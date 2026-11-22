@@ -60,6 +60,7 @@ import { readsRank } from "./sandbox_pin.js";
 import { parseSurfaceTree, readSurfaceBlobs, SurfaceTreeError, writeSurfaceTree, type SurfaceEntry } from "./surface_tree.js";
 import { AuditTrail, redact, resolveAudit, verifyTrail } from "./audit.js";
 import { harnessBuild } from "./build.js";
+import { runVerifySetup, verifyContext } from "./verify_run.js";
 import { mustFailFirst, readVerifyExit, isTestPath, unwritablePreImage, type PreImage } from "./must_fail_first.js";
 import {
   bashPolicy,
@@ -752,7 +753,32 @@ async function judge(
       verdict.checks.push({ id: "must_fail_first", status: "skipped", reason: "no [verify] declared" });
       return;
     }
-    const run = (command: string) => executeTool("bash", { command }, ctx, new Set(["bash"]));
+    const vctx = verifyContext(ctx, verify);
+    // `[verify] setup` (#233): a temporary worktree has no installed
+    // dependencies, which is most of what made a check fail there. Run in a
+    // fresh one only: the worktree being judged in place already has its own.
+    // The network opens for it only where [verify] runs on the host; under a
+    // container or sandbox floor it stays as the floor left it.
+    if (verify.setup && !inPlace) {
+      const effective = exec.mode === "off" ? verify : { ...verify, setup_network: "none" as const };
+      const setup = await runVerifySetup(
+        effective,
+        vctx,
+        (command, c) => executeTool("bash", { command }, c, new Set(["bash"])),
+        { force: true }
+      );
+      if (setup && !setup.ok) {
+        verdict.checks.push({
+          id: "verify",
+          status: "error",
+          reason: `the check could not run: [verify] setup ${setup.reason ?? "did not complete"}`,
+          findings: [{ command: verify.setup, exit: setup.exit, output: setup.output ?? "" }],
+        });
+        verdict.checks.push({ id: "must_fail_first", status: "skipped", reason: "[verify] setup did not complete" });
+        return;
+      }
+    }
+    const run = (command: string) => executeTool("bash", { command }, vctx, new Set(["bash"]));
     const out = await run(verify.command);
     const v = readVerifyExit(out);
     const tail = out.content.split("\n").slice(-20).join("\n");
@@ -810,7 +836,7 @@ async function judge(
     }
     const sources = [...preImages.keys()].filter((p) => !isTestPath(verify.test_paths, posix(relative(projRoot, p))));
     const reRun = () =>
-      mustFailFirst(projRoot, verify, preImages, (command) => executeTool("bash", { command }, ctx, new Set(["bash"])));
+      mustFailFirst(projRoot, verify, preImages, (command) => executeTool("bash", { command }, vctx, new Set(["bash"])));
     const mff = inPlace ? await withJournal(journal, toplevel, sources, reRun) : await reRun();
     if (!mff.ran) {
       verdict.checks.push({ id: "must_fail_first", status: "skipped", reason: mff.reason ?? "did not run" });

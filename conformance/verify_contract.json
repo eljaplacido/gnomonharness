@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "_comment": [
+    "The opt-in keys of [verify] and what they resolve to (docs/CONTRACTS.md section 52).",
+    "Each case is a policy.toml [verify] block (after `command = \"x\"`) and `resolves`: the fields the",
+    "resolved block must carry. `absent` lists fields it must not carry, because a key nobody declared",
+    "adds nothing to what runs. Asserted by packages/gnomon-core/src/verify_setup.test.ts."
+  ],
+  "setup_network": ["none", "registry"],
+  "setup_audit": { "kind": "verify", "phase": "setup", "network": ["none", "registry"] },
+  "cases": [
+    { "name": "nothing declared", "verify": {}, "resolves": {}, "absent": ["timeout_seconds", "setup", "setup_network", "setup_timeout_seconds"] },
+    { "name": "a timeout of the check's own", "verify": { "timeout_seconds": 900 }, "resolves": { "timeout_seconds": 900 }, "absent": ["setup"] },
+    { "name": "a setup, network shut by default", "verify": { "setup": "uv sync --frozen" }, "resolves": { "setup": "uv sync --frozen", "setup_network": "none" }, "absent": ["timeout_seconds"] },
+    { "name": "a setup with the registry open", "verify": { "setup": "pnpm install --frozen-lockfile", "setup_network": "registry", "setup_timeout_seconds": 1200 }, "resolves": { "setup_network": "registry", "setup_timeout_seconds": 1200 }, "absent": [] },
+    { "name": "an unreadable timeout is ignored", "verify": { "timeout_seconds": -5 }, "resolves": {}, "absent": ["timeout_seconds"] },
+    { "name": "an unknown setup_network is read as none", "verify": { "setup": "make deps", "setup_network": "anywhere" }, "resolves": { "setup_network": "none" }, "absent": [] }
+  ]
+}

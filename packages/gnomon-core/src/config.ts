@@ -21,6 +21,7 @@ import { loadSkills } from "./skills.js";
 import { harnessBuild } from "./build.js";
 import { AUTO_WINDOW, rememberedWindow, type ContextSource } from "./context_window.js";
 import { COMPLETION_GATE_MODES, auditCompletionGate } from "./completion_gate.js";
+import { auditVerifyKeys } from "./verify_run.js";
 import { auditSoftShell } from "./soft_shell.js";
 import { auditSandboxProfile } from "./sandbox_profile.js";
 import { auditDeliverableFirst } from "./deliverable_first.js";
@@ -465,6 +466,20 @@ export interface Policy {
      * check that can never pass cannot spend the budget in a circle.
      */
     max_rounds?: number;
+    /**
+     * Seconds the declared check may run, apart from the bash tool timeout
+     * (verify_run.ts). A timeout reads as `unrunnable`. Absent: the tool's.
+     */
+    timeout_seconds?: number;
+    /**
+     * A command run once per fresh worktree before the first check, e.g.
+     * `uv sync --frozen`. From the hashed surface, never the model's.
+     */
+    setup?: string;
+    /** "none" (default) or "registry": the network is open for `setup` alone. */
+    setup_network?: string;
+    /** Seconds `setup` may run. Absent: timeout_seconds, else the tool's. */
+    setup_timeout_seconds?: number;
     /** The completion gate (completion_gate.ts): "off", "checklist", "review" or "review_only". */
     completion_gate?: string;
     completion_rounds?: number;
@@ -2818,6 +2833,8 @@ const ENUM_KEYS: EnumSpec[] = [
     refuses: "bash refuses every command until it is fixed (it does not fall back to running unsandboxed)",
   },
   { block: "verify", key: "after", values: ["write", "change", "always"], falls_back_to: "write" },
+  // resolveVerify: anything but "registry" is "none" (the network stays shut for setup).
+  { block: "verify", key: "setup_network", values: ["none", "registry"], falls_back_to: "none" },
   // resolveCompletionGate (completion_gate.ts): anything else is "off", so a
   // misspelt "reveiw" would silently turn the gate off.
   { block: "verify", key: "completion_gate", values: COMPLETION_GATE_MODES, falls_back_to: "off" },
@@ -3003,6 +3020,10 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "max_rounds",
       "test_must_fail_first",
       "test_paths",
+      "timeout_seconds",
+      "setup",
+      "setup_network",
+      "setup_timeout_seconds",
       "completion_gate",
       "completion_rounds",
       "completion_min_remaining",
@@ -3614,6 +3635,7 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
 // The completion gate: a review naming no role cannot run (fatal); a
 // reviewer role declaring tools the review withholds reads as more than it is.
 problems.push(...auditCompletionGate(config));
+problems.push(...auditVerifyKeys(config));
 problems.push(...auditFinishGate(config));
 // The sweep knobs (sweep_knobs.ts): each opt-in, none fatal.
 problems.push(...auditSweepKnobs(config, (ep) => endpointKind(ep)));
@@ -6324,6 +6346,19 @@ export interface ResolvedVerify {
   test_must_fail_first: boolean;
   /** Which paths count as tests. Globs, matched against the repo-relative path. */
   test_paths: string[];
+  /** `[verify] timeout_seconds`, when declared and valid (verify_run.ts). */
+  timeout_seconds?: number;
+  /** `[verify] setup`: once per fresh worktree, before the first check. */
+  setup?: string;
+  /** Whether the network is open for `setup`: "registry", else "none". */
+  setup_network?: "none" | "registry";
+  /** `[verify] setup_timeout_seconds`, when declared and valid. */
+  setup_timeout_seconds?: number;
+}
+
+/** A positive, finite number of seconds, or undefined. */
+function positiveSeconds(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined;
 }
 
 /**
@@ -6350,6 +6385,15 @@ export function resolveVerify(config: GnomonConfig): ResolvedVerify | null {
       Array.isArray(v?.test_paths) && v.test_paths.length > 0
         ? (v.test_paths as string[])
         : ["**/test_*.py", "**/*_test.py", "**/*.test.ts", "**/*.test.js", "**/tests/**"],
+    // Opt-in keys are present only when declared, so a surface without them
+    // resolves to exactly the object it always did.
+    ...(positiveSeconds(v?.timeout_seconds) !== undefined ? { timeout_seconds: positiveSeconds(v?.timeout_seconds) } : {}),
+    ...(typeof v?.setup === "string" && v.setup.trim()
+      ? { setup: v.setup.trim(), setup_network: v.setup_network === "registry" ? ("registry" as const) : ("none" as const) }
+      : {}),
+    ...(positiveSeconds(v?.setup_timeout_seconds) !== undefined
+      ? { setup_timeout_seconds: positiveSeconds(v?.setup_timeout_seconds) }
+      : {}),
   };
 }
 

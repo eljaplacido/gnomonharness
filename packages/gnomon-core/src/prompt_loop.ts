@@ -12,6 +12,7 @@ import * as readline from "node:readline";
 import { safeGit } from "./git_safe.js";
 import { checkCitations } from "./citations.js";
 import { mustFailFirst, readVerifyExit } from "./must_fail_first.js";
+import { runVerifySetup, verifyContext } from "./verify_run.js";
 import { resolve, dirname, join, basename, sep, relative } from "node:path";
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, realpathSync, renameSync } from "node:fs";
 import { readRegular } from "./root_fs.js";
@@ -7783,12 +7784,47 @@ async function agenticTurn(
           // it stays ungated, because a declared check is not the model reaching
           // for the shell.
           const verifyGate: ApprovalGate = gate === "always" ? "always" : "never";
-          const check = await executeTool(
-            "bash",
-            { command: verify.command },
-            { ...ctx, gate: verifyGate, allow: "strict" as SurfaceConsent },
-            new Set(["bash"])
+          const verifyCtx: ToolContext = { ...verifyContext(ctx, verify), gate: verifyGate, allow: "strict" as SurfaceConsent };
+          // `[verify] setup` (#233): once per fresh worktree, before the first
+          // check, from the surface. A setup that did not complete means the
+          // check never had what it needs: `unrunnable`, not the work's fault.
+          let setupOut: ToolOutcome | undefined;
+          const setup = await runVerifySetup(
+            verify,
+            verifyCtx,
+            async (command, sctx) => (setupOut = await executeTool("bash", { command }, sctx, new Set(["bash"]))),
+            { audit: deps.audit, role }
           );
+          if (setupOut && setupOut.code === TOOL_DENIED_CODE && /^Refused: the user declined/.test(setupOut.content)) {
+            say(paint(deps.ui, "gray", `  ⚙ verify — setup declined; not run`));
+            toolLog.push("verify — setup declined by the operator");
+            verifyOutcome = "declined";
+            deps.audit?.write("verify", { role, command: verify.command, declined: true });
+            return null;
+          }
+          if (setup && !setup.ok) {
+            const why = `setup ${setup.reason ?? "did not complete"}`;
+            say(
+              paint(
+                deps.ui,
+                "yellow",
+                `  ⚙ verify — the check could not run (${why}). Not counted against the work; fix [verify] setup.`
+              )
+            );
+            toolLog.push(`verify — could not run (${why})`);
+            verifyOutcome = "unrunnable";
+            deps.audit?.write("verify", {
+              command: verify.command,
+              ok: false,
+              unrunnable: true,
+              exit: null,
+              reason: why,
+              round: verifyRounds,
+            });
+            verifyRounds = verify.max_rounds;
+            return null;
+          }
+          const check = await executeTool("bash", { command: verify.command }, verifyCtx, new Set(["bash"]));
           // Declined by the person asked (approval = "always"). A rule that
           // refused the command (bash_deny, sudo, network) returns the same code
           // but no person saw it, so it is read below as "could not run", not
@@ -7898,7 +7934,7 @@ async function agenticTurn(
               executeTool(
                 "bash",
                 { command },
-                { ...ctx, gate: "never" as ApprovalGate, allow: "strict" as SurfaceConsent },
+                { ...verifyContext(ctx, verify), gate: "never" as ApprovalGate, allow: "strict" as SurfaceConsent },
                 new Set(["bash"])
               )
             );

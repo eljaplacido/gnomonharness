@@ -26,6 +26,19 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`[verify] timeout_seconds`, `setup`, `setup_network`, `setup_timeout_seconds`**
+  (#233). The declared check no longer has to fit the bash tool's 120 s, and a
+  fresh worktree can install its dependencies first. `timeout_seconds` is the
+  check's own budget (a timeout reads as `unrunnable`); `setup` runs once per
+  worktree from the hashed surface, with the network shut unless
+  `setup_network = "registry"` opens it for that command alone, and is a
+  `verify` audit record with `phase: "setup"`. `gnomon check` runs it in the
+  temporary worktree it makes for a head that is not checked out. All opt-in:
+  with none declared the check runs as before. CONTRACTS §52,
+  `conformance/verify_contract.json`.
+
 ## [0.6.5] — 2026-11-21
 
 One fix, found by rerunning the 34-project capability matrix on v0.6.4: the
