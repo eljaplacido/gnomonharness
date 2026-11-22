@@ -89,6 +89,16 @@ export function projectRootAbove(start: string): string | null {
  * A project nobody trusted and that is not here is not on this list, and the
  * docs say so rather than add a registry.
  */
+/** A project for `root`, appended to the live list when it is not there yet (init names a directory). */
+export function ensureProject(projects: DashboardProject[], root: string): DashboardProject {
+  const r = real(root);
+  const found = projects.find((p) => p.root === r);
+  if (found) return found;
+  const p: DashboardProject = { id: idOf(r), root: r, name: basename(r) || r, source: "here", exists: existsSync(r), hasSurface: existsSync(join(r, ".gnomon")) };
+  projects.push(p);
+  return p;
+}
+
 export function knownProjects(opts: { cwd: string; dir?: string; trustPath?: string }): DashboardProject[] {
   const out: DashboardProject[] = [];
   const add = (root: string, source: DashboardProject["source"]): void => {

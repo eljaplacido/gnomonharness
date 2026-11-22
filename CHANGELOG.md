@@ -26,6 +26,22 @@
 
 ## [Unreleased]
 
+### Added — dashboard v2, onboarding and shell (depends on `feat/dashboard-v2-base`)
+
+- **One-click local quick start** on the Setup screen: detected hardware, one recommended catalog model with a fit pill
+  (fits / tight / over, the reason on hover and in the page text; tokens/s only when measured here), an engine, model,
+  finish rail that runs `setup.pull` and `setup.apply` through the confirm dialog, and a "Let me choose" escape to the
+  full wizard. Any failure offers Retry, Fall back (next model that fits on an engine that answers) and Go back, with
+  the raw output folded under Details. A compact cloud quick-add (`key.set`, then `endpoint.test`). With no governed
+  project the dashboard now opens on Setup.
+- **`init` and `guard.install` are enabled** in the dashboard's action table (they were `planned`): `init` for a chosen
+  directory (the one path the page sends; an existing absolute directory, never `--force`, 409 where a `.gnomon/`
+  exists), `guard.install <claude-code|opencode|cursor>` for the harnesses detected in the project
+  (`--write --dir <dir>`). Each states what it will write before the nonce. `GET /api/setup` lists the detected
+  harnesses. conformance/dashboard.json and CONTRACTS §17 move with it.
+- **Shell**: a Ctrl/Cmd+K command palette (screens, projects, actions, recent sessions; a write opens the confirm), a
+  `?` shortcuts overlay, opt-in toasts for finished jobs that never take focus, a light theme (CSS variables,
+  `prefers-color-scheme`, a toggle kept in localStorage only), and every Setup state deep-linkable by hash.
 ### Fixed — two trace rows wrapped at 80 columns
 
 - The once-per-session "0 cached prompt tokens" notice now wraps to the terminal width with a hanging indent under

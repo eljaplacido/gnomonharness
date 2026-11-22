@@ -78,7 +78,7 @@ const ICONS = {
   cross: ["M6 6l12 12M18 6L6 18"],
   arrow: ["M5 12h14M13 6l6 6-6 6"],
 };
-const mark = (ok) => s("svg", { "aria-hidden": "true", width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", stroke: ok ? "#A3CF8F" : "#F3C6B6", "stroke-width": "2.6", "stroke-linecap": "round", "stroke-linejoin": "round" }, s("path", { d: ok ? ICONS.check[0] : ICONS.cross[0] }));
+const mark = (ok) => s("svg", { "aria-hidden": "true", width: 16, height: 16, viewBox: "0 0 24 24", fill: "none", style: { stroke: ok ? "var(--allowed)" : "var(--refused)" }, "stroke-width": "2.6", "stroke-linecap": "round", "stroke-linejoin": "round" }, s("path", { d: ok ? ICONS.check[0] : ICONS.cross[0] }));
 
 // ── formatting ──────────────────────────────────────────────────────────────
 const fmtN = (n) => (n === null || n === undefined ? "–" : Number(n).toLocaleString("en-US"));
@@ -158,6 +158,8 @@ async function signIn() {
   }
   const here = S.meta.projects.find((p) => p.source === "here" && p.hasSurface) || S.meta.projects.find((p) => p.hasSurface) || S.meta.projects[0];
   S.pid = here ? here.id : null;
+  // First run: nothing governed yet, so the first screen is the quick start, not an empty Projects list.
+  if (!S.meta.projects.some((p) => p.hasSurface) && /^(#\/projects\/?)?$/.test(location.hash)) history.replaceState(null, "", `/#/setup/${S.pid || "-"}`);
   window.addEventListener("hashchange", route);
   route();
 }
@@ -201,7 +203,8 @@ export function onAfterRender(fn) {
   AFTER_RENDER.push(fn);
 }
 function go(screen, pid = S.pid, trail = null) {
-  location.hash = `#/${screen}${pid ? "/" + pid : ""}${trail ? "/" + encodeURIComponent(trail) : ""}`;
+  // "-" holds the project's place when a sub-state follows and no project is chosen.
+  location.hash = `#/${screen}${pid ? "/" + pid : trail ? "/-" : ""}${trail ? "/" + encodeURIComponent(trail) : ""}`;
 }
 async function route() {
   const parts = location.hash.replace(/^#\/?/, "").split("/");
@@ -211,11 +214,24 @@ async function route() {
   if (screen !== S.screen || trail !== S.trail) S.sel = null;
   S.screen = screen;
   S.trail = trail;
+  if (screen === "setup") syncSetupFromHash();
   await load();
 }
 
+/** Setup's sub-state (quick start, a wizard step, the init form) is in the hash, not in the data it fetches. */
+const dataKey = () => `${S.screen}:${S.pid}:${S.screen === "setup" ? "" : S.trail || ""}`;
+function syncSetupFromHash() {
+  const u = setupState();
+  const m = /^step-([1-7])$/.exec(S.trail || "");
+  if (m) {
+    u.full = true;
+    u.step = Number(m[1]);
+  } else if (S.trail === null || S.trail === "quick" || S.trail === "init") {
+    u.full = false;
+  }
+}
 async function load(force = false) {
-  const key = `${S.screen}:${S.pid}:${S.trail || ""}`;
+  const key = dataKey();
   if (force) S.data = {};
   render();
   if (S.data[key] !== undefined) return;
@@ -254,7 +270,7 @@ async function fetchScreen() {
   if (EXT.has(S.screen)) return EXT.get(S.screen).fetch(ctx());
   return null;
 }
-const current = () => S.data[`${S.screen}:${S.pid}:${S.trail || ""}`];
+const current = () => S.data[dataKey()];
 
 // ── actions: the "Runs as" bar ──────────────────────────────────────────────
 // The argv a button runs, as the server's own table has it. `<dir>` is the
@@ -269,7 +285,7 @@ function fillArgv(name, params = {}, pid = S.pid) {
     ["--cloud-key-env", c.cloud_key_env], ["--mode", c.mode], ["--hybrid-control", c.hybrid_control],
   ].filter(([, v]) => v).flat();
   return a.argv.flatMap((x) => {
-    if (x === "<dir>") return [p ? p.root : x];
+    if (x === "<dir>") return [params.dir || (p ? p.root : x)];
     if (x === "<choices>") return flags;
     if (x.startsWith("<")) return [params[x.slice(1, -1)] || x];
     return [x];
@@ -299,6 +315,10 @@ function plainCommand(label, text, note) {
 function stage(bar) {
   S.bar = bar;
   renderBar();
+  // The shell (palette.js) may turn a finished job into an opt-in toast. It never moves focus.
+  if (bar && (bar.done || bar.error)) {
+    try { window.dispatchEvent(new CustomEvent("gnomon:job", { detail: { name: bar.name || null, text: bar.text, ok: Boolean(bar.done) && !(bar.done.exit > 0), note: bar.error || (bar.done ? doneNote(bar.done) : "") } })); } catch { /* no events */ }
+  }
 }
 
 /**
@@ -382,6 +402,8 @@ const CONFIRM_TITLE = {
   "trust.grant": "Trust this surface on this machine?",
   "trust.revoke": "Revoke trust for this project?",
   "endpoint.test": "Send one token through this endpoint?",
+  init: "Create .gnomon/ here?",
+  "guard.install": "Install the guard hook?",
 };
 
 /**
@@ -390,8 +412,8 @@ const CONFIRM_TITLE = {
  * one-use nonce that runs it. Answers the server's body, or null.
  */
 async function perform(name, params = {}, o = {}) {
-  const pid = o.pid || S.pid;
-  const body = { project: pid, ...params };
+  const pid = o.noProject ? null : o.pid || S.pid;
+  const body = { ...(pid ? { project: pid } : {}), ...params };
   let text = commandFor(name, params, pid);
   stage({ text, running: true, name });
   let r;
@@ -457,6 +479,8 @@ function doneNote(d) {
     case "trust.revoke": return `${exit}.`;
     case "key.set": return d.exit === 0 ? `${exit}: stored. The page kept no copy.` : `${exit}: not stored.`;
     case "endpoint.test": return `${exit}: ${d.exit === 0 ? "it answered" : d.exit === 10 ? "not tested" : "it did not answer"}.`;
+    case "init": return d.exit === 0 ? `${exit}: .gnomon/ created. The project is on the list.` : `${exit}: nothing was created.`;
+    case "guard.install": return d.exit === 0 ? `${exit}: the hook was written. Commit it, or run \`gnomon guard install ${d.command.split(" ")[3] || "<harness>"} --write --local\` in a terminal to keep it out of git.` : `${exit}: the hook was not written.`;
     case "setup.pull": return d.job ? "Downloading: progress is on the Setup screen." : exit;
     default: return d.json && d.json.why ? `${exit}: ${d.json.why}` : exit;
   }
@@ -494,10 +518,10 @@ const sleep = (n) => new Promise((r) => setTimeout(r, n));
 // ── shell ───────────────────────────────────────────────────────────────────
 function sundial() {
   return s("svg", { "aria-hidden": "true", width: 32, height: 32, viewBox: "0 0 32 32", fill: "none", "stroke-linecap": "round", "stroke-linejoin": "round" },
-    s("circle", { cx: 16, cy: 16, r: 13, stroke: "#ECE7DC", "stroke-width": 1.5 }),
-    s("path", { d: "M16 4.5v2.5M16 25v2.5M4.5 16H7M25 16h2.5M7.9 7.9l1.8 1.8M22.3 22.3l1.8 1.8M7.9 24.1l1.8-1.8M22.3 9.7l1.8-1.8", stroke: "#B3AC9F", "stroke-width": 1.2 }),
-    s("path", { d: "M16 16L16 8.5L21 16Z", fill: "#E2733F", stroke: "#E2733F", "stroke-width": 1 }),
-    s("path", { d: "M16 16L23.5 20.5", stroke: "#ECE7DC", "stroke-width": 1.5 }));
+    s("circle", { cx: 16, cy: 16, r: 13, style: { stroke: "var(--ink)" }, "stroke-width": 1.5 }),
+    s("path", { d: "M16 4.5v2.5M16 25v2.5M4.5 16H7M25 16h2.5M7.9 7.9l1.8 1.8M22.3 22.3l1.8 1.8M7.9 24.1l1.8-1.8M22.3 9.7l1.8-1.8", style: { stroke: "var(--muted)" }, "stroke-width": 1.2 }),
+    s("path", { d: "M16 16L16 8.5L21 16Z", style: { fill: "var(--clay)", stroke: "var(--clay)" }, "stroke-width": 1 }),
+    s("path", { d: "M16 16L23.5 20.5", style: { stroke: "var(--ink)" }, "stroke-width": 1.5 }));
 }
 function render() {
   const root = document.getElementById("app");
@@ -578,7 +602,7 @@ function projectsScreen(d) {
       "How gnomon has governed and performed in each project on this machine: which surface ran, what the policy refused, how turns ended and what they used. Read from the records gnomon keeps; nothing here is sampled or estimated.",
       h("button", { type: "button", class: "btn big", text: "Refresh", onClick: () => load(true) }),
       h("a", { class: "btn big", href: `#/setup/${S.pid || ""}`, text: "Run setup" }),
-      plainCommand("Add a project", "gnomon init --dir <path>", "Planned. Today: run `gnomon init` in the project, then `gnomon dashboard` there, or trust it with `gnomon trust grant` so it is listed here.")),
+      h("a", { class: "btn big", href: `#/setup/${S.pid || "-"}/init`, title: "gnomon init --dir <directory>, asks first" }, "Add a project")),
     h("section", { "aria-labelledby": "tot-h" },
       h("div", { class: "sechead" }, h("h2", { id: "tot-h", text: "All projects on this list" }),
         h("span", { class: "muted small", text: `${plural(ps.length, "project")}: the one here, plus the roots in this machine's trust store` })),
@@ -665,6 +689,7 @@ const freshSetup = (pid) => ({
   pid, step: 1, doctor: null, plan: null, model: null, job: null, speed: null,
   cloudForm: { preset: "", url: "", key_env: "CLOUD_API_KEY", model: "" }, cloud: null, cloudPlan: null,
   mode: null, control: "observe", modePlan: null, review: null, result: null, tested: null, busy: false,
+  full: false, qs: null, cq: null, ip: null,
 });
 function setupState() {
   if (!S.setup || S.setup.pid !== S.pid) S.setup = freshSetup(S.pid);
@@ -716,7 +741,7 @@ function setupScreen(d) {
       h("p", { class: "empty", text: "Update gnomon (`gnomon update`), then start `gnomon dashboard` again." }),
     ];
   }
-  const goStep = (n) => { u.step = n; render(); enterStep(d); };
+  const goStep = (n) => { u.step = n; u.full = true; goSetup(`step-${n}`); enterStep(d); };
   const nav = (back, next, nextLabel = "Continue") => h("div", { class: "row" },
     back ? h("button", { type: "button", class: "btn", text: "Back", onClick: () => goStep(back) }) : null,
     next ? h("button", { type: "button", class: "btn primary", text: nextLabel, disabled: u.busy ? true : null, onClick: () => goStep(next) }) : null);
@@ -729,10 +754,38 @@ function setupScreen(d) {
     6: () => reviewPanel(d, nav),
     7: () => startPanel(d, nav),
   };
-  const roles = d.declared.roles || [];
+  const declared = declaredSection(d, u);
+  if (!u.full) {
+    const q = qs();
+    if (S.pid && !q.started) {
+      q.started = true;
+      const have = report(u.plan);
+      if (doctorOf(u.doctor) && have && have.recommendation) {
+        // The wizard already scanned and planned: use that, do not ask again.
+        q.rec = have.recommendation;
+        q.pick = q.rec.top;
+        q.phase = "ready";
+      } else {
+        queueMicrotask(() => { if (S.screen === "setup") qsScan(); });
+      }
+    }
+    if (S.trail === "init" && !u.focusedInit) {
+      u.focusedInit = true;
+      setTimeout(() => { const el = document.getElementById("init-dir"); if (el) { el.scrollIntoView({ block: "center" }); el.focus(); } }, 0);
+    }
+    return [
+      header("First run", "Set up gnomon", "One click finds a model this machine can run and sets it up. Each step is a gnomon command; nothing is downloaded, spent or written until you confirm it, and .gnomon/ only when you accept the diff."),
+      S.pid ? quickPanel(d) : h("section", { class: "panel hero" }, h("h2", { text: "Quick start needs a project" }), h("p", { class: "lede", text: "gnomon keeps its settings in a project's .gnomon/. Add a project below, then come back here." })),
+      cloudQuick(d),
+      projectPanel(),
+      harnessPanel(d),
+      declared,
+    ];
+  }
   return [
     header("First run", "Set up gnomon",
-      "Find a model this machine can run, optionally a cloud model to plan with, and how the work splits. Each step is `gnomon setup` or `gnomon doctor`; nothing is downloaded, spent or written until you confirm it, and .gnomon/ only when you accept the diff."),
+      "Find a model this machine can run, optionally a cloud model to plan with, and how the work splits. Each step is `gnomon setup` or `gnomon doctor`; nothing is downloaded, spent or written until you confirm it, and .gnomon/ only when you accept the diff.",
+      h("button", { type: "button", class: "btn", text: "Quick start", onClick: () => { u.full = false; goSetup(null); } })),
     h("ol", { class: "wizard", "aria-label": "Setup steps" },
       SETUP_STEPS.map(([n, label]) => h("li", null, h("button", {
         type: "button", class: "stepbtn", "aria-current": n === step ? "step" : null, disabled: u.busy ? true : null,
@@ -740,25 +793,30 @@ function setupScreen(d) {
       }, h("span", { class: "num", text: String(n) }), label)))),
     d.catalog ? h("p", { class: "muted small", text: `Model catalog ${d.catalog.as_of} (${d.catalog.label}), shipped with this build; never fetched.` }) : null,
     panels[step](),
-    h("section", { "aria-labelledby": "decl-h" },
-      h("div", { class: "sechead" }, h("h2", { id: "decl-h", text: "What this project's surface declares now" }),
-        h("span", { class: "muted small", text: d.has_surface ? "roles.toml and config.toml, as routed today" : "no .gnomon/ here yet: setup writes one" })),
-      roles.length
-        ? h("div", { class: "tablebox" }, h("table", null,
-          h("thead", null, h("tr", null, ["Role", "Model", "Endpoint", "Where"].map((x) => h("th", { scope: "col", text: x })))),
-          h("tbody", null, roles.map((r) => h("tr", null,
-            h("th", { scope: "row", text: r.role }),
-            h("td", { class: "mono", text: r.model || "–" }),
-            h("td", { class: "mono", text: r.endpoint || "–" }),
-            h("td", null, h("span", { class: "row" }, h("span", { class: `dot ${r.where}` }), `${r.where}${r.provider ? " · " + r.provider : ""}`, r.problem ? h("span", { class: "bad small", text: r.problem }) : null)))))))
-        : h("p", { class: "empty", text: d.declared.note || "No roles declared." }),
-      d.declared.model_url_override ? h("p", { class: "problem", text: "GNOMON_MODEL_URL is set in this environment: every role's requests go there instead, and the surface hash does not show it." }) : null,
-      d.endpoints.length
-        ? h("div", { class: "row" }, h("span", { class: "muted small", text: "Test an endpoint with one token:" }),
-          d.endpoints.map((n) => actionButton("endpoint.test", n, { params: { endpoint: n }, run: () => testEndpoint(n) })))
-        : null,
-      u.tested ? h("pre", { class: "well", text: `${u.tested.command}\n${u.tested.output || u.tested.stderr || ""}`.trim() }) : null),
+    declared,
   ];
+}
+
+function declaredSection(d, u) {
+  const roles = d.declared.roles || [];
+  return h("section", { "aria-labelledby": "decl-h" },
+    h("div", { class: "sechead" }, h("h2", { id: "decl-h", text: "What this project's surface declares now" }),
+      h("span", { class: "muted small", text: d.has_surface ? "roles.toml and config.toml, as routed today" : "no .gnomon/ here yet: setup writes one" })),
+    roles.length
+      ? h("div", { class: "tablebox" }, h("table", null,
+        h("thead", null, h("tr", null, ["Role", "Model", "Endpoint", "Where"].map((x) => h("th", { scope: "col", text: x })))),
+        h("tbody", null, roles.map((r) => h("tr", null,
+          h("th", { scope: "row", text: r.role }),
+          h("td", { class: "mono", text: r.model || "–" }),
+          h("td", { class: "mono", text: r.endpoint || "–" }),
+          h("td", null, h("span", { class: "row" }, h("span", { class: `dot ${r.where}` }), `${r.where}${r.provider ? " · " + r.provider : ""}`, r.problem ? h("span", { class: "bad small", text: r.problem }) : null)))))))
+      : h("p", { class: "empty", text: d.declared.note || "No roles declared." }),
+    d.declared.model_url_override ? h("p", { class: "problem", text: "GNOMON_MODEL_URL is set in this environment: every role's requests go there instead, and the surface hash does not show it." }) : null,
+    d.endpoints.length
+      ? h("div", { class: "row" }, h("span", { class: "muted small", text: "Test an endpoint with one token:" }),
+        d.endpoints.map((n) => actionButton("endpoint.test", n, { params: { endpoint: n }, run: () => testEndpoint(n) })))
+      : null,
+    u.tested ? h("pre", { class: "well", text: `${u.tested.command}\n${u.tested.output || u.tested.stderr || ""}`.trim() }) : null);
 }
 
 /** Each step reads what it needs from setup when it is opened. */
@@ -904,7 +962,7 @@ async function pollJob() {
       }
       stage({ text: u.job.command, done: { action: "setup.pull.done", exit: u.job.exit, json: res } });
     }
-    if (S.screen === "setup" && u.step === 2) {
+    if (S.screen === "setup" && (u.step === 2 || !u.full)) {
       render();
       if (u.job.state === "done" && !u.plan) enterStep(current());
     }
@@ -1233,6 +1291,370 @@ function startPanel(d, nav) {
     startCommandNote(p.root, platform) ? h("p", { class: "muted small", text: startCommandNote(p.root, platform) }) : null,
     h("p", { class: "muted small", text: "Later: `gnomon doctor` checks every role still answers; `gnomon setup` again changes the model." }),
     nav(6, null));
+}
+
+
+// ── 2a. Quick start ─────────────────────────────────────────────────────────
+// The one-click local path: what this machine is, ONE model from the catalog
+// for it, and a three-stage rail (engine, model, finish) that runs the same
+// actions the full wizard does: setup.pull (confirmed, a download) and
+// setup.apply (confirmed, the diff). "Let me choose" opens the full wizard.
+// Any failure ends in the same three ordered ways out: Retry, Fall back (the
+// next model that fits, or one on an engine that answers), Go back; the raw
+// output sits folded under Details. Nothing here is a new authority: it is the
+// wizard's own state (`u.doctor`, `u.plan`, `u.model`), driven in one go.
+const QS_STAGES = ["Engine", "Model", "Finish"];
+const FIT_TEXT = { fits: "fits", tight: "tight", over: "over", unknown: "size unknown" };
+function qs() {
+  const u = setupState();
+  if (!u.qs) u.qs = { started: false, phase: "scan", rec: null, pick: null, tried: [], stage: 0, done: [false, false, false], fail: null, finished: null, note: "", busy: false };
+  return u.qs;
+}
+const doctorOf = (r) => (r && !r.failed && r.available && r.doctor && r.doctor.schema === "gnomon.doctor/1" ? r.doctor : null);
+const rawOutput = (r) => (r ? [r.stderr, r.output, r.json ? JSON.stringify(r.json, null, 2) : "", r.error].filter(Boolean).join("\n").trim() : "");
+function qsFail(stageIx, why, raw, label) {
+  const q = qs();
+  q.phase = "failed";
+  q.busy = false;
+  q.fail = { stage: stageIx, label: label || QS_STAGES[stageIx] || "Scan", why, raw: raw || "" };
+  render();
+}
+/** Models that could replace the failed one: not tried, not over, on an engine that answers. */
+function qsFallbacks() {
+  const q = qs();
+  const u = setupState();
+  const rts = (doctorOf(u.doctor) || {}).runtimes || [];
+  const up = (id) => rts.some((r) => r.id === id && r.state === "serving");
+  return (q.rec ? q.rec.options : []).filter((o) => !q.tried.includes(o.tag) && o.tag !== q.pick && o.fit !== "over" && (o.installed || (o.runtime === "ollama" && up("ollama"))));
+}
+async function qsScan() {
+  const u = setupState();
+  const q = qs();
+  q.started = true;
+  q.phase = "scan";
+  q.fail = null;
+  q.rec = null;
+  render();
+  const doc = await perform("doctor.scan", {});
+  u.doctor = doc;
+  if (!doctorOf(doc)) return qsFail(-1, doc && doc.available === false ? "This build of the CLI has no `gnomon doctor`." : whyOf(doc) || "The scan did not answer.", rawOutput(doc), "Scan");
+  const plan = await perform("setup.plan", { choices: {} });
+  u.plan = plan;
+  const rep = report(plan);
+  if (!rep || !rep.recommendation) return qsFail(-1, whyOf(plan) || "Setup did not recommend a model.", rawOutput(plan), "Recommendation");
+  q.rec = rep.recommendation;
+  q.pick = q.rec.top;
+  q.tried = [];
+  q.done = [false, false, false];
+  q.phase = "ready";
+  if (S.screen === "setup") render();
+}
+async function qsRun() {
+  const u = setupState();
+  const q = qs();
+  const o = q.rec && q.rec.options.find((x) => x.tag === q.pick);
+  if (!o) return;
+  q.busy = true;
+  q.fail = null;
+  q.note = "";
+  q.phase = "run";
+  render();
+  // 1. Engine: the server that will hold the model must answer on 127.0.0.1.
+  q.stage = 0;
+  render();
+  if (!q.done[0]) {
+    const rt = ((doctorOf(u.doctor) || {}).runtimes || []).find((r) => r.id === o.runtime);
+    if (!rt || rt.state !== "serving") {
+      const label = rt ? rt.label : o.runtime;
+      return qsFail(0, `${label} is not answering on 127.0.0.1${rt ? ":" + rt.port : ""}${rt && rt.why ? " (" + rt.why + ")" : ""}. Start it (for Ollama: \`ollama serve\`), then Retry.`, rt ? `${rt.url}\nstate: ${rt.state}${rt.why ? "\n" + rt.why : ""}` : "");
+    }
+    q.done[0] = true;
+  }
+  // 2. Model: installed needs nothing; otherwise the confirmed download.
+  q.stage = 1;
+  render();
+  if (!q.done[1]) {
+    if (!o.installed) {
+      if (o.runtime !== "ollama") return qsFail(1, `${o.tag} is not loaded in its server, and only Ollama downloads from here. Load it in that server, then Retry.`, "");
+      const r = await perform("setup.pull", { tag: o.tag }, { confirmLabel: `Download ${o.tag}`, details: pullDetails });
+      if (!r) {
+        q.phase = "ready";
+        q.busy = false;
+        q.note = "Cancelled: nothing was downloaded.";
+        return render();
+      }
+      if (r.failed || !r.job) return qsFail(1, (r.error || whyOf(r) || "The download did not start.") + "", rawOutput(r));
+      u.job = r.job;
+      render();
+      await pollJob();
+      const res = u.job.result;
+      if (!(res && res.pull && res.pull.status === "pulled")) {
+        const why = (res && (res.why || (res.pull && res.pull.error))) || `The download ended with exit ${u.job.exit}.`;
+        return qsFail(1, why, [...(u.job.progress || []), res ? JSON.stringify(res, null, 2) : ""].filter(Boolean).join("\n"));
+      }
+    }
+    q.done[1] = true;
+  }
+  // 3. Finish: the diff, shown by the server's own confirmation, then written.
+  q.stage = 2;
+  u.model = o.tag;
+  u.mode = "local";
+  forgetFrom(3);
+  render();
+  const choices = { model: o.tag, mode: "local" };
+  const r = await perform("setup.apply", { choices }, {
+    title: "Write this change to .gnomon/?",
+    confirmLabel: "Accept and write",
+    details: (b) => (b.report && b.report.proposal && b.report.proposal.files.length
+      ? h("div", null, b.report.proposal.files.map((f) => h("div", null, h("h3", { class: "mono", text: `${f.action === "create" ? "+ create" : "~ modify"} .gnomon/${f.path}` }), diffView(f.diff))))
+      : h("p", { class: "muted small", text: "The surface already says this: only this machine's facts file is written." })),
+  });
+  if (!r) {
+    q.phase = "ready";
+    q.busy = false;
+    q.note = "Cancelled: nothing was written to .gnomon/.";
+    return render();
+  }
+  if (r.failed || r.exit !== 0) return qsFail(2, (r.json && (r.json.why || r.json.error)) || r.error || `setup exited ${r.exit}`, rawOutput(r));
+  q.done[2] = true;
+  q.finished = r;
+  q.phase = "done";
+  q.busy = false;
+  u.result = r;
+  try { S.meta = await api("/api/meta"); } catch { /* signed out */ }
+  S.data = {};
+  await load(true);
+}
+function qsRail() {
+  const q = qs();
+  const state = (i) => (q.done[i] ? "done" : q.fail && q.fail.stage === i ? "failed" : q.phase === "run" && q.stage === i ? "active" : "todo");
+  return h("ol", { class: "rail", "aria-label": "Quick start stages" },
+    QS_STAGES.map((label, i) => {
+      const st = state(i);
+      return h("li", { class: `rail-${st}`, "aria-current": st === "active" ? "step" : null },
+        h("span", { class: "num" }, st === "done" ? icon(ICONS.check, 14) : String(i + 1)),
+        h("span", null, label, h("span", { class: "sr-only", text: ` (${st === "todo" ? "not started" : st})` })));
+    }));
+}
+function fitPill(o, measured) {
+  const why = o.fit_why || "";
+  const speed = measured && measured.genTps !== undefined ? `${measured.genTps.toFixed(1)} tok/s measured here` : null;
+  return h("span", { class: `pill fit fit-${o.fit}`, ...hover(`${FIT_TEXT[o.fit] || o.fit}: ${why}${speed ? " · " + speed : ""}`) },
+    h("span", { class: "fitdot" }), FIT_TEXT[o.fit] || o.fit, speed ? h("span", { class: "muted tiny", text: ` · ${speed}` }) : null,
+    h("span", { class: "sr-only", text: `: ${why}` }));
+}
+function qsHardware(d) {
+  const u = setupState();
+  const doc = doctorOf(u.doctor);
+  if (!doc) return null;
+  const m = doc.machine || {};
+  const gpus = (m.gpus || []).map((g) => h("span", { class: "chip" }, `${g.name}${g.memory_gib !== null && g.memory_gib !== undefined ? ` · ${g.memory_gib} GiB` : ""}`, g.unified ? h("span", { class: "pill outline", text: "unified memory" }) : null));
+  const rts = (doc.runtimes || []).filter((r) => r.state === "serving").map((r) => h("span", { class: "chip" }, h("span", { class: "dot local" }), `${r.label} :${r.port}`));
+  return h("div", { class: "hw" },
+    h("div", { class: "hwrow" }, h("span", { class: "k", text: "This machine" }), h("span", { text: `${m.os || "?"} ${m.arch || ""} · ${m.cpu_count || "?"} cores · ${m.ram_gib ?? "?"} GiB RAM` })),
+    gpus.length ? h("div", { class: "hwrow" }, h("span", { class: "k", text: "GPU" }), gpus) : null,
+    h("div", { class: "hwrow" }, h("span", { class: "k", text: "Memory that bounds a model" }), h("span", { text: doc.memory ? doc.memory.label : "unknown" })),
+    h("div", { class: "hwrow" }, h("span", { class: "k", text: "Model servers answering" }), rts.length ? rts : h("span", { class: "muted", text: "none on 127.0.0.1" })));
+}
+function quickPanel(d) {
+  const u = setupState();
+  const q = qs();
+  const rec = q.rec;
+  const o = rec && rec.options.find((x) => x.tag === q.pick);
+  const sp = report(u.speed);
+  const measured = o && sp && sp.speed && !sp.speed.error && !sp.speed.skipped && sp.local && sp.local.tag === o.tag ? sp.speed : null;
+  const kids = [
+    h("p", { class: "kicker", text: "Quick start · this machine only" }),
+    h("h2", { id: "qs-h", text: "Run a local model, in one go" }),
+    h("p", { class: "lede", text: "Scans this machine, picks one model from the dated catalog that fits it, and runs engine, model, finish in order. The download and the write each ask you first; nothing leaves this machine." }),
+  ];
+  if (q.phase === "scan") {
+    kids.push(h("p", { class: "muted", role: "status", text: q.started ? `Scanning… (${commandFor("doctor.scan")}, then ${commandFor("setup.plan", { choices: {} })})` : "Ready to scan." }));
+  }
+  kids.push(qsHardware(d));
+  if (o) {
+    const entry = o.catalog;
+    kids.push(h("div", { class: "pick" },
+      h("div", { class: "pickhead" },
+        h("div", null, h("h3", { text: entry ? entry.name : o.tag }), h("span", { class: "muted small mono", text: `${o.tag} · ${o.runtime}` })),
+        fitPill(o, measured)),
+      h("p", { class: "muted small", text: [o.status, entry ? `${entry.tier} tier · ${entry.measured ? "measured by gnomon" : "not measured by gnomon"}` : "not in the catalog"].join(" · ") }),
+      rec.why && rec.why[0] ? h("p", { class: "well", text: rec.why[0] }) : null,
+      rec.catalog && rec.catalog.stale ? h("p", { class: "problem", text: rec.catalog.stale }) : null));
+  } else if (rec) {
+    kids.push(h("p", { class: "empty", text: "Nothing in the catalog fits this machine's memory. A cloud model can do the work: add one below, or choose in the full wizard." }));
+  }
+  if (q.phase !== "scan" && q.phase !== "done") kids.push(qsRail());
+  if (q.note) kids.push(h("p", { class: "muted small", role: "status", text: q.note }));
+  if (q.phase === "run") {
+    kids.push(h("p", { class: "muted", role: "status", "aria-live": "polite", text: `${QS_STAGES[q.stage]}…` }));
+    if (u.job && u.job.state === "running") kids.push(jobPanel(u.job));
+  }
+  if (q.phase === "failed" && q.fail) {
+    const f = q.fail;
+    const next = qsFallbacks()[0];
+    kids.push(h("div", { class: "fail", role: "alert" },
+      h("h3", { text: `${f.label} did not finish` }),
+      h("p", { text: f.why }),
+      h("p", { class: "muted small", text: "In order: try again, fall back, or go back. Nothing is changed by any of them until you confirm it." }),
+      h("div", { class: "row" },
+        h("button", { type: "button", class: "btn primary", text: "Retry", onClick: () => (f.stage < 0 ? qsScan() : qsRun()) }),
+        f.stage >= 0
+          ? h("button", {
+            type: "button", class: "btn", disabled: next ? null : true,
+            text: next ? `Fall back to ${next.tag}` : "Fall back",
+            title: next ? `${next.tag} · ${next.fit}: ${next.fit_why}` : "No other model fits this machine on an engine that answers.",
+            onClick: () => { q.tried.push(q.pick); q.pick = next.tag; q.done = [false, false, false]; q.fail = null; q.phase = "ready"; render(); },
+          })
+          : null,
+        h("button", { type: "button", class: "btn", text: "Go back", onClick: () => { q.fail = null; q.phase = q.rec ? "ready" : "scan"; q.done = [false, false, false]; if (!q.rec) q.started = false; render(); } })),
+      f.raw ? h("details", { class: "details" }, h("summary", { text: "Details" }), h("pre", { class: "well", text: f.raw.slice(-4000) })) : null));
+  }
+  if (q.phase === "done" && q.finished) {
+    const rep = q.finished.json;
+    kids.push(h("div", { class: "done", role: "status" },
+      h("p", { class: "status" }, mark(true), `Ready: ${q.pick} is set up for this project${rep && rep.surface_hash ? `. Surface ${rep.surface_hash.before ? short(rep.surface_hash.before) + " → " : ""}${short(rep.surface_hash.after)}` : ""}.`),
+      h("p", { class: "muted small", text: "Commit .gnomon/ to carry it to another machine. The next launch asks you to trust the surface if it grants more than gnomon's defaults." }),
+      h("div", { class: "row" },
+        h("a", { class: "btn primary", href: `#/setup/${S.pid}/step-7` }, "Show the start command", icon(ICONS.arrow, 16)),
+        h("a", { class: "btn", href: `#/governance/${S.pid}` }, "Trust and governance"))));
+  }
+  const actions = h("div", { class: "row" });
+  if (q.phase === "ready" && o) {
+    actions.append(h("button", {
+      type: "button", class: "btn primary big", disabled: o.fit === "over" || q.busy ? true : null,
+      text: o.installed ? `Set up ${o.tag}` : `Set up ${o.tag}${o.download_gb !== undefined ? ` (~${o.download_gb} GB download)` : ""}`,
+      title: `asks you first · ${commandFor(o.installed ? "setup.apply" : "setup.pull", o.installed ? { choices: { model: o.tag, mode: "local" }, digest: "<digest>" } : { tag: o.tag })}`,
+      onClick: () => qsRun(),
+    }));
+  }
+  if (q.phase !== "done") {
+    actions.append(h("button", { type: "button", class: "btn", text: "Let me choose", title: "The full seven-step wizard", disabled: q.busy ? true : null, onClick: () => { u.full = true; u.step = 1; goSetup("step-1"); } }));
+    if (q.phase === "ready" || q.phase === "failed") actions.append(h("button", { type: "button", class: "btn", text: "Scan again", disabled: q.busy ? true : null, onClick: () => qsScan() }));
+  }
+  if (actions.children.length) kids.push(actions);
+  return h("section", { class: "panel hero", "aria-labelledby": "qs-h" }, kids);
+}
+/** Setup's sub-state lives in the hash: #/setup/<project>/quick | step-N | init. */
+function goSetup(sub) {
+  const target = `#/setup/${S.pid || "-"}${sub ? "/" + sub : ""}`;
+  if (location.hash === target) render();
+  else location.hash = target;
+}
+
+// Cloud quick-add: a provider and its key, then one token through it. ───────
+function cloudQuick(d) {
+  const u = setupState();
+  if (!u.cq) u.cq = { preset: "", plan: null, busy: false, added: null, tested: null };
+  const c = u.cq;
+  const preset = d.cloud_presets.find((p) => p.key === c.preset);
+  const rep = report(c.plan);
+  const cloud = rep && rep.cloud;
+  const choices = () => {
+    const x = { cloud_endpoint: preset.key, mode: u.model ? "hybrid" : "cloud" };
+    if (preset.model) x.cloud_model = preset.model;
+    if (u.model) { x.model = u.model; x.hybrid_control = "observe"; }
+    return x;
+  };
+  const replan = async () => {
+    c.busy = true;
+    render();
+    try { c.plan = await perform("setup.plan", { choices: { cloud_endpoint: preset.key, ...(preset.model ? { cloud_model: preset.model } : {}) } }); } finally { c.busy = false; render(); }
+  };
+  const add = async () => {
+    c.busy = true;
+    render();
+    try {
+      const r = await perform("setup.apply", { choices: choices() }, {
+        title: "Write this change to .gnomon/?", confirmLabel: "Accept and write",
+        details: (b) => (b.report && b.report.proposal && b.report.proposal.files.length
+          ? h("div", null, b.report.proposal.files.map((f) => h("div", null, h("h3", { class: "mono", text: `${f.action === "create" ? "+ create" : "~ modify"} .gnomon/${f.path}` }), diffView(f.diff))))
+          : null),
+      });
+      if (r && !r.failed && r.exit === 0) {
+        c.added = r;
+        try { S.meta = await api("/api/meta"); } catch { /* signed out */ }
+        const keep = u.cq;
+        S.data = {};
+        await load(true);
+        setupState().cq = keep;
+        const t = await perform("endpoint.test", { endpoint: preset.key }, { confirmLabel: "Send one token" });
+        if (t && !t.failed) c.tested = t;
+      } else if (r) {
+        c.added = { failed: true, error: (r.json && r.json.why) || r.error || `exit ${r.exit}` };
+      }
+    } finally { c.busy = false; render(); }
+  };
+  return h("section", { class: "panel", "aria-labelledby": "cq-h" },
+    h("h2", { id: "cq-h", text: "Add a cloud model (optional)" }),
+    h("p", { class: "lede", text: "Pick a provider, store its key (it goes to gnomon's key store on stdin and this page keeps no copy), then add it and send one token through it." }),
+    h("div", { class: "row end" },
+      h("label", { class: "picker" }, "Provider",
+        h("select", { onChange: (e) => { c.preset = e.target.value; c.plan = null; c.added = null; c.tested = null; const p = d.cloud_presets.find((x) => x.key === c.preset); if (p) { void replan(); } else render(); } },
+          h("option", { value: "", text: "Choose a provider", selected: !c.preset ? true : null }),
+          d.cloud_presets.map((p) => h("option", { value: p.key, selected: p.key === c.preset ? true : null, text: `${p.note}${p.model ? " · " + p.model : ""}` }))))),
+    c.preset && c.plan && !cloud ? h("p", { class: "problem", text: whyOf(c.plan) }) : null,
+    cloud ? facts([["Endpoint", `${cloud.endpoint} · ${cloud.url}`], ["Model", cloud.model], ["Key", cloud.key_env ? `$${cloud.key_env} · ${cloud.key_held ? "held on this machine" : "not stored yet"}` : "none needed"]]) : null,
+    cloud ? h("div", { class: "row" },
+      cloud.key_env && !cloud.key_held
+        ? actionButton("key.set", `Store the key for $${cloud.key_env}…`, { primary: true, params: { variable: cloud.key_env }, run: async () => {
+          const r = await perform("key.set", { variable: cloud.key_env }, { secretLabel: `The key for $${cloud.key_env}`, confirmLabel: "Store key" });
+          if (r && !r.failed && r.exit === 0) await replan();
+        } })
+        : h("button", { type: "button", class: "btn primary", disabled: c.busy || c.added && !c.added.failed ? true : null, text: "Add it to this project and test…", title: `asks you first · ${commandFor("setup.apply", { choices: choices(), digest: "<digest>" })}`, onClick: add })) : null,
+    c.added && c.added.failed ? h("p", { class: "problem", role: "alert", text: c.added.error }) : null,
+    c.added && !c.added.failed ? h("p", { class: "status", role: "status" }, mark(true), c.tested ? `Written, and ${preset ? preset.key : "the endpoint"} answered one token.` : "Written. The test did not run or did not answer: use the button under “What this project's surface declares now”.") : null);
+}
+
+// Add a project: gnomon init in a directory. ────────────────────────────────
+function projectPanel() {
+  const u = setupState();
+  if (!u.ip) u.ip = { dir: "", note: "", busy: false };
+  const ip = u.ip;
+  const input = h("input", { class: "field mono", id: "init-dir", value: ip.dir, spellcheck: "false", autocomplete: "off", "aria-label": "Directory to initialise (an absolute path)", placeholder: "/home/me/my-project", onInput: (e) => { ip.dir = e.target.value; } });
+  const run = async () => {
+    const dir = ip.dir.trim();
+    if (!dir) { ip.note = "Type an absolute directory first."; render(); return; }
+    ip.busy = true;
+    ip.note = "";
+    render();
+    try {
+      const r = await perform("init", { dir }, { noProject: true, title: "Create .gnomon/ here?", confirmLabel: "Create .gnomon/" });
+      if (r && !r.failed && r.exit === 0) {
+        ip.note = `Initialised ${dir}.`;
+        try { S.meta = await api("/api/meta"); } catch { /* signed out */ }
+        if (r.project) S.pid = r.project;
+        S.data = {};
+        S.setup = null;
+        goSetup(null);
+        await load(true);
+      } else if (r) {
+        ip.note = (r.failed ? r.error : r.json && r.json.why) || `init exited ${r.exit}: ${(r.stderr || r.output || "").trim().split("\n").pop()}`;
+      }
+    } finally { ip.busy = false; if (S.screen === "setup") render(); }
+  };
+  return h("section", { class: "panel", "aria-labelledby": "ip-h" },
+    h("h2", { id: "ip-h", text: "Add a project" }),
+    h("p", { class: "lede", text: "Runs `gnomon init` in a directory: a content-hashed .gnomon/ with the models this machine can run. It refuses where one exists, and asks first." }),
+    h("div", { class: "row end" },
+      h("label", { class: "picker" }, "Directory (an absolute path)", input),
+      h("button", { type: "button", class: "btn primary", text: "Initialise…", disabled: ip.busy ? true : null, title: "asks you first · gnomon init --dir <directory>", onClick: run })),
+    ip.note ? h("p", { class: "muted small", role: "status", text: ip.note }) : null);
+}
+
+// Govern other agents: gnomon guard install for the harnesses found here. ───
+function harnessPanel(d) {
+  const rows = d.harnesses || [];
+  const p = P();
+  if (!p || !p.hasSurface) return null;
+  const HNAME = { "claude-code": "Claude Code", opencode: "opencode", cursor: "Cursor" };
+  return h("section", { class: "panel", "aria-labelledby": "gh-h" },
+    h("h2", { id: "gh-h", text: "Govern other coding agents here" }),
+    h("p", { class: "lede", text: "gnomon guard puts this project's rules in front of another harness's tool calls. It writes that harness's own hook file, names the file before it does, and asks first." }),
+    h("ul", { class: "harnesses" }, rows.map((r) => h("li", null,
+      h("span", { class: "hname" }, h("strong", { text: HNAME[r.harness] || r.harness }), h("span", { class: "muted small", text: r.detected ? " · found in this project" : " · not found here" }), r.present ? h("span", { class: "pill outline", text: "hook file exists" }) : null),
+      h("span", { class: "mono small muted", text: r.writes }),
+      actionButton("guard.install", r.present ? "Update the hook…" : "Install the hook…", { params: { harness: r.harness }, primary: Boolean(r.detected && !r.present) })))));
 }
 
 // ── 3. Session ──────────────────────────────────────────────────────────────
@@ -1830,4 +2252,6 @@ signIn();
 function ctx() {
   return { S, P: P(), pid: S.pid, api, projectApi, perform, go, load, h, icon, header, tile, confirmDialog };
 }
-export { S, h, api, projectApi, perform, go, load, header, tile, icon, confirmDialog, ICONS };
+/** The rail's screens, in order, for the palette and the shortcuts. */
+const screenList = () => SCREENS.map(([key, label]) => ({ key, label }));
+export { S, h, api, projectApi, perform, go, load, header, tile, icon, confirmDialog, ICONS, commandFor, actionOf, screenList, render };

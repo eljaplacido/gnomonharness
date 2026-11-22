@@ -134,7 +134,7 @@ const FAKE_DIGEST = "d".repeat(64);
  * runs the way their --json contracts say, and leaves a `marker` for anything
  * else, which the tests assert never appears.
  */
-function writeFakeCli(dir: string, help = ["setup", "doctor", "key", "endpoint", "trust", "check", "dashboard", "launch"]) {
+function writeFakeCli(dir: string, help = ["setup", "doctor", "key", "endpoint", "trust", "check", "dashboard", "launch", "init", "guard"]) {
   const entry = join(dir, "fake-gnomon.mjs");
   const log = join(dir, "spawns.jsonl");
   const marker = join(dir, "spawned-something-else");
@@ -176,6 +176,8 @@ if (a[0] === "key" && a[1] === "set") { console.log("Stored " + a[2] + " in /fak
 if (a[0] === "trust") { console.log(a[1] === "grant" ? "Trusted." : "Revoked 1 trusted surface."); process.exit(0); }
 if (a[0] === "endpoint" && a[1] === "test") { console.log(a[2] + ": ok"); process.exit(0); }
 if (a[0] === "check") { out({ schema: "gnomon.check/1", base: "b".repeat(40), head: "worktree", role: "implementor", surface_hash: "", checks: [{ id: "surface", status: "pass", inspected: 1 }], exit: 0 }); process.exit(0); }
+if (a[0] === "init") { console.log("Initialised " + flag("--dir") + "/.gnomon"); process.exit(0); }
+if (a[0] === "guard" && a[1] === "install") { console.log("Wrote the " + a[2] + " hook."); process.exit(0); }
 writeFileSync(${JSON.stringify(marker)}, a.join(" "));
 `
   );
@@ -299,11 +301,13 @@ describe("the server's security", () => {
     }
   });
 
-  it("an unknown action is 404 and spawns nothing; a planned one is 409 and spawns nothing", async () => {
+  it("an unknown action is 404 and spawns nothing; a planned one would be 409 and spawn nothing", async () => {
     expect((await act("rm.rf", { project: projects[0]!.id })).status).toBe(404);
     expect((await act("shell", { project: projects[0]!.id, argv: ["rm", "-rf", "/"] })).status).toBe(404);
     const planned = DASHBOARD_ACTIONS.filter((x) => x.state === "planned");
-    expect(planned.map((a) => a.name)).toEqual(["init", "guard.install"]);
+    // init and guard.install were planned until dashboard v2; nothing is now.
+    expect(planned.map((a) => a.name)).toEqual([]);
+    expect(DASHBOARD_ACTIONS.filter((a) => a.state === "enabled").map((a) => a.name)).toEqual(expect.arrayContaining(["init", "guard.install"]));
     for (const a of planned) {
       expect((await act(a.name, { project: projects[0]!.id })).status, a.name).toBe(409);
     }
@@ -817,6 +821,79 @@ describe("actions: each one is a gnomon command, and one that changes anything a
       await real.close();
     }
   }, 120_000);
+
+  it("init: asks first, says what it will write, refuses where a .gnomon/ exists, and runs `gnomon init --dir`", async () => {
+    const before = count();
+    // A project that already has a surface: no nonce, nothing runs (409), as the command refuses without --force.
+    const has = await post("init", { project: P });
+    expect(has.status).toBe(409);
+    expect(has.json.error).toMatch(/already has a \.gnomon\//);
+    const ask = await post("init", { project: F });
+    expect(ask.status, ask.raw).toBe(428);
+    expect(ask.json.confirm.command).toBe(`gnomon init --dir ${fresh}`);
+    expect(ask.json.confirm.effect.join(" ")).toMatch(/Creates .*\.gnomon\/.*Nothing existing is overwritten/);
+    expect(ask.json.confirm.effect.join(" ")).toMatch(/not a git repository/);
+    expect(count()).toBe(before);
+    const ran = await post("init", { project: F, confirm: ask.json.confirm.nonce });
+    expect(ran.json).toMatchObject({ exit: 0, command: `gnomon init --dir ${fresh}` });
+    expect(last().argv).toEqual(["init", "--dir", fresh]);
+    // No --force, ever, and the nonce is spent.
+    expect(last().argv).not.toContain("--force");
+    expect((await post("init", { project: F, confirm: ask.json.confirm.nonce })).status).toBe(409);
+  });
+
+  it("init names a directory off the list only as an existing absolute directory, and it joins the list after the confirmation is shown", async () => {
+    const target = tmp("gnomon-dash-newdir-");
+    mkdirSync(join(target, ".git"));
+    for (const dir of ["relative/path", join(target, "missing"), "/etc/passwd", "/tmp/x\nrm", "-rf"]) {
+      const r = await post("init", { dir });
+      expect(r.status, dir).toBe(400);
+    }
+    // dir takes no part in any other action, and may not name a different project's directory.
+    expect((await post("trust.grant", { project: P, dir: target })).status).toBe(400);
+    expect((await post("init", { project: P, dir: target })).status).toBe(400);
+    const ask = await post("init", { dir: target });
+    expect(ask.status, ask.raw).toBe(428);
+    expect(ask.json.confirm.command).toBe(`gnomon init --dir ${realpathSync(target)}`);
+    expect(ask.json.confirm.effect.join(" ")).toMatch(/\.gitattributes and \.gitignore/);
+    const meta = JSON.parse((await httpReq(d.port, "/api/meta", { headers: { Authorization: `Bearer ${tok}` } })).body);
+    expect(meta.projects.find((x: { root: string }) => x.root === realpathSync(target))).toBeTruthy();
+    const ran = await post("init", { dir: target, confirm: ask.json.confirm.nonce });
+    expect(ran.json.exit).toBe(0);
+    expect(last().argv).toEqual(["init", "--dir", realpathSync(target)]);
+  });
+
+  it("guard.install: a harness from the list only; asks first, names the file it writes, and runs `guard install <h> --write --dir`", async () => {
+    const before = count();
+    for (const harness of ["vim", "--write", "", undefined]) {
+      expect((await post("guard.install", { project: P, ...(harness === undefined ? {} : { harness }) })).status, String(harness)).toBe(400);
+    }
+    expect((await post("guard.install", { project: F, harness: "cursor" })).status).toBe(404); // no .gnomon/ there
+    const ask = await post("guard.install", { project: P, harness: "claude-code" });
+    expect(ask.status, ask.raw).toBe(428);
+    expect(ask.json.confirm.command).toBe(`gnomon guard install claude-code --write --dir ${root}`);
+    expect(ask.json.confirm.effect.join(" ")).toContain(join(root, ".claude/settings.json"));
+    expect(ask.json.writes).toBe(".claude/settings.json");
+    expect(count()).toBe(before);
+    // The nonce is for this harness only.
+    expect((await post("guard.install", { project: P, harness: "cursor", confirm: ask.json.confirm.nonce })).status).toBe(409);
+    const again = await post("guard.install", { project: P, harness: "opencode" });
+    const ran = await post("guard.install", { project: P, harness: "opencode", confirm: again.json.confirm.nonce });
+    expect(ran.json.exit).toBe(0);
+    expect(last().argv).toEqual(["guard", "install", "opencode", "--write", "--dir", root]);
+  });
+
+  it("/api/setup lists the harnesses detected in the project: .claude/ is claude-code, opencode.json or .opencode/ is opencode, .cursor/ is cursor", async () => {
+    const setup = async () => JSON.parse((await httpReq(d.port, `/api/setup?project=${P}`, { headers: { Authorization: `Bearer ${tok}` } })).body).harnesses as Array<{ harness: string; detected: boolean }>;
+    const none = await setup();
+    expect(none.map((h) => h.harness)).toEqual(["claude-code", "opencode", "cursor"]);
+    expect(none.every((h) => !h.detected)).toBe(true);
+    mkdirSync(join(root, ".claude"));
+    writeFileSync(join(root, "opencode.json"), "{}");
+    expect((await setup()).filter((h) => h.detected).map((h) => h.harness)).toEqual(["claude-code", "opencode"]);
+    rmSync(join(root, ".claude"), { recursive: true });
+    rmSync(join(root, "opencode.json"));
+  });
 });
 
 // ── the contract ────────────────────────────────────────────────────────────
