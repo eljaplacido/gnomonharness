@@ -230,6 +230,9 @@ export type AuditKind =
   // `meets_thresholds` (skill_trial.ts). Its own kind because no turn produced
   // it: it compares two arms of many turns against numbers declared before.
   | "skill_trial"
+  // What a turn did with the skills it had: loaded, read, cited, proposed. Derived, never
+  // asked of the model (skill_use.ts, CONTRACTS section 52).
+  | "skill_use"
   // A change to gnomon's own records that gnomon did not make, found by the
   // record guard (record_guard.ts): which tool call, or between calls, and
   // which files. And a person's resolution of one (`gnomon audit resolve`).
@@ -324,6 +327,7 @@ export const AUDIT_KINDS = [
   "skill_accept",
   "skill_reject",
   "skill_trial",
+  "skill_use",
   "record_tamper",
   "record_tamper_resolved",
   "record_notice",

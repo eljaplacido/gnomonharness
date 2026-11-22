@@ -78,6 +78,7 @@ export * from "./record_tamper.js";
 // A turn's record on disk while it runs, and the signals that flush it.
 export * from "./live_record.js";
 export * from "./skill_mine.js";
+export * from "./skill_use.js";
 export * from "./skill_trial.js";
 // `gnomon eval`: the trial's cells, for a profile or a surface instead of a skill.
 export * from "./eval.js";

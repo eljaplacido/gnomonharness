@@ -230,10 +230,14 @@ import {
   selectSkills,
   roleSkills,
   applySkills,
+  skillBlock,
+  skillId as skillIdOf,
   SKILLS_DIR,
   withWorkingContext,
   type Skill,
 } from "./skills.js";
+import { readSkillUsage, type SkillUsage } from "./skill_mine.js";
+import { SkillUse, skillsUsedText, type SkillCounters } from "./skill_use.js";
 import { AuditTrail, resolveAudit, type AuditKind } from "./audit.js";
 import { announceAnchorBacklog } from "./anchor.js";
 import {
@@ -3996,8 +4000,20 @@ export function skillRead(call: ToolCall, gnomonDirName: string): string | null 
  * the rule as well as its result. The word is the operator's own input, and
  * escaped like any other text on this screen.
  */
-export function skillsRow(ui: ResolvedUi, active: Skill[], input: string, columns: number = terminalWidth()): string | null {
-  if (active.length === 0) return null;
+export function skillsRow(
+  ui: ResolvedUi,
+  active: Skill[],
+  input: string,
+  columns: number = terminalWidth(),
+  /** Skills this role may use, loaded or not: what `none matched · N available` counts. */
+  available: number = active.length
+): string | null {
+  if (active.length === 0) {
+    // Only where the operator asked to see the work: at brief and tools the
+    // absence of a row is the quiet reading.
+    if (available === 0 || (ui.cot !== "work" && ui.cot !== "full")) return null;
+    return fitRow(paint(ui, "magenta", "  ◆ skills") + "  " + paint(ui, "gray", `none matched · ${available} available`), columns);
+  }
   const why = (sk: Skill): string => {
     if (!sk.match) return "always";
     try {
@@ -4007,11 +4023,74 @@ export function skillsRow(ui: ResolvedUi, active: Skill[], input: string, column
       return "matched";
     }
   };
+  const cost = active.map(skillTokens);
   return fitRow(
     paint(ui, "magenta", "  ◆ skills") + "  " +
-      active.map((sk) => `${safeForPrompt(sk.name)} ${paint(ui, "gray", `(${why(sk)})`)}`).join(", "),
+      active.map((sk, i) => `${safeForPrompt(sk.name)} ${paint(ui, "gray", `(${why(sk)}) ~${cost[i]} tok`)}`).join(", ") +
+      paint(ui, "gray", `  · ~${cost.reduce((a, b) => a + b, 0)} tok`),
     columns
   );
+}
+
+/**
+ * One `skill_use` record for a turn that involved skills (CONTRACTS section
+ * 52): the same derived data as `counters.skills`, as a record of its own so a
+ * reader of the trail can follow skills without parsing every turn.
+ */
+export function writeSkillUse(
+  audit: Pick<TurnAudit, "write"> | undefined,
+  turn: number,
+  role: string,
+  skills: SkillCounters | undefined
+): void {
+  if (!audit || !skills) return;
+  const { v: _v, ...fields } = skills;
+  audit.write("skill_use", { turn, role, ...fields });
+}
+
+/**
+ * The `/skills` lines about how one skill has been used: this session from the
+ * turns' `counters.skills`, and the project's history from `skill_use` and
+ * `skill_trial` records (readSkillUsage). Derived; nothing the model said.
+ */
+export function skillUsageLines(sk: Skill, exchanges: PromptExchange[], past: SkillUsage | undefined): string[] {
+  let fired = 0;
+  let read = 0;
+  let cited = 0;
+  for (const e of exchanges) {
+    const c = e.counters?.skills;
+    if (!c) continue;
+    if (c.fired.some((f) => f.name === sk.id)) fired += 1;
+    read += c.read[sk.id] ?? 0;
+    if (c.cited_in_reasoning.includes(sk.id)) cited += 1;
+  }
+  const lines = [
+    `      this session: fired ${fired}×, read ${read}×, cited ${cited}× · ~${skillTokens(sk)} tok per firing`,
+  ];
+  if (past && (past.firings > 0 || past.reads > 0)) {
+    const rate = past.firings > 0 ? `${Math.round((past.cited / past.firings) * 100)}%` : "n/a";
+    lines.push(
+      `      across sessions: ${past.firings} firing(s), cited ${rate}, last used ${past.last_used ? past.last_used.slice(0, 10) : "never"}`
+    );
+  } else {
+    lines.push(`      across sessions: no firings recorded`);
+  }
+  if (past?.trial) {
+    const verdict = past.trial.meets_thresholds === true ? "meets thresholds" : past.trial.meets_thresholds === false ? "does not meet thresholds" : String(past.trial.status ?? "no verdict");
+    lines.push(`      latest trial: ${verdict} (${past.trial.ts.slice(0, 10)})`);
+  }
+  return lines;
+}
+
+/** What a loaded skill costs the prompt: the estimate of the block applySkills adds. */
+export function skillTokens(sk: Skill): number {
+  return estimateTokens(skillBlock(sk));
+}
+
+/** The `◆ skills` row for `role` and `input`, read from the surface. */
+function skillsRowFor(ui: ResolvedUi, config: GnomonConfig, role: string, input: string): string | null {
+  const all = loadSkills(config);
+  return skillsRow(ui, selectSkills(all, role, input), input, terminalWidth(), roleSkills(all, role).length);
 }
 
 /**
@@ -4954,6 +5033,12 @@ const COUNT_LINES_MAX_BYTES = 16 * 1024 * 1024;
 
 export interface TurnCounters {
   /**
+   * What the turn did with skills: loaded (with context cost), opened,
+   * named in its reasoning, proposed. Derived, never asked of the model
+   * (skill_use.ts, CONTRACTS section 52). Absent when no skill was involved.
+   */
+  skills?: SkillCounters;
+  /**
    * What actually changed in the worktree this turn — MEASURED, at the end,
    * from git. Never the model's account of it.
    *
@@ -5627,9 +5712,20 @@ export async function runAgenticTurn(
   parentLedger?: CallLedger,
   sub?: { readOnly?: boolean }
 ): Promise<TurnResult> {
-  const held: { jobs?: JobTable } = {};
+  const held: { jobs?: JobTable; skills?: SkillUse } = {};
   try {
-    return await agenticTurn(state, role, route, messages, deps, depth, parentLedger, sub, held);
+    const result = await agenticTurn(state, role, route, messages, deps, depth, parentLedger, sub, held);
+    // The turn's skill activity, on its counters and, for a turn a person
+    // asked for, as a closing trace line. A delegated sub-turn's is carried to
+    // its parent by the `↲` line (delegate.run) instead of a line of its own.
+    const used = held.skills?.counters();
+    if (used) {
+      result.counters.skills = used;
+      if (depth === 0 && deps.ui.cot !== "off") {
+        deps.say(fitRow(paint(deps.ui, "magenta", "  ◆ ") + paint(deps.ui, "gray", skillsUsedText(used)), terminalWidth()));
+      }
+    }
+    return result;
   } finally {
     await held.jobs?.closeAll("turn_end");
   }
@@ -5654,9 +5750,19 @@ async function agenticTurn(
    */
   sub?: { readOnly?: boolean },
   /** Where this turn's job table is left for runAgenticTurn to close. */
-  held: { jobs?: JobTable } = {}
+  held: { jobs?: JobTable; skills?: SkillUse } = {}
 ): Promise<TurnResult> {
   const config = state.config;
+  // What this turn does with skills, derived from what the loop already sees.
+  // The input is the last user message, which is what selectSkills matched on.
+  const skillUse = (held.skills = (() => {
+    const input = [...messages].reverse().find((m) => m.role === "user")?.content;
+    const fired = selectSkills(loadSkills(config), role, typeof input === "string" ? input : "");
+    return new SkillUse(
+      fired.map((sk) => ({ id: sk.id, tokens: skillTokens(sk) })),
+      fired
+    );
+  })());
   // `gnomon task --deadline`'s stopping clock, when the caller set one. A
   // deadline with only `total_ms` and `started_at` is read by the
   // completion gate and stops nothing.
@@ -5725,9 +5831,12 @@ async function agenticTurn(
     deps.say(line);
   };
   /** Reasoning as the trace shows it: `✻`, muted, at /think's verbosity. */
-  const sayReasoning = (text: string): void => {
-    traceLines(text, deps.ui.think, terminalWidth()).forEach((line, i) =>
-      say(paint(deps.ui, "gray", `  ${i === 0 ? "✻" : " "} ${line}`))
+  const sayReasoning = (text: string, uses: string[] = []): void => {
+    // `·uses <skill>`: which loaded skill this reasoning names. Appended to the
+    // first row, which is clipped to leave room for it.
+    const tag = uses.length > 0 ? `  ·uses ${uses.join(", ")}` : "";
+    traceLines(text, deps.ui.think, Math.max(20, terminalWidth() - tag.length)).forEach((line, i) =>
+      say(paint(deps.ui, "gray", `  ${i === 0 ? "✻" : " "} ${line}`) + (i === 0 && tag ? paint(deps.ui, "magenta", tag) : ""))
     );
   };
 
@@ -5932,7 +6041,7 @@ async function agenticTurn(
         const nested = nestedDeps(deps);
         if (shown) {
           nested.say(paint(deps.ui, "magenta", `  ↳ ${subRole}`) + paint(deps.ui, "gray", ` on ${subRoute.target.model}`));
-          const loaded = skillsRow(deps.ui, selectSkills(loadSkills(config), subRole, instruction), instruction);
+          const loaded = skillsRowFor(deps.ui, config, subRole, instruction);
           if (loaded) nested.say(loaded);
         }
         const sub = await runAgenticTurn(
@@ -5947,12 +6056,14 @@ async function agenticTurn(
           depth + 1,
           ledger
         );
+        skillUse.absorb(sub.counters.skills);
         if (shown) {
           const handed = splitThinking(sub.content ?? "").answer.trim().split("\n").find((l) => l.trim()) ?? "";
+          const subSkills = sub.counters.skills ? ` · ${skillsUsedText(sub.counters.skills)}` : "";
           nested.say(
             fitRow(
               paint(deps.ui, "magenta", `  ↲ ${subRole}`) +
-                paint(deps.ui, "gray", ` ${sub.toolSteps} step(s)${handed ? ` · ${safeForPrompt(handed.trim())}` : " · no answer"}`),
+                paint(deps.ui, "gray", ` ${sub.toolSteps} step(s)${subSkills}${handed ? ` · ${safeForPrompt(handed.trim())}` : " · no answer"}`),
               terminalWidth() - 3
             )
           );
@@ -8065,7 +8176,7 @@ async function agenticTurn(
               } else {
                 const system = buildSystemPrompt(state, completion.reviewer, instruction, { delegated: true });
                 if (deps.ui.cot !== "off") {
-                  const loaded = skillsRow(deps.ui, selectSkills(loadSkills(config), completion.reviewer, instruction), instruction);
+                  const loaded = skillsRowFor(deps.ui, config, completion.reviewer, instruction);
                   if (loaded) nestedDeps(deps).say(loaded);
                 }
                 const rev = await runAgenticTurn(
@@ -8724,6 +8835,8 @@ async function agenticTurn(
     // thought, which is the opposite of what folding is for.
     const showTrace =
       deps.ui.cot === "full" || deps.ui.cot === "think" || deps.ui.cot === "work";
+    // Derived from the reasoning text, whether or not the trace shows it.
+    const uses = reasoning ? skillUse.noteReasoning(reasoning) : [];
     // Chain-of-thought as it happens — the model's <think> reasoning, at the
     // verbosity /think sets (collapse = one line, show = all, hide = none). This
     // is what "see it chewing" means; models that emit no <think> show nothing.
@@ -8738,7 +8851,7 @@ async function agenticTurn(
     // it held back.
     if (showTrace) {
       const columns = terminalWidth();
-      if (reasoning) sayReasoning(reasoning);
+      if (reasoning) sayReasoning(reasoning, uses);
       const rationale = split.answer.trim();
       if (rationale && rationale !== lastRationale) {
         traceLines(rationale, deps.ui.think === "hide" ? "collapse" : deps.ui.think, columns).forEach((line, i) =>
@@ -8874,7 +8987,9 @@ async function agenticTurn(
         deps.ui.cot === "full" || deps.ui.cot === "tools" || (deps.ui.cot === "work" && call.name === "task");
       // A read that opens a skill file is the skill being used (skillRead).
       const skillId = skillRead(call, basename(config.gnomonDir));
-      const stepTool = skillId ? SKILL_STEP : call.name;
+      // The `skill` tool is skills being LEARNED (a proposal), drawn as a skill
+      // row beside the read of one being used.
+      const stepTool = skillId || call.name === "skill" ? SKILL_STEP : call.name;
       const stepDescribe = skillId ?? describeCall(call);
       if (announced) {
         if (deps.ui.cot === "work") flushFold();
@@ -9135,6 +9250,11 @@ async function agenticTurn(
         bucket === "result" && outcome.shell_exit !== undefined && outcome.shell_exit !== 0;
       const glyph = shellFailed ? "✗" : bucket === "result" ? "✓" : bucket === "refusal" ? "⚠" : "✗";
       const bcolor = shellFailed ? "yellow" : bucket === "result" ? "green" : bucket === "refusal" ? "yellow" : "red";
+      // Skill attribution is read off calls that ran: a refused read is no use.
+      if (bucket === "result") {
+        if (skillId) skillUse.noteRead(skillId);
+        else if (call.name === "skill" && typeof call.args.name === "string") skillUse.noteProposed(skillIdOf(call.args.name));
+      }
       if (announced) {
         say(stepResultRow(deps.ui, { glyph, colour: bcolor, summary: outcome.summary, glimpse: outcome.glimpse }));
       } else if (deps.ui.cot === "work") {
@@ -9161,6 +9281,7 @@ async function agenticTurn(
           call.name !== "edit" &&
           // Using a skill is a step the operator follows, not recon to count.
           skillId === null &&
+          call.name !== "skill" &&
           // The tool succeeding is not the work succeeding. `bash` returns
           // TOOL_OK for a command that ran and exited 1, so this check is what
           // stops a failing test run or a broken script being counted as one
@@ -9181,7 +9302,7 @@ async function agenticTurn(
         // One line per step: the call and what it returned.
         say(
           fitRow(
-            paint(deps.ui, skillId ? "magenta" : "cyan", `  • ${skillId ? "skill" : call.name}`) +
+            paint(deps.ui, stepTool === SKILL_STEP ? "magenta" : "cyan", `  • ${stepTool === SKILL_STEP ? "skill" : call.name}`) +
               paint(deps.ui, "gray", ` ${safeForPrompt(stepDescribe)} `) +
               paint(deps.ui, bcolor, `${glyph} ${summaryResult(outcome.summary)}`),
             terminalWidth()
@@ -10383,7 +10504,7 @@ export async function runTask(
         );
         note(`[chain] stage ${i + 1}/${chain.length} — ${stageRole}`);
         {
-          const loaded = skillsRow(ui, selectSkills(loadSkills(config), stageRole, stageInput), stageInput);
+          const loaded = skillsRowFor(ui, config, stageRole, stageInput);
           if (loaded) note(loaded);
         }
         const stageInfo = shadowTurnInfo(sessionId, `t1.s${i + 1}`, stageRole, stageRoute);
@@ -10429,6 +10550,7 @@ export async function runTask(
           ...contextFields(r.counters),
           surface_hash,
         });
+        writeSkillUse(audit, 1, stageRole, r.counters.skills);
         last = r;
         carried = r.content;
         // An apparatus failure is not a result to hand onward: the endpoint
@@ -10596,6 +10718,8 @@ export async function runTask(
     input: audit.text(input),
     output: audit.text(turn.content),
   });
+  // A chain wrote each stage's own `skill_use` above; the last stage's is not repeated.
+  if (stageRecords.length === 0) writeSkillUse(audit, 1, role, turn.counters.skills);
 
   const record: TaskRecord = {
     surface_hash,
@@ -11720,6 +11844,7 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         return true;
       }
 
+      const usage = readSkillUsage(state.config);
       console.log(`\nIn use — added to the prompt when they match:`);
       if (active.length === 0) console.log("  (none yet)");
       for (const sk of active) {
@@ -11731,6 +11856,7 @@ export function processCommand(cmd: string, state: PromptState): boolean {
         // "always" is the correct reading of a skill whose match never parsed,
         // and indistinguishable from one that meant it. Say which this is.
         if (sk.problem) console.log(paint(uiOf(state), "yellow", `      ⚠ ${sk.problem}`));
+        for (const line of skillUsageLines(sk, state.exchanges, usage.get(sk.id))) console.log(line);
       }
 
       console.log(`\nProposed by an agent — not in use until you accept:`);
@@ -12413,7 +12539,7 @@ export async function runSessionTurn(
   // Selection is by declared pattern, not model judgement, so the same
   // input loads the same skills on every machine.
   const active = selectSkills(loadSkills(config), role, cleanedInput);
-  const skillsLine = ui.cot === "off" ? null : skillsRow(ui, active, cleanedInput);
+  const skillsLine = ui.cot === "off" ? null : skillsRowFor(ui, config, role, cleanedInput);
   if (skillsLine) deps.log(skillsLine);
   const systemPrompt = buildSystemPrompt(state, role, cleanedInput);
 
@@ -12500,7 +12626,7 @@ export async function runSessionTurn(
           paint(ui, "gray", `  [chain] stage ${i + 1}/${turnChain.length} — ${stageRole}`)
         );
         {
-          const loaded = ui.cot === "off" ? null : skillsRow(ui, selectSkills(loadSkills(config), stageRole, stageInput), stageInput);
+          const loaded = ui.cot === "off" ? null : skillsRowFor(ui, config, stageRole, stageInput);
           if (loaded) print(loaded);
         }
         const stageInfo = shadowTurnInfo(
@@ -12536,6 +12662,7 @@ export async function runSessionTurn(
           stop_reason: r.stop_reason,
           tool_steps: r.toolSteps,
         });
+        writeSkillUse(deps.audit, state.exchanges.length + 1, stageRole, r.counters.skills);
         last = r;
         carriedAnswer = r.content;
         // A dead endpoint is not an answer to hand onward, and Esc must
@@ -12748,6 +12875,7 @@ export async function runSessionTurn(
     input: deps.audit.text(cleanedInput),
     output: deps.audit.text(turn.content),
   });
+  if (turnChain.length < 2) writeSkillUse(deps.audit, exchange.turn, role, turn.counters.skills);
   // The turn's live record, final, in the shape `gnomon task --json` prints.
   deps.live?.close(
     {

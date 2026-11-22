@@ -1161,7 +1161,7 @@ describe("model API errors", () => {
         "rotate the API token",
         200
       );
-      expect(row).toBe('  ◆ skills  secrets ("token"), house style (always)');
+      expect(row).toMatch(/^  ◆ skills  secrets \("token"\) ~\d+ tok, house style \(always\) ~\d+ tok  · ~\d+ tok$/);
       expect(promptLoop.skillsRow(ui, [], "x")).toBeNull();
     });
 

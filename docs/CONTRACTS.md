@@ -234,7 +234,7 @@ so both format drift and non-determinism fail the build.
   "governance_family": ["write", "bash", "network", "secrets", "rules", "ci"],
   "audit_kind": ["session_start", "session_resume", "turn", "chain_stage", "tool_call", "approval",
                  "verify", "bootstrap", "context_mask", "degradation", "check", "trust", "guard",
-                 "skill_accept", "skill_reject", "skill_trial", "record_tamper",
+                 "skill_accept", "skill_reject", "skill_trial", "skill_use", "record_tamper",
                  "record_tamper_resolved", "record_notice", "mcp_tools", "stall_signal",
                  "completion_gate", "todo_gate", "job", "deliverable_first", "first_token_stall",
                  "checkpoint", "finish_gate", "model_call", "escalation", "eval_run",
@@ -4715,3 +4715,30 @@ run. The pack changes nothing in the project and never says compliant.
 
 **Fixture**: `conformance/evidence_pack.json`;
 `packages/gnomon-cli/src/pack.test.ts`.
+
+## 52. Skill attribution — audit kind `skill_use`, `counters.skills`
+
+What a turn did with its skills, **derived** from what the loop already sees.
+Nothing is asked of the model: there is no self-reported outcome field, and a
+skill the reasoning never names stays visibly unattributed. Skill matching and
+injection are unchanged.
+
+**`counters.skills`** is absent unless a skill was loaded, opened with `read`
+or proposed. Keys: `v` (1), `fired` (`[{name, tokens}]`: the skill id and the
+estimate of the block added to the prompt), `read` (id to successful reads),
+`cited_in_reasoning` (ids of fired or opened skills whose id or name appears,
+whole-word and case-insensitive, in the reasoning; names under 4 characters and
+names made only of generic words never match) and `proposed` (ids written by
+the `skill` tool). A delegated sub-turn's data is merged into its parent's.
+
+**`skill_use`** is written at the end of every turn whose `counters.skills` is
+present (once per chain stage), with `turn`, `role` and the same four fields.
+It is hash-chained like any record.
+
+`gnomon skill mine` reads these records and returns, besides candidates,
+`skill_signals`: `fires_never_cited` (at least 5 firings, never cited) and
+`cited_often` (at least 3 citations and at least half of firings). They are
+about existing skills and are not written to `.gnomon-skills/candidates/`.
+
+**Fixture**: `conformance/skill_use.json`;
+`packages/gnomon-core/src/skill_attribution.test.ts`.

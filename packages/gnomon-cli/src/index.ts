@@ -32,6 +32,8 @@ import {
   unresolvedTamper,
   resolveTamper,
   mineCandidates,
+  readSkillUsage,
+  skillUsageSignals,
   writeCandidates,
   loadCandidates,
   MIN_REPEATS,
@@ -1880,22 +1882,31 @@ async function cmdSkill(args: CliArgs): Promise<void> {
     // to .gnomon-skills/candidates/, and changes nothing the agent loads.
     const found = mineCandidates(config);
     const w = writeCandidates(config, found);
+    // Signals about skills that already exist, from `skill_use` records.
+    const usage = readSkillUsage(config);
+    const usageSignals = skillUsageSignals(usage);
     if (args.json) {
-      console.log(JSON.stringify({ dir: w.dir, fresh: w.fresh, candidates: found }, null, 2));
+      console.log(JSON.stringify({ dir: w.dir, fresh: w.fresh, candidates: found, skill_usage: [...usage.values()], skill_signals: usageSignals }, null, 2));
       return;
     }
     if (found.length === 0) {
       console.log("No skill candidates: no rule refused the same role on the same thing " +
         `${MIN_REPEATS} or more times in the audit trails.`);
-      return;
+    } else {
+      console.log(`${found.length} skill candidate(s), ${w.fresh.length} new → ${w.dir}`);
+      for (const c of found) {
+        console.log(`  ${c.id}${w.fresh.includes(c.id) ? "  (new)" : ""}`);
+        console.log(`      ${c.suggestion}`);
+        console.log(`      ${c.records.length} record(s), first ${c.records[0]!.trail} seq ${c.records[0]!.seq}`);
+      }
+      console.log("Candidates are evidence, not skills: nothing is loaded until a person accepts one.");
     }
-    console.log(`${found.length} skill candidate(s), ${w.fresh.length} new → ${w.dir}`);
-    for (const c of found) {
-      console.log(`  ${c.id}${w.fresh.includes(c.id) ? "  (new)" : ""}`);
-      console.log(`      ${c.suggestion}`);
-      console.log(`      ${c.records.length} record(s), first ${c.records[0]!.trail} seq ${c.records[0]!.seq}`);
-    }
-    console.log("Candidates are evidence, not skills: nothing is loaded until a person accepts one.");
+    console.log(`\nSkills in use (from skill_use records): ${usageSignals.length} signal(s)`);
+    for (const h of usageSignals) console.log(`  ${h.skill} [${h.signal}]\n      ${h.suggestion}`);
+    const costly = [...usage.values()]
+      .filter((u) => u.tokens_per_firing !== null)
+      .sort((x, y) => y.tokens_per_firing! - x.tokens_per_firing!);
+    for (const u of costly) console.log(`  ${u.id}: ${u.firings} firing(s), ~${u.tokens_per_firing} tok each, cited ${u.cited}×`);
     return;
   }
 
