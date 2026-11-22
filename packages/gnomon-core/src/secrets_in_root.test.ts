@@ -149,7 +149,9 @@ describe("exec = os: the probe is stopped before it can run (the session never s
           timeoutMs: 20_000,
           maxOutputBytes: 32_000,
           bashDeny: [],
-          exec: { mode: "os", image: "x", network: false },
+          // network = true: the control is about the filesystem grant, and macOS
+          // refuses exec = "os" with network = false (Seatbelt cannot enforce it).
+          exec: { mode: "os", image: "x", network: true },
         } as ToolContext,
         new Set(["bash"])
       );
