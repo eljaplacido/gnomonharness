@@ -1686,7 +1686,8 @@ nothing wider: there is no flag that widens the bind. Design:
 `docs/design/SETUP-AND-COMMAND-CENTER.md`, Part II (#105). It reads what gnomon
 already records. It changes something only by running one of gnomon's own
 commands from the action table below, and it writes no file, record or
-configuration of its own.
+configuration of its own, with one exception: a chat question sent to a
+cloud endpoint (below) is recorded, because it leaves the machine.
 
 **Exit codes.** `0` stopped cleanly (Ctrl-C or SIGTERM), `1` a usage error,
 `4` the port or loopback could not be had (`preconditions_unmet`), `10` the
@@ -1740,6 +1741,41 @@ action does not take is 400. An unknown action is 404 and a `planned` one 409;
 neither runs anything. Because each action is the command, it is recorded as
 the command records itself (`trust` and `check` records, setup's facts file);
 the dashboard adds no record kind of its own (`inbox.add` and `inbox.resolve` run `gnomon inbox`, which writes the `inbox_item` record, §57).
+
+**The chat: `GET` and `POST /api/p/<id>/chat`.** A read-only drawer that
+answers questions about the open project's records, with no tools: nothing a
+model says can run anything. `GET` says where a question would go: `local` and
+`cloud` (each `{role, endpoint, model, url, local, source, keyed}` or null),
+and `why` when there is no local endpoint. `POST {question, history[], cloud?,
+confirm?}` builds a **brief of at most 10,000 characters** from the same views
+the screens render (`## [projects]`, `[session]`, `[governance]`,
+`[measurements]`, `[contracts]`, and `[lens]` when that view exists) and sends
+it under a system prompt that allows answering from the brief only, requires
+each claim to end with the panel it came from in square brackets, and says
+"not in the records" otherwise. The answer is `{answer, cites[], grounded,
+not_in_records, withheld, raw?, ms, brief_chars, chars_sent}`: one that cites
+no panel and does not say "not in the records" is `withheld`, with the model's
+text only in `raw`.
+- **Where it asks.** A local endpoint of the project's surface: the role named
+  by `[dashboard] chat_role` (config.toml; the surface audit reports a name no
+  role carries), else the first role whose endpoint gnomon classes as local
+  (loopback or LAN, `isLocalEndpoint`). With none, `POST` answers 409 with
+  `no_endpoint` and how to set one; nothing is sent. One request at a time per
+  project (409), and a reply that has not come after 150 s is 504.
+- **Cloud, per question.** Only with `cloud: true`, to a role whose endpoint is
+  not local. That first request sends nothing and answers 200 with `sent: false` and
+  `confirm: {nonce, expires_in_s, chars, effect, messages}` (not 428, which the
+  actions use: a 4xx is logged by the browser as a failed request): the exact messages
+  that would leave, from a brief without session opening lines or refusal text.
+  Only a second request with the same question and history and that `confirm`
+  sends them (409 for another question, a used or expired nonce, or records
+  that changed). A key goes only where gnomon's key-host rule allows, else 403.
+- **The record.** A cloud send writes one `model_call` record (§29) in a trail
+  of its own, `chat-<time>-<pid>.jsonl`, between a `session_start` with
+  `mode: "dashboard_chat"` and a `session_end`: `endpoint`, `model`, `role`,
+  `ms`, `code`, and the characters sent as `est_body`. No question, brief or
+  answer text. Nothing is recorded when `[audit]` is off (the answer says so),
+  and a local question writes nothing.
 
 | Action | argv | State | Confirm |
 |---|---|---|---|
