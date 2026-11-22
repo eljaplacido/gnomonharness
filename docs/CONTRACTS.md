@@ -2735,7 +2735,7 @@ One entry per request:
 | `steer` | gnomon's own system messages after the leading ones, present in the request, by kind: `nudge` (the idle nudge), `converge` (the convergence push), `other` (a trim's ledger, a failed check, the wrap-up, a context notice) |
 | `via` | `system`, or `user` under `steer_role = "user"` (declared, or learned from a refusal): the role they went out in. Present with `steer` |
 | `delivered` | beside `via`, always: `true` when that channel is known to reach the model (user content; a late system message to a remote endpoint), `false` for a late system message to a local lane, whose chat templates dropped every one on the M2 lanes (§39) |
-| `trim` | a trim since the request before: `why` (`leg`: the leg checkpoint; `overflow`: the provider refused the request as too long, code 13, and gnomon trimmed to 50% to send it again; `pre_call`: the estimate of the request about to go out exceeded a window the surface declared or `auto` read from the endpoint, never the `[defaults]` fallback, and gnomon trimmed to the leg budget before sending it), `dropped` messages, the working context's estimate `before` and `after`, the `budget` it was trimmed to, and the `ratio` it was divided by under `calibrated` |
+| `trim` | a trim since the request before: `why` (`leg`: the leg checkpoint; `overflow`: the provider refused the request as too long, code 13, and gnomon trimmed to 50% to send it again; `pre_call`: the estimate of the request about to go out exceeded a window the surface declared or `auto` read from the endpoint, never the `[defaults]` fallback, and gnomon trimmed to the leg budget before sending it), `dropped` messages, the working context's estimate `before` and `after`, the `budget` it was trimmed to, the `ratio` it was divided by (under `calibrated`, and against a known window under any mode), and, against a known window, the `basis` of that ratio: `measured` (the provider's own prompt counts for this endpoint and model) or `safety` (none seen yet: the pre-call check's 1.5x) |
 | `leg` | the turn's leg, from 2 on |
 | `depth` | `1` for a request a delegated sub-turn (the `task` tool) made; its requests are its parent's |
 | `window` | this request's window, when its target's differs from the turn's (a fallback) |
@@ -2745,7 +2745,7 @@ steering present. Against a window that is only `[defaults]`'s fallback
 (`max_context_tokens_source = "default"`) there is no per-request window check:
 between two checkpoints a request can grow past the window, and `prompt_tokens`
 against `window` below is where that shows. Against a declared or `auto`-read
-window, a request whose estimate exceeds it is trimmed first (`pre_call`).
+window, a request whose estimate, scaled by the measured real/estimate ratio (1.5 until a response with usage has been seen, never below 1), exceeds it is trimmed first (`pre_call`).
 
 **What came back: `model_calls`.** Under `volatile` on the `TaskRecord`, as
 `tokens_in` is, because it is the backend's measurement and the clock. As

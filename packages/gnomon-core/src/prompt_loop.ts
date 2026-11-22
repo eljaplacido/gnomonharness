@@ -459,6 +459,11 @@ export interface PromptState {
    */
   tokenCalibration?: TokenCalibration;
   /**
+   * The same measurement under every mode: what a trim against a KNOWN window
+   * reads (CallLedger.knownTrim). Never consulted for an unresolved window.
+   */
+  tokenMeasured?: TokenCalibration;
+  /**
    * The session checklist, as the `todo` tool last left it.
    *
    * Session state, not surface state: it lives in the saved conversation and
@@ -6827,6 +6832,7 @@ async function agenticTurn(
       target: route.target,
       mode: estimateMode,
       calibration: estimateMode === "calibrated" ? (state.tokenCalibration ??= new Map()) : undefined,
+      measured: (state.tokenMeasured ??= new Map()),
       audit: deps.audit ? (fields) => deps.audit!.write("model_call", fields) : undefined,
       role,
     });
@@ -6842,6 +6848,10 @@ async function agenticTurn(
   const tokOptsFor = (t: RouteTarget): MessageTokenOptions => ({
     reasoning: adaptTarget(state, t).replayReasoning === true,
   });
+  // A window gnomon KNOWS: declared, read from the listing, or in the catalog;
+  // not the `[defaults]` guess (source "default").
+  const windowKnown = (t: RouteTarget): boolean =>
+    Boolean(t.contextTokens) && t.contextSource !== undefined && t.contextSource !== "default";
   const estOf = (ms: ChatMessage[], t: RouteTarget = route.target): number => messagesTokens(ms, tokOptsFor(t));
 
   // What the worktree looked like BEFORE this turn. Without it, `tree_delta`
@@ -7761,12 +7771,14 @@ async function agenticTurn(
     // there the checkpoint and the overflow retry stay the only decision points.
     {
       const next = escalation ? active : onFallback && route.fallback ? route.fallback : route.target;
-      if (next.contextTokens && next.contextSource !== undefined && next.contextSource !== "default") {
+      if (windowKnown(next)) {
         const window = resolveContext(config, next).max_context_tokens;
-        const ratio = ledger.ratioFor(next) ?? 1;
+        // The estimate runs low against real tokenizers (~1.4x), so against a
+        // known window it is scaled: by the measured ratio once a response with
+        // usage has been seen here, else by PRE_CALL_SAFETY (mediators.ts).
+        const { budget, ratio, basis } = ledger.knownTrim(legBudget(window), next, true);
         const est = estOf(working, next);
-        if (est * ratio > window) {
-          const { budget, ratio: used } = ledger.trimBudget(legBudget(window), next);
+        if (est * (ratio ?? 1) > window) {
           const trimmed = trimWorking(working, budget, tokOptsFor(next));
           if (trimmed.dropped > 0) {
             working.length = 0;
@@ -7777,7 +7789,8 @@ async function agenticTurn(
               before: est,
               after: estOf(working, next),
               budget,
-              ...(used !== undefined ? { ratio: used } : {}),
+              ...(ratio !== undefined ? { ratio } : {}),
+              ...(basis !== undefined ? { basis } : {}),
             });
             say(
               paint(
@@ -9341,10 +9354,12 @@ async function agenticTurn(
       // The window of the endpoint answering, when it declares one: a cloud
       // model was trimmed to 60% of a default sized for a local one. Divided
       // by the measured ratio only under token_estimate = "calibrated".
-      const { budget, ratio } = ledger.trimBudget(
-        legBudget(resolveContext(config, usedTarget).max_context_tokens),
-        usedTarget
-      );
+      // Against a known window, by the measured ratio under any mode once a
+      // response has reported usage (knownTrim); else as before.
+      const legB = legBudget(resolveContext(config, usedTarget).max_context_tokens);
+      const { budget, ratio, basis } = windowKnown(usedTarget)
+        ? ledger.knownTrim(legB, usedTarget, false)
+        : { ...ledger.trimBudget(legB, usedTarget), basis: undefined };
       const before = working.length;
       const trimmed = trimWorking(working, budget, tokOptsFor(usedTarget));
       if (trimmed.dropped > 0) {
@@ -9358,6 +9373,7 @@ async function agenticTurn(
           after: estOf(working, usedTarget),
           budget,
           ...(ratio !== undefined ? { ratio } : {}),
+          ...(basis !== undefined ? { basis } : {}),
         });
         say(
           paint(

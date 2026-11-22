@@ -26,6 +26,15 @@
 
 ## [Unreleased]
 
+### Fixed — a known window is checked against a realistic estimate
+
+- Against a window gnomon knows (declared, read from the listing, or catalog), the pre-call trim no longer gates on the
+  raw chars/4 estimate, which runs ~1.42x low (R66: a local Qwen3.6 on llama.cpp with a resolved 98,304 window refused 9
+  prompts while the pre-call trim fired 0 times). The estimate is scaled by 1.5 until a response with usage has been seen
+  for the endpoint and model, then by the measured ratio (never below 1); the leg checkpoint divides its budget by the
+  measured ratio the same way. Unresolved (`default`) windows are unchanged byte for byte, and no floor or guard is
+  loosened. A trim's record gains an optional `basis` (`measured` or `safety`) beside `ratio`.
+
 ### Added — dashboard v2, onboarding and shell (depends on `feat/dashboard-v2-base`)
 
 - **One-click local quick start** on the Setup screen: detected hardware, one recommended catalog model with a fit pill
