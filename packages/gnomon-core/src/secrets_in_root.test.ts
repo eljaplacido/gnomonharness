@@ -111,7 +111,9 @@ describe("exec = docker: an empty read-only file is mounted over each declared s
 
   it("the docker line carries the mount at level prevent, and not below or without governance", () => {
     const line = sandboxCommand("ls", ctxFor({ level: "prevent", ...PATHS }), "n");
-    expect(line).toMatch(new RegExp(`-v '[^']*gnomon-empty-[^']*/empty':'${join(root, ".env.matrix")}':ro`));
+    // Escaped: a Windows temp path is full of backslashes, which a RegExp reads as escapes.
+    const secret = join(root, ".env.matrix").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    expect(line).toMatch(new RegExp(`-v '[^']*gnomon-empty-[^']*[\\\\/]empty':'${secret}':ro`));
     expect(sandboxCommand("ls", ctxFor({ level: "advise", ...PATHS }), "n")).not.toContain("gnomon-empty-");
     expect(sandboxCommand("ls", ctxFor(), "n")).not.toContain("gnomon-empty-");
   });
