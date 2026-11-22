@@ -1709,13 +1709,22 @@ runs the check as before ([CONTRACTS.md §52](CONTRACTS.md)):
 # policy.toml: inside the existing [verify] block
 [verify]
 timeout_seconds = 900             # the check's own budget; a timeout reads as `unrunnable`
-setup = "uv sync --frozen"        # once per fresh worktree, before the first check
+setup = "uv sync --frozen"        # once per fresh worktree, before the model's first call
 setup_network = "registry"        # "none" (default) or "registry": open for setup alone
 setup_timeout_seconds = 1200      # defaults to timeout_seconds
 ```
 
-`setup` comes from the hashed surface (changing it moves the surface hash),
-runs once per worktree, is not bound by the role's `write_allow` (an install
+Write `setup` so it cannot run code from the tree: `pnpm install
+--frozen-lockfile --ignore-scripts`, `npm ci --ignore-scripts`, `uv sync
+--frozen`. An install otherwise runs lifecycle scripts, build backends and
+`.npmrc`/`pip.conf` from the working tree. In a session `setup` runs at the
+start of the turn, before the model can edit a manifest; in `gnomon check` it
+runs on the head being judged, so **with `setup_network = "registry"` on a host
+`[verify]` an untrusted head's install scripts run with network access**: keep
+`none`, use `exec = "docker"`, or use the flags above. `registry` has no effect
+under `exec = "docker"` or `"os"`: the floor stays as declared. `setup` comes
+from the hashed surface (changing it moves the surface hash), runs once per
+worktree, is not bound by the role's `write_allow` (an install
 writes `node_modules`), and is recorded as a `verify` audit record with
 `phase: "setup"` and the network it had. A setup that fails makes the check
 `unrunnable`: nothing is handed back to the model as "fix your code".

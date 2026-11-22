@@ -28,6 +28,7 @@
  * the function that runs a command.
  */
 
+import { createHash } from "node:crypto";
 import type { GnomonConfig, ResolvedVerify } from "./config.js";
 import type { ToolContext, ToolOutcome } from "./tools.js";
 import { readExitMapEntries } from "./verify_outcome.js";
@@ -41,12 +42,29 @@ export function verifyContext(ctx: ToolContext, verify: Pick<ResolvedVerify, "ti
   return { ...ctx, timeoutMs: Math.round(verify.timeout_seconds * 1000) };
 }
 
+/**
+ * The network `setup` really gets. `registry` opens it only where bash runs on
+ * the host (exec off or unset): under a docker or os floor the floor stays as
+ * the surface declared it, so a [verify] key can never widen containment. One
+ * function for the loop and for `gnomon check`.
+ */
+export function effectiveSetupNetwork(
+  declared: ResolvedVerify["setup_network"] | undefined,
+  exec: { mode: string } | undefined
+): "none" | "registry" {
+  return declared === "registry" && (!exec || exec.mode === "off") ? "registry" : "none";
+}
+
 /** What running `setup` came to. */
 export interface SetupResult {
   /** True when it ran now; false when this worktree had already been set up. */
   ran: boolean;
   ok: boolean;
   exit: number | null;
+  /** The network it was given (effectiveSetupNetwork), for the trail and the verdict. */
+  network: "none" | "registry";
+  /** sha256 of the command text, so a record names it without carrying it. */
+  command_sha256: string;
   /** Why it did not complete, when it did not. */
   reason?: string;
   /** The tail of its output, for the hand-off and the trail. */
@@ -96,7 +114,8 @@ export async function runVerifySetup(
   const seen = setupDone.get(key);
   if (seen && !opts.force) return { ...seen, ran: false };
 
-  const open = verify.setup_network === "registry";
+  const net = effectiveSetupNetwork(verify.setup_network, ctx.exec);
+  const open = net === "registry";
   const seconds = verify.setup_timeout_seconds ?? verify.timeout_seconds;
   const sctx: ToolContext = {
     ...ctx,
@@ -117,6 +136,8 @@ export async function runVerifySetup(
     ran: true,
     ok,
     exit,
+    network: net,
+    command_sha256: createHash("sha256").update(verify.setup).digest("hex"),
     ...(ok ? {} : { reason: exit === null ? out.summary.replace(/^bash — /, "") : `exit ${exit}` }),
     ...(ok ? {} : { output: out.content.split("\n").slice(-20).join("\n") }),
   };
@@ -125,7 +146,7 @@ export async function runVerifySetup(
     ...(opts.role ? { role: opts.role } : {}),
     phase: "setup",
     command: verify.setup,
-    network: open ? "registry" : "none",
+    network: net,
     exit,
     ok,
     ...(result.reason ? { reason: result.reason } : {}),
