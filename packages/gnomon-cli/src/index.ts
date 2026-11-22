@@ -131,6 +131,7 @@ import { setProcessTitle } from "./proc_title.js";
 import { runInbox, runInboxHook } from "./inbox_cmd.js";
 import { runProposals, runMemory } from "./proposals_cmd.js";
 import { runImproveCmd, bindDraftModel } from "./improve_cmd.js";
+import { runAblateCmd } from "./ablate_cmd.js";
 import { serveInboxMcp } from "./inbox_mcp.js";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -2649,6 +2650,16 @@ async function cmdSecurity(args: CliArgs): Promise<number> {
  */
 async function cmdEval(args: CliArgs): Promise<number> {
   const config = loadConfig(args.dir, args.flags["profile"]);
+  if (args.flags["ablate"] !== undefined) {
+    return runAblateCmd(
+      config,
+      { flags: args.flags, json: !!args.json },
+      {
+        settleTrust: (c) => settleTrustHeadless(c, trustOptions(args)).outcome,
+        runCell: (wt, prompt, o) => runTask(loadConfig(wt, o.profile), prompt, { role: o.role, yes: args.yes, trust: o.trust }),
+      }
+    );
+  }
   const flag = (k: string) => (typeof args.flags[k] === "string" && args.flags[k] !== "true" ? (args.flags[k] as string) : undefined);
   const yesSpend = args.flags["yes-spend"] !== undefined || args.positional.includes("--yes-spend");
   let outcome: Awaited<ReturnType<typeof runEval>>;
@@ -3422,6 +3433,24 @@ Commands:
   eval [--against profile:<name>|surface:<git ref>|command:<harness>]
        [--base command:<harness>] [--spec <name>] [--yes]
        [--yes-spend] [--trust] [--json] [--dir <path>]
+  eval --ablate [components] [--families <a,b>] [--run] [--k <n>]
+       [--budget-usd <x>] [--max-requests <n>] [--propose] [--allow-host-probes] [--json]
+    Which parts of this surface still earn their keep? Builds one arm per
+    component (system.md sections, skills, [verify], approval mode in the
+    eval clone only, masking, the think cap, the structured summary, each
+    non-essential tool, the memory index), each the surface with exactly
+    that one thing removed or neutralised, and measures it against the base
+    on .gnomon/trials/, optionally once per declared model family. Reports
+    pass, steps, tokens and refusals with the eval's uncertainty and a
+    verdict per component: load_bearing, neutral or harmful (inconclusive
+    when the sample cannot say). Never applied. Governance (policy deny
+    rules, sandbox, guard, audit) is never ablated. Dry by default: --run
+    measures, under the same refusals as improve (no agent session, a
+    confined [sandbox], billed roles need declared rates or --max-requests).
+    --propose (with --run) writes retirement proposals for neutral-and-cheaper
+    skills and system.md sections. Exit 0 done, 1 usage, 3 refused, 10 could not run.
+
+  eval (spec form)
     Measure on this project's own tasks (.gnomon/trials/<name>.toml, the
     skill trial's spec): alone, the surface's pass rate; with --against,
     whether another profile, the .gnomon/ of another commit with HEAD's

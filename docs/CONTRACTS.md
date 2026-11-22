@@ -5647,3 +5647,81 @@ scripted model, k, regression, composition, the budget, the policy's every
 refusal, retirement, byte-identity of a normal run with an `[improve]` table) and
 `packages/gnomon-cli/src/improve_cmd.test.ts` (flags, refusals, the schedule file,
 output, the dashboard view).
+
+## 60. `gnomon eval --ablate` — a load-bearing analysis of the surface; `gnomon.ablate/1`, `.gnomon-trials/_ablate/`, `v: 1`
+
+"Keeping harnesses useful as models improve": a component written for a weaker
+model can be dead weight on a stronger one. `gnomon eval --ablate` builds one
+candidate arm per component, each the current surface with exactly ONE
+component removed or neutralised, runs each against the base on the project's
+trial spec with `gnomon eval`'s machinery (paired, interleaved, k attempts, a
+temporary clone per cell), and reports what each component is worth. It never
+changes `.gnomon/`; a verdict is information, and removing anything stays a
+person's decision. Without `--ablate`, `gnomon eval` is byte-identical to a
+build without this section.
+
+**Command.** `gnomon eval --ablate [components] [--families a,b] [--run] [--k N]
+[--budget-usd X] [--max-requests N] [--propose] [--spec NAME]
+[--allow-host-probes] [--json]`. `--dry-run` is the default: it prints the arms,
+the families and the estimated cell count (arms x families x tasks x k x 2) and
+calls no model and writes nothing. `--run` measures. Exit 0 done (a dry run
+included), 1 usage, 3 refused, 10 could not run.
+
+**Components** (the arm's id; each is built only when the surface has it):
+`system:<heading>` (a `##` section of system.md, or `#` when there is none),
+`skill:<id>`, `verify` (the `[verify]` table), `approval` (`[approval] gate`
+becomes `never` in the eval clone only), `masking` (`[context.mask_observations]`),
+`think_cap` (`[turn] max_reasoning_tokens_without_action`), `structured_summary`
+(`[context] summary_style` `structured` becomes `prose`), `tool:<name>` (set
+`enabled = false`; `read`, `bash`, `edit` and `write` are never offered) and
+`memory_index` (every `memory/*.md` withheld). `--ablate` takes a comma list of
+groups (`system`, `skills`, `verify`, `approval`, `masking`, `think_cap`,
+`summary`, `tools`, `memory`) or ids; none means every component.
+
+**Governance is never ablated.** The policy's deny rules, the sandbox, the guard
+and the audit trail are not components. A request naming one (`sandbox`,
+`guard`, `audit`, `policy`, `deny`, `governance`, `trust`) is refused (exit 3),
+and every arm is checked before it is built: `policy.toml` with its `[verify]`
+table and approval gate value normalised, and `roles.toml`, must be
+byte-identical to the base's, else the run is refused.
+
+**Families.** `--families a,b` crosses each arm with model families: a model id's
+family is its leading letters after the provider prefix and `:tag` (`qwen3.6:35b`
+is `qwen`), and a family runs as the declared role of that family (the spec's
+role when it is in the family, else the first declared). A family no role
+declares is refused. Absent, the spec's role alone runs.
+
+**Refusals, as `gnomon improve --run`**: inside an agent session (exit 3); with no
+trial spec; a role that can reach a non-local endpoint with no `[improve]
+usd_per_mtok_in` and `usd_per_mtok_out` and no `--max-requests`; an unconfined
+`[sandbox]` without `--allow-host-probes`. `--budget-usd` (and `[improve]
+budget_usd`) stops the run between cells; `--max-requests` is a total over the
+whole run, and an arm that begins after it is spent is reported `skipped`.
+
+**Report** (`gnomon.ablate/1`, written to `.gnomon-trials/_ablate/<run>.json`; each
+arm's eval is also recorded as `gnomon eval` records it): `schema, mode, run, spec,
+families, never_ablated, plan, rows, components, proposals, budget, problems`. A row
+is one component x family: both arms' passes with Wilson intervals, refusals, output
+tokens and requests; `delta` (ablated minus base: `pass`, `steps`, `tokens`,
+`cost_usd`, `refusals`); the eval's McNemar `p`, `alpha` and minimum detectable
+difference; the files that differ; `verdict`; `cheaper`.
+
+**Verdicts** (never applied). `harmful`: removing it raised the pass rate, with p <
+alpha. `load_bearing`: removing it lowered the pass rate with p < alpha, or raised
+refusals without raising passes. `inconclusive`: not probed, the eval did not
+complete, or a pass drop the sample cannot separate from noise. `neutral`:
+otherwise. A component's verdict over its families is `load_bearing` if any is,
+else `harmful`, else `inconclusive`, and `neutral` only when every family is;
+`neutral_and_cheaper` also needs fewer steps or tokens and no more of either in
+every family. Verdicts are conservative toward keeping a component.
+
+**`--propose`** (with `--run`) writes, through the §58 store, a retirement proposal
+for each neutral-and-cheaper `skill` and a `harness` proposal for each such
+`system:` section (`improve.signal` `ablate_neutral`, signature
+`ablate:<component>`; one signature is proposed once). Other components have no
+proposal kind and are named for a person to change by hand. A person accepts.
+
+**Fixture**: `conformance/eval_ablate.json`; `packages/gnomon-core/src/ablate.test.ts`
+(arms differ by exactly the ablated file, the dry run, governance, verdicts, the
+budget, a measured run, the report shape) and
+`packages/gnomon-cli/src/ablate_cmd.test.ts`.

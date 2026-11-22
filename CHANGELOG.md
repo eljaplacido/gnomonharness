@@ -26,6 +26,22 @@
 
 ## [Unreleased]
 
+### Added
+
+- `gnomon eval --ablate [components] [--families a,b] [--run] [--propose]`: a
+  load-bearing analysis of the project's own surface. One arm per component
+  (system.md sections, skills, `[verify]`, approval mode in the eval clone only,
+  masking, the think cap, the structured summary, each non-essential tool, the
+  memory index), each the surface with exactly one thing removed or neutralised,
+  measured against the base on the trial spec with the eval's paired machinery,
+  optionally per declared model family. Reports pass, steps, tokens and refusals
+  with Wilson and McNemar, and a verdict per component (load_bearing, neutral,
+  harmful, inconclusive), never applied. Governance (deny rules, sandbox, guard,
+  audit) is never ablated. Dry by default; `--run` refuses as `improve --run`
+  does; `--propose` writes retirement proposals for neutral-and-cheaper skills
+  and sections. Without `--ablate`, `gnomon eval` is unchanged
+  (CONTRACTS.md section 60, `conformance/eval_ablate.json`).
+
 ## [0.6.6] — 2026-11-22
 
 The daily-runtime release, audited against v0.6.5 before it was cut. With no new
