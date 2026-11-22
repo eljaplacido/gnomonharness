@@ -404,6 +404,8 @@ const CONFIRM_TITLE = {
   "endpoint.test": "Send one token through this endpoint?",
   init: "Create .gnomon/ here?",
   "guard.install": "Install the guard hook?",
+  "proposal.accept": "Write this change to .gnomon/?",
+  "proposal.reject": "Reject this proposal?",
 };
 
 /**
@@ -481,6 +483,8 @@ function doneNote(d) {
     case "endpoint.test": return `${exit}: ${d.exit === 0 ? "it answered" : d.exit === 10 ? "not tested" : "it did not answer"}.`;
     case "init": return d.exit === 0 ? `${exit}: .gnomon/ created. The project is on the list.` : `${exit}: nothing was created.`;
     case "guard.install": return d.exit === 0 ? `${exit}: the hook was written. Commit it, or run \`gnomon guard install ${d.command.split(" ")[3] || "<harness>"} --write --local\` in a terminal to keep it out of git.` : `${exit}: the hook was not written.`;
+    case "proposal.accept": return d.exit === 0 ? `${exit}: written. The surface hash changed; it applies from the next session. Decided in-process by the function \`gnomon proposals accept\` uses.` : `${exit}: nothing was written.`;
+    case "proposal.reject": return d.exit === 0 ? `${exit}: rejected; .gnomon/ is untouched.` : `${exit}: not rejected.`;
     case "setup.pull": return d.job ? "Downloading: progress is on the Setup screen." : exit;
     default: return d.json && d.json.why ? `${exit}: ${d.json.why}` : exit;
   }

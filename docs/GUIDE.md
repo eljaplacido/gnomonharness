@@ -1119,6 +1119,8 @@ nothing; `gnomon --help` prints all of it.
 | `gnomon guard install claude-code\|opencode\|cursor [--write [--local]]` | Prints the hook or plugin for that harness; `--write` adds it to this project's config, `--local` keeps it out of git. For Cursor, `--write` merges into an existing `.cursor/hooks.json` (your other hooks stay) and brings an older gnomon install up to date | Setting up `guard` |
 | `gnomon acp [--role R] [--profile N]` | Serves the Agent Client Protocol on stdin/stdout for an editor. Same surface, roles, approvals and audit as `prompt`. | Zed, JetBrains IDEs |
 | `gnomon trust [list \| grant \| revoke]` | What this project's `.gnomon/` grants beyond the defaults, and whether this machine trusts it | A repository you did not write |
+| `gnomon proposals [list \| show ID \| accept ID \| reject ID [--note N]] [--json]` | The pending proposals to change `.gnomon/` (a skill, a memory entry, an edit to `system.md`): `show` prints the exact diff, `accept` applies it (the surface hash moves; from the next session) and refuses if the files changed since, `reject` changes nothing. A person's decision: it refuses inside an agent session and without a terminal (exit 3). See 7.10 | Letting the harness learn without it editing itself |
+| `gnomon memory [list \| show NAME] [--json]` | The notes a person accepted into `.gnomon/memory/` | Seeing what the harness remembers about this repository |
 | `gnomon inbox [list \| show ID \| add --title T \| ack ID \| resolve ID \| mcp] [--json]` | Work items the dashboard's **Flag for fix** (or you) wrote to `.gnomon-inbox/` for a harness to read as information, never as an instruction. `gnomon guard install claude-code --write` (and `install cursor --write`, via Cursor's `sessionStart` hook) hands the open ones to the harness at session start; `gnomon inbox mcp` serves them to Cursor and Claude Code (list, get, acknowledge, resolve; no add) | Telling a harness what to fix |
 | `gnomon audit [show \| verify]` | Lists trails; checks every chain, seal and signature anchor. `verify` exits 1 on a break or when there is nothing to verify. | Review, release gates |
 | `gnomon dashboard [--port N] [--no-open] [--dir P]` | A command center in the browser on 127.0.0.1: projects, sessions as a timeline, refusals by rule, audit verification, contracts, token measurements (alias `ui`); a one-click local quick start, `init`, `guard install`, setup, check, trust and endpoint test as buttons that run those same commands, each change confirmed first; a Ctrl/Cmd+K palette and a light theme. | Reviewing what happened without reading JSONL; first-run setup without a terminal wizard |
@@ -1164,6 +1166,7 @@ Press **Tab** after `/` to list everything. These matter most:
 | `/context` · `/todo` · `/manifest` | The window · the agent's checklist · the surface hash and what it covers |
 | `/cot MODE` · `/think MODE` · `/expand [think]` | How much of the live trace and reasoning to show (`/think`: `hide`, `collapse`, `wrap`, `show`) · list the steps in the last folded run, or reprint the last turn's reasoning in full |
 | `/skills` | Active skills: times fired, read and cited this session, estimated tokens per firing, and from the audit trail total firings, cited rate, last used and the latest trial verdict; pending proposals |
+| `/proposals` | The pending proposals to change `.gnomon/` (skills, memory, harness notes), with their paths. Read-only: a person decides them with `gnomon proposals accept\|reject` |
 | `/inbox [resolve ID [note]]` | The work items flagged in the dashboard for this project (the launch banner counts the open ones); resolve one when it is dealt with. Information, not instructions |
 | `/quit` | Leave. See the note on sealing in [section 9](#9-troubleshooting). |
 
@@ -1853,6 +1856,63 @@ gnomon trust revoke     # forget every trust for this project; the next launch a
   **clamped** to the defaults, with one line naming the server and both hashes.
   `gnomon trust grant` accepts the change: it clears the pins, and the next
   session pins what the servers offer then. `gnomon trust` lists the pins.
+
+### 7.10 Governed self-improvement: proposals and memory
+
+gnomon's behaviour is fixed by the content-hashed `.gnomon/` directory, and
+nothing edits it silently. That would make the harness unable to learn, so there
+is one path by which it can: a **proposal**. Something proposes a change; a
+person reads the exact diff and accepts or rejects it; accepting moves the
+surface hash on purpose and takes effect from the next session.
+
+**A proposal** is a small typed file in `.gnomon-proposals/<id>.json`
+(machine-local, gitignored, never in the surface hash): a kind, a title, a
+rationale, where it came from, optional evidence (trail and record), and the
+diff, the whole new content of each file it would write with the sha256 of the
+file it was written against. Three kinds share the store: `skill`
+(`skills/<id>.md`; the `skill` tool still writes into `skills/proposed/`, and
+`gnomon proposals` lists those too), `memory` (`memory/<id>.md`) and `harness`
+(an edit to a surface file the surface allows: `system.md`, and only more if
+policy.toml names them).
+
+```
+gnomon proposals                     # the pending ones
+gnomon proposals show 20261122T1015  # the diff, the rationale, the evidence
+gnomon proposals accept 20261122T1015
+gnomon proposals reject 20261122T1015 --note "not true in this repo"
+```
+
+**Accept** applies the diff only if every file is exactly what the proposal was
+written against; otherwise it writes nothing and says the surface moved:
+re-propose. It refuses inside an agent session and without a person (a terminal,
+or a signer that needs a person for each signature), exit 3, like `gnomon skill
+accept`. Each decision is an audit record (`proposal_decision`; a skill keeps
+`skill_accept` / `skill_reject`) naming the paths and the surface hash before and
+after. The dashboard's Inbox screen has a Proposals section with the same two
+buttons: its confirmation shows the exact diff and the paths first.
+
+**Memory** is the first thing proposals are for. An entry in `.gnomon/memory/`
+is a short note about this repository with `name`, `description`, `provenance`
+(the proposal it came from) and `created` in its front matter. It exists only
+through an accepted proposal, so a change to what the agent remembers is a
+change to the surface hash, made by a person who saw the text. When the
+directory has entries the system prompt lists their names and one line each (at
+most 40, one line each); the model opens one with `read`, and that read is
+counted (`counters.memory`). No directory, no change to the prompt.
+
+```toml
+# policy.toml: all optional, all off by default
+[memory]
+propose = true            # the `skill` tool may also propose a memory entry (kind = "memory")
+
+[proposals]
+harness_paths = ["tools.toml"]   # extra surface files a harness proposal may edit
+```
+
+With `propose = true` the agent can propose a memory mid-run; that writes a
+proposal and nothing under `.gnomon/`. gnomon does not adopt memory that an
+agent writes on its own authority. With none of this declared, and no memory
+entries, the prompt, the tool definitions and the records are what they were.
 
 ---
 

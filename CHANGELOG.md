@@ -88,6 +88,29 @@ list no new host, `security test --host all` runs the same three hosts, and the
   written. The schemas are from each host's documentation (URLs in
   `packages/gnomon-core/src/guard.ts` and GOVERNING-OTHER-HARNESSES.md). Kimi Code's
   hook schema could not be verified, so no adapter.
+### Added — governed self-improvement, step 1: proposals and memory
+
+- **One proposal path** (`gnomon proposals [list|show|accept|reject]`, `/proposals`,
+  CONTRACTS §58). A proposal is an inert, typed file in the gitignored
+  `.gnomon-proposals/`: kind `skill`, `memory` or `harness`, a rationale, a source
+  (`agent`, `mine`, `improve`, `cli`), optional evidence and a diff of whole files
+  with the sha256 each was written against. Accept applies it only if every file
+  still matches (otherwise "the surface moved; re-propose"), moves the surface hash,
+  and writes a `proposal_decision` audit record (36th audit kind). Reject changes
+  nothing. Both refuse inside an agent session and without a person present (exit
+  3), as `gnomon skill accept` does. Existing skill proposals keep working and
+  keep `skill_accept` / `skill_reject`; `gnomon proposals` lists them too. A harness
+  proposal reaches `system.md` only, plus files `[proposals] harness_paths` names.
+- **Governed memory** (`gnomon memory [list|show]`). Entries live in
+  `.gnomon/memory/*.md`, hashed with the surface, and exist only through an accepted
+  proposal. When there are entries the system prompt lists their names (one line
+  each, at most 40) and the model opens one with `read`; reads are counted as
+  `counters.memory`. With `[memory] propose = true` the `skill` tool also takes
+  `kind: "memory"` and writes a proposal, never `.gnomon/`.
+- **Dashboard**: a Proposals section on the Inbox screen, with `proposal.accept` /
+  `proposal.reject` actions whose confirmation shows the exact diff and the paths.
+- Everything is opt-in. With no new keys and no memory entries the prompt, the tool
+  definitions and the records are byte-identical to before (tests pin it).
 
 ### Added — dashboard v2, onboarding and shell (depends on `feat/dashboard-v2-base`)
 

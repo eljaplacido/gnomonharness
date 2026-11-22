@@ -657,7 +657,7 @@ One thing to do straight after:
 
 The machine-local directories gnomon writes beside `.gnomon/`
 (`.gnomon-sessions/`, `.gnomon-audit/`, `.gnomon-out/`, `.gnomon-jobs/`,
-`.gnomon-loops/`, `.gnomon-shadow/`, `.gnomon-skills/`, `.gnomon-trials/`, `.gnomon-inbox/`) are
+`.gnomon-loops/`, `.gnomon-shadow/`, `.gnomon-skills/`, `.gnomon-trials/`, `.gnomon-inbox/`, `.gnomon-proposals/`) are
 added to `.gitignore` by `init` (and so by `launch`) — check that file before
 your first commit.
 
@@ -3590,6 +3590,8 @@ target; never the text) when the surface keeps a trail. Contract:
 | `gnomon acp [--role <name>] [--profile <name>]` | Serve the Agent Client Protocol on stdio for an editor (Zed, JetBrains). Same surface, roles, approvals and audit as `prompt`. See [In your editor](#in-your-editor--gnomon-acp). |
 | `gnomon task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--trust-exec-downgrade] [--deadline <seconds\|ISO time>]` | One task, no terminal. Exit code carries the bucket. An untrusted surface that grants more than the defaults runs clamped to them. `--deadline` (or `GNOMON_DEADLINE`) gives the run a wall clock and stops it with `stop_reason` `deadline` (exit 2) before it; `--trust-exec-downgrade` lets a role leave the container it ran in for this run. Both since v0.5.0. |
 | `gnomon trust [list\|grant\|revoke]` | Whether this machine trusts what this project's `.gnomon/` grants beyond the defaults. See [Workspace trust](#workspace-trust). |
+| `gnomon proposals [list\|show ID\|accept ID\|reject ID [--note N]] [--json]` | The one path by which `.gnomon/` changes itself: inert, typed proposals (a skill, a memory entry, an edit to an allowed surface file) in the gitignored `.gnomon-proposals/`. A person reads the diff and accepts (the surface hash moves, from the next session; refused if the surface moved since) or rejects. Never decided from inside an agent session. See [CONTRACTS §58](docs/CONTRACTS.md). |
+| `gnomon memory [list\|show NAME] [--json]` | The memory entries a person accepted into `.gnomon/memory/`: hashed with the surface, indexed (names only) in the prompt, opened with `read`. An entry exists only through an accepted proposal. |
 | `gnomon inbox [list\|show ID\|add --title T\|ack ID\|resolve ID\|mcp] [--json]` | Work items an operator flagged for the developer's harness (**Flag for fix** in the dashboard): one gitignored file each in `.gnomon-inbox/`, read by every harness as information from the operator, never as an instruction. See [The inbox](#the-inbox). |
 | `gnomon sessions` | Saved sessions. |
 | `gnomon skill [list [--candidates]\|accept <id> [--evidence <report.json>]\|reject <id> [--reason <text>]\|mine [--json]]` | Learned skills and proposals. Accept and reject write `skill_accept` / `skill_reject` audit records; a refused accept exits 3. `mine` writes candidates from the audit trail to `.gnomon-skills/candidates/`, with no model call. |
@@ -3658,6 +3660,7 @@ undiscoverable.
 | `/endpoints` | Declared inference endpoints |
 | `/context` | Window, folded turns, summary size |
 | `/skills` | Active skills with how often each fired, was read and cited (this session and across the audit trail), its context cost and latest trial verdict; pending proposals |
+| `/proposals` | The pending proposals to change `.gnomon/` (skills, memory, harness notes), with their paths. Read-only: a person decides them with `gnomon proposals accept\|reject` |
 | `/inbox [resolve ID [note]]` | The work items flagged in the dashboard for this project (the launch banner counts the open ones); resolve one when it is dealt with. Information, not instructions |
 | `/session [id]` | This session, earlier ones, and switching between them |
 | `/new` | Start a fresh session; the current one stays resumable |

@@ -1212,6 +1212,7 @@ export const MACHINE_LOCAL_DIRS = [
   ".gnomon-skills",
   ".gnomon-trials",
   ".gnomon-inbox",
+  ".gnomon-proposals",
 ];
 
 /**

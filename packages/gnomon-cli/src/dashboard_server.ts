@@ -32,10 +32,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { harnessBuild, loadTrust, trustPath as defaultTrustPath, getItem as getInboxItem, INBOX_DIR } from "gnomon-core";
+import { acceptProposal, rejectProposal, readProposal, renderDiff, proposalPaths, sha256Hex, SkillRefusal } from "gnomon-core";
 import {
   contractsView,
   ensureProject,
   inboxView,
+  proposalsView,
+  configOf,
   governanceView,
   measurementsView,
   projectOverview,
@@ -122,6 +125,7 @@ export const DASHBOARD_ROUTES = {
     "GET /api/p/<id>/lens?trail=<trail>",
     "GET /api/p/<id>/lens/run?name=<trail>",
     "GET /api/p/<id>/inbox",
+    "GET /api/p/<id>/proposals",
     "GET /api/p/<id>/chat",
     "POST /api/p/<id>/chat",
     "POST /api/actions/<name>",
@@ -308,6 +312,26 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
   ): Promise<void> {
     const argv = argvFor(action, p, params, pending?.digest);
     const command = commandText(argv);
+    if (action.name === "proposal.accept" || action.name === "proposal.reject") {
+      // In-process, as `audit.verify` is: see the table's note. Recorded as the
+      // command records itself (`proposal_decision`, or skill_accept/reject),
+      // with `by: "dashboard"`.
+      busy.add(p.id);
+      try {
+        const config = configOf(p);
+        const d = action.name === "proposal.accept"
+          ? acceptProposal(config, params.id!, { by: "dashboard" })
+          : rejectProposal(config, params.id!, { by: "dashboard", reason: params.note });
+        refresh(p);
+        return json(res, 200, { action: action.name, command, exit: 0, timed_out: false, json: { schema: "gnomon.proposals/1", decision: d }, stderr: "" });
+      } catch (err) {
+        refresh(p);
+        const message = err instanceof Error ? err.message : String(err);
+        return json(res, 200, { action: action.name, command, exit: err instanceof SkillRefusal ? 3 : 1, timed_out: false, output: "", stderr: message });
+      } finally {
+        busy.delete(p.id);
+      }
+    }
     const entry = opts.cliEntry!;
 
     if (action.name === "setup.pull") {
@@ -465,6 +489,39 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
           ]
         );
       }
+      case "proposal.accept":
+      case "proposal.reject": {
+        const config = configOf(p);
+        const prop = readProposal(config, params.id!);
+        if (!prop) return fail(res, 404, "no such proposal");
+        if (prop.status !== "pending") return fail(res, 409, `this proposal is already ${prop.status}`);
+        const accept = action.name === "proposal.accept";
+        const shownPaths = proposalPaths(prop).map((x) => `.gnomon/${x}`);
+        const moved = prop.diff.filter((d) => {
+          try {
+            const file = join(p.root, ".gnomon", ...d.path.split("/"));
+            return (existsSync(file) ? sha256Hex(readFileSync(file)) : null) !== d.before_sha256;
+          } catch {
+            return true;
+          }
+        });
+        if (accept && moved.length) return fail(res, 409, `${moved.map((d) => `.gnomon/${d.path}`).join(", ")} changed since this was proposed (the surface moved): reject it and re-propose`);
+        const hash = surfaceHashOf(p);
+        return ask(
+          { proposal: { id: prop.id, kind: prop.kind, title: prop.title, rationale: prop.rationale, source: prop.source, paths: shownPaths, evidence: prop.evidence ?? [] }, diff: renderDiff(config, prop) },
+          accept
+            ? [
+                `Writes ${shownPaths.join(", ")} exactly as the diff below shows, and nothing else. The surface hash ${hash ? hash.slice(0, 12) : ""} changes, and the change applies from the next session.`,
+                "Refused, and nothing written, if any of those files has changed since this was proposed, if an agent session or no person is present, or if gnomon's records were tampered with.",
+                "Recorded as a proposal_decision record (a skill: skill_accept) with who decided, the paths and the surface hash before and after.",
+              ]
+            : [
+                `Marks this proposal rejected${params.note ? ` with the note "${params.note}"` : ""}. ${shownPaths.join(", ")} stays as it is.`,
+                "Recorded as a proposal_decision record (a skill: skill_reject).",
+              ],
+          { surfaceHash: hash ?? undefined }
+        );
+      }
       case "inbox.resolve": {
         const item = getInboxItem(p.root, params.id!);
         if (!item) return fail(res, 404, "no such inbox item");
@@ -521,8 +578,9 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
 
     // Everything else is the CLI's own command, so it exists exactly when the
     // CLI this dashboard belongs to has it.
-    const have = await cliCommands();
-    if (!opts.cliEntry || !have.has(action.argv[0])) {
+    const inProcess = action.name === "proposal.accept" || action.name === "proposal.reject";
+    const have = inProcess ? new Set<string>() : await cliCommands();
+    if (!inProcess && (!opts.cliEntry || !have.has(action.argv[0]))) {
       if (action.name === "doctor.scan") return json(res, 200, { action: action.name, available: false, command: "gnomon doctor --json" });
       return fail(res, 409, `this gnomon build has no \`gnomon ${action.argv[0]}\``);
     }
@@ -673,7 +731,7 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
         key_store: keyStorePath(),
       });
     }
-    const m = /^\/api\/p\/([0-9a-f]{12})\/(surface|sessions|trail|governance|measurements|contracts|lens|lens\/run|inbox)$/.exec(path);
+    const m = /^\/api\/p\/([0-9a-f]{12})\/(surface|sessions|trail|governance|measurements|contracts|lens|lens\/run|inbox|proposals)$/.exec(path);
     if (req.method === "GET" && m) {
       const p = projectById(m[1]!);
       if (!p) return fail(res, 404, "no such project");
@@ -702,6 +760,8 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
         }
         case "inbox":
           return json(res, 200, inboxView(p));
+        case "proposals":
+          return json(res, 200, proposalsView(p));
       }
     }
     const j = /^\/api\/jobs\/([A-Za-z0-9_-]{12})$/.exec(path);
