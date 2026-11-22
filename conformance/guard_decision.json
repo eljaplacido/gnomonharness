@@ -60,6 +60,25 @@
       "allow": {},
       "deny": { "permission": "deny", "user_message": "<string>", "agent_message": "<string>" },
       "ask": { "permission": "ask", "user_message": "<string>", "agent_message": "<string>" }
+    },
+    "qwen-code": {
+      "_comment": "Qwen Code reads Claude Code's answer (opt-in host: nothing is installed until `gnomon guard install qwen-code`).",
+      "allow": "",
+      "deny": { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "<string>" } },
+      "ask": { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "<string>" } }
+    },
+    "codex": {
+      "_comment": "Codex documents permissionDecision ask as parsed but not supported: an ask from the approval gate (rule approval) is answered with nothing on stdout (Codex's own approval flow applies) and one stderr line starting 'gnomon guard: ask (approval), left to Codex's own approval flow'; every other ask is answered deny.",
+      "allow": "",
+      "deny": { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "<string>" } },
+      "ask": "",
+      "ask_other_than_approval": { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "<string>" } }
+    },
+    "copilot": {
+      "_comment": "Copilot reads a top-level permissionDecision; the Claude-format hookSpecificOutput is carried beside it.",
+      "allow": {},
+      "deny": { "permissionDecision": "deny", "permissionDecisionReason": "<string>", "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "<string>" } },
+      "ask": { "permissionDecision": "ask", "permissionDecisionReason": "<string>", "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": "<string>" } }
     }
   },
   "project_sources": {
@@ -67,12 +86,16 @@
     "claude-code": "env:CLAUDE_PROJECT_DIR",
     "cursor": "payload:workspace_roots",
     "opencode": "payload:directory",
+    "qwen-code": "env:QWEN_PROJECT_DIR",
     "generic": "payload:project"
   },
   "hook_agents": {
     "_comment": "The --agent each hook `gnomon guard install` writes passes (for the opencode plugin, its default; $GNOMON_GUARD_AGENT overrides it). The guard maps it to a role through [check.roles] in .gnomon/policy.toml. With no entry there, or one naming no declared role, it has no role and answers every call ask (rule error, 'no role'). install warns on stderr with the [check.roles] line to add, and exits as before; guard status lists such a hook in `warnings`, not `findings` (#205, CONTRACTS.md §10).",
     "claude-code": "claude-code",
     "opencode": "opencode",
-    "cursor": "cursor"
+    "cursor": "cursor",
+    "codex": "codex",
+    "qwen-code": "qwen-code",
+    "copilot": "copilot"
   }
 }

@@ -34,7 +34,10 @@ import {
   guardHarnessRequest,
   readHarness,
   resolveCheckRole,
+  CODEX_DEFERRED,
   toClaudeCode,
+  toCodex,
+  toCopilot,
   toCursor,
   type GovernanceGaps,
   type GuardHarness,
@@ -44,9 +47,9 @@ import {
 } from "gnomon-core/guard";
 
 export const GUARD_USAGE = `Usage: gnomon guard --tool <${GUARD_TOOLS.join("|")}> --input <json> [options]
-       gnomon guard [--from generic|claude-code|opencode|cursor] [options] < call.json
-       gnomon guard install claude-code|opencode|cursor [--write [--local]] [--dir <path>] [--bin <path>]
-       gnomon guard status [--dir <path>] [--expect claude-code,opencode,cursor] [--json]
+       gnomon guard [--from generic|claude-code|opencode|cursor|codex|qwen-code|copilot] [options] < call.json
+       gnomon guard install claude-code|opencode|cursor|codex|qwen-code|copilot [--write [--local]] [--dir <path>] [--bin <path>]
+       gnomon guard status [--dir <path>] [--expect claude-code,opencode,cursor,codex,qwen-code,copilot] [--json]
 
 Options:
   --base <rev>         read the rules from <rev> (default: the session's recorded base, else HEAD)
@@ -58,7 +61,9 @@ Options:
                        only when the session has no recorded base yet (the opencode plugin)
 
 Exit (generic and opencode): 0 allow, 2 deny, 3 ask, 10 no decision (answered as ask).
-claude-code and cursor answer in their own hook format and exit 0.
+claude-code, cursor, codex, qwen-code and copilot answer in their own hook format and exit 0
+(codex cannot ask: an approval-gate ask is left to Codex's own approval flow, any other ask is
+answered deny; codex, qwen-code and copilot install nothing until you run \`guard install\` for them).
 install writes the absolute path of a gnomon that answers \`gnomon guard\` (--bin, else
 $GNOMON_GUARD_BIN, else the gnomon running the install, else the one on PATH), and refuses
 (exit 10) when none does. That path is this machine's: --local keeps the hook out of git
@@ -138,6 +143,8 @@ export async function cmdGuard(
     // Claude Code names its project root to every hook. A shell an earlier
     // `cd` moved out of the project still answers to the project's rules.
     ...(from === "claude-code" && process.env.CLAUDE_PROJECT_DIR ? { project: resolve(process.env.CLAUDE_PROJECT_DIR) } : {}),
+    // Qwen Code names its project root to hooks as $QWEN_PROJECT_DIR (its hooks docs).
+    ...(from === "qwen-code" && process.env.QWEN_PROJECT_DIR ? { project: resolve(process.env.QWEN_PROJECT_DIR) } : {}),
     base: args.flags.base,
     role: args.flags.role,
     agent: args.flags.agent,
@@ -173,6 +180,21 @@ function answer(from: GuardHarness, v: GuardVerdict, out: (s: string) => void, e
       if (s) out(s);
       return 0;
     }
+    case "qwen-code": {
+      // Qwen Code reads Claude Code's answer: hookSpecificOutput.permissionDecision.
+      const s = toClaudeCode(v);
+      if (s) out(s);
+      return 0;
+    }
+    case "codex": {
+      const s = toCodex(v);
+      if (s) out(s);
+      else if (v.decision === "ask") console.error(`${CODEX_DEFERRED}: ${v.reason}`);
+      return 0;
+    }
+    case "copilot":
+      out(toCopilot(v));
+      return 0;
     case "cursor":
       out(toCursor(v, event));
       return 0;
@@ -306,6 +328,78 @@ export function cursorHooks(bin: string[] = ["gnomon"]): { version: number; hook
   };
 }
 
+const CODEX_GUARD_TAIL = "guard --from codex --agent codex";
+const QWEN_GUARD_TAIL = "guard --from qwen-code --agent qwen-code";
+const COPILOT_GUARD_TAIL = "guard --from copilot --agent copilot";
+
+/**
+ * Codex's PreToolUse matcher: a regex over the tool name
+ * (https://learn.chatgpt.com/docs/hooks). `Bash`, `apply_patch` (matched
+ * by its `Edit`/`Write` aliases too) and MCP tools. Not hosted web search,
+ * which Codex runs outside its hooks.
+ */
+export const CODEX_MATCHER = "Bash|apply_patch|Edit|Write|mcp__.*";
+export const CODEX_MATCHED_TOOLS = ["Bash", "apply_patch", "mcp__server__tool"];
+/**
+ * Qwen Code's PreToolUse matcher: the runtime tool ids gnomon decides, and MCP
+ * tools. Listed, not `*`: a hook on every tool would put host bookkeeping
+ * (todo_write, ask_user_question ...) to a person under a declared
+ * [governance].
+ */
+export const QWEN_MATCHER =
+  "^(?:run_shell_command|write_file|edit|notebook_edit|read_file|grep_search|glob|list_directory|web_fetch|web_search|agent|mcp__.*)$";
+export const QWEN_MATCHED_TOOLS = [
+  "run_shell_command",
+  "write_file",
+  "edit",
+  "notebook_edit",
+  "read_file",
+  "grep_search",
+  "glob",
+  "list_directory",
+  "web_fetch",
+  "web_search",
+  "agent",
+  "mcp__server__tool",
+];
+
+/**
+ * Codex's hooks (`.codex/hooks.json`, event -> matcher group -> handlers; the
+ * same shape as Claude Code's). PreToolUse decides; SessionStart records the
+ * base the rules are read from. Stop is not installed: its output contract
+ * (`decision: "block"` starts a continuation) is not the exit-2 one `gnomon
+ * check --hook stop` answers, and the dashboard inbox is not delivered
+ * (its target is Claude Code's).
+ */
+export function codexHooks(bin: string[] = ["gnomon"]): { hooks: Record<string, unknown[]> } {
+  return {
+    hooks: {
+      SessionStart: [{ hooks: [{ type: "command", command: shellCommand(bin, CC_START_TAIL), timeout: 30 }] }],
+      PreToolUse: [{ matcher: CODEX_MATCHER, hooks: [{ type: "command", command: shellCommand(bin, CODEX_GUARD_TAIL), timeout: 30 }] }],
+    },
+  };
+}
+
+/** Qwen Code's hooks (`.qwen/settings.json`, `hooks` beside the user's other settings). */
+export function qwenCodeHooks(bin: string[] = ["gnomon"]): { hooks: Record<string, unknown[]> } {
+  return {
+    hooks: {
+      SessionStart: [{ hooks: [{ type: "command", command: shellCommand(bin, CC_START_TAIL), timeout: 30 }] }],
+      PreToolUse: [{ matcher: QWEN_MATCHER, hooks: [{ type: "command", command: shellCommand(bin, QWEN_GUARD_TAIL), timeout: 30 }] }],
+    },
+  };
+}
+
+/**
+ * Copilot's hook file (`.github/hooks/gnomon.json`, `version` 1; CLI and cloud
+ * agent read `.github/hooks/*.json`). A flat entry with the cross-platform
+ * `command` fallback and `timeoutSec`
+ * (https://docs.github.com/en/copilot/reference/hooks-configuration).
+ */
+export function copilotHooks(bin: string[] = ["gnomon"]): { version: number; hooks: Record<string, unknown[]> } {
+  return { version: 1, hooks: { preToolUse: [{ type: "command", command: shellCommand(bin, COPILOT_GUARD_TAIL), timeoutSec: 30 }] } };
+}
+
 /**
  * The agent name each host's hook passes as `--agent`
  * (conformance/guard_decision.json `hook_agents`; the opencode plugin's
@@ -313,10 +407,13 @@ export function cursorHooks(bin: string[] = ["gnomon"]): { version: number; hook
  * through `[check.roles]`. With no entry there it has no role to decide as,
  * and answers every call `ask` (rule `error`, "no role", CONTRACTS.md §10).
  */
-export const HOOK_AGENTS: Readonly<Record<"claude-code" | "opencode" | "cursor", string>> = {
+export const HOOK_AGENTS: Readonly<Record<"claude-code" | "opencode" | "cursor" | "codex" | "qwen-code" | "copilot", string>> = {
   "claude-code": "claude-code",
   opencode: "opencode",
   cursor: "cursor",
+  codex: "codex",
+  "qwen-code": "qwen-code",
+  copilot: "copilot",
 };
 
 /**
@@ -717,8 +814,15 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
   const write = args.flags.write === "true";
   const local = args.flags.local === "true";
   const project = resolve(args.flags.dir ?? process.cwd());
-  if (target !== "claude-code" && target !== "opencode" && target !== "cursor") {
-    console.error(`gnomon guard install: claude-code, opencode or cursor (got "${target ?? ""}")\n\n${GUARD_USAGE}`);
+  if (
+    target !== "claude-code" &&
+    target !== "opencode" &&
+    target !== "cursor" &&
+    target !== "codex" &&
+    target !== "qwen-code" &&
+    target !== "copilot"
+  ) {
+    console.error(`gnomon guard install: claude-code, opencode, cursor, codex, qwen-code or copilot (got "${target ?? ""}")\n\n${GUARD_USAGE}`);
     return 10;
   }
   const resolved = resolveGnomonBin(args.flags.bin && args.flags.bin !== "true" ? args.flags.bin : undefined);
@@ -837,7 +941,113 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
       warnNoRole(project, target);
       return 0;
     }
+    case "codex":
+    case "qwen-code":
+    case "copilot": {
+      const spec = {
+        codex: {
+          fragment: codexHooks(bin),
+          file: join(project, ".codex", "hooks.json"),
+          what: "Codex",
+          notes: [
+            "Codex loads a project's hooks only once the project is trusted, and runs a non-managed hook only",
+            "after it is reviewed: open Codex and approve it with /hooks. Until then Codex runs every call",
+            "unguarded (`--dangerously-bypass-hook-trust` skips the review, and `[features] hooks = false` in",
+            "config.toml turns hooks off; `guard status` reports the second, not the first).",
+            "Codex cannot ask: a call the [approval] gate would ask about is left to Codex's own approval flow",
+            "(said on stderr, recorded as an ask); any other ask (no such tool for the role, an ungoverned tool",
+            "under [governance], an undecidable call) is refused.",
+            "Not covered: hosted web search; Stop and the dashboard inbox are not installed.",
+          ],
+        },
+        "qwen-code": {
+          fragment: qwenCodeHooks(bin),
+          file: join(project, ".qwen", "settings.json"),
+          what: "Qwen Code",
+          notes: [
+            "Qwen Code reads this file's `hooks` beside your other settings (kept as they are).",
+            "Under `--prompt` (headless) and in background subagents Qwen turns an ask into a deny.",
+            "`disableAllHooks` and `--safe-mode`/`--bare` turn hooks off; `guard status` reads the first.",
+          ],
+        },
+        copilot: {
+          fragment: copilotHooks(bin),
+          file: join(project, ".github", "hooks", "gnomon.json"),
+          what: "GitHub Copilot",
+          notes: [
+            "Copilot CLI and the cloud agent read .github/hooks/*.json from the repository: commit it, and",
+            "give each machine a path it has (--bin). A command that errors DENIES the call; a hook that",
+            "times out (30 s) lets it through to Copilot's own permissions. Copilot also reads",
+            "`.claude/settings.json`: a gnomon claude-code hook there fires too.",
+            "MCP tools are not put to the guard (their tool names are not documented).",
+          ],
+        },
+      }[target];
+      if (write) {
+        const { file, fragment } = spec;
+        const checked = checkHookFile(file);
+        if (checked) {
+          console.error(`gnomon guard install ${target}: ${checked}`);
+          return 10;
+        }
+        const added = mergeHooks(project, file, fragment);
+        recordInstall(project, target, file, bin);
+        console.error(added.length ? `gnomon guard: added ${added.join(", ")} to ${file}` : `gnomon guard: ${file} already has these hooks`);
+        if (target === "codex") {
+          const toml = join(project, ".codex", "config.toml");
+          if (existsSync(toml) && /^\s*\[\[?hooks[.\]]/m.test(readFileSync(toml, "utf-8"))) {
+            console.error(`gnomon guard: warning: ${toml} also defines [hooks]; Codex loads both files and warns at startup. Keep one format per layer.`);
+          }
+        }
+        if (target === "copilot") {
+          const claude = join(project, ".claude", "settings.json");
+          if (existsSync(claude) && /guard --from claude-code\b/.test(readFileSync(claude, "utf-8"))) {
+            console.error(`gnomon guard: warning: ${claude} also runs gnomon's guard, and Copilot reads that file: it decides each call twice (the same answer, two records).`);
+          }
+        }
+        for (const n of spec.notes) console.error(`gnomon guard: ${n}`);
+        console.error(`gnomon guard: live verification against a real ${spec.what} binary is pending: the hook schema is from its documentation.`);
+        travel(file);
+        warnNoRole(project, target);
+        return 0;
+      }
+      out(JSON.stringify(spec.fragment, null, 2));
+      console.error(
+        [
+          "",
+          `Save the above as ${relative(project, spec.file) || spec.file} (merged with what is there), or run`,
+          `\`gnomon guard install ${target} --write\` to merge it without clobbering existing hooks.`,
+          ...spec.notes.map((n) => `  ${n}`),
+          `Map the agent to a role: [check.roles] ${target} = "implement".`,
+        ].join("\n")
+      );
+      warnNoRole(project, target);
+      return 0;
+    }
   }
+}
+
+/**
+ * Why an existing hook file cannot be merged into, or null when it can (absent,
+ * or a JSON object whose `hooks`, when there, is an object of arrays). A file
+ * that is not is left untouched: the user's hooks are not ours to rewrite.
+ */
+function checkHookFile(file: string): string | null {
+  if (!existsSync(file)) return null;
+  let doc: unknown;
+  try {
+    doc = JSON.parse(readFileSync(file, "utf-8"));
+  } catch (err) {
+    return `${file} is not valid JSON (${err instanceof Error ? err.message : String(err)}); nothing was changed. Fix or move it, or merge the printed hooks by hand (run without --write).`;
+  }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return `${file} is not a JSON object; nothing was changed.`;
+  const hooks = (doc as { hooks?: unknown }).hooks;
+  if (hooks === undefined) return null;
+  if (!hooks || typeof hooks !== "object" || Array.isArray(hooks)) return `${file} has a "hooks" that is not an object; nothing was changed.`;
+  for (const [event, list] of Object.entries(hooks)) {
+    if (!Array.isArray(list)) return `${file}: hooks.${event} is not an array; nothing was changed.`;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -968,7 +1178,26 @@ function runs(hooks: unknown, event: string, tail: string, tools?: string[], mat
 }
 
 /** A hook file that has gnomon's guard in it at all: an install, perhaps older or edited. */
-const COMMITTED_GUARD = /guard --from (?:claude-code|cursor)\b|gnomon-guard: generated by/;
+const COMMITTED_GUARD = /guard --from (?:claude-code|cursor|codex|qwen-code|copilot)\b|gnomon-guard: generated by/;
+
+/**
+ * Whether a TOML text sets `hooks = false` (or the deprecated `codex_hooks =
+ * false`) under `[features]`: Codex's switch for all hooks. A line scan, not a
+ * TOML parse: the table header, then the key, until the next table.
+ */
+export function codexHooksOff(toml: string): boolean {
+  let inFeatures = false;
+  for (const raw of toml.split(/\r?\n/)) {
+    const line = raw.replace(/#.*$/, "").trim();
+    if (!line) continue;
+    if (line.startsWith("[")) {
+      inFeatures = /^\[\s*features\s*\]$/.test(line);
+      continue;
+    }
+    if (inFeatures && /^(?:hooks|codex_hooks)\s*=\s*false$/.test(line)) return true;
+  }
+  return false;
+}
 
 /** Why a hook's program cannot run, when it is an absolute path that is not there. */
 function absentProgram(command: string): string | null {
@@ -1135,10 +1364,99 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
         : `no beforeShellExecution and beforeReadFile hook runs \`gnomon ${CURSOR_TAIL}\``;
     })
   );
+  // Codex, Qwen Code and Copilot are opt-in: listed only where an install, a
+  // committed hook or `--expect` makes them expected, so a repository that
+  // never installed one sees the same status as before.
+  const optIn: HookStatus[] = [];
+  const codexFile = join(repo.project, ".codex", "hooks.json");
+  const codexHome = env.CODEX_HOME ? resolve(env.CODEX_HOME) : join(homedir(), ".codex");
+  optIn.push(
+    judge(
+      "codex",
+      codexFile,
+      (text) => {
+        let hooks: unknown;
+        try {
+          hooks = (JSON.parse(text) as { hooks?: unknown }).hooks;
+        } catch {
+          return "it is not JSON Codex can read";
+        }
+        const cmd = runs(hooks, "PreToolUse", CODEX_GUARD_TAIL, CODEX_MATCHED_TOOLS);
+        if (!cmd) {
+          return runs(hooks, "PreToolUse", CODEX_GUARD_TAIL)
+            ? `its PreToolUse matcher does not cover ${CODEX_MATCHER}`
+            : `no PreToolUse hook runs \`gnomon ${CODEX_GUARD_TAIL}\``;
+        }
+        if (!runs(hooks, "SessionStart", CC_START_TAIL)) return "no SessionStart hook records the session's base";
+        return absentProgram(cmd);
+      },
+      () => {
+        for (const f of [join(repo.project, ".codex", "config.toml"), join(codexHome, "config.toml")]) {
+          try {
+            if (codexHooksOff(readFileSync(f, "utf-8"))) return `${f} sets [features] hooks = false`;
+          } catch {
+            // no such file
+          }
+        }
+        return null;
+      }
+    )
+  );
+  const qwenFile = join(repo.project, ".qwen", "settings.json");
+  optIn.push(
+    judge(
+      "qwen-code",
+      qwenFile,
+      (text) => {
+        let hooks: unknown;
+        try {
+          hooks = (JSON.parse(text) as { hooks?: unknown }).hooks;
+        } catch {
+          return "it is not JSON Qwen Code can read";
+        }
+        const cmd = runs(hooks, "PreToolUse", QWEN_GUARD_TAIL, QWEN_MATCHED_TOOLS);
+        if (!cmd) {
+          return runs(hooks, "PreToolUse", QWEN_GUARD_TAIL)
+            ? "its PreToolUse matcher does not select every tool gnomon decides"
+            : `no PreToolUse hook runs \`gnomon ${QWEN_GUARD_TAIL}\``;
+        }
+        if (!runs(hooks, "SessionStart", CC_START_TAIL)) return "no SessionStart hook records the session's base";
+        return absentProgram(cmd);
+      },
+      () => {
+        for (const f of [qwenFile, join(homedir(), ".qwen", "settings.json")]) {
+          if (readJson(f)?.disableAllHooks === true) return `${f} sets disableAllHooks`;
+        }
+        return null;
+      }
+    )
+  );
+  const copilotFile = join(repo.project, ".github", "hooks", "gnomon.json");
+  optIn.push(
+    judge("copilot", copilotFile, (text) => {
+      let hooks: unknown;
+      try {
+        hooks = (JSON.parse(text) as { hooks?: unknown }).hooks;
+      } catch {
+        return "it is not JSON Copilot can read";
+      }
+      const cmd = runs(hooks, "preToolUse", COPILOT_GUARD_TAIL);
+      return cmd ? absentProgram(cmd) : `no preToolUse hook runs \`gnomon ${COPILOT_GUARD_TAIL}\``;
+    })
+  );
+  for (const h of optIn) if (h.state !== "not_installed") status.hosts.push(h);
   for (const h of status.hosts) {
-    const line = `${h.host}: ${h.state} — ${relative(repo.project, h.file) || h.file}: ${h.detail}`;
+    const line = `${h.host}: ${h.state} —${relative(repo.project, h.file) || h.file}: ${h.detail}`;
     if (h.state === "missing" || h.state === "modified" || h.state === "disabled") status.findings.push(line);
     else if (h.state === "outdated") status.warnings.push(line);
+  }
+  const cx = status.hosts.find((h) => h.host === "codex");
+  if (cx && (cx.state === "ok" || cx.state === "outdated")) {
+    status.warnings.push("codex: Codex runs a project hook only once the project is trusted and the hook reviewed (/hooks); gnomon cannot see that, so `ok` means the file is right, not that Codex runs it");
+  }
+  const cp = status.hosts.find((h) => h.host === "copilot");
+  if (cp && (cp.state === "ok" || cp.state === "outdated") && holdsGuard(claudeShared) && /guard --from claude-code\b/.test(readFileSync(claudeShared, "utf-8"))) {
+    status.warnings.push("copilot: Copilot also reads .claude/settings.json, where gnomon's claude-code hook is: each call is decided twice (the same answer, two records)");
   }
   // The dashboard inbox's delivery (inbox.ts): reported beside the hook, and a
   // warning, never a finding, when an older install lacks it.

@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 4846 TypeScript tests (4060 core, 761 cli, 18
-> natives, 7 tui) and 120 Rust tests — **4966 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 4885 TypeScript tests (4060 core, 800 cli, 18
+> natives, 7 tui) and 120 Rust tests — **5005 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2555,7 +2555,8 @@ builds a throwaway repository holding a copy of this project's `.gnomon/`,
 with bait beside it: a `.env`, a CI workflow, a directory worth deleting. An
 isolated HOME stands in for yours. It then pipes 24 tool calls an injected or
 mistaken agent could propose through the real `gnomon guard`, in the hook
-input of each harness the guard governs: Claude Code, opencode and Cursor.
+input of each harness the guard governs: Claude Code, opencode and Cursor (and, by
+name, `--host codex|qwen-code|copilot`).
 No model runs, and the scratch repository is removed afterwards.
 
 ```bash
@@ -3574,7 +3575,7 @@ target; never the text) when the surface keeps a trail. Contract:
 | `gnomon setup [--json] [--yes] [--pull <tag>] [--model <tag>] [--speed-check] [--mode local\|hybrid\|cloud] [--cloud-endpoint <url\|preset\|name> --cloud-model <name>] [--cloud-key-env <VAR>] [--catalog <file>] [--expect-proposal <digest>]` | Scan this machine, recommend a local model it can run from a dated catalog, pull it only on a yes, speed-check it, connect an optional cloud model, suggest local only, hybrid or cloud first, and write `.gnomon/` only after you accept the diff. `--yes` approves the write, never a download (`--pull` names one) or spending; `--expect-proposal` writes only the change a `--json` run printed as `proposal.digest`. Exit 0 written, 3 the surface or the change moved, 4 needs consent or a model, 12 the model server stopped answering. See [Get started in 3 steps](#get-started-in-3-steps). |
 | `gnomon doctor [--json] [--catalog <file>]` | Read-only: this machine, whether every role's model answers, and what changed since setup. Says what would fix each problem; never changes anything. Exit 0 nothing to do, 1 something needs attention, 10 could not run. |
 | `gnomon security [--json]` | Read-only: this project's security posture in one place — trust, where each role's commands run and what contains them, other harnesses' guard hooks, the audit trail. Risks (exit 2) are what is wrong now; advice names a setting that would contain more. See [Security posture](#security-posture--gnomon-security). |
-| `gnomon security test [--host claude-code\|opencode\|cursor\|all] [--role <r>] [--json]` | A model-free attack corpus (24 cases, mapped to OWASP LLM01/02/03/06) through the real guard, in the hook input of Claude Code, opencode and Cursor, against a scratch copy of this surface. Exit 2 names each case that did not hold. See [Security test](#security-test--gnomon-security-test). |
+| `gnomon security test [--host claude-code\|opencode\|cursor\|codex\|qwen-code\|copilot\|all] [--role <r>] [--json]` | A model-free attack corpus (24 cases, mapped to OWASP LLM01/02/03/06) through the real guard, in the hook input of Claude Code, opencode and Cursor, against a scratch copy of this surface. Exit 2 names each case that did not hold. See [Security test](#security-test--gnomon-security-test). |
 | `gnomon compliance [--framework <id,...>] [--json]` | Read-only: which controls of the EU AI Act, GDPR, OWASP LLM Top 10, ISO/IEC 42001, NIST AI RMF, ISO/IEC 27001, SOC 2, the Cyber Resilience Act and DORA this project has gnomon evidence for, from a dated catalog — evidence, partial, gap (with the setting that closes it), a gnomon property, or the organisation's. A mapping, never an assessment. See [Compliance evidence](#compliance-evidence--gnomon-compliance). |
 | `gnomon compliance pack --out <dir> [--with-trails]` / `--verify <dir>` | Every read-only report (compliance, security posture and test, data flows, metrics, audit verification, eval reports) as JSON and text in one directory, with `pack.json` hashing each file; `--verify` re-hashes it. See [Evidence pack](#evidence-pack--gnomon-compliance-pack). |
 | `gnomon compliance dataflow [--json]` | Read-only: every place this surface can send prompts and repository content — model endpoints per role (primary, fallback, escalation) with host, locality and declared region, MCP servers, network-fetching roles, the shadow and anchor — and, with the opt-in `[compliance] allowed_regions` rule, which routes it admits. See [Data flows and residency](#data-flows-and-residency--gnomon-compliance-dataflow). |

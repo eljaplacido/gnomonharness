@@ -2,7 +2,8 @@
 
 gnomon's rules live in a committed `.gnomon/` directory, and the same code that
 enforces them inside gnomon's own tool loop can be put in front of another
-coding agent: Claude Code, opencode, Cursor, or anything with a pre-tool hook.
+coding agent: Claude Code, opencode, Cursor, and (opt-in) OpenAI Codex CLI, Qwen
+Code and GitHub Copilot, or anything with a pre-tool hook.
 This page says what is enforced where, how to set it up, how to tell that it is
 running, what it records, and how it can be got around.
 
@@ -17,6 +18,9 @@ The contracts behind it are [CONTRACTS.md](CONTRACTS.md) §10 (`gnomon guard`),
 | | Claude Code | a `PreToolUse` hook runs `gnomon guard` on Bash, Write, Edit, MultiEdit, NotebookEdit, Read, Grep, Glob, WebFetch, WebSearch, Agent/Task and every MCP tool | `permissionDecision: "deny"`; Claude reads the reason |
 | | opencode 2.2.x | a plugin in `.opencode/plugins/` sees every tool call before it runs | the call fails with gnomon's reason |
 | | Cursor | `beforeShellExecution` and `beforeReadFile` hooks | `permission: "deny"`. Cursor documents no hook before a file write, so writes are judged afterwards |
+| | OpenAI Codex CLI (opt-in, [below](#codex-qwen-code-and-copilot-opt-in)) | a `PreToolUse` hook in `.codex/hooks.json` on `Bash`, `apply_patch` and MCP tools | `permissionDecision: "deny"`. Codex cannot ask, so an approval-gate ask is left to Codex's own flow and any other ask is refused |
+| | Qwen Code (opt-in) | a `PreToolUse` hook in `.qwen/settings.json` on its runtime tool ids and MCP tools | `permissionDecision: "deny"` (Claude Code's answer) |
+| | GitHub Copilot CLI and cloud agent (opt-in) | a `preToolUse` hook in `.github/hooks/gnomon.json` | top-level `permissionDecision: "deny"`; a hook that errors also denies |
 | **Decided on request** | any harness with a pre-tool hook (pi, mini-swe-agent, your own) | the hook pipes the call to `gnomon guard --from generic` and acts on the exit code | whatever the hook does with exit 2 |
 | **After the fact** | any harness, hook or not | `gnomon check` on the change (and the agent's transcript) | the check fails (exit 2); in CI that blocks the merge |
 
@@ -79,6 +83,80 @@ After an upgrade, a hook an earlier gnomon wrote and nobody changed is
 `install --write`, and after that to commit the file if it is committed.
 `modified` (a finding, exit 2) is kept for a hook that differs from what any
 gnomon wrote.
+
+## Codex, Qwen Code and Copilot (opt-in)
+
+Nothing here changes for anyone who does not run these installs: no hook file is
+written, `guard status` lists no new host, `security test` (`--host all`) runs the
+same three hosts, and the `host_hooks` rule protects these files only where
+gnomon's hook was installed.
+
+```bash
+gnomon guard install codex --write [--local]      # .codex/hooks.json
+gnomon guard install qwen-code --write [--local]  # the "hooks" of .qwen/settings.json
+gnomon guard install copilot --write [--local]    # .github/hooks/gnomon.json
+# [check.roles] codex = "implement" (likewise qwen-code, copilot) in .gnomon/policy.toml
+```
+
+`--write` merges into an existing file and never replaces what is there: your
+other hooks and settings are kept, a gnomon entry already present is updated in
+place, and a file that is not a JSON object (or whose `hooks` is not an object of
+arrays) is refused with exit 10 and left untouched. Without `--write` it prints
+the fragment.
+
+**Live verification pending.** None of the three CLIs was installed where this
+was written, so no hook has run against a real binary. The schemas below were
+read from each host's documentation on 2026-11-22, and the tests use payloads
+built from them. Run `gnomon guard status` and a harmless denied call (`security
+test --host <h>` shows the decisions, not the host) before relying on one.
+
+| Host | What was verified, and where | Not verified |
+|---|---|---|
+| Codex | hooks file locations (`.codex/hooks.json` for a trusted project, `~/.codex/hooks.json`, `[hooks]` in `config.toml`), the event, matcher group and handler shape, the `PreToolUse` input (`tool_name`, `tool_input.command` for `Bash` and `apply_patch`, `permission_mode`, `session_id`, `cwd`, `transcript_path`), `hookSpecificOutput.permissionDecision` and exit 2, `ask` "parsed but not supported yet", trust and `/hooks` review, `[features] hooks = false`, `timeout` in seconds: <https://learn.chatgpt.com/docs/hooks> (developers.openai.com/codex/hooks redirects there) and the generated input schema in `openai/codex` `codex-rs/hooks/schema/generated/` | the exact patch text a real `apply_patch` call carries (the page says `tool_input.command`; gnomon reads the `*** Add/Update/Delete File:` and `*** Move to:` lines of the apply_patch format); MCP tool-name format beyond the page's `mcp__fs__read` |
+| Qwen Code | `.qwen/settings.json` hooks, entry shape (`matcher`, `hooks[]` with `type`, `command`, `timeout` in seconds), the common and `PreToolUse` input fields, `hookSpecificOutput.permissionDecision` (`ask` shows a prompt, but becomes `deny` headless and in background subagents), exit 2 blocks, `disableAllHooks`, `SessionStart`, `$QWEN_PROJECT_DIR`, permission modes `default\|plan\|auto_edit\|auto\|yolo`: <https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/>; tool ids and the `edit` parameters: `QwenLM/qwen-code` `packages/core/src/tools/` (`tool-names.ts`, `edit.ts`) | the `tool_input` keys of every tool but `write_file.file_path` (the docs show only that one: the others follow the tools' own parameter types), MCP tool names, whether `yolo` honours a hook's `ask` (gnomon treats it as a mode where nobody is asked) |
+| Copilot | `.github/hooks/*.json` (CLI and cloud agent), `version` 1, entry keys `type`, `command` (cross-platform fallback), `bash`, `powershell`, `timeoutSec` (default 30), events, the camelCase input `{sessionId, timestamp, cwd, toolName, toolArgs}` and PascalCase alias input, built-in tool names (`bash`, `create`, `edit`, `view`, `glob`, `grep`, `task`, `web_fetch`, `ask_user`, `powershell`), top-level `permissionDecision`, exit 2 deny, other non-zero deny, timeouts fail open, `ask` denied under cloud agent and autopilot: <https://docs.github.com/en/copilot/reference/hooks-configuration> and <https://code.visualstudio.com/docs/copilot/customization/hooks> | the keys inside `toolArgs` (both Claude's and Copilot's own names are read), MCP tool names, any permission-mode field, whether the Claude-format `hookSpecificOutput` that gnomon also emits is ignored or honoured |
+| Kimi Code | nothing: only a search snippet exists, and its hook schema was not found in official documentation | everything: no adapter is shipped |
+
+What differs from Claude Code, and so is **not** `fromClaudeCode` plus a path:
+
+- **Codex** names `Bash` and `apply_patch`; `apply_patch`'s input is a patch text,
+  decided as one `write` per file it touches (a patch naming no file is not allowed
+  through). Hosted web search does not reach its hooks. A project hook runs only
+  once the project is trusted and the hook reviewed in `/hooks`
+  (`--dangerously-bypass-hook-trust` skips that), so `guard status` can say the
+  file is right but not that Codex runs it, and says so as a warning. It cannot
+  ask: an ask from the approval gate (rule `approval`, the default `on_write`
+  gate asks before every mutating call) is answered with nothing, so Codex's own
+  approval flow decides, and one stderr line says gnomon asked; any other ask (a
+  tool the role does not hold, an ungoverned tool under `[governance]`, a call gnomon
+  could not decide, no role) is refused. Under `permission_mode`
+  `bypassPermissions` every ask is refused. **This makes the `[approval]` gate weaker
+  on Codex than on Claude Code**: `deny` rules stand, the gate is Codex's. Stop and
+  the dashboard inbox are not installed (the inbox is addressed to Claude Code).
+- **Qwen Code** sends its runtime tool ids (`run_shell_command`, `write_file`,
+  `edit`, `read_file`, ...), not Claude's names, so Claude Code's reader would see
+  an unknown tool and decide nothing; `fromQwenCode` maps them. Its matcher lists
+  the tools gnomon decides rather than `*`, so host bookkeeping is not put to a
+  person under `[governance]`. In `--prompt` runs and background subagents Qwen turns
+  an ask into a deny.
+- **Copilot** reads a top-level `permissionDecision`, not Claude's
+  `hookSpecificOutput` (gnomon sends both), and its camelCase `preToolUse` input uses
+  `toolName` and `toolArgs`. It also **reads `.claude/settings.json`**: a gnomon
+  Claude Code hook there fires in Copilot too (the same answer, two records), which
+  `install` and `status` warn of. A command that errors denies; a hook that times
+  out lets the call through to Copilot's own permissions.
+
+`gnomon guard status` reports each as ok, missing, modified or disabled (Codex's
+`[features] hooks = false` in a project or user `config.toml`; Qwen Code's
+`disableAllHooks`), and lists a host only where it is installed, committed or named by
+`--expect`. `gnomon security test --host codex|qwen-code|copilot` runs the corpus in
+each dialect (Codex 22 of 24: no read-tool hook; Copilot 22 of 24: no permission mode).
+
+**Transcripts.** There is no `--format codex` for `gnomon check --transcript`: Codex's
+documentation says its transcript "isn't a stable interface for hooks and may change",
+and its rollout format is not documented, so gnomon does not guess at it. `check` still
+judges a Codex session's diff (`--base`), which misses git-ignored state destruction.
+Qwen Code's reader already exists (`--format qwen-code`); Copilot has none.
 
 For a harness gnomon has no adapter for, call the generic form from its hook:
 
@@ -250,6 +328,10 @@ These are the ways the run-time layer can be got around:
   and `--dangerously-skip-permissions`, the deletion it was meant to stop
   happened. `install` writing an absolute, checked path and `guard status`
   flagging a missing program reduce this. They do not remove it.
+- **Codex, Qwen Code and Copilot's own switches.** Codex's `--dangerously-bypass-hook-trust`
+  and an unreviewed hook, `[features] hooks = false`; Qwen Code's `disableAllHooks`,
+  `--safe-mode` and `--bare`; a Copilot hook that times out. `guard status` reads the
+  files that switch them off, not the flags.
 - **Bypass and auto modes.** Under Claude Code's `bypassPermissions` gnomon
   turns `ask` into `deny`, because Claude Code was seen to run an asked call in
   that mode. Other modes in which a host answers its own prompts (opencode

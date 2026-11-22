@@ -26,6 +26,39 @@
 
 ## [Unreleased]
 
+### Added — guard adapters for OpenAI Codex CLI, Qwen Code and GitHub Copilot (opt-in; depends on #280)
+
+`gnomon guard install codex|qwen-code|copilot [--write [--local]]`, and
+`gnomon guard --from codex|qwen-code|copilot`. Nothing changes for anyone who
+does not run these installs: no file is written, `guard status` and the audit feed
+list no new host, `security test --host all` runs the same three hosts, and the
+`host_hooks` rule protects the new hook files only where gnomon's hook is in them.
+
+- **Codex**: `.codex/hooks.json` with `PreToolUse` (`Bash`, `apply_patch`, MCP) and
+  `SessionStart`. `fromCodex` decides a patch as one `write` per file it touches.
+  Codex documents `ask` as unsupported, so an ask from the approval gate is left to
+  Codex's own approval flow (said on stderr, recorded as an ask) and any other ask is
+  refused; `guard status` reads `[features] hooks = false` and warns that Codex runs a
+  project hook only once trusted (`/hooks`). No `check --format codex`: Codex's
+  transcript format is documented as unstable.
+- **Qwen Code**: the `hooks` of `.qwen/settings.json`, merged with the user's other
+  settings. Qwen sends runtime tool ids (`run_shell_command`, `write_file`, ...), not
+  Claude's names, so it has its own reader (`fromQwenCode`); `yolo` is treated as
+  `bypassPermissions`; `disableAllHooks` is read by `guard status`.
+- **Copilot**: `.github/hooks/gnomon.json` (`preToolUse`); answers with a top-level
+  `permissionDecision`; warns when `.claude/settings.json` also runs gnomon's guard,
+  which Copilot reads.
+- `install` merges into an existing file without replacing the user's hooks, and
+  refuses (exit 10, file untouched) one that is not a JSON object.
+- `gnomon security test --host codex|qwen-code|copilot` (by name only).
+- Fixtures: `harness_answers`, `project_sources`, `hook_agents`, the feed's `host`
+  enum, `opt_in_hosts` / `opt_in_not_covered`. Docs: GOVERNING-OTHER-HARNESSES.md,
+  GUIDE §7.3, CONTRACTS §10 and §50.
+- **Live verification pending**: none of the three CLIs was installed where this was
+  written. The schemas are from each host's documentation (URLs in
+  `packages/gnomon-core/src/guard.ts` and GOVERNING-OTHER-HARNESSES.md). Kimi Code's
+  hook schema could not be verified, so no adapter.
+
 ### Added — dashboard v2, onboarding and shell (depends on `feat/dashboard-v2-base`)
 
 - **One-click local quick start** on the Setup screen: detected hardware, one recommended catalog model with a fit pill
