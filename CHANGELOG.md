@@ -39,6 +39,15 @@
   (a running session cannot loosen its own sandbox), or `/sandbox off` for this session only; without a grant the safest
   route is running gnomon from the other repository or leaving a patch inside this project. The agent is told not to
   edit `policy.toml` itself. Before, only the shell refusal named `extra_roots`, and the file tools said nothing.
+### Added — `[context] summary_style = "structured"` (opt-in), CONTRACTS §56
+
+- A compaction summary with headed sections: Goal, Constraints (verbatim), Decisions, Files touched, Verified
+  (with the evidence) and `UNVERIFIED: claim - basis` for beliefs not checked outside the agent's own
+  reasoning, so a model inheriting a record, as in a hybrid hand-off, does not take another model's self-check as
+  fact. When the summary call fails or is empty the harness folds the turns with a record it builds without a
+  model (task, files changed, last actions, failing check). `counters.compaction` on the next turn record says
+  how many passes ran and whether the summary role or the fallback wrote them. Absent key: the original prose
+  summary, byte-identical request. Adopted from a reverse-engineering study of Hermes Agent's compressor.
 
 ### Added — the audit record schema, and the skill enumerations (#113), CONTRACTS §55
 

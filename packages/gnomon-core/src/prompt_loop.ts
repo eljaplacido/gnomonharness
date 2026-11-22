@@ -343,6 +343,11 @@ export type { Todo, RunNote };
 
 export interface PromptState {
   config: GnomonConfig;
+  /**
+   * Compaction since the last turn record (`summary_style = "structured"`).
+   * The next turn stamps it on `counters.compaction` and clears it.
+   */
+  compaction?: CompactionCounters;
   exchanges: PromptExchange[];
   currentRole: string;
   /**
@@ -5262,6 +5267,12 @@ const COUNT_LINES_MAX_BYTES = 16 * 1024 * 1024;
 
 export interface TurnCounters {
   /**
+   * Compaction passes that ran between the previous turn and this one, and
+   * which wrote each record: the summary role or the harness's own fallback.
+   * Present only under `[context] summary_style = "structured"`.
+   */
+  compaction?: CompactionCounters;
+  /**
    * What the turn did with skills: loaded (with context cost), opened,
    * named in its reasoning, proposed. Derived, never asked of the model
    * (skill_use.ts, CONTRACTS section 54). Absent when no skill was involved.
@@ -6810,6 +6821,10 @@ async function agenticTurn(
     });
   const observe = ledger.observer({ depth, leg: () => leg });
   if (depth === 0) counters.model_calls = ledger.sent;
+  if (depth === 0 && state.compaction) {
+    counters.compaction = state.compaction;
+    state.compaction = undefined;
+  }
   const measured = (): ModelCallsMeasured | undefined => (depth === 0 ? ledger.measured() : undefined);
   // The estimate every context decision uses (message_tokens.ts): content, tool-call
   // arguments and, where the target is sent them, replayed reasoning.
@@ -10057,6 +10072,34 @@ export interface CompactionResult {
   reclaimed: number;
   /** Set when compaction was needed but could not run */
   problem?: string;
+  /**
+   * How the fold was written: "model" (the summary role answered) or
+   * "fallback" (`summary_style = "structured"` only: the call failed or came
+   * back empty and the harness built the record itself). Absent when nothing
+   * was folded.
+   */
+  via?: "model" | "fallback";
+  /** Said when the fold happened but not the way it was asked to (the fallback ran) */
+  notice?: string;
+}
+
+/**
+ * What compaction did since the last turn, stamped on the next turn's
+ * `counters.compaction` (docs/CONTRACTS.md section 56). Present only under
+ * `[context] summary_style = "structured"`, so a surface without the key
+ * writes the records it always did.
+ */
+export interface CompactionCounters {
+  v: 1;
+  style: "structured";
+  /** Fold passes since the previous turn record */
+  passes: number;
+  /** Passes written by the summary role */
+  model: number;
+  /** Passes the harness wrote itself because the summary call failed or was empty */
+  fallback: number;
+  folded: number;
+  reclaimed: number;
 }
 
 const SUMMARY_INSTRUCTION =
@@ -10067,6 +10110,77 @@ const SUMMARY_INSTRUCTION =
   "Drop: pleasantries, restated questions, and reasoning that led nowhere.\n\n" +
   "Write plain prose or terse bullets. Do not address the user. Do not offer " +
   "to help. Output only the record.";
+
+/**
+ * `[context] summary_style = "structured"`: the same job, a fixed shape. The
+ * section that matters most is UNVERIFIED. A record that states a belief as a
+ * fact is inherited as one: a model that takes over from another (a hybrid
+ * hand-off, a resumed session) read the earlier model's own self-check as
+ * ground truth and built on it.
+ */
+export const STRUCTURED_SUMMARY_INSTRUCTION =
+  "You are compacting a coding session's history. Rewrite the material below " +
+  "as a record for an agent that will continue this work. Use exactly these " +
+  "headed sections, in this order, and write `none` under one with nothing to say:\n\n" +
+  "## Goal\nWhat the user asked for, in one or two sentences.\n" +
+  "## Constraints\nRequirements the user stated, quoted verbatim from the task. Do not paraphrase.\n" +
+  "## Decisions\nChoices made and the reason for each.\n" +
+  "## Files touched\nOne path per line, with what changed.\n" +
+  "## Verified\nOnly what an external check confirmed, each with the command or " +
+  "evidence that confirmed it (a test run, a compiler, a file read).\n" +
+  "## UNVERIFIED\nEvery claim the agent believes but has not checked against " +
+  "something outside its own reasoning, one per line, as `UNVERIFIED: claim - basis`. " +
+  "A self-check the agent wrote and ran itself is not external evidence. When " +
+  "unsure whether something was verified, list it here.\n\n" +
+  "Do not address the user. Do not offer to help. Output only the record.";
+
+const FALLBACK_ACTIONS = 8;
+
+/**
+ * The record the harness writes when the summary call fails or comes back
+ * empty (`summary_style = "structured"`). No model: the task text, the files
+ * the turns changed, the last actions with how each ended, and the failing
+ * check if the last verification failed. Everything it says came from the
+ * turn records, and nothing in it is marked Verified.
+ */
+export function fallbackSummary(pending: PromptExchange[]): string {
+  const clip1 = (t: string, n: number): string => {
+    const one = t.replace(/\s+/g, " ").trim();
+    return one.length > n ? `${one.slice(0, n - 1)}…` : one;
+  };
+  const task = pending.find((e) => e.input.trim())?.input ?? "";
+  const files = new Set<string>();
+  const actions: string[] = [];
+  let failing = "";
+  for (const e of pending) {
+    for (const line of e.tool_log ?? []) {
+      const m = /^(?:write|edit)\s+(\S+)/.exec(line);
+      if (m && !/(?:denied|refused|failed)/.test(line)) files.add(m[1]!);
+      actions.push(line);
+      const v = /^verify — (.*)$/.exec(line);
+      if (v) failing = /\b(fail|exit [1-9]|error)/i.test(v[1]!) ? v[1]! : "";
+    }
+  }
+  const lines = [
+    "## Goal",
+    clip1(task, 400) || "none",
+    "## Constraints",
+    "none recorded (built without a model; see the Goal for the task text)",
+    "## Decisions",
+    "none recorded",
+    "## Files touched",
+    ...(files.size ? [...files].sort().map((f) => `- ${f}`) : ["none"]),
+    "## Verified",
+    "none (this record was built by the harness without a model)",
+    "## UNVERIFIED",
+    "UNVERIFIED: the outcome of every action below - the summary call failed, so none was reviewed",
+    `## Last actions (${Math.min(actions.length, FALLBACK_ACTIONS)} of ${actions.length})`,
+    ...(actions.length ? actions.slice(-FALLBACK_ACTIONS).map((a) => `- ${clip1(a, 160)}`) : ["none"]),
+    "## Failing check",
+    failing ? clip1(failing, 240) : "none seen",
+  ];
+  return lines.join("\n");
+}
 
 /**
  * Fold turns that no longer fit the window into a running summary.
@@ -10139,11 +10253,12 @@ export async function compactSession(
       : `compacting ${pending.length} turn(s) via ${role}…`
   );
 
+  const structured = ctx.summary_style === "structured";
   const route = routeRole(state.config, role);
   const result = await callEndpoint(
     adaptOutputLimit(state, route.target),
     [
-      { role: "system", content: SUMMARY_INSTRUCTION },
+      { role: "system", content: structured ? STRUCTURED_SUMMARY_INSTRUCTION : SUMMARY_INSTRUCTION },
       { role: "user", content: `${priorSummary}${transcript}` },
     ],
     [],
@@ -10156,19 +10271,29 @@ export async function compactSession(
     state.sessionId
   );
 
-  if (result.code !== 0) {
-    // Leaving them unfolded means they are simply dropped this turn and
-    // retried next — losing them silently would be worse than a slow retry.
-    return {
-      folded: 0,
-      reclaimed: 0,
-      problem: `compaction failed (${result.content.slice(0, 80)}); turns left unfolded`,
-    };
-  }
-
-  const folded_text = splitThinking(result.content).answer.trim();
+  let folded_text = result.code === 0 ? splitThinking(result.content).answer.trim() : "";
+  let via: "model" | "fallback" = "model";
+  let note: string | undefined;
   if (!folded_text) {
-    return { folded: 0, reclaimed: 0, problem: "compaction produced nothing" };
+    if (!structured) {
+      if (result.code !== 0) {
+        // Leaving them unfolded means they are simply dropped this turn and
+        // retried next — losing them silently would be worse than a slow retry.
+        return {
+          folded: 0,
+          reclaimed: 0,
+          problem: `compaction failed (${result.content.slice(0, 80)}); turns left unfolded`,
+        };
+      }
+      return { folded: 0, reclaimed: 0, problem: "compaction produced nothing" };
+    }
+    // Structured: the harness writes the record, so the turns fold anyway.
+    folded_text = fallbackSummary(pending);
+    via = "fallback";
+    note =
+      result.code !== 0
+        ? `summary call failed (${result.content.slice(0, 80)}); folded with a harness-built record`
+        : "summary call produced nothing; folded with a harness-built record";
   }
   // Append unless this pass re-folded everything.
   const summary =
@@ -10183,7 +10308,28 @@ export async function compactSession(
   state.summary = summary;
   for (const e of pending) e.folded = true;
 
-  return { folded: pending.length, reclaimed: Math.max(0, before - after) };
+  const reclaimed = Math.max(0, before - after);
+  if (structured) {
+    const c = (state.compaction ??= {
+      v: 1,
+      style: "structured",
+      passes: 0,
+      model: 0,
+      fallback: 0,
+      folded: 0,
+      reclaimed: 0,
+    });
+    c.passes += 1;
+    c[via] += 1;
+    c.folded += pending.length;
+    c.reclaimed += reclaimed;
+  }
+  return {
+    folded: pending.length,
+    reclaimed,
+    ...(structured ? { via } : {}),
+    ...(note ? { notice: note } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -15026,6 +15172,7 @@ export async function runPromptLoop(
       const compacted = await compactSession(state, systemPrompt, (line) =>
         console.log(paint(ui, "gray", `  [context] ${line}`))
       );
+      if (compacted.notice) console.log(paint(ui, "yellow", `  [context] ${compacted.notice}`));
       if (compacted.problem) {
         console.log(paint(ui, "yellow", `  [context] ${compacted.problem}`));
       } else if (compacted.folded > 0) {

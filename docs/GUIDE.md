@@ -2136,6 +2136,18 @@ declared at their defaults, a turn sends the same request bytes as before.
 - `[turn] todo_gate = true`: an answer given while this turn's checklist has
   open items is handed back once, naming them; skipped when less than
   `completion_min_remaining` of the budget is left.
+- `[context] summary_style = "structured"`: with `compaction = "summary"`, the
+  folded record has fixed sections: Goal, Constraints (the user's own words),
+  Decisions, Files touched, Verified (each item with the command that confirmed
+  it) and `UNVERIFIED: claim - basis` for what the agent believes but has not
+  checked outside its own reasoning. So a model that takes over after a
+  hand-off does not inherit another model's self-check as a fact. If the summary
+  call fails or returns nothing, the harness folds the turns anyway with a record
+  it builds without a model (task text, files changed, last actions and how
+  they ended, the failing check), marked as unreviewed. The next turn's
+  `counters.compaction` says how many passes ran and which kind. Absent or
+  `"prose"`: the original free-prose summary, and a failed call leaves the turns
+  to be retried.
 - `variant = "compat"` on the `edit` tool: `old_string`/`new_string`, and an
   edit that does not match exactly is matched with whitespace, then
   indentation, ignored, always uniquely.
@@ -2153,6 +2165,7 @@ sampling = "provider"
 
 [context]
 env_snapshot = true
+summary_style = "structured"
 
 [turn]
 todo_gate = true

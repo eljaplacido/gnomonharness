@@ -972,6 +972,7 @@ summary_role = "smol"             # who folds evicted turns
 | `compaction = "discard"` | Evicted turns are dropped, and the drop is stated in-band. |
 | `compaction = "truncate"` | Evicted turns are replaced by a list of their prompts. |
 | `compaction = "summary"` | Evicted turns are folded into a running summary by `summary_role`. |
+| `summary_style = "structured"` | Opt-in. The summary has headed sections (Goal, Constraints, Decisions, Files touched, Verified, UNVERIFIED), and a failed summary call folds with a record the harness builds instead of leaving turns unfolded. Absent: the free-prose record, unchanged. |
 | `reserve_output` | Tokens held back for the model's *reply*. Defaults to 15% of the budget — at least 1024, never more than 40%. |
 
 Four rules the window keeps:
