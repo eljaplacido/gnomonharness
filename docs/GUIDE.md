@@ -717,6 +717,20 @@ number the fallback is 65,536 and an unresolved lookup also prints the stderr
 note and records `context_window_unresolved`. A URL with no listing route
 records neither key, as before.
 
+**The lookup is background and cached.** It starts when the session does and
+never holds a request that does not need it: a request whose estimated size is
+under half of the best window known without it (the catalog's, else `[defaults]`)
+is sent at once, and says so in its source (`catalog` or `default`); later
+requests use the listing's window once it lands. A large request waits for the
+lookup, at most 1.5 s in all (the listing and the llama.cpp props route are asked together). The
+answer is remembered per endpoint URL, model and provider in
+`window-cache.json` in gnomon's machine data directory
+(`$XDG_DATA_HOME/gnomon`, else `~/.local/share/gnomon`; `%APPDATA%\gnomon` on
+Windows): a window for 7 days, "no window" or "no answer" for 1 day, so a dead
+endpoint costs one bounded wait a day. A cached window is the listing's
+window and keeps its `listing:<shape>` source. To ask again, delete the
+file; `GNOMON_WINDOW_LOOKUP=off` turns the lookup and the cache off.
+
 **Ollama.** gnomon calls Ollama's native `/api/chat`, which takes the context
 the model runs with as `options.num_ctx`; without it Ollama uses its own
 default (a few thousand tokens, depending on version and VRAM) and silently
