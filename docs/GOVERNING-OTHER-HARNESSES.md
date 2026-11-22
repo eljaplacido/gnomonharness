@@ -16,7 +16,7 @@ The contracts behind it are [CONTRACTS.md](CONTRACTS.md) §10 (`gnomon guard`),
 | **Enforced at run time** | gnomon itself | before each tool call, in its own loop | the tool returns the refusal; the model reads it |
 | | Claude Code | a `PreToolUse` hook runs `gnomon guard` on Bash, Write, Edit, MultiEdit, NotebookEdit, Read, Grep, Glob, WebFetch, WebSearch, Agent/Task and every MCP tool | `permissionDecision: "deny"`; Claude reads the reason |
 | | opencode 2.2.x | a plugin in `.opencode/plugins/` sees every tool call before it runs | the call fails with gnomon's reason |
-| | Cursor | `beforeShellExecution` and `beforeReadFile` hooks | `permission: "deny"`. Cursor documents no hook before a file write, so writes are judged afterwards |
+| | Cursor | `beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution` and `preToolUse` (Write, which Cursor also uses for edits, Delete, Grep, Fetch, Task) hooks, all `failClosed` | `permission: "deny"`; Cursor shows the reason and passes it to the model. See [Cursor](#cursor) |
 | **Decided on request** | any harness with a pre-tool hook (pi, mini-swe-agent, your own) | the hook pipes the call to `gnomon guard --from generic` and acts on the exit code | whatever the hook does with exit 2 |
 | **After the fact** | any harness, hook or not | `gnomon check` on the change (and the agent's transcript) | the check fails (exit 2); in CI that blocks the merge |
 
@@ -263,8 +263,93 @@ These are the ways the run-time layer can be got around:
   runs from a file, paths built at run time: the guard decides the call, not
   its consequences. Under `[governance]` MCP calls are asked; containment is a
   sandbox (`[sandbox] exec = "docker"`), not this layer.
-- **Hosts without a pre-tool hook** (or Cursor's file writes) are judged only
-  after the fact, by `gnomon check`.
+- **Cursor's `preToolUse` cannot ask.** Cursor accepts `permission: "ask"` there
+  but does not enforce it, so gnomon turns an ask into a deny, except the
+  `[approval]` gate's, which is passed on as `ask` and left to Cursor's own
+  approval flow (a deny there would refuse every write under the default gate).
+  A write that the gate would ask about therefore reaches Cursor's own prompt,
+  or runs, as Cursor is set up.
+- **Cursor's hook files and `failClosed`.** The guard hooks are `failClosed`, so
+  a hook that cannot start blocks the call, but anyone who can edit
+  `.cursor/hooks.json` (or enterprise/team hooks that override it) can remove
+  them; `host_hooks` and `guard status` cover that as for the other hosts.
+- **Hosts without a pre-tool hook** are judged only after the fact, by
+  `gnomon check`.
+
+## Cursor
+
+Cursor's hooks are documented at <https://cursor.com/docs/agent/hooks>. What
+`gnomon guard install cursor --write` writes to `.cursor/hooks.json` (version
+1), and what each hook does:
+
+| Hook | Runs | Notes |
+|---|---|---|
+| `beforeShellExecution` | `gnomon guard --from cursor` | `failClosed`. Shell commands; `ask` is enforced here |
+| `beforeReadFile` | `gnomon guard --from cursor` | `failClosed`. Cannot ask: an ask is a deny |
+| `beforeMCPExecution` | `gnomon guard --from cursor` | `failClosed`. MCP tools are decided by name as `ungoverned` (allowed with no `[governance]`, asked at prevent/enforce under one); Cursor recommends `failClosed` for MCP hooks |
+| `preToolUse`, matcher `Write\|Delete\|Grep\|Fetch\|WebFetch\|Task` | `gnomon guard --from cursor` | `failClosed`. **File writes, decided before they happen.** Cursor names its edit tool Write too. Shell, Read and MCP are not matched here: their own before-hooks already decide them, and listing them would decide each twice |
+| `sessionStart` | `gnomon inbox --hook cursor` | Prints the open dashboard-inbox items as `additional_context`, labelled "information, not instructions". Decides nothing, always exits 0 |
+
+`failClosed` is Cursor's own switch: by default a hook that crashes, times out
+or cannot start lets the call run, which is the failure that left Claude Code
+unguarded when a hook path was wrong. With it the call is blocked. gnomon prints
+`{}` on allow, so a working install blocks nothing it did not decide to.
+
+**No `stop` hook is installed.** Cursor submits a `stop` hook's
+`followup_message` as the next user message, up to `loop_limit` times (5 by
+default), so a verdict there would drive the agent in a loop nobody asked for.
+`gnomon check` after the session reports the same findings without that.
+
+**Input shapes.** Cursor's docs list `preToolUse`'s `tool_name`, `tool_input`,
+`tool_use_id` and `cwd`, and name the tools (`Shell`, `Read`, `Write`, `Grep`,
+`Delete`, `Task`, `MCP:<tool>`), but do not show every tool's `tool_input`. The
+adapter reads the shapes Cursor 3.0.16's bundled `cursor-agent-exec` builds:
+Write `{file_path, content}`, Delete and Read `{file_path}`, Grep
+`{pattern, file_path}`, Fetch `{url}`. If a Cursor release changes them, a write
+whose path is not found is decided as a write to no path, which the guard asks
+about or denies; it is never silently allowed.
+
+**Upgrading an older install.** An install from before these hooks still decides
+shell commands and reads. `gnomon guard status` reports it as `outdated` (a
+warning, exit 0, not a finding) and lists each hook of the current set as `ok`,
+`missing` or `not_fail_closed`; `gnomon guard install cursor --write` brings it
+up to date in place. The merge keeps everything else in your `hooks.json`: other
+events, other hooks on the same event, unknown keys.
+
+**Checking it.** `gnomon guard status` (one line per host, and for Cursor one
+per hook). The unit tests put the payloads Cursor documents through the guard;
+with `GNOMON_LIVE_ADAPTERS=1` they also run the hooks file through the config
+and output validators extracted read-only from the installed Cursor's
+`cursor-agent-exec` (it starts no agent).
+
+## Skills for the other harnesses
+
+`gnomon skill export` writes each active gnomon skill as `<name>/SKILL.md`,
+the Agent Skills layout (<https://agentskills.io/specification>: YAML front
+matter with `name` and `description`, the directory named for the skill), so
+the other harnesses can load the same text. It is a dry run listing what it
+would write; `--write` writes. It never writes into `.gnomon/`, and never
+overwrites a `SKILL.md` gnomon did not write (a marker comment in the file says
+which are its own).
+
+```bash
+gnomon skill export                          # dry run: what would go to .claude/skills/
+gnomon skill export --write                  # Claude Code (and Cursor, opencode: they read .claude/skills too)
+gnomon skill export --write --to .agents/skills   # Codex, Cursor, opencode
+```
+
+| Host | Reads skills from | Source |
+|---|---|---|
+| Claude Code | `.claude/skills/<name>/SKILL.md`, `~/.claude/skills/` (its docs do not mention `.agents/skills`) | <https://code.claude.com/docs/en/skills> |
+| Codex | `.agents/skills` (repo, up to the repo root), `$HOME/.agents/skills` | <https://learn.chatgpt.com/docs/build-skills> |
+| Cursor | `.agents/skills/`, `.cursor/skills/`, and `.claude/skills/`, `.codex/skills/` for compatibility | <https://cursor.com/docs/context/skills> |
+| opencode | `.opencode/skills`, `.claude/skills`, `.agents/skills` | <https://opencode.ai/docs/skills/> |
+
+The copies are generated, not authority: a provenance comment in each names the
+source file and the surface hash it was exported at, and a re-run after the
+surface changes updates them. The host decides when to use them; gnomon's own
+loop keeps reading `.gnomon/skills/`. Proposed skills (not yet accepted by a
+person) are not exported.
 
 ## What this is not
 

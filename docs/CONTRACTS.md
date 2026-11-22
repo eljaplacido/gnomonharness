@@ -1031,7 +1031,11 @@ that when the payload's `permission_mode` is `bypassPermissions`
 and was seen to run one (GBS-LAYER pilot, Claude Code 2.1.319), an `ask` is
 answered `deny`, its reason saying so, and recorded as the deny it is; Cursor
 gets `{}` on allow and `permission` / `user_message` / `agent_message`
-otherwise, exit 0; opencode's plugin reads the generic document, and passes
+otherwise, exit 0 (events decided: `beforeShellExecution`, `beforeReadFile`,
+`beforeMCPExecution` and `preToolUse`, which carries file writes; at
+`preToolUse` Cursor accepts `ask` but does not enforce it, so an ask is
+answered `deny` except the `[approval]` gate's, which is passed on;
+https://cursor.com/docs/agent/hooks); opencode's plugin reads the generic document, and passes
 `--session-base <sha>`, the HEAD it read when opencode loaded it, which the
 guard uses and records only for a session with no recorded base yet.
 
@@ -1070,7 +1074,10 @@ entry is in force once it is committed.
 `cursor`), whether the hook `gnomon guard install` wrote is still there:
 `ok`, `outdated` (the hook an earlier release wrote, unchanged: a Claude Code
 PreToolUse matcher from `OLDER_CLAUDE_CODE_MATCHERS`, or an opencode plugin
-whose sha256 is a known earlier one; or a hook `install --write` updated whose
+whose sha256 is a known earlier one; a Cursor install that lacks `beforeMCPExecution`,
+`preToolUse` or `failClosed` on a guard hook, which the host's optional `events` list
+names per hook as `ok`, `missing` or `not_fail_closed` (and `sessionStart`, the
+inbox, whose absence is a warning only); or a hook `install --write` updated whose
 update is not committed while HEAD holds gnomon's older one), `missing`,
 `modified` (the guard hook is gone from the file, its matcher no longer covers
 the selected tools and is not an earlier gnomon's, the absolute program it runs
@@ -4700,7 +4707,7 @@ The test runs as follows:
   `keep/data.txt`, `README.md` and `app.py`;
 - each case, for each host, is the hook input that host sends (`hostPayload`):
   a Claude Code `PreToolUse` payload, an opencode `execute.before` event, a
-  Cursor `beforeShellExecution` or `beforeReadFile` event. It is piped to
+  Cursor `beforeShellExecution`, `beforeReadFile` or `preToolUse` (Write) event. It is piped to
   `gnomon guard --from <host> --role <role>` in that repository, with HOME,
   XDG_DATA_HOME and LOCALAPPDATA in a temporary directory, and the answer is
   read as that host reads it (`readAnswer`);
@@ -4717,9 +4724,8 @@ The test runs as follows:
   `passed`. Claude Code reads an empty answer as allow only from a guard that
   exited 0;
 - a case a host gives its hook no event for is listed in `not_covered` with
-  why, and counted nowhere: Cursor has no event before a file write or edit
-  (`gnomon check` judges those afterwards), and `bypassPermissions` is a
-  Claude Code permission mode;
+  why, and counted nowhere: `bypassPermissions` is a Claude Code permission
+  mode;
 - the repository and the HOME are removed afterwards;
 - no model is called, and the project is not touched.
 
@@ -4761,7 +4767,7 @@ An unknown subcommand is exit 10.
 **Limits**, printed with every report:
 - the test covers the policy layer's decisions, not whether a host asks its
   hook;
-- Cursor's file writes and edits are not covered before the fact;
+- Cursor's writes are sent as its `preToolUse` Write tool, whose input Cursor's docs do not publish (the shape is read from Cursor 3.0.16's bundle);
 - code run by an interpreter is gated as a command, not parsed;
 - the surface tested is the copy on disk;
 - on Windows, a shell redirection to an absolute Windows path outside the
@@ -4772,7 +4778,7 @@ An unknown subcommand is exit 10.
 expectations, families, OWASP ids, keys and exits.
 `packages/gnomon-cli/src/security_test.test.ts` covers:
 - a fresh scaffold holds every case on every host (claude-code 24/24,
-  opencode 22/22, cursor 15/15) and leaves nothing behind;
+  opencode 22/22, cursor 22/22) and leaves nothing behind;
 - the not-covered list per host is the fixture's;
 - `[approval] gate = "never"` fails the asked cases on every host while the
   structural denials hold;
@@ -5266,6 +5272,11 @@ An id is the full id or a prefix that names exactly one item. Exit `0` done,
   always exits 0: it decides nothing and cannot stop a session. `guard status`
   carries a top-level `inbox_hook: "ok"|"missing"|null` and, for an
   older install without it, a warning (never a finding, never the exit).
+- *Cursor, at session start*: `gnomon guard install cursor --write` adds a
+  `sessionStart` hook running `gnomon inbox --hook cursor`, which prints
+  `{"additional_context": "<label, notice, items>"}` (the field Cursor's
+  `sessionStart` documents, https://cursor.com/docs/agent/hooks) for the items
+  addressed to `cursor` or `any`; nothing when there are none; always exit 0.
 - *Cursor and Claude Code*: `gnomon inbox mcp`, a Model Context Protocol server
   on stdio (one JSON-RPC 2.0 message per line; `initialize`, `ping`,
   `tools/list`, `tools/call`; protocol `2025-03-26`, or the client's). Tools:

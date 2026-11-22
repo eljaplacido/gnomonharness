@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 4850 TypeScript tests (4064 core, 761 cli, 18
-> natives, 7 tui) and 120 Rust tests — **4970 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 4872 TypeScript tests (4074 core, 773 cli, 18
+> natives, 7 tui) and 120 Rust tests — **4992 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -2565,10 +2565,8 @@ gnomon security test --role plan --json # gnomon.security_test/2
 ```
 
 A call a host gives its hook no event for is listed as not covered, never
-counted as held: Cursor has no hook before a file write or edit (`gnomon
-check` judges those afterwards), and `bypassPermissions` exists only in
-Claude Code. A fresh scaffold holds claude-code 24/24, opencode 22/22 and
-cursor 15/15.
+counted as held: `bypassPermissions` exists only in Claude Code. A fresh
+scaffold holds claude-code 24/24, opencode 22/22 and cursor 22/22.
 
 | Family | What is tried | Must be |
 |---|---|---|
@@ -3302,7 +3300,7 @@ line to add and `gnomon guard status` lists the hook as a warning:
 |---|---|---|---|---|
 | Claude Code | a `PreToolUse` hook on Bash, Write, Edit, MultiEdit, NotebookEdit, Read, Grep, Glob, WebFetch, WebSearch, Agent/Task and every MCP tool (`mcp__.*`), naming an absolute, checked gnomon path, added beside the `check` SessionStart and Stop hooks (`.claude/settings.json`) | `permissionDecision: "deny"` — Claude reads the reason | `"ask"` — Claude Code prompts. Under `permission_mode: "bypassPermissions"` (`--dangerously-skip-permissions`) nobody is asked, and Claude Code 2.1.319 was seen to run an ask, so it is answered `"deny"` | nothing printed: Claude Code's own permission flow decides |
 | opencode 2.2 | a plugin, `.opencode/plugins/gnomon-guard.js`, on `tool.hook("execute.before")` for shell, write, edit, patch, read, grep, glob, webfetch, execute | the call fails with gnomon's reason, which the model reads | opencode's own permission prompt (`permission.hook("evaluate")`). A non-interactive `opencode run` rejects it; `--auto` approves it, as it does every ask | nothing |
-| Cursor | `.cursor/hooks.json`: `beforeShellExecution` and `beforeReadFile` | `permission: "deny"` with `user_message` / `agent_message` | `permission: "ask"` (a read that would be asked is denied: `beforeReadFile` cannot ask) | `{}` |
+| Cursor | `.cursor/hooks.json`: `beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution` and `preToolUse` (Write, Delete, Grep, Fetch, Task: file writes are decided before they happen), all `failClosed`, plus `sessionStart` for the dashboard inbox | `permission: "deny"` with `user_message` / `agent_message` | `permission: "ask"` (a read that would be asked is denied: `beforeReadFile` cannot ask; at `preToolUse` Cursor does not enforce ask, so only the approval gate's is passed on, others are denied) | `{}` |
 | anything else with a pre-tool hook | `gnomon guard` with the call on stdin: `{"tool": "bash", "input": {"command": "…"}, "cwd": "…", "session_id": "…"}` in gnomon's own tool and argument names | exit 2 | exit 3 | exit 0 |
 
 Verified against the installed harnesses: the Claude Code and Cursor configs
@@ -3319,9 +3317,15 @@ Claude Code `Read` of a file in your home directory included — exactly as in
 gnomon's loop. Grant a path with `[sandbox] extra_roots`, or leave `Read` out
 of the hook's matcher.
 
-**Not done.** Cursor file **writes**: its documented hooks give none before a
-write happens (`afterFileEdit` is after; `preToolUse` does not document Write's
-input), so writes in Cursor are left to `gnomon check`. Grep and Glob are
+**Cursor** (<https://cursor.com/docs/agent/hooks>): file writes are decided
+before they happen through `preToolUse`, which Cursor added after the first
+adapter. Its docs do not show Write's input, so the adapter reads the shape
+Cursor 3.0.16's bundled code builds (`{file_path, content}`). No `stop` hook is
+installed: Cursor would submit its `followup_message` as a new prompt.
+`gnomon skill export` writes your skills as Agent Skills for these harnesses
+(see [docs/GOVERNING-OTHER-HARNESSES.md](docs/GOVERNING-OTHER-HARNESSES.md)).
+
+**Not done.** Grep and Glob are
 decided as a read of where they search. MCP tools and unknown tools are
 recorded with rule `ungoverned`: allowed with no `[governance]`, asked at
 prevent/enforce under one. Agent/Task are allowed (their calls are decided one

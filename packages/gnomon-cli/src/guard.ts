@@ -294,14 +294,50 @@ export function claudeCodeHooks(bin: string[] = ["gnomon"]): { hooks: Record<str
   };
 }
 
-/** Cursor's hooks.json (version 1): the two documented pre-execution events gnomon can decide. */
+/**
+ * Delivers the dashboard inbox to Cursor at session start, as `additional_context`
+ * labelled "information, not instructions". Decides nothing, always exits 0.
+ */
+export const CURSOR_INBOX_TAIL = "inbox --hook cursor";
+
+/**
+ * The preToolUse matcher: Cursor's tools gnomon decides that no other Cursor hook
+ * already covers. Shell, Read and MCP calls reach `beforeShellExecution`,
+ * `beforeReadFile` and `beforeMCPExecution`, so listing them here would decide
+ * each twice. Write (which Cursor also uses for edits) and Delete are what no
+ * before-hook covered; Grep, Fetch/WebFetch and Task come with them.
+ */
+export const CURSOR_PRETOOL_MATCHER = "Write|Delete|Grep|Fetch|WebFetch|Task";
+
+/** The guard events a current install carries, each with `failClosed` (see cursorHooks). */
+export const CURSOR_GUARD_EVENTS = ["beforeShellExecution", "beforeReadFile", "beforeMCPExecution", "preToolUse"] as const;
+
+/**
+ * Cursor's hooks.json (version 1, https://cursor.com/docs/agent/hooks): the guard on
+ * every event Cursor offers before a call runs (shell, file read, MCP, and
+ * preToolUse for writes and the rest), and the inbox at sessionStart.
+ *
+ * The guard hooks are `failClosed`: Cursor's default is to let the call run when a
+ * hook crashes, times out or cannot start, which is the failure that left
+ * Claude Code unguarded when a hook path was wrong. gnomon prints `{}` on allow,
+ * so a working install blocks nothing it did not decide to.
+ *
+ * Not installed: a `stop` hook. Cursor submits a stop hook's `followup_message` as the
+ * next user message, up to `loop_limit` times, so a verdict there would drive the
+ * agent in a loop nobody asked for. `gnomon check` after the session says the same
+ * without that.
+ */
 export function cursorHooks(bin: string[] = ["gnomon"]): { version: number; hooks: Record<string, unknown[]> } {
   const command = shellCommand(bin, CURSOR_TAIL);
+  const guard = { command, timeout: 30, failClosed: true };
   return {
     version: 1,
     hooks: {
-      beforeShellExecution: [{ command, timeout: 30 }],
-      beforeReadFile: [{ command, timeout: 30 }],
+      beforeShellExecution: [{ ...guard }],
+      beforeReadFile: [{ ...guard }],
+      beforeMCPExecution: [{ ...guard }],
+      preToolUse: [{ ...guard, matcher: CURSOR_PRETOOL_MATCHER }],
+      sessionStart: [{ command: shellCommand(bin, CURSOR_INBOX_TAIL), timeout: 10 }],
     },
   };
 }
@@ -685,6 +721,13 @@ function mergeHooks(project: string, file: string, fragment: { hooks: Record<str
               (existing as Entry).matcher = m;
               changed = true;
             }
+            // Cursor's failClosed: an older install had none. Re-running install is the
+            // operator's ask to bring it up to date.
+            const fc = (entry as { failClosed?: unknown }).failClosed;
+            if (fc === true && (existing as { failClosed?: unknown }).failClosed !== true) {
+              (existing as { failClosed?: unknown }).failClosed = true;
+              changed = true;
+            }
           }
         }
       }
@@ -829,8 +872,18 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
         [
           "",
           "Merge the above into .cursor/hooks.json, or run `gnomon guard install cursor --write`.",
-          "Cursor's documented hooks decide shell commands and file reads before they run; file",
-          "writes have no documented pre-execution hook, so `gnomon check` judges those after.",
+          "",
+          "  beforeShellExecution, beforeReadFile, beforeMCPExecution  `gnomon guard` decides each before it runs",
+          "  preToolUse    `gnomon guard` on Write (Cursor's edits too), Delete, Grep, Fetch and Task: a file",
+          "                write is decided BEFORE it happens. (Shell, Read and MCP reach it through the three",
+          "                hooks above, so they are not matched here twice.)",
+          "  sessionStart  `gnomon inbox --hook cursor`: prints the operator's open dashboard items as",
+          "                additional_context, labelled information, not instructions (decides nothing)",
+          "",
+          "The guard hooks are failClosed: a hook that crashes, times out or cannot start BLOCKS the call",
+          "(Cursor's default is to let it run). No stop hook is installed: Cursor submits its",
+          "followup_message as the next user message, so a verdict there would loop the agent.",
+          "Hook sources: https://cursor.com/docs/agent/hooks",
           "Map the agent to a role: [check.roles] cursor = \"implement\".",
         ].join("\n")
       );
@@ -886,6 +939,13 @@ export interface HookStatus {
   file: string;
   /** Why the state is what it is; empty when ok. */
   detail: string;
+  /** Cursor only, when its hook file is in place: each hook of a current install and whether it is there. */
+  events?: CursorHookStatus[];
+}
+export interface CursorHookStatus {
+  event: string;
+  /** not_fail_closed: hooked, but a crash or timeout of the hook lets the call run. */
+  state: "ok" | "missing" | "not_fail_closed";
 }
 export interface GuardStatus {
   schema: "gnomon.guard.status/1";
@@ -1121,6 +1181,20 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
     })
   );
   const cursorFile = join(repo.project, ".cursor", "hooks.json");
+  /** Each hook a current Cursor install carries, and whether this file has it as it should be. */
+  const cursorEvents = (hooks: unknown): CursorHookStatus[] => {
+    const entryOf = (event: string, tail: string, tools?: string[]) => {
+      const cmd = runs(hooks, event, tail, tools);
+      if (!cmd) return null;
+      const list = (hooks as Record<string, unknown[]>)[event] ?? [];
+      return (list as Array<{ command?: unknown; failClosed?: unknown }>).find((e) => e.command === cmd) ?? { failClosed: undefined };
+    };
+    const guarded = (event: (typeof CURSOR_GUARD_EVENTS)[number]): CursorHookStatus => {
+      const e = entryOf(event, CURSOR_TAIL, event === "preToolUse" ? ["Write", "Delete"] : undefined);
+      return { event, state: !e ? "missing" : e.failClosed === true ? "ok" : "not_fail_closed" };
+    };
+    return [...CURSOR_GUARD_EVENTS.map(guarded), { event: "sessionStart", state: runs(hooks, "sessionStart", CURSOR_INBOX_TAIL) ? "ok" : "missing" }];
+  };
   status.hosts.push(
     judge("cursor", cursorFile, (text) => {
       let hooks: unknown;
@@ -1130,11 +1204,31 @@ export function guardStatus(dir: string, expect: string[] = [], env: NodeJS.Proc
         return "it is not JSON Cursor can read";
       }
       const shell = runs(hooks, "beforeShellExecution", CURSOR_TAIL);
-      return shell && runs(hooks, "beforeReadFile", CURSOR_TAIL)
-        ? absentProgram(shell)
-        : `no beforeShellExecution and beforeReadFile hook runs \`gnomon ${CURSOR_TAIL}\``;
+      if (!(shell && runs(hooks, "beforeReadFile", CURSOR_TAIL))) {
+        return `no beforeShellExecution and beforeReadFile hook runs \`gnomon ${CURSOR_TAIL}\``;
+      }
+      const absent = absentProgram(shell);
+      if (absent) return absent;
+      // An install from before Cursor had preToolUse still decides shell and reads: a
+      // warning (outdated) that says what it lacks, never a failure.
+      const lacking = cursorEvents(hooks).filter((e) => e.event !== "sessionStart" && e.state !== "ok");
+      return lacking.length === 0
+        ? null
+        : {
+            older:
+              `an older gnomon's install: ${lacking.map((e) => `${e.event} ${e.state === "missing" ? "is not hooked" : "is not failClosed"}`).join(", ")}` +
+              " (file writes and MCP calls are not decided before they run). `gnomon guard install cursor --write` updates it",
+          };
     })
   );
+  const cursorHost = status.hosts[status.hosts.length - 1]!;
+  if (cursorHost.state === "ok" || cursorHost.state === "outdated") {
+    const events = cursorEvents(readJson(cursorHost.file)?.hooks);
+    cursorHost.events = events;
+    if (cursorHost.state === "ok" && events.some((e) => e.event === "sessionStart" && e.state === "missing")) {
+      status.warnings.push("cursor: no sessionStart hook delivers the dashboard inbox. fix: `gnomon guard install cursor --write`");
+    }
+  }
   for (const h of status.hosts) {
     const line = `${h.host}: ${h.state} — ${relative(repo.project, h.file) || h.file}: ${h.detail}`;
     if (h.state === "missing" || h.state === "modified" || h.state === "disabled") status.findings.push(line);
@@ -1176,7 +1270,10 @@ function statusGuard(args: GuardArgs, out: (s: string) => void): number {
   if (args.flags.json === "true") out(JSON.stringify(st));
   else if (!st.governed) out(`gnomon guard status: no .gnomon/ governs ${dir}`);
   else {
-    for (const h of st.hosts) out(`${h.host.padEnd(12)} ${h.state.padEnd(14)} ${relative(st.project!, h.file)}${h.detail ? `  ${h.detail}` : ""}${h.host === "claude-code" && st.inbox_hook ? `  [inbox hook: ${st.inbox_hook}]` : ""}`);
+    for (const h of st.hosts) {
+      out(`${h.host.padEnd(12)} ${h.state.padEnd(14)} ${relative(st.project!, h.file)}${h.detail ? `  ${h.detail}` : ""}${h.host === "claude-code" && st.inbox_hook ? `  [inbox hook: ${st.inbox_hook}]` : ""}`);
+      if (h.events) out(`${"".padEnd(12)} hooks: ${h.events.map((e) => `${e.event} ${e.state}`).join(", ")}`);
+    }
     out(st.findings.length ? `\n${st.findings.length} finding(s): a host is not governed the way it was set up to be.` : "\nevery installed hook is in place.");
     for (const w of st.warnings) out(`warning: ${w}`);
     const gaps = st.governance && governanceGapLine(st.governance);

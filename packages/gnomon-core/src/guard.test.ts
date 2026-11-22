@@ -776,6 +776,43 @@ describe("gnomon guard — reading other harnesses' hook payloads", () => {
     expect(fromCursor({ hook_event_name: "afterFileEdit", file_path: "/w/a" }).calls).toEqual([]);
   });
 
+  // Payloads as cursor.com/docs/agent/hooks documents them (common fields, preToolUse's
+  // tool_name/tool_input/tool_use_id/cwd, beforeMCPExecution's JSON-string tool_input) with the
+  // tool_input shapes cursor-agent-exec 3.0.16 builds for each tool.
+  it("Cursor preToolUse: Write, Delete, Read, Grep, Fetch and Shell reach gnomon's tools; MCP is by its name", () => {
+    const common = { conversation_id: "c1", generation_id: "g1", model: "m", hook_event_name: "preToolUse", cursor_version: "3.0.16", workspace_roots: ["/w"], cwd: "/w", tool_use_id: "tu1", transcript_path: null };
+    const pre = (tool_name: string, tool_input: Record<string, unknown>) => fromCursor({ ...common, tool_name, tool_input });
+    expect(pre("Write", { file_path: "/w/a.ts", content: "x" })).toMatchObject({
+      calls: [{ tool: "write", input: { path: "/w/a.ts", content: "x" } }],
+      harnessTool: "Write",
+      callId: "tu1",
+      session: "c1",
+      event: "preToolUse",
+      project: "/w",
+    });
+    expect(pre("Delete", { file_path: "/w/a.ts" }).calls).toEqual([{ tool: "write", input: { path: "/w/a.ts", content: "" } }]);
+    expect(pre("Read", { file_path: "/w/a.ts" }).calls).toEqual([{ tool: "read", input: { path: "/w/a.ts" } }]);
+    expect(pre("Grep", { pattern: "k", file_path: "/w" }).calls).toEqual([{ tool: "grep", input: { pattern: "k", path: "/w" } }]);
+    expect(pre("Fetch", { url: "https://x.invalid" }).calls).toEqual([{ tool: "webfetch", input: { url: "https://x.invalid" } }]);
+    expect(pre("Shell", { command: "ls", cwd: "/w" }).calls).toEqual([{ tool: "bash", input: { command: "ls" } }]);
+    expect(pre("Task", { description: "d" }).calls).toMatchObject([{ tool: "agent" }]);
+    expect(pre("MCP:create_issue", { title: "t" })).toMatchObject({ calls: [], harnessTool: "MCP:create_issue" });
+    expect(fromCursor({ ...common, hook_event_name: "preToolUse" }).calls).toEqual([]);
+  });
+
+  it("Cursor beforeMCPExecution: decided by the tool's name, as an ungoverned tool", () => {
+    const r = fromCursor({
+      conversation_id: "c1",
+      hook_event_name: "beforeMCPExecution",
+      tool_name: "create_issue",
+      tool_input: '{"title":"t"}',
+      mcp_server_name: "github",
+      command: "npx github-mcp",
+      workspace_roots: ["/w"],
+    });
+    expect(r).toMatchObject({ calls: [], harnessTool: "MCP:create_issue", event: "beforeMCPExecution", session: "c1" });
+  });
+
   it("a patch is decided by its strictest path", async () => {
     surface("never");
     const hr = fromOpencode({
@@ -813,6 +850,18 @@ describe("gnomon guard — reading other harnesses' hook payloads", () => {
     expect(JSON.parse(toCursor(verdict("allow")))).toEqual({});
     expect(JSON.parse(toCursor(verdict("ask"), "beforeShellExecution"))).toMatchObject({ permission: "ask", user_message: expect.any(String), agent_message: expect.any(String) });
     expect(JSON.parse(toCursor(verdict("ask"), "beforeReadFile")).permission).toBe("deny");
+  });
+
+  it("Cursor's answer: preToolUse does not enforce ask, so an ask is a deny that says a person must approve, except the approval gate's, which Cursor's own flow answers; beforeMCPExecution can ask", () => {
+    const other = { ...verdict("ask"), rule: "tools" as const };
+    const pre = JSON.parse(toCursor(other, "preToolUse"));
+    expect(pre).toMatchObject({ permission: "deny", user_message: expect.stringContaining("A person must approve") });
+    expect(pre.agent_message).toBe(pre.user_message);
+    expect(JSON.parse(toCursor(verdict("ask"), "preToolUse")).permission).toBe("ask");
+    expect(JSON.parse(toCursor(verdict("ask"), "beforeReadFile")).permission).toBe("deny");
+    expect(JSON.parse(toCursor(verdict("deny"), "preToolUse")).permission).toBe("deny");
+    expect(JSON.parse(toCursor(verdict("ask"), "beforeMCPExecution")).permission).toBe("ask");
+    expect(JSON.parse(toCursor(verdict("allow"), "preToolUse"))).toEqual({});
   });
 });
 

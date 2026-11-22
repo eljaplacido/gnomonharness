@@ -154,7 +154,7 @@ export interface SecurityTestReport {
 
 const LIMITS = [
   "Decisions of the policy layer only: a call a host runs without asking its hook is not seen (gnomon guard status checks the hooks).",
-  "Cursor's hooks give no event before a file write or edit, so those cases are listed as not covered there; gnomon check judges Cursor's writes afterwards.",
+  "Cursor's writes and edits are put to the guard as its preToolUse Write tool; its Write input is built here from cursor-agent-exec 3.0.16's shape, which Cursor's docs do not publish.",
   "Command recognition is by pattern: code an interpreter runs (python -c) is gated as a command, not parsed, so it is asked about rather than refused.",
   "A secret read through an interpreter with a path built at run time (python3 -c \"open('.env'+'.x')\") is not seen by the word check: it is contained by exec = \"docker\" (an empty mount) or by keeping the file out of the repository (gnomon security: secrets_in_tree).",
   "The surface tested is this checkout's .gnomon/ as it is on disk, committed in a scratch repository.",
@@ -271,7 +271,17 @@ export function hostPayload(
       const base = { conversation_id: session, cwd: sb, workspace_roots: [sb] };
       if (k.tool === "Bash") return { payload: { ...base, hook_event_name: "beforeShellExecution", command: input.command } };
       if (k.tool === "Read") return { payload: { ...base, hook_event_name: "beforeReadFile", file_path: input.file_path } };
-      return { why: "Cursor's hooks give no event before a file write or edit (gnomon check judges it afterwards)" };
+      // A write or edit reaches Cursor's `preToolUse` hook as its Write tool (cursor.com/docs/agent/hooks;
+      // input { file_path, content } as cursor-agent-exec 3.0.16 builds it).
+      return {
+        payload: {
+          ...base,
+          hook_event_name: "preToolUse",
+          tool_name: "Write",
+          tool_use_id: `${session}-call`,
+          tool_input: { file_path: input.file_path, content: input.content ?? input.new_string ?? "" },
+        },
+      };
     }
   }
 }

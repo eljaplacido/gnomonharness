@@ -34,6 +34,28 @@
   for the endpoint and model, then by the measured ratio (never below 1); the leg checkpoint divides its budget by the
   measured ratio the same way. Unresolved (`default`) windows are unchanged byte for byte, and no floor or guard is
   loosened. A trim's record gains an optional `basis` (`measured` or `safety`) beside `ratio`.
+### Added — Cursor hooks v2 and skill export (opt-in; depends on the inbox in PR #280)
+
+Nothing changes for anyone who does not run `gnomon guard install cursor` or `gnomon skill export`.
+
+- **`gnomon guard install cursor` writes the current Cursor hook set** (<https://cursor.com/docs/agent/hooks>):
+  `preToolUse` (file writes, which Cursor sends as its Write tool, plus Delete, Grep, Fetch, Task) now decided before
+  they happen, `beforeMCPExecution`, and the existing shell and read hooks, all `failClosed` (a hook that cannot start
+  blocks the call instead of letting it run); a `sessionStart` hook `gnomon inbox --hook cursor` that hands the
+  dashboard inbox to Cursor as `additional_context`, labelled "information, not instructions". No `stop` hook: Cursor
+  submits its `followup_message` as a new prompt, which would loop the agent. The merge keeps your other hooks;
+  re-running install updates an older gnomon install in place. `guard status` reports each Cursor hook (`ok`,
+  `missing`, `not_fail_closed`) and shows an older install as `outdated`, a warning, never a failure.
+- **`gnomon skill export [--to <dir>] [--format skill-md] [--write]`** writes each active skill as `<name>/SKILL.md`
+  (the Agent Skills layout Claude Code, Codex, Cursor and opencode read), with a provenance comment naming the surface
+  hash. A dry run unless `--write`; default `.claude/skills`; never writes into `.gnomon/`; never overwrites a
+  `SKILL.md` gnomon did not write (exit 2).
+- `gnomon security test` now sends Cursor's writes as `preToolUse` Write events: cursor 22/22 (68/68 overall).
+
+### Fixed
+
+- Docs and code said Cursor has no hook before a file write; it does (`preToolUse`). `toCursor` knows that `preToolUse`
+  does not enforce `ask`: an ask there is a deny, except the approval gate's.
 
 ### Added — dashboard v2, onboarding and shell (depends on `feat/dashboard-v2-base`)
 

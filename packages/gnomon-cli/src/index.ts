@@ -26,6 +26,10 @@ import {
   runPromptLoop,
   loadSkills,
   loadProposedSkills,
+  exportSkills,
+  SKILL_EXPORT_FORMATS,
+  SKILL_EXPORT_DEFAULT_DIR,
+  type SkillExportFormat,
   acceptSkill,
   rejectSkill,
   SkillRefusal,
@@ -2087,7 +2091,31 @@ async function cmdSkill(args: CliArgs): Promise<void> {
     return;
   }
 
-  console.error(`Unknown skill subcommand: ${sub}. Use: list | accept | reject | mine | trial`);
+  if (sub === "export") {
+    // Opt-in: a dry run unless --write, and only ever outside .gnomon/. Exit 0 done, 2 something refused, 1 usage.
+    const to = typeof args.flags["to"] === "string" && args.flags["to"] !== "true" ? args.flags["to"] : undefined;
+    const format = (typeof args.flags["format"] === "string" ? args.flags["format"] : "skill-md") as SkillExportFormat;
+    if (!(SKILL_EXPORT_FORMATS as readonly string[]).includes(format)) {
+      console.error(`gnomon skill export: --format is one of ${SKILL_EXPORT_FORMATS.join(", ")} (got "${format}")`);
+      process.exit(1);
+    }
+    const write = args.flags["write"] !== undefined;
+    const result = exportSkills(config, { project: resolve(args.dir ?? process.cwd()), to, format, write });
+    if (args.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`${write ? "Exported" : "Would export"} ${result.items.length} gnomon skill(s) as ${result.format} to ${result.dir} (surface ${result.surface_hash.slice(0, 12)}):`);
+      for (const i of result.items) {
+        const verb = write ? { create: "wrote", update: "updated", unchanged: "unchanged", refuse: "REFUSED" }[i.action] : { create: "create", update: "update", unchanged: "unchanged", refuse: "REFUSE" }[i.action];
+        console.log(`  ${verb.padEnd(9)} ${i.name || i.id}/SKILL.md${i.reason ? `  (${i.reason})` : ""}`);
+      }
+      if (result.items.length === 0) console.log("  (no active skills in .gnomon/skills/)");
+      if (!write) console.log(`\nNothing written. Re-run with --write to write these (default directory ${SKILL_EXPORT_DEFAULT_DIR}; --to <dir>, e.g. .agents/skills for Codex).`);
+    }
+    process.exit(result.items.some((i) => i.action === "refuse") ? 2 : 0);
+  }
+
+  console.error(`Unknown skill subcommand: ${sub}. Use: list | accept | reject | mine | trial | export`);
   process.exit(1);
 }
 
@@ -3186,6 +3214,15 @@ Commands:
     candidates (evidence with record pointers, not skill text) to
     .gnomon-skills/candidates/, which is not hashed.
 
+  skill export [--to <dir>] [--format skill-md] [--write] [--json] [--dir <path>]
+    Write each active skill (.gnomon/skills/*.md; proposals are not exported)
+    as <name>/SKILL.md, the Agent Skills layout Claude Code, Codex, Cursor
+    and opencode read: YAML name and description, the skill's text, and a
+    comment naming the source file and the surface hash. A DRY RUN unless
+    --write. Default directory .claude/skills (Claude Code; Cursor and
+    opencode read it too); --to .agents/skills for Codex. Never writes into
+    .gnomon/ and never overwrites a SKILL.md gnomon did not write (exit 2).
+
   skill trial <id> [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]
     Measure a proposal on the tasks in .gnomon/trials/<name>.toml (default
     "default"): each task x attempt runs once without the skill and once
@@ -3615,7 +3652,7 @@ async function main(): Promise<void> {
     case "inbox": {
       if (args.flags["hook"]) {
         // A hook never fails the host: see runInboxHook.
-        process.exitCode = runInboxHook(args.dir ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd());
+        process.exitCode = runInboxHook(args.dir ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd(), console.log, args.flags["hook"] === "cursor" ? "cursor" : "claude-code");
         break;
       }
       if (args.subcommand === "mcp") {
