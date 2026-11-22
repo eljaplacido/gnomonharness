@@ -2610,13 +2610,15 @@ async function cmdSecurity(args: CliArgs): Promise<number> {
   }
   const sub = subcommandOr(args, "posture");
   if (sub === "test") {
-    const { runSecurityTest, formatSecurityTest, SECURITY_TEST_SCHEMA, SECURITY_TEST_EXIT, SECURITY_TEST_HOSTS } = await import("./security_test.js");
+    const { runSecurityTest, formatSecurityTest, SECURITY_TEST_SCHEMA, SECURITY_TEST_EXIT, SECURITY_TEST_HOSTS, SECURITY_TEST_OPT_IN_HOSTS } = await import("./security_test.js");
     const host = args.flags.host ?? "all";
-    if (host !== "all" && !(SECURITY_TEST_HOSTS as readonly string[]).includes(host)) {
-      return commandError(args, SECURITY_TEST_SCHEMA, `--host ${host}: use one of ${SECURITY_TEST_HOSTS.join(", ")}, or all (the default)`, SECURITY_TEST_EXIT.couldNotRun);
+    // `all` is the three hosts it always was; Codex, Qwen Code and Copilot are asked for by name.
+    const named = [...SECURITY_TEST_HOSTS, ...SECURITY_TEST_OPT_IN_HOSTS];
+    if (host !== "all" && !(named as readonly string[]).includes(host)) {
+      return commandError(args, SECURITY_TEST_SCHEMA, `--host ${host}: use one of ${named.join(", ")}, or all (the default: ${SECURITY_TEST_HOSTS.join(", ")})`, SECURITY_TEST_EXIT.couldNotRun);
     }
     try {
-      const hosts = host === "all" ? SECURITY_TEST_HOSTS : ([host] as Array<(typeof SECURITY_TEST_HOSTS)[number]>);
+      const hosts = host === "all" ? SECURITY_TEST_HOSTS : ([host] as Array<(typeof named)[number]>);
       const report = runSecurityTest(dir, { role: args.role, hosts });
       if (args.json) console.log(JSON.stringify(report, null, 2));
       else for (const l of formatSecurityTest(report)) console.log(l);
@@ -3314,19 +3316,20 @@ Commands:
     gnomon.scorecard/1 JSON. Exit 0 clean, 2 a finding, 10 not governed.
 
   guard --tool <bash|write|edit|read|webfetch|grep|glob|execute> --input <json> [--role <r> | --agent <a>]
-  guard --from claude-code|opencode|cursor|generic  (the call on stdin)
+  guard --from claude-code|opencode|cursor|codex|qwen-code|copilot|generic  (the call on stdin)
     Decide one tool call another harness is about to make, before it runs,
     by this surface's rules as committed (the session's recorded base, else
     HEAD): allow, deny or ask, with the rule and the reason, as
     gnomon.guard/1 JSON. The same prechecks gnomon's own tools run decide it.
     Exit: 0 allow, 2 deny, 3 ask, 10 no decision (answered as ask). With
-    --from claude-code|cursor it answers in that harness's hook format.
+    --from claude-code|cursor|codex|qwen-code|copilot it answers in that harness's hook format.
     Recorded in the audit trail when [audit] is on.
-  guard install claude-code|opencode|cursor [--write] [--bin <path>]
+  guard install claude-code|opencode|cursor|codex|qwen-code|copilot [--write] [--bin <path>]
     Print the hook (Claude Code PreToolUse, an opencode 2.2 plugin, Cursor
-    hooks.json), or with --write add it to this project's own config. The
+    hooks.json, Codex .codex/hooks.json, Qwen Code .qwen/settings.json, Copilot
+    .github/hooks/gnomon.json), or with --write add it to this project's own config. The
     hook names an absolute gnomon that answers guard; none: exit 10.
-  guard status [--expect claude-code,opencode,cursor] [--json] [--dir <path>]
+  guard status [--expect claude-code,opencode,cursor,codex,qwen-code,copilot] [--json] [--dir <path>]
     Per host: the hook ok, missing, modified (differs from HEAD or from what
     install --write recorded), disabled (disableAllHooks) or not installed;
     and the host sessions the guard has decided for (liveness).
@@ -3351,7 +3354,7 @@ Commands:
     surface problem); advice names a setting that would contain more. Runs
     no model and changes nothing. Exit 0 no risk, 2 a risk, 10 could not run.
 
-  security test [--host claude-code|opencode|cursor|all] [--role <r>] [--json] [--dir <path>]
+  security test [--host claude-code|opencode|cursor|codex|qwen-code|copilot|all] [--role <r>] [--json] [--dir <path>]
     A model-free attack corpus run through the real guard against a scratch
     copy of this surface (bait .env, CI workflow, a precious directory, an
     isolated HOME; all removed afterwards): destructive commands,

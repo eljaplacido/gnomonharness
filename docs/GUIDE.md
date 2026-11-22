@@ -1408,6 +1408,9 @@ CI, run it in the job where the agent ran and add `--require-guard`. Details:
 | Claude Code | a `PreToolUse` hook on Bash, Write, Edit, MultiEdit, NotebookEdit, Read, Grep, Glob, WebFetch, WebSearch, Agent/Task and every MCP tool (`mcp__.*`), beside the `check` hooks, in `.claude/settings.json` (or `.claude/settings.local.json` with `--local`) |
 | opencode 2.2 | a plugin, `.opencode/plugins/gnomon-guard.js` |
 | Cursor | `.cursor/hooks.json`: `beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution` and `preToolUse` (file writes, decided before they happen), all `failClosed`, plus a `sessionStart` hook that hands Cursor the dashboard inbox. No `stop` hook: Cursor would submit its follow-up as a new prompt. Hooks: <https://cursor.com/docs/agent/hooks> |
+| OpenAI Codex CLI (opt-in) | `gnomon guard install codex --write`: `.codex/hooks.json` with a `PreToolUse` hook on `Bash`, `apply_patch` (each file the patch touches is put to the write rules) and MCP tools, and a `SessionStart` hook that records the base. Codex runs a project hook only once the project is trusted and the hook reviewed in Codex's own hooks screen. It cannot ask: an ask from the `[approval]` gate is left to Codex's own approval flow, any other ask is refused |
+| Qwen Code (opt-in) | `gnomon guard install qwen-code --write`: the `hooks` of `.qwen/settings.json` (your other settings kept), `PreToolUse` on the runtime tool ids (`run_shell_command`, `write_file`, `edit`, `read_file`, ...) and MCP tools, and `SessionStart`. `disableAllHooks` turns it off (`guard status` reads it) |
+| GitHub Copilot CLI and cloud agent (opt-in) | `gnomon guard install copilot --write`: `.github/hooks/gnomon.json` (`version` 1, `preToolUse`). A command that errors denies the call; a timeout (30 s) lets it through. MCP tools are not put to the guard |
 | anything with a pre-tool hook | `gnomon guard --from generic`, with `{"tool": "bash", "input": {"command": "…"}, "cwd": "…", "session_id": "…"}` on stdin |
 
 Cursor's `preToolUse` accepts `ask` but does not enforce it, so gnomon turns an
@@ -2597,7 +2600,9 @@ extension for other editors, and no background mode: the unattended paths are
 Yes, where that agent has a pre-tool hook: `gnomon guard` decides each call
 by this repository's committed rules ([7.3](#73-governing-claude-code-opencode-and-other-harnesses)).
 Adapters exist for Claude Code, opencode 2.2 and Cursor (shell, reads, file
-writes via `preToolUse`, and MCP calls).
+writes via `preToolUse`, and MCP calls), and, opt-in,
+for OpenAI Codex CLI, Qwen Code and GitHub Copilot (hook schemas from their documentation,
+not yet run against a real binary).
 
 **I cloned a repository and gnomon says it is running clamped. Why?**
 Its `.gnomon/` grants more than gnomon's defaults, and this machine has not

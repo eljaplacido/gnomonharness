@@ -4165,16 +4165,46 @@ export function hostHookPaths(root: string, env: NodeJS.ProcessEnv = process.env
   // Read on every write target of every shell call: remembered per root and
   // per the environment that moves the user-level paths. Only a found
   // repository is remembered, as gitControlPaths does.
-  const key = [root, homedir(), env.CLAUDE_CONFIG_DIR, env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.APPDATA, env.OPENCODE_CONFIG].join("\0");
+  const key = [root, homedir(), env.CLAUDE_CONFIG_DIR, env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.APPDATA, env.OPENCODE_CONFIG, env.CODEX_HOME].join("\0");
   const hit = HOST_HOOKS.get(key);
-  if (hit) return hit;
+  // Not remembered: whether `guard install codex|qwen-code|copilot` has put its hook
+  // here can change under a running process.
+  if (hit) return [...hit.paths, ...optInHostHookPaths(hit.bases, env)];
   const found = hostHookPathsOf(root, env);
-  if (found.repo) HOST_HOOKS.set(key, found.paths);
-  return found.paths;
+  if (found.repo) HOST_HOOKS.set(key, found);
+  return [...found.paths, ...optInHostHookPaths(found.bases, env)];
 }
-const HOST_HOOKS = new Map<string, string[]>();
+const HOST_HOOKS = new Map<string, { paths: string[]; bases: string[] }>();
 
-function hostHookPathsOf(root: string, env: NodeJS.ProcessEnv): { paths: string[]; repo: boolean } {
+function optInHostHookPaths(bases: string[], env: NodeJS.ProcessEnv): string[] {
+  const home = homedir();
+  const out: string[] = [];
+  // Codex, Qwen Code and Copilot: opt-in. Their files are protected only where
+  // `gnomon guard install codex|qwen-code|copilot` put gnomon's hook, so a
+  // project that never installed one is judged exactly as before.
+  const optIn = (re: RegExp, file: string): boolean => {
+    try {
+      return re.test(readFileSync(file, "utf-8"));
+    } catch {
+      return false; // absent or unreadable: not installed there
+    }
+  };
+  const codexHome = env.CODEX_HOME ? resolve(env.CODEX_HOME) : join(home, ".codex");
+  for (const b of bases) {
+    if (optIn(/guard --from codex\b/, join(b, ".codex", "hooks.json"))) {
+      out.push(join(b, ".codex", "hooks.json"), join(b, ".codex", "config.toml"), join(codexHome, "hooks.json"), join(codexHome, "config.toml"));
+    }
+    if (optIn(/guard --from qwen-code\b/, join(b, ".qwen", "settings.json"))) {
+      out.push(join(b, ".qwen", "settings.json"), join(home, ".qwen", "settings.json"));
+    }
+    if (optIn(/guard --from copilot\b/, join(b, ".github", "hooks", "gnomon.json"))) {
+      out.push(join(b, ".github", "hooks", "gnomon.json"));
+    }
+  }
+  return out;
+}
+
+function hostHookPathsOf(root: string, env: NodeJS.ProcessEnv): { paths: string[]; repo: boolean; bases: string[] } {
   const home = homedir();
   const bases = [resolve(root)];
   let gitDir: string | null = null;
@@ -4232,7 +4262,7 @@ function hostHookPathsOf(root: string, env: NodeJS.ProcessEnv): { paths: string[
   }
   out.push(join(home, ".cursor", "hooks.json"));
   if (env.OPENCODE_CONFIG) out.push(resolve(root, env.OPENCODE_CONFIG));
-  return { paths: [...new Set(out)], repo: gitDir !== null };
+  return { paths: [...new Set(out)], repo: gitDir !== null, bases };
 }
 
 /**

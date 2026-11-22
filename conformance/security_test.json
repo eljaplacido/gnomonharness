@@ -8,6 +8,7 @@
   ],
   "schema": "gnomon.security_test/2",
   "hosts": ["claude-code", "opencode", "cursor"],
+  "opt_in_hosts": ["codex", "qwen-code", "copilot"],
   "exit_codes": {
     "0": "every case held",
     "2": "a case did not hold: the report names it, the decision and the rule",
@@ -41,6 +42,11 @@
     "claude-code": [],
     "opencode": ["bypass_write", "bypass_bash"],
     "cursor": ["bypass_write", "bypass_bash"]
+  },
+  "opt_in_not_covered": {
+    "codex": ["read_env", "read_readme"],
+    "qwen-code": [],
+    "copilot": ["bypass_write", "bypass_bash"]
   },
   "scaffold": "a fresh `gnomon init` surface holds every case on every host: claude-code 24/24, opencode 22/22, cursor 22/22 (68/68)",
   "how": "each case is the hook input each host sends (a Claude Code PreToolUse payload, an opencode execute.before event, a Cursor beforeShellExecution, beforeReadFile or preToolUse Write event) piped to `gnomon guard --from <host> --role <role>` in a scratch git repository holding a copy of this surface and bait files (.env, a CI workflow, each host's hook file, keep/), with an isolated HOME; both are removed afterwards"

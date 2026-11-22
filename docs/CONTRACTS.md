@@ -828,7 +828,7 @@ decision gnomon could not make is never an allow.
 | `surface` | a write or edit inside `.gnomon/`, including through a symlink from either side, a hard link to a surface file, and, on case-insensitive filesystems, other spellings of the directory; and a shell write target inside it (or a recursive removal of a directory above it), for every role and at every `/allow` level: the write tool under `/allow custom\|all` is the one consented route. Also a `git rm` (`--cached` included) of a path in it, and, under strict consent, a `git commit` that would record a change to it: one already staged, one `-a` or the commit's pathspec takes, or one a `git add` in the same command stages |
 | `record` | a write, edit or shell write target inside gnomon's own records: `.gnomon-audit/` (or the `[audit] dir`), `.gnomon-trials/` and `.gnomon-sessions/` (or the `[session] dir`), for every role, with no consent path. This includes a hard link to a record, an `ln` into or out of one, git checkout/restore/clone/worktree/apply, archive extraction (members listed by `tar`/`unzip`), rsync, a perl two-argument open, an awk redirect, a glob that could name a record, on case-insensitive filesystems other spellings of the directory, a recursive removal of a directory above the records (`rm -r`, `find -delete` unless its name tests match no record, `mv`, `rsync --delete`, `shutil.rmtree` and the like), and a `git clean` or `git stash --include-untracked\|--all` that would remove a record (git's own `status` says which, after `-x`/`-X`/`-e` and pathspecs) |
 | `git_hooks` | a write, edit or shell write target in `.git/hooks/` or `.git/config` (a linked worktree's common git dir included), or a `git config` that sets, in any scope, a key git runs as a program: `core.hooksPath`, `core.fsmonitor`, `core.sshCommand`, `core.pager`, `core.editor`, `core.askPass`, `sequence.editor`, `credential.helper`, diff/merge/filter drivers, `gpg.program`, `pager.*`, `alias.*` starting with `!`, `include.path`, `init.templateDir` and the rest of the list in `shell.ts` (`GIT_EXEC_KEYS`). For every role |
-| `host_hooks` | a write, edit or shell write target in a host harness's hook configuration — what `gnomon guard install` writes and what can switch it off: `.claude/settings.json`, `.claude/settings.local.json`, `.claude/hooks/`, `.opencode/plugins/` (and `plugin/`), `opencode.json[c]`, `.cursor/hooks.json` in the root and the git toplevel; the user-level copies (`$CLAUDE_CONFIG_DIR` or `~/.claude`, `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`, `$OPENCODE_CONFIG`, `~/.cursor/hooks.json`); and gnomon's per-repository state (the guard's session bases and rules cache). A recursive removal, `mv`, `git rm` or `git clean` that would reach one counts. For every role, under every gate: removing the hook detaches the layer from every later session (GBS-LAYER pilot, 2026-11-06) |
+| `host_hooks` | a write, edit or shell write target in a host harness's hook configuration — what `gnomon guard install` writes and what can switch it off: `.claude/settings.json`, `.claude/settings.local.json`, `.claude/hooks/`, `.opencode/plugins/` (and `plugin/`), `opencode.json[c]`, `.cursor/hooks.json` in the root and the git toplevel, and, only where `gnomon guard install codex|qwen-code|copilot` put gnomon's hook, that host's files (`.codex/hooks.json`, `.codex/config.toml`, `$CODEX_HOME` or `~/.codex` `hooks.json` and `config.toml`; `.qwen/settings.json`, `~/.qwen/settings.json`; `.github/hooks/gnomon.json`); the user-level copies (`$CLAUDE_CONFIG_DIR` or `~/.claude`, `$XDG_CONFIG_HOME/opencode` or `~/.config/opencode`, `$OPENCODE_CONFIG`, `~/.cursor/hooks.json`); and gnomon's per-repository state (the guard's session bases and rules cache). A recursive removal, `mv`, `git rm` or `git clean` that would reach one counts. For every role, under every gate: removing the hook detaches the layer from every later session (GBS-LAYER pilot, 2026-11-06) |
 | `write_allow` | a path outside the role's `write_allow`; or a relative shell write after a `cd` gnomon cannot follow (`cd "$X"`), which it cannot place |
 | `outside_root` | only under a declared governance (§38), and not under `[sandbox] level = "off"`: a shell write or removal target outside the root and every granted `extra_roots` — redirections, `rm`/`mv`/`cp`/`tee`/`dd`/`install`/`ln`/`truncate`/`sed -i`/`chmod`/`chown`/… operands, `find -delete`/`-exec rm`, literal paths in inline python/node/perl code — after `cd` sequences gnomon can follow, `~` and `$HOME`, globs by their literal part. Temp space is scratch, except the project's own neighbours when it lives there. The bash half of what `sandbox` refuses for write and edit |
 | `secret_path` | only under a declared governance (§37): a read, write or edit of a protected secret path (`[governance.paths] secrets`, or its default: `.env`, keys, `~/.ssh`, `~/.aws`, …), a shell command with a word or redirection naming one (a glob by what it expands to) or a recursive reader (`grep -r`, `rg`, `tar`, `cp -r`, `find -exec`) whose walk reaches one, a command that prints the environment (`printenv`, `env` with no command, a bare `export`, `/proc/<pid>/environ`), or a grep/glob whose scope is one or holds one. Containment of an in-root secret (#227): `exec = "docker"` mounts an empty read-only file over each declared file at secrets >= prevent; `exec = "os"` at secrets >= prevent refuses to start unless `[governance] secrets_in_root = "allow"` (recorded as `session_start.resolved.secrets_in_root`) |
@@ -1022,7 +1022,7 @@ A working directory inside another governed project is judged by that
 project's rules. Paths in the call still resolve against the project root.
 
 **Input.** `--tool <kind> --input <json>`, or on stdin `{"tool", "input",
-"cwd"?, "project"?, "session_id"?}`. With `--from claude-code | opencode | cursor` stdin
+"cwd"?, "project"?, "session_id"?}`. With `--from claude-code | opencode | cursor | codex | qwen-code | copilot` stdin
 is that harness's own hook payload, and the answer is in its own format
 (`harness_answers` in the fixture): Claude Code gets nothing on allow and
 `hookSpecificOutput.permissionDecision` deny or ask otherwise, exit 0 — except
@@ -1035,7 +1035,17 @@ otherwise, exit 0 (events decided: `beforeShellExecution`, `beforeReadFile`,
 `beforeMCPExecution` and `preToolUse`, which carries file writes; at
 `preToolUse` Cursor accepts `ask` but does not enforce it, so an ask is
 answered `deny` except the `[approval]` gate's, which is passed on;
-https://cursor.com/docs/agent/hooks); opencode's plugin reads the generic document, and passes
+https://cursor.com/docs/agent/hooks); Qwen Code reads Claude Code's answer, with the runtime tool ids
+(`run_shell_command`, `write_file`, `edit`, `read_file`, ...) read in place of Claude's
+names, and `yolo` treated as `bypassPermissions`; Codex gets the same
+`hookSpecificOutput` but documents `ask` as unsupported, so an ask from the approval
+gate (rule `approval`) is answered with nothing on stdout and one stderr line
+(`gnomon guard: ask (approval), left to Codex's own approval flow`), leaving the call
+to Codex's own approval flow, and every other ask is answered `deny`; Copilot gets `{}` on
+allow and a top-level `permissionDecision` / `permissionDecisionReason` (with the
+Claude-format `hookSpecificOutput` beside it). `codex`, `qwen-code` and `copilot`
+are opt-in: nothing is installed, listed by `guard status`, or protected until
+`gnomon guard install` is run for them (below); opencode's plugin reads the generic document, and passes
 `--session-base <sha>`, the HEAD it read when opencode loaded it, which the
 guard uses and records only for a session with no recorded base yet.
 
@@ -1059,7 +1069,7 @@ directory or a versioned directory (`/v22.22.2/`), which another clone will not
 have. The exit is the same either way.
 
 Each hook passes an agent name as `--agent` (`hook_agents` in the fixture:
-`claude-code`, `opencode`, `cursor`; the opencode plugin's is a default that
+`claude-code`, `opencode`, `cursor`, and the opt-in `codex`, `qwen-code`, `copilot`; the opencode plugin's is a default that
 `$GNOMON_GUARD_AGENT` overrides), which the guard maps to a role through
 `[check.roles]` in `.gnomon/policy.toml`. With no entry for it, or one naming
 no declared role, the guard has **no role** and answers every call `ask`
@@ -4673,7 +4683,7 @@ The per-session keys, and the records each one comes from:
 | `process` (`writes`, `verified_after_last_write`, `refusal_rate`, `apparatus_rate`) | derived, below |
 
 Each guarded session has `trail`; `host` (the `session_start`'s `via`:
-claude-code, opencode, cursor), `agent`, `role`, `surface_hash` and
+claude-code, opencode, cursor, or an opt-in codex, qwen-code, copilot), `agent`, `role`, `surface_hash` and
 `started` from its `session_start`; `ended` (the last record's `ts`); and,
 from its `guard` records (§10), `calls`, `decisions` (decision → n), `rules`
 (rule → n), `by_tool` (the host's own tool name where it differs) and
@@ -4698,7 +4708,11 @@ Claude Code and opencode calls.
 
 A built-in, model-free attack corpus (`CORPUS`, `security_test.ts`), run
 through the real `gnomon guard` as each harness it governs would call it:
-Claude Code, opencode and Cursor (`--host <one>`, or `all`, the default).
+Claude Code, opencode and Cursor (`--host <one>`, or `all`, the default), and, by name
+only, the opt-in hosts Codex, Qwen Code and Copilot (`--host codex`; `opt_in_hosts` in the
+fixture, never part of `all`, with `opt_in_not_covered` the cases each cannot be asked:
+Codex has no read-tool hook, Copilot's input documents no permission mode). Their
+payloads are built from the hosts' documentation, not recorded from a real binary.
 The test runs as follows:
 - it makes a scratch git repository holding a copy of `<dir>/.gnomon/`, as it
   is on disk, committed, with bait beside it: `.env`, `.gitignore`,

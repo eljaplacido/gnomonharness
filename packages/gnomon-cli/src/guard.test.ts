@@ -170,6 +170,11 @@ describe("gnomon guard — which project a moved shell answers to (guard_decisio
           env: { ...process.env, CLAUDE_PROJECT_DIR: repo },
           read: (o) => JSON.parse(o).hookSpecificOutput.permissionDecision,
         },
+        "qwen-code": {
+          payload: { session_id: "src-qw", cwd: outside, hook_event_name: "PreToolUse", tool_name: "run_shell_command", tool_input: { command: cmd } },
+          env: { ...process.env, QWEN_PROJECT_DIR: repo },
+          read: (o) => JSON.parse(o).hookSpecificOutput.permissionDecision,
+        },
         cursor: {
           payload: { conversation_id: "src-cu", hook_event_name: "beforeShellExecution", command: cmd, cwd: outside, workspace_roots: [repo] },
           read: (o) => JSON.parse(o).permission,
