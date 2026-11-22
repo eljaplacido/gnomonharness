@@ -170,6 +170,11 @@ describe("gnomon guard — which project a moved shell answers to (guard_decisio
           env: { ...process.env, CLAUDE_PROJECT_DIR: repo },
           read: (o) => JSON.parse(o).hookSpecificOutput.permissionDecision,
         },
+        "qwen-code": {
+          payload: { session_id: "src-qw", cwd: outside, hook_event_name: "PreToolUse", tool_name: "run_shell_command", tool_input: { command: cmd } },
+          env: { ...process.env, QWEN_PROJECT_DIR: repo },
+          read: (o) => JSON.parse(o).hookSpecificOutput.permissionDecision,
+        },
         cursor: {
           payload: { conversation_id: "src-cu", hook_event_name: "beforeShellExecution", command: cmd, cwd: outside, workspace_roots: [repo] },
           read: (o) => JSON.parse(o).permission,
@@ -573,7 +578,9 @@ describe("gnomon guard install / status — a hook whose agent [check.roles] map
     expect(agents).toEqual({ ...HOOK_AGENTS });
     const cc = JSON.stringify(claudeCodeHooks(BIN).hooks.PreToolUse);
     expect(cc).toContain(`--agent ${agents["claude-code"]}`);
-    for (const e of Object.values(cursorHooks(BIN).hooks)) expect(JSON.stringify(e)).toContain(`--agent ${agents.cursor}`);
+    // sessionStart is the inbox, which decides nothing and so has no agent.
+    const { sessionStart: _inbox, ...cursorGuards } = cursorHooks(BIN).hooks;
+    for (const e of Object.values(cursorGuards)) expect(JSON.stringify(e)).toContain(`--agent ${agents.cursor}`);
     expect(opencodePlugin(BIN)).toContain(`process.env.GNOMON_GUARD_AGENT || "${agents.opencode}"`);
     const doc = readFileSync(join(ROOT, "docs/CONTRACTS.md"), "utf-8");
     const section = doc.slice(doc.indexOf("## 10. `gnomon guard`"), doc.indexOf("## 11. "));
@@ -680,6 +687,202 @@ describe("gnomon guard — Cursor", () => {
     expect(outside).toMatchObject({ permission: "deny" });
     expect(outside.agent_message).toBeUndefined();
     rmSync(repo, { recursive: true, force: true });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cursor v2: preToolUse (writes), beforeMCPExecution, sessionStart, failClosed
+// ---------------------------------------------------------------------------
+
+/**
+ * Cursor's own hooks-config validator, cut out of the installed
+ * cursor-agent-exec bundle (the module exporting RV, the config check, and jO,
+ * the per-event output check) and run in a function. Read-only: it only parses
+ * hooks.json text, it starts no agent.
+ */
+function cursorValidators(): { config: (c: unknown) => { isValid: boolean; errors: string[] }; output: (event: string, o: unknown) => { success: boolean } } | null {
+  if (!existsSync(CURSOR_EXEC)) return null;
+  const src = readFileSync(CURSOR_EXEC, "utf-8");
+  const at = src.indexOf("const J=e=>{const t=[];if(!A(e))");
+  const start = src.lastIndexOf('"use strict"', at);
+  const end = src.indexOf("},89340:(e,t)=>", at);
+  if (at < 0 || start < 0 || end < 0) return null;
+  const ex: Record<string, (...a: unknown[]) => never> = {};
+  const n = { d: (o: object, defs: Record<string, () => unknown>) => Object.keys(defs).forEach((k) => Object.defineProperty(o, k, { get: defs[k], enumerable: true })) };
+  new Function("e", "t", "n", src.slice(start, end))({}, ex, n);
+  return { config: ex.RV as never, output: ex.jO as never };
+}
+
+describe("gnomon guard — Cursor v2 hooks (cursor.com/docs/agent/hooks)", () => {
+  const run = (p: Record<string, unknown>) =>
+    guardBin(["--from", "cursor", "--agent", "cursor"], JSON.stringify({ conversation_id: "c1", generation_id: "g1", workspace_roots: [repo], cursor_version: "3.0.16", ...p }));
+  const mapped = `\n[check.roles]\ncursor = "implement"\n`;
+
+  it("the hook set: guard on shell, read, MCP and preToolUse (writes), all failClosed; the inbox at sessionStart; no stop", () => {
+    const h = cursorHooks(BIN).hooks as Record<string, Array<Record<string, unknown>>>;
+    expect(Object.keys(h).sort()).toEqual(["beforeMCPExecution", "beforeReadFile", "beforeShellExecution", "preToolUse", "sessionStart"]);
+    for (const e of ["beforeShellExecution", "beforeReadFile", "beforeMCPExecution", "preToolUse"]) {
+      expect(h[e]![0]).toMatchObject({ failClosed: true, timeout: 30 });
+      expect(h[e]![0]!.command).toContain("guard --from cursor --agent cursor");
+    }
+    const matcher = new RegExp(`^(?:${h.preToolUse![0]!.matcher})$`);
+    for (const t of ["Write", "Delete", "Grep", "Fetch", "WebFetch", "Task"]) expect(matcher.test(t), t).toBe(true);
+    // Covered by their own before-hooks: not decided twice.
+    for (const t of ["Shell", "Read", "MCP:x"]) expect(matcher.test(t), t).toBe(false);
+    expect(h.sessionStart![0]!.command).toContain("inbox --hook cursor");
+    expect(h.sessionStart![0]!.failClosed).toBeUndefined();
+    expect(h.stop).toBeUndefined();
+  });
+
+  it.skipIf(!LIVE || !existsSync(CURSOR_EXEC))("the installed Cursor's own validator accepts the hooks.json this writes, and rejects a broken one", () => {
+    const v = cursorValidators();
+    expect(v, "could not cut the validator out of this Cursor build").not.toBeNull();
+    expect(v!.config(cursorHooks(BIN))).toEqual({ isValid: true, errors: [] });
+    expect(v!.config({ version: 1, hooks: { preToolUse: [{ command: "x", failClosed: "yes" }] } }).isValid).toBe(false);
+    expect(v!.config({ version: 1, hooks: { notAnEvent: [{ command: "x" }] } }).isValid).toBe(false);
+    // And the answers: the shapes toCursor makes are valid output for each event.
+    for (const [event, out] of [
+      ["preToolUse", { permission: "deny", user_message: "u", agent_message: "a" }],
+      ["preToolUse", {}],
+      ["beforeMCPExecution", { permission: "ask", user_message: "u", agent_message: "a" }],
+      ["beforeShellExecution", { permission: "deny", user_message: "u", agent_message: "a" }],
+      ["beforeReadFile", { permission: "deny", user_message: "u" }],
+      ["sessionStart", { additional_context: "text" }],
+    ] as const) {
+      expect(v!.output(event, out).success, event).toBe(true);
+    }
+  });
+
+  it("preToolUse Write: a write to the hooks file and one outside the project are denied BEFORE they happen; an ordinary write says nothing", () => {
+    governedRepo("on_write", mapped);
+    const write = (file_path: string) => run({ hook_event_name: "preToolUse", tool_name: "Write", tool_input: { file_path, content: "x\n" }, tool_use_id: "t1", cwd: repo });
+    const hooks = write(join(repo, ".cursor/hooks.json"));
+    expect(hooks.code).toBe(0);
+    expect(JSON.parse(hooks.stdout)).toMatchObject({ permission: "deny", user_message: expect.stringMatching(/host_hooks/), agent_message: expect.any(String) });
+    expect(JSON.parse(write("/etc/gnomon-test-outside").stdout).permission).toBe("deny");
+    expect(JSON.parse(write(join(repo, ".gnomon/policy.toml")).stdout).permission).toBe("deny");
+    const del = run({ hook_event_name: "preToolUse", tool_name: "Delete", tool_input: { file_path: join(repo, ".cursor/hooks.json") }, cwd: repo });
+    expect(JSON.parse(del.stdout).permission).toBe("deny");
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  it("preToolUse cannot enforce an ask: the approval gate's is passed on to Cursor's own flow, any other (no role) is a deny that says so; beforeShellExecution asks", () => {
+    governedRepo("on_write", mapped);
+    const put = (p: Record<string, unknown>) => run({ hook_event_name: "preToolUse", tool_name: "Write", tool_input: { file_path: join(repo, "src/a.ts"), content: "x\n" }, cwd: repo, ...p });
+    expect(JSON.parse(put({}).stdout).permission).toBe("ask");
+    expect(JSON.parse(run({ hook_event_name: "beforeShellExecution", command: "ls", cwd: repo }).stdout).permission).toBe("ask");
+    rmSync(repo, { recursive: true, force: true });
+    governedRepo("on_write"); // [check.roles] maps no cursor role: every call is an ask for want of one
+    expect(JSON.parse(put({}).stdout)).toMatchObject({ permission: "deny", user_message: expect.stringContaining("A person must approve") });
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  it("beforeMCPExecution: an MCP tool is allowed through as ungoverned ({}), never an error", () => {
+    governedRepo("on_write", mapped);
+    const r = run({ hook_event_name: "beforeMCPExecution", tool_name: "create_issue", tool_input: '{"title":"t"}', mcp_server_name: "github", command: "npx github-mcp", cwd: repo });
+    expect(r.code).toBe(0);
+    expect(JSON.parse(r.stdout)).toEqual({});
+    rmSync(repo, { recursive: true, force: true });
+  });
+
+  describe("install, merge, migrate, status", () => {
+    const status = async (dir: string) => {
+      const lines: string[] = [];
+      const code = await cmdGuard(["status", "--dir", dir, "--json", "--expect", "cursor"], (s) => lines.push(s));
+      const st = JSON.parse(lines.join("")) as GuardStatus;
+      return { code, host: st.hosts.find((h) => h.host === "cursor")!, st };
+    };
+    const hooksFile = () => join(repo, ".cursor", "hooks.json");
+    const quiet = async (args: string[]) => {
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        return await cmdGuard(args, () => {});
+      } finally {
+        spy.mockRestore();
+      }
+    };
+
+    it("merges into a user's hooks.json without touching what is theirs, and a second install changes nothing", async () => {
+      governedRepo("never", mapped);
+      mkdirSync(join(repo, ".cursor"), { recursive: true });
+      const theirs = {
+        version: 1,
+        hooks: {
+          beforeShellExecution: [{ command: "./audit.sh", timeout: 5 }],
+          preToolUse: [{ command: "./mine.sh", matcher: "Write" }],
+          stop: [{ command: "./stop.sh", loop_limit: 2 }],
+        },
+        extra: { kept: true },
+      };
+      writeFileSync(hooksFile(), JSON.stringify(theirs));
+      expect(await quiet(["install", "cursor", "--write", "--dir", repo])).toBe(0);
+      const merged = JSON.parse(readFileSync(hooksFile(), "utf-8"));
+      expect(merged.extra).toEqual({ kept: true });
+      expect(merged.hooks.stop).toEqual(theirs.hooks.stop);
+      expect(merged.hooks.beforeShellExecution[0]).toEqual({ command: "./audit.sh", timeout: 5 });
+      expect(merged.hooks.preToolUse[0]).toEqual({ command: "./mine.sh", matcher: "Write" });
+      for (const e of ["beforeShellExecution", "preToolUse"]) expect(merged.hooks[e]).toHaveLength(2);
+      expect(Object.keys(merged.hooks).sort()).toEqual(["beforeMCPExecution", "beforeReadFile", "beforeShellExecution", "preToolUse", "sessionStart", "stop"]);
+      const once = readFileSync(hooksFile(), "utf-8");
+      expect(await quiet(["install", "cursor", "--write", "--dir", repo])).toBe(0);
+      expect(readFileSync(hooksFile(), "utf-8")).toBe(once);
+      const s = await status(repo);
+      expect(s.host.state).toBe("ok");
+      expect(s.host.events).toEqual([
+        { event: "beforeShellExecution", state: "ok" },
+        { event: "beforeReadFile", state: "ok" },
+        { event: "beforeMCPExecution", state: "ok" },
+        { event: "preToolUse", state: "ok" },
+        { event: "sessionStart", state: "ok" },
+      ]);
+      rmSync(repo, { recursive: true, force: true });
+    });
+
+    it("an install from before preToolUse is `outdated` (a warning, exit 0) and says what it lacks; re-installing migrates it", async () => {
+      governedRepo("never", mapped);
+      mkdirSync(join(repo, ".cursor"), { recursive: true });
+      const old = shellCommand(BIN, "guard --from cursor --agent cursor");
+      writeFileSync(hooksFile(), JSON.stringify({ version: 1, hooks: { beforeShellExecution: [{ command: old, timeout: 30 }], beforeReadFile: [{ command: old, timeout: 30 }] } }));
+      const before = await status(repo);
+      expect(before.code).toBe(0);
+      expect(before.host.state).toBe("outdated");
+      expect(before.host.detail).toMatch(/preToolUse is not hooked/);
+      expect(before.host.detail).toMatch(/beforeShellExecution is not failClosed/);
+      expect(before.st.warnings.some((w) => w.startsWith("cursor:"))).toBe(true);
+      expect(before.st.findings).toEqual([]);
+      expect(await quiet(["install", "cursor", "--write", "--dir", repo])).toBe(0);
+      const after = JSON.parse(readFileSync(hooksFile(), "utf-8"));
+      // The two existing entries were updated in place, not duplicated.
+      expect(after.hooks.beforeShellExecution).toEqual([{ command: old, timeout: 30, failClosed: true }]);
+      expect((await status(repo)).host.state).toBe("ok");
+      rmSync(repo, { recursive: true, force: true });
+    });
+
+    it("an expected hooks file that is gone is `missing`; a project that never installed reports not_installed", async () => {
+      governedRepo("never", mapped);
+      expect((await status(repo)).host.state).toBe("missing");
+      const lines: string[] = [];
+      await cmdGuard(["status", "--dir", repo, "--json"], (s) => lines.push(s));
+      expect((JSON.parse(lines.join("")) as GuardStatus).hosts.find((h) => h.host === "cursor")!.state).toBe("not_installed");
+      rmSync(repo, { recursive: true, force: true });
+    });
+
+    it("nothing is written without --write", async () => {
+      governedRepo("never", mapped);
+      const lines: string[] = [];
+      expect(await quiet(["install", "cursor", "--dir", repo])).toBe(0);
+      await cmdGuard(["install", "cursor", "--dir", repo], (s) => lines.push(s));
+      expect(existsSync(hooksFile())).toBe(false);
+      expect(JSON.parse(lines.join("")).hooks.preToolUse).toBeDefined();
+      rmSync(repo, { recursive: true, force: true });
+    });
+
+    it.skipIf(!LIVE || !existsSync(CURSOR_EXEC))("what install --write wrote passes the installed Cursor's own config validator", async () => {
+      governedRepo("never", mapped);
+      expect(await quiet(["install", "cursor", "--write", "--dir", repo])).toBe(0);
+      expect(cursorValidators()!.config(JSON.parse(readFileSync(hooksFile(), "utf-8")))).toEqual({ isValid: true, errors: [] });
+      rmSync(repo, { recursive: true, force: true });
+    });
   });
 });
 

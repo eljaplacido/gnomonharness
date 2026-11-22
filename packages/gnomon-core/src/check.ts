@@ -234,7 +234,7 @@ function parseNameStatus(out: Buffer): Array<{ status: string; path: string }> {
  * worktree, and again in CI once someone commits the trail. Nothing under them
  * is surface, so leaving them out cannot hide an edit to the rules.
  */
-const OWN_STATE = [".gnomon-audit", ".gnomon-sessions", ".gnomon-jobs", ".gnomon-out", ".gnomon-loops", ".gnomon-inbox"];
+const OWN_STATE = [".gnomon-audit", ".gnomon-sessions", ".gnomon-jobs", ".gnomon-out", ".gnomon-loops", ".gnomon-inbox", ".gnomon-proposals"];
 
 // ---------------------------------------------------------------------------
 // Restore journal

@@ -2,7 +2,8 @@
 
 gnomon's rules live in a committed `.gnomon/` directory, and the same code that
 enforces them inside gnomon's own tool loop can be put in front of another
-coding agent: Claude Code, opencode, Cursor, or anything with a pre-tool hook.
+coding agent: Claude Code, opencode, Cursor, and (opt-in) OpenAI Codex CLI, Qwen
+Code and GitHub Copilot, or anything with a pre-tool hook.
 This page says what is enforced where, how to set it up, how to tell that it is
 running, what it records, and how it can be got around.
 
@@ -16,7 +17,10 @@ The contracts behind it are [CONTRACTS.md](CONTRACTS.md) §10 (`gnomon guard`),
 | **Enforced at run time** | gnomon itself | before each tool call, in its own loop | the tool returns the refusal; the model reads it |
 | | Claude Code | a `PreToolUse` hook runs `gnomon guard` on Bash, Write, Edit, MultiEdit, NotebookEdit, Read, Grep, Glob, WebFetch, WebSearch, Agent/Task and every MCP tool | `permissionDecision: "deny"`; Claude reads the reason |
 | | opencode 2.2.x | a plugin in `.opencode/plugins/` sees every tool call before it runs | the call fails with gnomon's reason |
-| | Cursor | `beforeShellExecution` and `beforeReadFile` hooks | `permission: "deny"`. Cursor documents no hook before a file write, so writes are judged afterwards |
+| | Cursor | `beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution` and `preToolUse` (Write, which Cursor also uses for edits, Delete, Grep, Fetch, Task) hooks, all `failClosed` | `permission: "deny"`; Cursor shows the reason and passes it to the model. See [Cursor](#cursor) |
+| | OpenAI Codex CLI (opt-in, [below](#codex-qwen-code-and-copilot-opt-in)) | a `PreToolUse` hook in `.codex/hooks.json` on `Bash`, `apply_patch` and MCP tools | `permissionDecision: "deny"`. Codex cannot ask, so an approval-gate ask is left to Codex's own flow and any other ask is refused |
+| | Qwen Code (opt-in) | a `PreToolUse` hook in `.qwen/settings.json` on its runtime tool ids and MCP tools | `permissionDecision: "deny"` (Claude Code's answer) |
+| | GitHub Copilot CLI and cloud agent (opt-in) | a `preToolUse` hook in `.github/hooks/gnomon.json` | top-level `permissionDecision: "deny"`; a hook that errors also denies |
 | **Decided on request** | any harness with a pre-tool hook (pi, mini-swe-agent, your own) | the hook pipes the call to `gnomon guard --from generic` and acts on the exit code | whatever the hook does with exit 2 |
 | **After the fact** | any harness, hook or not | `gnomon check` on the change (and the agent's transcript) | the check fails (exit 2); in CI that blocks the merge |
 
@@ -79,6 +83,80 @@ After an upgrade, a hook an earlier gnomon wrote and nobody changed is
 `install --write`, and after that to commit the file if it is committed.
 `modified` (a finding, exit 2) is kept for a hook that differs from what any
 gnomon wrote.
+
+## Codex, Qwen Code and Copilot (opt-in)
+
+Nothing here changes for anyone who does not run these installs: no hook file is
+written, `guard status` lists no new host, `security test` (`--host all`) runs the
+same three hosts, and the `host_hooks` rule protects these files only where
+gnomon's hook was installed.
+
+```bash
+gnomon guard install codex --write [--local]      # .codex/hooks.json
+gnomon guard install qwen-code --write [--local]  # the "hooks" of .qwen/settings.json
+gnomon guard install copilot --write [--local]    # .github/hooks/gnomon.json
+# [check.roles] codex = "implement" (likewise qwen-code, copilot) in .gnomon/policy.toml
+```
+
+`--write` merges into an existing file and never replaces what is there: your
+other hooks and settings are kept, a gnomon entry already present is updated in
+place, and a file that is not a JSON object (or whose `hooks` is not an object of
+arrays) is refused with exit 10 and left untouched. Without `--write` it prints
+the fragment.
+
+**Live verification pending.** None of the three CLIs was installed where this
+was written, so no hook has run against a real binary. The schemas below were
+read from each host's documentation on 2026-11-22, and the tests use payloads
+built from them. Run `gnomon guard status` and a harmless denied call (`security
+test --host <h>` shows the decisions, not the host) before relying on one.
+
+| Host | What was verified, and where | Not verified |
+|---|---|---|
+| Codex | hooks file locations (`.codex/hooks.json` for a trusted project, `~/.codex/hooks.json`, `[hooks]` in `config.toml`), the event, matcher group and handler shape, the `PreToolUse` input (`tool_name`, `tool_input.command` for `Bash` and `apply_patch`, `permission_mode`, `session_id`, `cwd`, `transcript_path`), `hookSpecificOutput.permissionDecision` and exit 2, `ask` "parsed but not supported yet", trust and `/hooks` review, `[features] hooks = false`, `timeout` in seconds: <https://learn.chatgpt.com/docs/hooks> (developers.openai.com/codex/hooks redirects there) and the generated input schema in `openai/codex` `codex-rs/hooks/schema/generated/` | the exact patch text a real `apply_patch` call carries (the page says `tool_input.command`; gnomon reads the `*** Add/Update/Delete File:` and `*** Move to:` lines of the apply_patch format); MCP tool-name format beyond the page's `mcp__fs__read` |
+| Qwen Code | `.qwen/settings.json` hooks, entry shape (`matcher`, `hooks[]` with `type`, `command`, `timeout` in seconds), the common and `PreToolUse` input fields, `hookSpecificOutput.permissionDecision` (`ask` shows a prompt, but becomes `deny` headless and in background subagents), exit 2 blocks, `disableAllHooks`, `SessionStart`, `$QWEN_PROJECT_DIR`, permission modes `default\|plan\|auto_edit\|auto\|yolo`: <https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/>; tool ids and the `edit` parameters: `QwenLM/qwen-code` `packages/core/src/tools/` (`tool-names.ts`, `edit.ts`) | the `tool_input` keys of every tool but `write_file.file_path` (the docs show only that one: the others follow the tools' own parameter types), MCP tool names, whether `yolo` honours a hook's `ask` (gnomon treats it as a mode where nobody is asked) |
+| Copilot | `.github/hooks/*.json` (CLI and cloud agent), `version` 1, entry keys `type`, `command` (cross-platform fallback), `bash`, `powershell`, `timeoutSec` (default 30), events, the camelCase input `{sessionId, timestamp, cwd, toolName, toolArgs}` and PascalCase alias input, built-in tool names (`bash`, `create`, `edit`, `view`, `glob`, `grep`, `task`, `web_fetch`, `ask_user`, `powershell`), top-level `permissionDecision`, exit 2 deny, other non-zero deny, timeouts fail open, `ask` denied under cloud agent and autopilot: <https://docs.github.com/en/copilot/reference/hooks-configuration> and <https://code.visualstudio.com/docs/copilot/customization/hooks> | the keys inside `toolArgs` (both Claude's and Copilot's own names are read), MCP tool names, any permission-mode field, whether the Claude-format `hookSpecificOutput` that gnomon also emits is ignored or honoured |
+| Kimi Code | nothing: only a search snippet exists, and its hook schema was not found in official documentation | everything: no adapter is shipped |
+
+What differs from Claude Code, and so is **not** `fromClaudeCode` plus a path:
+
+- **Codex** names `Bash` and `apply_patch`; `apply_patch`'s input is a patch text,
+  decided as one `write` per file it touches (a patch naming no file is not allowed
+  through). Hosted web search does not reach its hooks. A project hook runs only
+  once the project is trusted and the hook reviewed in `/hooks`
+  (`--dangerously-bypass-hook-trust` skips that), so `guard status` can say the
+  file is right but not that Codex runs it, and says so as a warning. It cannot
+  ask: an ask from the approval gate (rule `approval`, the default `on_write`
+  gate asks before every mutating call) is answered with nothing, so Codex's own
+  approval flow decides, and one stderr line says gnomon asked; any other ask (a
+  tool the role does not hold, an ungoverned tool under `[governance]`, a call gnomon
+  could not decide, no role) is refused. Under `permission_mode`
+  `bypassPermissions` every ask is refused. **This makes the `[approval]` gate weaker
+  on Codex than on Claude Code**: `deny` rules stand, the gate is Codex's. Stop and
+  the dashboard inbox are not installed (the inbox is addressed to Claude Code).
+- **Qwen Code** sends its runtime tool ids (`run_shell_command`, `write_file`,
+  `edit`, `read_file`, ...), not Claude's names, so Claude Code's reader would see
+  an unknown tool and decide nothing; `fromQwenCode` maps them. Its matcher lists
+  the tools gnomon decides rather than `*`, so host bookkeeping is not put to a
+  person under `[governance]`. In `--prompt` runs and background subagents Qwen turns
+  an ask into a deny.
+- **Copilot** reads a top-level `permissionDecision`, not Claude's
+  `hookSpecificOutput` (gnomon sends both), and its camelCase `preToolUse` input uses
+  `toolName` and `toolArgs`. It also **reads `.claude/settings.json`**: a gnomon
+  Claude Code hook there fires in Copilot too (the same answer, two records), which
+  `install` and `status` warn of. A command that errors denies; a hook that times
+  out lets the call through to Copilot's own permissions.
+
+`gnomon guard status` reports each as ok, missing, modified or disabled (Codex's
+`[features] hooks = false` in a project or user `config.toml`; Qwen Code's
+`disableAllHooks`), and lists a host only where it is installed, committed or named by
+`--expect`. `gnomon security test --host codex|qwen-code|copilot` runs the corpus in
+each dialect (Codex 22 of 24: no read-tool hook; Copilot 22 of 24: no permission mode).
+
+**Transcripts.** There is no `--format codex` for `gnomon check --transcript`: Codex's
+documentation says its transcript "isn't a stable interface for hooks and may change",
+and its rollout format is not documented, so gnomon does not guess at it. `check` still
+judges a Codex session's diff (`--base`), which misses git-ignored state destruction.
+Qwen Code's reader already exists (`--format qwen-code`); Copilot has none.
 
 For a harness gnomon has no adapter for, call the generic form from its hook:
 
@@ -250,6 +328,10 @@ These are the ways the run-time layer can be got around:
   and `--dangerously-skip-permissions`, the deletion it was meant to stop
   happened. `install` writing an absolute, checked path and `guard status`
   flagging a missing program reduce this. They do not remove it.
+- **Codex, Qwen Code and Copilot's own switches.** Codex's `--dangerously-bypass-hook-trust`
+  and an unreviewed hook, `[features] hooks = false`; Qwen Code's `disableAllHooks`,
+  `--safe-mode` and `--bare`; a Copilot hook that times out. `guard status` reads the
+  files that switch them off, not the flags.
 - **Bypass and auto modes.** Under Claude Code's `bypassPermissions` gnomon
   turns `ask` into `deny`, because Claude Code was seen to run an asked call in
   that mode. Other modes in which a host answers its own prompts (opencode
@@ -263,8 +345,93 @@ These are the ways the run-time layer can be got around:
   runs from a file, paths built at run time: the guard decides the call, not
   its consequences. Under `[governance]` MCP calls are asked; containment is a
   sandbox (`[sandbox] exec = "docker"`), not this layer.
-- **Hosts without a pre-tool hook** (or Cursor's file writes) are judged only
-  after the fact, by `gnomon check`.
+- **Cursor's `preToolUse` cannot ask.** Cursor accepts `permission: "ask"` there
+  but does not enforce it, so gnomon turns an ask into a deny, except the
+  `[approval]` gate's, which is passed on as `ask` and left to Cursor's own
+  approval flow (a deny there would refuse every write under the default gate).
+  A write that the gate would ask about therefore reaches Cursor's own prompt,
+  or runs, as Cursor is set up.
+- **Cursor's hook files and `failClosed`.** The guard hooks are `failClosed`, so
+  a hook that cannot start blocks the call, but anyone who can edit
+  `.cursor/hooks.json` (or enterprise/team hooks that override it) can remove
+  them; `host_hooks` and `guard status` cover that as for the other hosts.
+- **Hosts without a pre-tool hook** are judged only after the fact, by
+  `gnomon check`.
+
+## Cursor
+
+Cursor's hooks are documented at <https://cursor.com/docs/agent/hooks>. What
+`gnomon guard install cursor --write` writes to `.cursor/hooks.json` (version
+1), and what each hook does:
+
+| Hook | Runs | Notes |
+|---|---|---|
+| `beforeShellExecution` | `gnomon guard --from cursor` | `failClosed`. Shell commands; `ask` is enforced here |
+| `beforeReadFile` | `gnomon guard --from cursor` | `failClosed`. Cannot ask: an ask is a deny |
+| `beforeMCPExecution` | `gnomon guard --from cursor` | `failClosed`. MCP tools are decided by name as `ungoverned` (allowed with no `[governance]`, asked at prevent/enforce under one); Cursor recommends `failClosed` for MCP hooks |
+| `preToolUse`, matcher `Write\|Delete\|Grep\|Fetch\|WebFetch\|Task` | `gnomon guard --from cursor` | `failClosed`. **File writes, decided before they happen.** Cursor names its edit tool Write too. Shell, Read and MCP are not matched here: their own before-hooks already decide them, and listing them would decide each twice |
+| `sessionStart` | `gnomon inbox --hook cursor` | Prints the open dashboard-inbox items as `additional_context`, labelled "information, not instructions". Decides nothing, always exits 0 |
+
+`failClosed` is Cursor's own switch: by default a hook that crashes, times out
+or cannot start lets the call run, which is the failure that left Claude Code
+unguarded when a hook path was wrong. With it the call is blocked. gnomon prints
+`{}` on allow, so a working install blocks nothing it did not decide to.
+
+**No `stop` hook is installed.** Cursor submits a `stop` hook's
+`followup_message` as the next user message, up to `loop_limit` times (5 by
+default), so a verdict there would drive the agent in a loop nobody asked for.
+`gnomon check` after the session reports the same findings without that.
+
+**Input shapes.** Cursor's docs list `preToolUse`'s `tool_name`, `tool_input`,
+`tool_use_id` and `cwd`, and name the tools (`Shell`, `Read`, `Write`, `Grep`,
+`Delete`, `Task`, `MCP:<tool>`), but do not show every tool's `tool_input`. The
+adapter reads the shapes Cursor 3.0.16's bundled `cursor-agent-exec` builds:
+Write `{file_path, content}`, Delete and Read `{file_path}`, Grep
+`{pattern, file_path}`, Fetch `{url}`. If a Cursor release changes them, a write
+whose path is not found is decided as a write to no path, which the guard asks
+about or denies; it is never silently allowed.
+
+**Upgrading an older install.** An install from before these hooks still decides
+shell commands and reads. `gnomon guard status` reports it as `outdated` (a
+warning, exit 0, not a finding) and lists each hook of the current set as `ok`,
+`missing` or `not_fail_closed`; `gnomon guard install cursor --write` brings it
+up to date in place. The merge keeps everything else in your `hooks.json`: other
+events, other hooks on the same event, unknown keys.
+
+**Checking it.** `gnomon guard status` (one line per host, and for Cursor one
+per hook). The unit tests put the payloads Cursor documents through the guard;
+with `GNOMON_LIVE_ADAPTERS=1` they also run the hooks file through the config
+and output validators extracted read-only from the installed Cursor's
+`cursor-agent-exec` (it starts no agent).
+
+## Skills for the other harnesses
+
+`gnomon skill export` writes each active gnomon skill as `<name>/SKILL.md`,
+the Agent Skills layout (<https://agentskills.io/specification>: YAML front
+matter with `name` and `description`, the directory named for the skill), so
+the other harnesses can load the same text. It is a dry run listing what it
+would write; `--write` writes. It never writes into `.gnomon/`, and never
+overwrites a `SKILL.md` gnomon did not write (a marker comment in the file says
+which are its own).
+
+```bash
+gnomon skill export                          # dry run: what would go to .claude/skills/
+gnomon skill export --write                  # Claude Code (and Cursor, opencode: they read .claude/skills too)
+gnomon skill export --write --to .agents/skills   # Codex, Cursor, opencode
+```
+
+| Host | Reads skills from | Source |
+|---|---|---|
+| Claude Code | `.claude/skills/<name>/SKILL.md`, `~/.claude/skills/` (its docs do not mention `.agents/skills`) | <https://code.claude.com/docs/en/skills> |
+| Codex | `.agents/skills` (repo, up to the repo root), `$HOME/.agents/skills` | <https://learn.chatgpt.com/docs/build-skills> |
+| Cursor | `.agents/skills/`, `.cursor/skills/`, and `.claude/skills/`, `.codex/skills/` for compatibility | <https://cursor.com/docs/context/skills> |
+| opencode | `.opencode/skills`, `.claude/skills`, `.agents/skills` | <https://opencode.ai/docs/skills/> |
+
+The copies are generated, not authority: a provenance comment in each names the
+source file and the surface hash it was exported at, and a re-run after the
+surface changes updates them. The host decides when to use them; gnomon's own
+loop keeps reading `.gnomon/skills/`. Proposed skills (not yet accepted by a
+person) are not exported.
 
 ## What this is not
 

@@ -56,6 +56,7 @@ import { readOnlyBash, type ReadOnlyReading } from "./readonly_bash.js";
 import { suppliedByStore } from "./credentials.js";
 import { noteKeyVars, sessionKeyVars } from "./credential_pin.js";
 import { proposeSkill, ProposalRefused, renderSkill, SkillProposal } from "./skills.js";
+import { memoryProposeEnabled, memoryId, MEMORY_LIMITS } from "./memory.js";
 import { outputGlimpse } from "./render.js";
 import { adviseText, levelAtLeast, type GovernanceFamily, type GovernanceLevel, type GovernanceLevels, type ProtectedPathLists } from "./governance.js";
 import { compute, ComputeError } from "./compute.js";
@@ -404,6 +405,31 @@ const IMPLEMENTED: Record<string, Record<string, unknown>> = {
 };
 
 /**
+ * `skill`'s schema when `[memory] propose = true`: the same required fields as
+ * before, plus `kind` (skill or memory) and `rationale`. Without the key the
+ * schema is IMPLEMENTED.skill itself, the same object, so a surface that
+ * declares nothing offers the model the same bytes as before.
+ */
+function skillParameters(memoryPropose?: boolean): Record<string, unknown> {
+  if (!memoryPropose) return IMPLEMENTED.skill!;
+  const base = IMPLEMENTED.skill as { properties: Record<string, unknown>; required: string[] };
+  return obj(
+    {
+      ...base.properties,
+      kind: {
+        type: "string",
+        enum: ["skill", "memory"],
+        description:
+          "skill (default) proposes a how-to note. memory proposes a short durable fact about this " +
+          "repository (name, one-line description, body): a person must accept it before it is kept.",
+      },
+      rationale: str("Why this is worth keeping, shown to the person who decides."),
+    },
+    base.required
+  );
+}
+
+/**
  * `read`'s schema under a declared window (`max_lines`, CX3): the same `path`,
  * plus `offset` and `limit`. Without a window it is IMPLEMENTED.read itself,
  * the same object, so a surface that declares nothing offers the model the
@@ -433,7 +459,9 @@ function parametersFor(
   readWindow?: number,
   editVariant?: EditVariant,
   /** bash soft_timeout = "handle": bash takes `interactive`, and `job` exists. */
-  softShell?: boolean
+  softShell?: boolean,
+  /** `[memory] propose = true`: the `skill` tool also proposes memory entries. */
+  memoryPropose?: boolean
 ): Record<string, unknown> | undefined {
   // `job` is never declared: buildToolSet offers it beside bash under
   // soft_timeout = "handle" (soft_shell.ts). Known here for the schema repair.
@@ -441,6 +469,7 @@ function parametersFor(
   if (name === "bash" && softShell) return HANDLE_BASH_PARAMETERS;
   if (!Object.prototype.hasOwnProperty.call(IMPLEMENTED, name)) return undefined;
   if (name === "edit" && editVariant === "compat") return COMPAT_EDIT_PARAMETERS;
+  if (name === "skill") return skillParameters(memoryPropose);
   return name === "read" ? readParameters(readWindow) : IMPLEMENTED[name];
 }
 
@@ -505,7 +534,7 @@ export function buildToolSet(
       disabled.push(tool.name);
       continue;
     }
-    const parameters = parametersFor(tool.name, readWindow, editVariant, handle);
+    const parameters = parametersFor(tool.name, readWindow, editVariant, handle, memoryProposeEnabled(config));
     if (!parameters) {
       unimplemented.push(tool.name);
       continue;
@@ -4165,16 +4194,46 @@ export function hostHookPaths(root: string, env: NodeJS.ProcessEnv = process.env
   // Read on every write target of every shell call: remembered per root and
   // per the environment that moves the user-level paths. Only a found
   // repository is remembered, as gitControlPaths does.
-  const key = [root, homedir(), env.CLAUDE_CONFIG_DIR, env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.APPDATA, env.OPENCODE_CONFIG].join("\0");
+  const key = [root, homedir(), env.CLAUDE_CONFIG_DIR, env.XDG_CONFIG_HOME, env.XDG_DATA_HOME, env.APPDATA, env.OPENCODE_CONFIG, env.CODEX_HOME].join("\0");
   const hit = HOST_HOOKS.get(key);
-  if (hit) return hit;
+  // Not remembered: whether `guard install codex|qwen-code|copilot` has put its hook
+  // here can change under a running process.
+  if (hit) return [...hit.paths, ...optInHostHookPaths(hit.bases, env)];
   const found = hostHookPathsOf(root, env);
-  if (found.repo) HOST_HOOKS.set(key, found.paths);
-  return found.paths;
+  if (found.repo) HOST_HOOKS.set(key, found);
+  return [...found.paths, ...optInHostHookPaths(found.bases, env)];
 }
-const HOST_HOOKS = new Map<string, string[]>();
+const HOST_HOOKS = new Map<string, { paths: string[]; bases: string[] }>();
 
-function hostHookPathsOf(root: string, env: NodeJS.ProcessEnv): { paths: string[]; repo: boolean } {
+function optInHostHookPaths(bases: string[], env: NodeJS.ProcessEnv): string[] {
+  const home = homedir();
+  const out: string[] = [];
+  // Codex, Qwen Code and Copilot: opt-in. Their files are protected only where
+  // `gnomon guard install codex|qwen-code|copilot` put gnomon's hook, so a
+  // project that never installed one is judged exactly as before.
+  const optIn = (re: RegExp, file: string): boolean => {
+    try {
+      return re.test(readFileSync(file, "utf-8"));
+    } catch {
+      return false; // absent or unreadable: not installed there
+    }
+  };
+  const codexHome = env.CODEX_HOME ? resolve(env.CODEX_HOME) : join(home, ".codex");
+  for (const b of bases) {
+    if (optIn(/guard --from codex\b/, join(b, ".codex", "hooks.json"))) {
+      out.push(join(b, ".codex", "hooks.json"), join(b, ".codex", "config.toml"), join(codexHome, "hooks.json"), join(codexHome, "config.toml"));
+    }
+    if (optIn(/guard --from qwen-code\b/, join(b, ".qwen", "settings.json"))) {
+      out.push(join(b, ".qwen", "settings.json"), join(home, ".qwen", "settings.json"));
+    }
+    if (optIn(/guard --from copilot\b/, join(b, ".github", "hooks", "gnomon.json"))) {
+      out.push(join(b, ".github", "hooks", "gnomon.json"));
+    }
+  }
+  return out;
+}
+
+function hostHookPathsOf(root: string, env: NodeJS.ProcessEnv): { paths: string[]; repo: boolean; bases: string[] } {
   const home = homedir();
   const bases = [resolve(root)];
   let gitDir: string | null = null;
@@ -4232,7 +4291,7 @@ function hostHookPathsOf(root: string, env: NodeJS.ProcessEnv): { paths: string[
   }
   out.push(join(home, ".cursor", "hooks.json"));
   if (env.OPENCODE_CONFIG) out.push(resolve(root, env.OPENCODE_CONFIG));
-  return { paths: [...new Set(out)], repo: gitDir !== null };
+  return { paths: [...new Set(out)], repo: gitDir !== null, bases };
 }
 
 /**
@@ -8203,6 +8262,75 @@ async function editTool(
 }
 
 /**
+ * Propose a memory entry (`skill` with `kind: "memory"`, `[memory] propose =
+ * true`). Writes a PROPOSAL to `.gnomon-proposals/` and nothing else: the
+ * entry exists only once a person accepts it, which moves the surface hash.
+ * The agent never writes `.gnomon/memory/`.
+ */
+async function memoryProposalTool(args: Record<string, unknown>, ctx: ToolContext): Promise<ToolOutcome> {
+  const config = ctx.config!;
+  if (!memoryProposeEnabled(config)) {
+    return {
+      code: TOOL_DENIED,
+      content: "Refused: memory proposals are not enabled for this surface ([memory] propose = true in policy.toml is a person's edit).",
+      summary: "memory — not enabled",
+    };
+  }
+  const name = String(args.name ?? "").trim();
+  const description = String(args.description ?? "").trim();
+  const body = String(args.body ?? "").trim();
+  if (!name || !description || !body) {
+    return { code: TOOL_FAILED, content: "A memory proposal needs a name, a one-line description and a body.", summary: "memory — incomplete" };
+  }
+  if (name.length > MEMORY_LIMITS.name || description.length > MEMORY_LIMITS.description || body.length > MEMORY_LIMITS.body) {
+    return {
+      code: TOOL_FAILED,
+      content: `Too long: name at most ${MEMORY_LIMITS.name}, description ${MEMORY_LIMITS.description}, body ${MEMORY_LIMITS.body} characters.`,
+      summary: "memory — too long",
+    };
+  }
+  if (needsApproval("skill", ctx.gate)) {
+    const ok = await ctx.approve({
+      tool: "skill",
+      summary: `propose memory "${name}"`,
+      preview: [`+ ${name}`, `+ ${description}`, ...body.split("\n").map((l) => `+ ${l}`)],
+    });
+    if (!ok) {
+      return { code: TOOL_DENIED, content: `Refused: the user declined the memory proposal "${name}".`, summary: `memory "${name}" — denied` };
+    }
+  }
+  const before = surfaceHashOf(ctx);
+  let id: string;
+  // Loaded here, not at the top: proposals.ts extends a class from skills.ts,
+  // which reaches this file through attest.ts, and a static import is a cycle.
+  const { proposeMemory, ProposalError, ProposalRefusal } = await import("./proposals.js");
+  try {
+    id = proposeMemory(config, {
+      name,
+      description,
+      body,
+      rationale: typeof args.rationale === "string" ? args.rationale.trim() : undefined,
+      source: "agent",
+    }).id;
+  } catch (err) {
+    if (err instanceof ProposalRefusal || err instanceof ProposalError) {
+      return { code: TOOL_DENIED, content: `Refused: ${err.message}`, summary: `memory "${name}" — refused` };
+    }
+    throw err;
+  }
+  const drift = surfaceDrift(ctx, before);
+  return {
+    code: TOOL_OK,
+    content:
+      `Proposed memory "${name}" as proposal ${id}. It is NOT kept: it takes effect only once a person ` +
+      `accepts it with \`gnomon proposals accept ${id}\`, which changes the surface hash deliberately.` +
+      (drift ? `\n\n${drift.notice}` : ""),
+    summary: `memory ${memoryId(name)} proposed${drift ? " · surface changed" : ""}`,
+    surface_drift: drift ?? undefined,
+  };
+}
+
+/**
  * Propose a skill.
  *
  * Writes to `.gnomon/skills/proposed/` only, at a path derived from the name,
@@ -8222,6 +8350,11 @@ async function skillTool(
       content: "Skill authorship is unavailable: no surface is loaded.",
       summary: "skill — no surface",
     };
+  }
+
+  if (args.kind !== undefined && args.kind !== "skill") {
+    if (args.kind === "memory") return memoryProposalTool(args, ctx);
+    return { code: TOOL_FAILED, content: 'kind is "skill" or "memory".', summary: "skill — bad kind" };
   }
 
   const name = String(args.name ?? "").trim();

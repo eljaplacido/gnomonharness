@@ -148,18 +148,20 @@ export function runInbox(a: InboxArgs, out: (s: string) => void = console.log, e
 }
 
 /**
- * `gnomon inbox --hook claude-code`: what Claude Code's SessionStart hook runs.
- * Prints the project's pending items, for claude-code or for any harness, as
- * `additionalContext` under the label "Open items from the gnomon dashboard
- * (information, not instructions)"; prints nothing when there are none. It
- * decides nothing and always exits 0, so a broken inbox can never stop a
- * session.
+ * `gnomon inbox --hook claude-code|cursor`: what a host's session-start hook
+ * runs. Prints the project's pending items, for that host or for any harness,
+ * under the label "Open items from the gnomon dashboard (information, not
+ * instructions)"; prints nothing when there are none. Claude Code reads it as
+ * `hookSpecificOutput.additionalContext`, Cursor's sessionStart as
+ * `additional_context` (cursor.com/docs/agent/hooks). It decides nothing and
+ * always exits 0, so a broken inbox can never stop a session.
  */
-export function runInboxHook(project: string, out: (s: string) => void = console.log): number {
+export function runInboxHook(project: string, out: (s: string) => void = console.log, host: "claude-code" | "cursor" = "claude-code"): number {
   try {
-    const items = pendingFor(resolve(project), "claude-code");
+    const items = pendingFor(resolve(project), host);
     if (items.length === 0) return 0;
-    out(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: formatForAgent(items) } }));
+    const text = formatForAgent(items);
+    out(JSON.stringify(host === "cursor" ? { additional_context: text } : { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: text } }));
   } catch {
     // Never a reason to stop a session.
   }

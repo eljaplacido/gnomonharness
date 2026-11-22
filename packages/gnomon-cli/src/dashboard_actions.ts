@@ -47,6 +47,7 @@ import {
   describeEndpoints,
 } from "gnomon-core";
 import { validateInput, INBOX_ID, INBOX_LIMITS, InboxError, type InboxEvidence } from "gnomon-core";
+import { PROPOSAL_ID, PROPOSAL_LIMITS } from "gnomon-core";
 import { ENDPOINT_PRESETS } from "./setup.js";
 import { loadCatalog, defaultCatalogPath, type Catalog } from "./catalog.js";
 import { diskFree } from "./setup_host.js";
@@ -98,6 +99,14 @@ export const DASHBOARD_ACTIONS = [
   // is --title, --detail, --target, --evidence and --scope, from typed params.
   { name: "inbox.add", argv: ["inbox", "add", "--json", "--author", "dashboard", "<inbox>", "--dir", "<dir>"], state: "enabled", confirm: "required" },
   { name: "inbox.resolve", argv: ["inbox", "resolve", "<id>", "--json", "<inbox>", "--dir", "<dir>"], state: "enabled", confirm: "required" },
+  // A person's decision on a proposal to change .gnomon/ (proposals.ts). The
+  // argv is the command a person would type, shown in the confirmation; the
+  // server runs the decision IN-PROCESS, not by spawning it, because a spawned
+  // gnomon has a gnomon ancestor and a decision refuses those (agent_context.ts).
+  // The decision keeps every refusal the command has: an agent session, no
+  // person present, a surface that moved since the proposal was written.
+  { name: "proposal.accept", argv: ["proposals", "accept", "<id>", "--dir", "<dir>"], state: "enabled", confirm: "required" },
+  { name: "proposal.reject", argv: ["proposals", "reject", "<id>", "<inbox>", "--dir", "<dir>"], state: "enabled", confirm: "required" },
   // Scaffolds .gnomon/ (and .gitignore / .gitattributes lines) in a directory.
   // Refuses, as the command does, where a .gnomon/ already exists: no --force.
   { name: "init", argv: ["init", "--dir", "<dir>"], state: "enabled", confirm: "required" },
@@ -174,6 +183,8 @@ const PARAMS: Record<ActionName, readonly (keyof ActionParams | "value")[]> = {
   "endpoint.test": ["endpoint"],
   "inbox.add": ["title", "detail", "target", "evidence", "scope"],
   "inbox.resolve": ["id", "note"],
+  "proposal.accept": ["id"],
+  "proposal.reject": ["id", "note"],
   init: ["dir"],
   "guard.install": ["harness"],
 };
@@ -351,6 +362,17 @@ export function readParams(
     params.id = body.id;
     if (body.note !== undefined && body.note !== "") {
       if (typeof body.note !== "string" || body.note.length > INBOX_LIMITS.note || body.note.includes("\u0000")) return { error: `"note" is a string of at most ${INBOX_LIMITS.note} characters` };
+      params.note = body.note.trim();
+    }
+  }
+
+  if (name === "proposal.accept" || name === "proposal.reject") {
+    // A proposal id, or the id of a skill proposal in skills/proposed/.
+    if (typeof body.id !== "string" || !(PROPOSAL_ID.test(body.id) || /^[a-z0-9][a-z0-9-]{0,59}$/.test(body.id))) return { error: `${name} needs "id": a proposal id` };
+    params.id = body.id;
+    if (body.note !== undefined && body.note !== "") {
+      if (name === "proposal.accept") return { error: 'proposal.accept takes no "note"' };
+      if (typeof body.note !== "string" || body.note.length > PROPOSAL_LIMITS.note || body.note.includes("\u0000")) return { error: `"note" is a string of at most ${PROPOSAL_LIMITS.note} characters` };
       params.note = body.note.trim();
     }
   }
@@ -647,6 +669,8 @@ export const TIMEOUT_MS: Record<ActionName, number> = {
   "endpoint.test": 120_000,
   "inbox.add": 30_000,
   "inbox.resolve": 30_000,
+  "proposal.accept": 30_000,
+  "proposal.reject": 30_000,
   init: 60_000,
   "guard.install": 30_000,
 };

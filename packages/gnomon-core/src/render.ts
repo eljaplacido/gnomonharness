@@ -606,7 +606,9 @@ export function renderExchange(
     lines.push(answer);
   }
   lines.push("");
-  lines.push(...renderMeta(exchange, ui, thinkTokens, terminalWidth()));
+  // Fitted only on a terminal: a pipe has no width, and dropping fields to an
+  // assumed 80 columns would cut the turn number and context from transcripts.
+  lines.push(...renderMeta(exchange, ui, thinkTokens, process.stdout.isTTY ? terminalWidth() : Number.POSITIVE_INFINITY));
   lines.push("");
   return lines;
 }

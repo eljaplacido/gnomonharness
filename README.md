@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 4846 TypeScript tests (4060 core, 761 cli, 18
-> natives, 7 tui) and 120 Rust tests — **4966 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 5056 TypeScript tests (4189 core, 842 cli, 18
+> natives, 7 tui) and 120 Rust tests — **5176 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -657,7 +657,7 @@ One thing to do straight after:
 
 The machine-local directories gnomon writes beside `.gnomon/`
 (`.gnomon-sessions/`, `.gnomon-audit/`, `.gnomon-out/`, `.gnomon-jobs/`,
-`.gnomon-loops/`, `.gnomon-shadow/`, `.gnomon-skills/`, `.gnomon-trials/`, `.gnomon-inbox/`) are
+`.gnomon-loops/`, `.gnomon-shadow/`, `.gnomon-skills/`, `.gnomon-trials/`, `.gnomon-inbox/`, `.gnomon-proposals/`) are
 added to `.gitignore` by `init` (and so by `launch`) — check that file before
 your first commit.
 
@@ -2555,7 +2555,8 @@ builds a throwaway repository holding a copy of this project's `.gnomon/`,
 with bait beside it: a `.env`, a CI workflow, a directory worth deleting. An
 isolated HOME stands in for yours. It then pipes 24 tool calls an injected or
 mistaken agent could propose through the real `gnomon guard`, in the hook
-input of each harness the guard governs: Claude Code, opencode and Cursor.
+input of each harness the guard governs: Claude Code, opencode and Cursor (and, by
+name, `--host codex|qwen-code|copilot`).
 No model runs, and the scratch repository is removed afterwards.
 
 ```bash
@@ -2565,10 +2566,8 @@ gnomon security test --role plan --json # gnomon.security_test/2
 ```
 
 A call a host gives its hook no event for is listed as not covered, never
-counted as held: Cursor has no hook before a file write or edit (`gnomon
-check` judges those afterwards), and `bypassPermissions` exists only in
-Claude Code. A fresh scaffold holds claude-code 24/24, opencode 22/22 and
-cursor 15/15.
+counted as held: `bypassPermissions` exists only in Claude Code. A fresh
+scaffold holds claude-code 24/24, opencode 22/22 and cursor 22/22.
 
 | Family | What is tried | Must be |
 |---|---|---|
@@ -3302,7 +3301,7 @@ line to add and `gnomon guard status` lists the hook as a warning:
 |---|---|---|---|---|
 | Claude Code | a `PreToolUse` hook on Bash, Write, Edit, MultiEdit, NotebookEdit, Read, Grep, Glob, WebFetch, WebSearch, Agent/Task and every MCP tool (`mcp__.*`), naming an absolute, checked gnomon path, added beside the `check` SessionStart and Stop hooks (`.claude/settings.json`) | `permissionDecision: "deny"` — Claude reads the reason | `"ask"` — Claude Code prompts. Under `permission_mode: "bypassPermissions"` (`--dangerously-skip-permissions`) nobody is asked, and Claude Code 2.1.319 was seen to run an ask, so it is answered `"deny"` | nothing printed: Claude Code's own permission flow decides |
 | opencode 2.2 | a plugin, `.opencode/plugins/gnomon-guard.js`, on `tool.hook("execute.before")` for shell, write, edit, patch, read, grep, glob, webfetch, execute | the call fails with gnomon's reason, which the model reads | opencode's own permission prompt (`permission.hook("evaluate")`). A non-interactive `opencode run` rejects it; `--auto` approves it, as it does every ask | nothing |
-| Cursor | `.cursor/hooks.json`: `beforeShellExecution` and `beforeReadFile` | `permission: "deny"` with `user_message` / `agent_message` | `permission: "ask"` (a read that would be asked is denied: `beforeReadFile` cannot ask) | `{}` |
+| Cursor | `.cursor/hooks.json`: `beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution` and `preToolUse` (Write, Delete, Grep, Fetch, Task: file writes are decided before they happen), all `failClosed`, plus `sessionStart` for the dashboard inbox | `permission: "deny"` with `user_message` / `agent_message` | `permission: "ask"` (a read that would be asked is denied: `beforeReadFile` cannot ask; at `preToolUse` Cursor does not enforce ask, so only the approval gate's is passed on, others are denied) | `{}` |
 | anything else with a pre-tool hook | `gnomon guard` with the call on stdin: `{"tool": "bash", "input": {"command": "…"}, "cwd": "…", "session_id": "…"}` in gnomon's own tool and argument names | exit 2 | exit 3 | exit 0 |
 
 Verified against the installed harnesses: the Claude Code and Cursor configs
@@ -3319,9 +3318,15 @@ Claude Code `Read` of a file in your home directory included — exactly as in
 gnomon's loop. Grant a path with `[sandbox] extra_roots`, or leave `Read` out
 of the hook's matcher.
 
-**Not done.** Cursor file **writes**: its documented hooks give none before a
-write happens (`afterFileEdit` is after; `preToolUse` does not document Write's
-input), so writes in Cursor are left to `gnomon check`. Grep and Glob are
+**Cursor** (<https://cursor.com/docs/agent/hooks>): file writes are decided
+before they happen through `preToolUse`, which Cursor added after the first
+adapter. Its docs do not show Write's input, so the adapter reads the shape
+Cursor 3.0.16's bundled code builds (`{file_path, content}`). No `stop` hook is
+installed: Cursor would submit its `followup_message` as a new prompt.
+`gnomon skill export` writes your skills as Agent Skills for these harnesses
+(see [docs/GOVERNING-OTHER-HARNESSES.md](docs/GOVERNING-OTHER-HARNESSES.md)).
+
+**Not done.** Grep and Glob are
 decided as a read of where they search. MCP tools and unknown tools are
 recorded with rule `ungoverned`: allowed with no `[governance]`, asked at
 prevent/enforce under one. Agent/Task are allowed (their calls are decided one
@@ -3574,7 +3579,7 @@ target; never the text) when the surface keeps a trail. Contract:
 | `gnomon setup [--json] [--yes] [--pull <tag>] [--model <tag>] [--speed-check] [--mode local\|hybrid\|cloud] [--cloud-endpoint <url\|preset\|name> --cloud-model <name>] [--cloud-key-env <VAR>] [--catalog <file>] [--expect-proposal <digest>]` | Scan this machine, recommend a local model it can run from a dated catalog, pull it only on a yes, speed-check it, connect an optional cloud model, suggest local only, hybrid or cloud first, and write `.gnomon/` only after you accept the diff. `--yes` approves the write, never a download (`--pull` names one) or spending; `--expect-proposal` writes only the change a `--json` run printed as `proposal.digest`. Exit 0 written, 3 the surface or the change moved, 4 needs consent or a model, 12 the model server stopped answering. See [Get started in 3 steps](#get-started-in-3-steps). |
 | `gnomon doctor [--json] [--catalog <file>]` | Read-only: this machine, whether every role's model answers, and what changed since setup. Says what would fix each problem; never changes anything. Exit 0 nothing to do, 1 something needs attention, 10 could not run. |
 | `gnomon security [--json]` | Read-only: this project's security posture in one place — trust, where each role's commands run and what contains them, other harnesses' guard hooks, the audit trail. Risks (exit 2) are what is wrong now; advice names a setting that would contain more. See [Security posture](#security-posture--gnomon-security). |
-| `gnomon security test [--host claude-code\|opencode\|cursor\|all] [--role <r>] [--json]` | A model-free attack corpus (24 cases, mapped to OWASP LLM01/02/03/06) through the real guard, in the hook input of Claude Code, opencode and Cursor, against a scratch copy of this surface. Exit 2 names each case that did not hold. See [Security test](#security-test--gnomon-security-test). |
+| `gnomon security test [--host claude-code\|opencode\|cursor\|codex\|qwen-code\|copilot\|all] [--role <r>] [--json]` | A model-free attack corpus (24 cases, mapped to OWASP LLM01/02/03/06) through the real guard, in the hook input of Claude Code, opencode and Cursor, against a scratch copy of this surface. Exit 2 names each case that did not hold. See [Security test](#security-test--gnomon-security-test). |
 | `gnomon compliance [--framework <id,...>] [--json]` | Read-only: which controls of the EU AI Act, GDPR, OWASP LLM Top 10, ISO/IEC 42001, NIST AI RMF, ISO/IEC 27001, SOC 2, the Cyber Resilience Act and DORA this project has gnomon evidence for, from a dated catalog — evidence, partial, gap (with the setting that closes it), a gnomon property, or the organisation's. A mapping, never an assessment. See [Compliance evidence](#compliance-evidence--gnomon-compliance). |
 | `gnomon compliance pack --out <dir> [--with-trails]` / `--verify <dir>` | Every read-only report (compliance, security posture and test, data flows, metrics, audit verification, eval reports) as JSON and text in one directory, with `pack.json` hashing each file; `--verify` re-hashes it. See [Evidence pack](#evidence-pack--gnomon-compliance-pack). |
 | `gnomon compliance dataflow [--json]` | Read-only: every place this surface can send prompts and repository content — model endpoints per role (primary, fallback, escalation) with host, locality and declared region, MCP servers, network-fetching roles, the shadow and anchor — and, with the opt-in `[compliance] allowed_regions` rule, which routes it admits. See [Data flows and residency](#data-flows-and-residency--gnomon-compliance-dataflow). |
@@ -3585,6 +3590,9 @@ target; never the text) when the surface keeps a trail. Contract:
 | `gnomon acp [--role <name>] [--profile <name>]` | Serve the Agent Client Protocol on stdio for an editor (Zed, JetBrains). Same surface, roles, approvals and audit as `prompt`. See [In your editor](#in-your-editor--gnomon-acp). |
 | `gnomon task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--trust-exec-downgrade] [--deadline <seconds\|ISO time>]` | One task, no terminal. Exit code carries the bucket. An untrusted surface that grants more than the defaults runs clamped to them. `--deadline` (or `GNOMON_DEADLINE`) gives the run a wall clock and stops it with `stop_reason` `deadline` (exit 2) before it; `--trust-exec-downgrade` lets a role leave the container it ran in for this run. Both since v0.5.0. |
 | `gnomon trust [list\|grant\|revoke]` | Whether this machine trusts what this project's `.gnomon/` grants beyond the defaults. See [Workspace trust](#workspace-trust). |
+| `gnomon proposals [list\|show ID\|accept ID\|reject ID [--note N]] [--json]` | The one path by which `.gnomon/` changes itself: inert, typed proposals (a skill, a memory entry, an edit to an allowed surface file) in the gitignored `.gnomon-proposals/`. A person reads the diff and accepts (the surface hash moves, from the next session; refused if the surface moved since) or rejects. Never decided from inside an agent session. See [CONTRACTS §58](docs/CONTRACTS.md). |
+| `gnomon improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--schedule nightly\|weekly] [--json]` | Governed self-improvement: mines the audit trails for what keeps recurring, drafts and lints proposals, probes each against the current surface on `.gnomon/trials/`, composes the ones that helped, and writes them as proposals. A dry run by default; never writes `.gnomon/` except through acceptance by a person or by a policy the surface declares (`[improve] auto_accept`). See [CONTRACTS §59](docs/CONTRACTS.md). |
+| `gnomon memory [list\|show NAME] [--json]` | The memory entries a person accepted into `.gnomon/memory/`: hashed with the surface, indexed (names only) in the prompt, opened with `read`. An entry exists only through an accepted proposal. |
 | `gnomon inbox [list\|show ID\|add --title T\|ack ID\|resolve ID\|mcp] [--json]` | Work items an operator flagged for the developer's harness (**Flag for fix** in the dashboard): one gitignored file each in `.gnomon-inbox/`, read by every harness as information from the operator, never as an instruction. See [The inbox](#the-inbox). |
 | `gnomon sessions` | Saved sessions. |
 | `gnomon skill [list [--candidates]\|accept <id> [--evidence <report.json>]\|reject <id> [--reason <text>]\|mine [--json]]` | Learned skills and proposals. Accept and reject write `skill_accept` / `skill_reject` audit records; a refused accept exits 3. `mine` writes candidates from the audit trail to `.gnomon-skills/candidates/`, with no model call. |
@@ -3653,6 +3661,7 @@ undiscoverable.
 | `/endpoints` | Declared inference endpoints |
 | `/context` | Window, folded turns, summary size |
 | `/skills` | Active skills with how often each fired, was read and cited (this session and across the audit trail), its context cost and latest trial verdict; pending proposals |
+| `/proposals` | The pending proposals to change `.gnomon/` (skills, memory, harness notes), with their paths. Read-only: a person decides them with `gnomon proposals accept\|reject` |
 | `/inbox [resolve ID [note]]` | The work items flagged in the dashboard for this project (the launch banner counts the open ones); resolve one when it is dealt with. Information, not instructions |
 | `/session [id]` | This session, earlier ones, and switching between them |
 | `/new` | Start a fresh session; the current one stays resumable |

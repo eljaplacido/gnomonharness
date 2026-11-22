@@ -749,8 +749,8 @@ as too long (code 13: llama.cpp, vLLM, OpenAI, Anthropic's "prompt is too
 long", Gemini's token count, LiteLLM's `ContextWindowExceededError` and HTTP
 413 all count), to 50%, then one resend; and, only against a window gnomon
 knows, before the request goes out when its estimate exceeds that window
-(`pre_call`, to 60%). A window is known when the endpoint declares
-`max_context_tokens = <n>` or `"auto"` read it from the listing. When
+(`pre_call`, to 60%). Against a known window the estimate is scaled first, because chars/4 runs about 1.4x low against real tokenizers (median 1.42, max 1.65 on local Qwen3.6): by 1.5 until a response with usage has been seen for that endpoint and model, then by the measured ratio, never below 1, and the leg checkpoint divides its budget by the measured ratio the same way. A trim's record says which drove it (`basis`: `measured` or `safety`). A window is known when the endpoint declares
+`max_context_tokens = <n>`, `"auto"` read it from the listing, or the model is in gnomon's catalog. When
 `max_context_tokens_source` is `default`, the `[defaults]` figure is a guess:
 no pre-call trim happens, and the checkpoint and the overflow retry are the only
 decision points. A trim drops whole units: an assistant message and every
@@ -1116,14 +1116,18 @@ nothing; `gnomon --help` prints all of it.
 | `gnomon check --base REV [--head REV] [--role R \| --agent N] [--transcript F --format FMT] [--json]` | Judges a change by this surface's rules as they stood at `REV`. Exit 0 held, 2 failed, 10 no verdict. `FMT`: `claude-code`, `opencode`, `goose`, `qwen-code`, `mini-swe-agent` or `gnomon` (its own chained, sealed audit trail). | CI, hooks, other harnesses |
 | `gnomon check --install-hook claude-code` | Prints the Claude Code hooks JSON and writes nothing | Governing Claude Code |
 | `gnomon guard --tool T --input JSON [--role R \| --agent N]`, or `--from claude-code\|opencode\|cursor\|generic` with the call on stdin | Decides one tool call another harness is about to make, by the committed rules: exit 0 allow, 2 deny, 3 ask, 10 no decision (answered as ask) | Governing another agent at run time |
-| `gnomon guard install claude-code\|opencode\|cursor [--write [--local]]` | Prints the hook or plugin for that harness; `--write` adds it to this project's config, `--local` keeps it out of git | Setting up `guard` |
+| `gnomon guard install claude-code\|opencode\|cursor [--write [--local]]` | Prints the hook or plugin for that harness; `--write` adds it to this project's config, `--local` keeps it out of git. For Cursor, `--write` merges into an existing `.cursor/hooks.json` (your other hooks stay) and brings an older gnomon install up to date | Setting up `guard` |
 | `gnomon acp [--role R] [--profile N]` | Serves the Agent Client Protocol on stdin/stdout for an editor. Same surface, roles, approvals and audit as `prompt`. | Zed, JetBrains IDEs |
 | `gnomon trust [list \| grant \| revoke]` | What this project's `.gnomon/` grants beyond the defaults, and whether this machine trusts it | A repository you did not write |
-| `gnomon inbox [list \| show ID \| add --title T \| ack ID \| resolve ID \| mcp] [--json]` | Work items the dashboard's **Flag for fix** (or you) wrote to `.gnomon-inbox/` for a harness to read as information, never as an instruction. `gnomon guard install claude-code --write` hands the open ones to Claude Code at session start; `gnomon inbox mcp` serves them to Cursor and Claude Code (list, get, acknowledge, resolve; no add) | Telling a harness what to fix |
+| `gnomon proposals [list \| show ID \| accept ID \| reject ID [--note N]] [--json]` | The pending proposals to change `.gnomon/` (a skill, a memory entry, an edit to `system.md`): `show` prints the exact diff, `accept` applies it (the surface hash moves; from the next session) and refuses if the files changed since, `reject` changes nothing. A person's decision: it refuses inside an agent session and without a terminal (exit 3). See 7.10 | Letting the harness learn without it editing itself |
+| `gnomon improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--max-requests N] [--allow-host-probes] [--schedule nightly\|weekly] [--json]` | Mines the audit trails for what keeps recurring (a refused rule, an unused skill, a build command, a failure class), drafts, lints and probes each against the current surface on `.gnomon/trials/`, composes the ones that helped, and writes proposals. A dry run by default; nothing reaches `.gnomon/` until you accept, or a policy you declared (`[improve] auto_accept`) does. See 7.11 | Letting the harness find its own improvements, measured, under your rules |
+| `gnomon memory [list \| show NAME] [--json]` | The notes a person accepted into `.gnomon/memory/` | Seeing what the harness remembers about this repository |
+| `gnomon inbox [list \| show ID \| add --title T \| ack ID \| resolve ID \| mcp] [--json]` | Work items the dashboard's **Flag for fix** (or you) wrote to `.gnomon-inbox/` for a harness to read as information, never as an instruction. `gnomon guard install claude-code --write` (and `install cursor --write`, via Cursor's `sessionStart` hook) hands the open ones to the harness at session start; `gnomon inbox mcp` serves them to Cursor and Claude Code (list, get, acknowledge, resolve; no add) | Telling a harness what to fix |
 | `gnomon audit [show \| verify]` | Lists trails; checks every chain, seal and signature anchor. `verify` exits 1 on a break or when there is nothing to verify. | Review, release gates |
 | `gnomon dashboard [--port N] [--no-open] [--dir P]` | A command center in the browser on 127.0.0.1: projects, sessions as a timeline, refusals by rule, audit verification, contracts, token measurements (alias `ui`); a one-click local quick start, `init`, `guard install`, setup, check, trust and endpoint test as buttons that run those same commands, each change confirmed first; a Ctrl/Cmd+K palette and a light theme. | Reviewing what happened without reading JSONL; first-run setup without a terminal wizard |
 | `gnomon sessions` | Saved interactive sessions, newest last | Find one to resume |
 | `gnomon skill [list \| accept ID \| reject ID \| mine]` | Active skills and the proposals the agent made; `mine` also reports skills that fire but are never cited, skills worth trialling, and context cost per firing | Reviewing what it learned |
+| `gnomon skill export [--to DIR] [--format skill-md] [--write]` | Writes each active skill as `<name>/SKILL.md` (the Agent Skills layout Claude Code, Codex, Cursor and opencode read) with a provenance comment naming the surface hash. A dry run unless `--write`; default `.claude/skills`, `--to .agents/skills` for Codex; never overwrites a `SKILL.md` gnomon did not write | Giving the other harnesses gnomon's skills |
 | `gnomon loop [list \| status \| dry-run N \| run N \| install N \| uninstall N \| reset N \| kill]` | Cron-scheduled guard/act loops declared in `.gnomon/loops/` (alias `loops`) | Unattended supervision |
 | `gnomon surface [hash \| manifest \| paths]` | The surface hash, the manifest, the hashed paths | Pinning, drift, bug reports |
 | `gnomon enumerations` | The published legal values (alias `enums`) | Contract checks |
@@ -1163,6 +1167,7 @@ Press **Tab** after `/` to list everything. These matter most:
 | `/context` · `/todo` · `/manifest` | The window · the agent's checklist · the surface hash and what it covers |
 | `/cot MODE` · `/think MODE` · `/expand [think]` | How much of the live trace and reasoning to show (`/think`: `hide`, `collapse`, `wrap`, `show`) · list the steps in the last folded run, or reprint the last turn's reasoning in full |
 | `/skills` | Active skills: times fired, read and cited this session, estimated tokens per firing, and from the audit trail total firings, cited rate, last used and the latest trial verdict; pending proposals |
+| `/proposals` | The pending proposals to change `.gnomon/` (skills, memory, harness notes), with their paths. Read-only: a person decides them with `gnomon proposals accept\|reject` |
 | `/inbox [resolve ID [note]]` | The work items flagged in the dashboard for this project (the launch banner counts the open ones); resolve one when it is dealt with. Information, not instructions |
 | `/quit` | Leave. See the note on sealing in [section 9](#9-troubleshooting). |
 
@@ -1406,8 +1411,28 @@ CI, run it in the job where the agent ran and add `--require-guard`. Details:
 |---|---|
 | Claude Code | a `PreToolUse` hook on Bash, Write, Edit, MultiEdit, NotebookEdit, Read, Grep, Glob, WebFetch, WebSearch, Agent/Task and every MCP tool (`mcp__.*`), beside the `check` hooks, in `.claude/settings.json` (or `.claude/settings.local.json` with `--local`) |
 | opencode 2.2 | a plugin, `.opencode/plugins/gnomon-guard.js` |
-| Cursor | `.cursor/hooks.json` for shell commands and file reads; writes are left to `check` |
+| Cursor | `.cursor/hooks.json`: `beforeShellExecution`, `beforeReadFile`, `beforeMCPExecution` and `preToolUse` (file writes, decided before they happen), all `failClosed`, plus a `sessionStart` hook that hands Cursor the dashboard inbox. No `stop` hook: Cursor would submit its follow-up as a new prompt. Hooks: <https://cursor.com/docs/agent/hooks> |
+| OpenAI Codex CLI (opt-in) | `gnomon guard install codex --write`: `.codex/hooks.json` with a `PreToolUse` hook on `Bash`, `apply_patch` (each file the patch touches is put to the write rules) and MCP tools, and a `SessionStart` hook that records the base. Codex runs a project hook only once the project is trusted and the hook reviewed in Codex's own hooks screen. It cannot ask: an ask from the `[approval]` gate is left to Codex's own approval flow, any other ask is refused |
+| Qwen Code (opt-in) | `gnomon guard install qwen-code --write`: the `hooks` of `.qwen/settings.json` (your other settings kept), `PreToolUse` on the runtime tool ids (`run_shell_command`, `write_file`, `edit`, `read_file`, ...) and MCP tools, and `SessionStart`. `disableAllHooks` turns it off (`guard status` reads it) |
+| GitHub Copilot CLI and cloud agent (opt-in) | `gnomon guard install copilot --write`: `.github/hooks/gnomon.json` (`version` 1, `preToolUse`). A command that errors denies the call; a timeout (30 s) lets it through. MCP tools are not put to the guard |
 | anything with a pre-tool hook | `gnomon guard --from generic`, with `{"tool": "bash", "input": {"command": "…"}, "cwd": "…", "session_id": "…"}` on stdin |
+
+Cursor's `preToolUse` accepts `ask` but does not enforce it, so gnomon turns an
+ask into a deny there, except the `[approval]` gate's, which is left to Cursor's
+own approval flow. `gnomon guard status` lists each Cursor hook as `ok`,
+`missing` or `not_fail_closed`; an install from before these hooks shows as
+`outdated`, a warning, and `install cursor --write` updates it in place.
+
+**Skills for the other harnesses.** `gnomon skill export` writes your active
+skills as `<name>/SKILL.md` (YAML `name` and `description`, then the skill's
+text, then a comment with the surface hash it was exported at), the layout
+Claude Code (`.claude/skills/`), Codex (`.agents/skills`), Cursor
+(`.agents/skills`, `.cursor/skills`, `.claude/skills`) and opencode
+(`.opencode/skills`, `.claude/skills`, `.agents/skills`) load. It lists what it
+would write and writes nothing until `--write`; `--to <dir>` picks the
+directory (default `.claude/skills`); it never touches `.gnomon/` and never
+overwrites a `SKILL.md` gnomon did not write. Proposed skills are not exported.
+Sources are in [GOVERNING-OTHER-HARNESSES.md](GOVERNING-OTHER-HARNESSES.md#skills-for-the-other-harnesses).
 
 **Audit first, then gates: governance levels** (since v0.5.0). To watch what the rules would
 refuse before you let them refuse it, declare a level per family (CONTRACTS.md
@@ -1832,6 +1857,161 @@ gnomon trust revoke     # forget every trust for this project; the next launch a
   **clamped** to the defaults, with one line naming the server and both hashes.
   `gnomon trust grant` accepts the change: it clears the pins, and the next
   session pins what the servers offer then. `gnomon trust` lists the pins.
+
+### 7.10 Governed self-improvement: proposals and memory
+
+gnomon's behaviour is fixed by the content-hashed `.gnomon/` directory, and
+nothing edits it silently. That would make the harness unable to learn, so there
+is one path by which it can: a **proposal**. Something proposes a change; a
+person reads the exact diff and accepts or rejects it; accepting moves the
+surface hash on purpose and takes effect from the next session.
+
+**A proposal** is a small typed file in `.gnomon-proposals/<id>.json`
+(machine-local, gitignored, never in the surface hash): a kind, a title, a
+rationale, where it came from, optional evidence (trail and record), and the
+diff, the whole new content of each file it would write with the sha256 of the
+file it was written against. Three kinds share the store: `skill`
+(`skills/<id>.md`; the `skill` tool still writes into `skills/proposed/`, and
+`gnomon proposals` lists those too), `memory` (`memory/<id>.md`) and `harness`
+(an edit to a surface file the surface allows: `system.md`, and only more if
+policy.toml names them).
+
+```
+gnomon proposals                     # the pending ones
+gnomon proposals show 20261122T1015  # the diff, the rationale, the evidence
+gnomon proposals accept 20261122T1015
+gnomon proposals reject 20261122T1015 --note "not true in this repo"
+```
+
+**Accept** applies the diff only if every file is exactly what the proposal was
+written against; otherwise it writes nothing and says the surface moved:
+re-propose. It refuses inside an agent session and without a person (a terminal,
+or a signer that needs a person for each signature), exit 3, like `gnomon skill
+accept`. Each decision is an audit record (`proposal_decision`; a skill keeps
+`skill_accept` / `skill_reject`) naming the paths and the surface hash before and
+after. The dashboard's Inbox screen has a Proposals section with the same two
+buttons: its confirmation shows the exact diff and the paths first.
+
+**Memory** is the first thing proposals are for. An entry in `.gnomon/memory/`
+is a short note about this repository with `name`, `description`, `provenance`
+(the proposal it came from) and `created` in its front matter. It exists only
+through an accepted proposal, so a change to what the agent remembers is a
+change to the surface hash, made by a person who saw the text. When the
+directory has entries the system prompt lists their names and one line each (at
+most 40, one line each, flattened so a name cannot add a heading or another line); the model opens one with `read`, and that read is
+counted (`counters.memory`). No directory, no change to the prompt.
+
+```toml
+# policy.toml: all optional, all off by default
+[memory]
+propose = true            # the `skill` tool may also propose a memory entry (kind = "memory")
+
+[proposals]
+harness_paths = ["tools.toml"]   # extra surface files a harness proposal may edit
+```
+
+With `propose = true` the agent can propose a memory mid-run; that writes a
+proposal and nothing under `.gnomon/`. gnomon does not adopt memory that an
+agent writes on its own authority. With none of this declared, and no memory
+entries, the prompt, the tool definitions and the records are what they were.
+
+How proposals get found, measured and, if you declare it, accepted without you is
+7.11.
+
+### 7.11 Governed self-improvement: `gnomon improve`
+
+Proposals (7.10) are how the surface changes itself; `gnomon improve` is how it
+finds changes worth proposing. It does what Harness^2 calls Propose, Probe,
+Compose, and its output is proposals, never edits. **It runs only when you run
+it**, and it is a dry run unless you say `--run`.
+
+```
+gnomon improve                    # dry run: what it would mine, draft and probe. No model call, no write.
+gnomon improve --run              # draft, lint, probe, compose; write proposals and one inbox item
+gnomon improve --run --k 3 --budget-usd 0.50 --role smol
+gnomon improve --schedule nightly # writes .gnomon/loops/improve.toml for you to review and commit
+```
+
+A dry run looks like this:
+
+```
+gnomon improve (dry run): nothing is written and no model is called.
+Mined 14 trail(s), 212 record(s): 4 candidate(s).
+  skill    repeated_refusal   bash_deny boundary          3  would propose
+  memory   build_command      Command: npm test           5  would propose
+  harness  stall              System note: repeated steps 4  would propose
+  retire   fires_never_cited  Retire skill old-style      6  would propose
+Draft role: smol (local; the first role on a local endpoint).
+Probe: .gnomon/trials/default.toml, k = 2, 2 task(s): 8 cells per candidate, each in a temporary clone.
+Policy: no [improve] auto_accept is declared, so a person decides every proposal.
+```
+
+**Mine.** From the audit trails, deterministically: a rule that refused the same
+role in three sessions (a skill candidate), a skill that fires often and is
+never named in the reasoning (a retirement), a build or test command that
+succeeded in three sessions, the files sessions open first, an approval a person
+declined three times (memory), and a failure class that ended turns three times
+(a note for `system.md`). Every candidate carries its trail and record numbers.
+**Propose.** A local role writes the text (`--role` names another; a cloud role
+only when you name it), or, with no model, a plain template does. **Lint.**
+Every proposal is checked by rules taken from how Hermes Agent writes skills: a
+class-level name, a rule with its why, no incident story, no dates or PR
+numbers, short, no secret, nothing that loosens approval, the sandbox or a
+check. A finding is shown on the proposal and blocks automatic acceptance; it
+does not hide the proposal from you. **Probe.** Each candidate surface runs
+against the current one on `.gnomon/trials/` (`gnomon init` writes a starter),
+`k` attempts per task per arm, each cell in a temporary clone, under the budget.
+The proposal records pass rate, output tokens, steps, refusals and check
+verdicts for both arms. With no trial spec it is marked `unprobed` and says to
+add one. **Compose.** Candidates of one kind that each helped without regressing
+are combined into one proposal and probed together.
+
+`gnomon proposals show <id>` prints the diff, and the dashboard's Proposals
+section shows the same evidence as a table beside it. A retirement is a proposal
+that deletes the skill file; history keeps it.
+
+**Nothing reaches `.gnomon/` without acceptance**: yours, with `gnomon proposals
+accept`, or a policy you declared ahead of time in `policy.toml`:
+
+```toml
+# policy.toml: opt in, per kind. Nothing here is on by default.
+[improve]
+auto_accept = ["skill", "memory"]
+min_probe_runs = 4
+min_pass_delta = 0.05
+max_token_increase = 0.10
+```
+
+With that, `gnomon improve --run` accepts a proposal as
+`policy:improve.auto_accept` only when **all** hold: its kind is listed (a
+harness edit only if `"harness"` is); it is lint clean; it was probed and the
+eval report it cites is intact, is for this surface and this exact diff, and
+ended complete; at least `min_probe_runs` pairs were valid; the pass rate did not
+fall below `min_pass_delta` (left out, a skill or `system.md` edit must strictly improve the
+pass rate and a memory entry only not lower it), and the probe did not regress (no
+fewer passes, no more refusals); a hash-chained `eval_run` audit record matches the report
+and the trial spec is unchanged since; output tokens rose no more than
+`max_token_increase`; and every path is a skill, a memory entry or `system.md`.
+Never by policy: a retirement, an unprobed proposal, `policy.toml`, `roles.toml`,
+`tools.toml`, `config.toml`, trials, loops, extensions or profiles. The decision
+is a `proposal_decision` record that names the rule and the numbers it rested on.
+You can still reject or review everything afterwards: the surface hash moved, git
+shows the diff.
+
+**Schedule it, or don't.** `--schedule nightly` (or `weekly`) writes
+`.gnomon/loops/improve.toml` and nothing else; review it and commit it, then
+`gnomon loop install improve` is the step that puts it in cron. The loop runs
+`gnomon improve --scheduled`, which is a dry run unless `policy.toml` declares
+`scheduled = "run"` under `[improve]`. A run costs at most `--budget-usd` (`[improve]
+budget_usd`); a local role costs nothing, and a billed role needs
+`usd_per_mtok_in` and `usd_per_mtok_out` declared so the cap can be metered.
+**Before it spends anything.** `gnomon improve --run` refuses (exit 3) unless `[sandbox]` is
+`level = "confined"` or `"strict"`, or `exec = "docker"` or `"os"`: probe cells run
+model-written commands in clones on this machine. `--allow-host-probes` accepts that for one
+run (the report records it). If a probe cell's role can reach a billed endpoint and no rates are
+declared, it also refuses unless you pass `--max-requests <n>`, a ceiling on model requests. Run
+inside an agent session, even `--scheduled`, it refuses; a cron `gnomon loop run improve` does not.
+Contract: [CONTRACTS.md §59](CONTRACTS.md).
 
 ---
 
@@ -2578,7 +2758,10 @@ extension for other editors, and no background mode: the unattended paths are
 **Can gnomon stop another agent before it acts, not only judge it after?**
 Yes, where that agent has a pre-tool hook: `gnomon guard` decides each call
 by this repository's committed rules ([7.3](#73-governing-claude-code-opencode-and-other-harnesses)).
-Adapters exist for Claude Code, opencode 2.2 and Cursor (shell and reads).
+Adapters exist for Claude Code, opencode 2.2 and Cursor (shell, reads, file
+writes via `preToolUse`, and MCP calls), and, opt-in,
+for OpenAI Codex CLI, Qwen Code and GitHub Copilot (hook schemas from their documentation,
+not yet run against a real binary).
 
 **I cloned a repository and gnomon says it is running clamped. Why?**
 Its `.gnomon/` grants more than gnomon's defaults, and this machine has not

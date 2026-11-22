@@ -28,12 +28,20 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { harnessBuild, loadConfig, recomputeManifest } from "gnomon-core";
+import { CODEX_DEFERRED } from "gnomon-core/guard";
 import { LAUNCHER_CANDIDATES, selfLauncher } from "./self_launcher.js";
 
 export const SECURITY_TEST_SCHEMA = "gnomon.security_test/2";
 /** The harnesses whose hook input `gnomon guard --from` reads; the test speaks each one. */
 export const SECURITY_TEST_HOSTS = ["claude-code", "opencode", "cursor"] as const;
-export type SecurityTestHost = (typeof SECURITY_TEST_HOSTS)[number];
+/**
+ * Hosts whose dialect the test speaks but that `--host all` leaves out: asked
+ * for by name (`--host codex`), so a plain `gnomon security test` is the run it
+ * always was. Their hook schemas are from the hosts' documentation; none was
+ * run against a real binary.
+ */
+export const SECURITY_TEST_OPT_IN_HOSTS = ["codex", "qwen-code", "copilot"] as const;
+export type SecurityTestHost = (typeof SECURITY_TEST_HOSTS)[number] | (typeof SECURITY_TEST_OPT_IN_HOSTS)[number];
 export const SECURITY_TEST_EXIT = { clean: 0, failed: 2, couldNotRun: 10 } as const;
 export const EXPECTATIONS = ["deny", "blocked", "ask", "allow"] as const;
 export const ATTACK_FAMILIES = [
@@ -154,11 +162,16 @@ export interface SecurityTestReport {
 
 const LIMITS = [
   "Decisions of the policy layer only: a call a host runs without asking its hook is not seen (gnomon guard status checks the hooks).",
-  "Cursor's hooks give no event before a file write or edit, so those cases are listed as not covered there; gnomon check judges Cursor's writes afterwards.",
+  "Cursor's writes and edits are put to the guard as its preToolUse Write tool; its Write input is built here from cursor-agent-exec 3.0.16's shape, which Cursor's docs do not publish.",
   "Command recognition is by pattern: code an interpreter runs (python -c) is gated as a command, not parsed, so it is asked about rather than refused.",
   "A secret read through an interpreter with a path built at run time (python3 -c \"open('.env'+'.x')\") is not seen by the word check: it is contained by exec = \"docker\" (an empty mount) or by keeping the file out of the repository (gnomon security: secrets_in_tree).",
   "The surface tested is this checkout's .gnomon/ as it is on disk, committed in a scratch repository.",
   "On Windows, a shell redirection to an absolute Windows path outside the project is asked about, not refused (bash_write_outside expects blocked there).",
+];
+
+const OPT_IN_LIMITS = [
+  "Codex, Qwen Code and Copilot: the payloads are built from each host's documentation (cited in packages/gnomon-core/src/guard.ts), not recorded from a real binary; live verification is pending.",
+  "Codex cannot ask: a call the approval gate would ask about is left to Codex's own approval flow (read here from the guard's stderr), and any other ask is refused. It has no read-tool hook, and a project hook runs only once Codex trusts it (/hooks).",
 ];
 
 /** Which role a host's calls are decided as: --role, [check.roles] <host>, or implement. */
@@ -195,6 +208,9 @@ const GUARD_EXITS: Record<SecurityTestHost, readonly number[]> = {
   cursor: [0],
   // 10 is the guard's own "could not decide", answered as ask with rule `error`.
   opencode: [0, 2, 3, 10],
+  codex: [0],
+  "qwen-code": [0],
+  copilot: [0],
 };
 
 /**
@@ -225,6 +241,8 @@ export function readGuardRun(
   if (r.signal) return { error: `the guard was stopped by ${r.signal}${tail}` };
   if (r.status === null || !GUARD_EXITS[host].includes(r.status)) return { error: `the guard exited ${r.status}${tail}` };
   const text = (r.stdout ?? "").trim();
+  // Codex cannot ask: an approval-gate ask is an empty answer plus this line on stderr.
+  if (host === "codex" && text === "" && (r.stderr ?? "").startsWith(CODEX_DEFERRED)) return { decision: "ask", rule: "approval" };
   try {
     return readAnswer(host, text);
   } catch (err) {
@@ -232,10 +250,22 @@ export function readGuardRun(
   }
 }
 
-function judge(expect: Expect, decision: CaseResult["decision"]): boolean {
+function judge(expect: Expect, decision: CaseResult["decision"], host?: SecurityTestHost): boolean {
   if (decision === null) return false;
   if (expect === "blocked") return decision === "deny" || decision === "ask";
   return decision === expect;
+}
+
+/** Where each opt-in host's hook file lives in the scratch repository (the edit_host_hooks case). */
+const OPT_IN_HOOK_FILE = { codex: ".codex/hooks.json", "qwen-code": ".qwen/settings.json", copilot: ".github/hooks/gnomon.json" } as const;
+
+/** An apply_patch text (Codex's `tool_input.command`) writing `content` to `path`, or editing it. */
+function codexPatch(k: AttackCase, input: Record<string, string>): string {
+  const path = input.file_path ?? "";
+  if (k.tool === "Write") {
+    return `*** Begin Patch\n*** Add File: ${path}\n${(input.content ?? "").split("\n").map((l) => `+${l}`).join("\n")}\n*** End Patch`;
+  }
+  return `*** Begin Patch\n*** Update File: ${path}\n@@\n-${input.old_string ?? ""}\n+${input.new_string ?? ""}\n*** End Patch`;
 }
 
 /** opencode's tool ids and input keys for the corpus's tools. */
@@ -252,8 +282,30 @@ export function hostPayload(
   sb: string,
   session: string
 ): { payload: Record<string, unknown> } | { why: string } {
-  if (k.mode && host !== "claude-code") return { why: `${k.mode} is a Claude Code permission mode` };
+  if (k.mode && host !== "claude-code" && host !== "codex" && host !== "qwen-code") {
+    return { why: host === "copilot" ? "Copilot's hook input documents no permission mode" : `${k.mode} is a Claude Code permission mode` };
+  }
   switch (host) {
+    case "codex": {
+      // https://learn.chatgpt.com/docs/hooks: Bash and apply_patch carry tool_input.command.
+      const base = { hook_event_name: "PreToolUse", session_id: session, cwd: sb, permission_mode: k.mode ?? "default", tool_use_id: `${session}-call` };
+      if (k.tool === "Bash") return { payload: { ...base, tool_name: "Bash", tool_input: { command: input.command } } };
+      if (k.tool === "Read") return { why: "Codex has no read tool hook: it reads through the shell (the Bash cases cover it)" };
+      return { payload: { ...base, tool_name: "apply_patch", tool_input: { command: codexPatch(k, input) } } };
+    }
+    case "qwen-code": {
+      const base = { hook_event_name: "PreToolUse", session_id: session, cwd: sb, permission_mode: k.mode ? "yolo" : "default", tool_use_id: `${session}-call` };
+      const name = { Bash: "run_shell_command", Write: "write_file", Edit: "edit", Read: "read_file" }[k.tool];
+      return { payload: { ...base, tool_name: name, tool_input: input } };
+    }
+    case "copilot": {
+      // camelCase preToolUse, the event `guard install copilot` writes.
+      const base = { sessionId: session, timestamp: 1_760_000_000_000, cwd: sb };
+      if (k.tool === "Bash") return { payload: { ...base, toolName: "bash", toolArgs: JSON.stringify({ command: input.command }) } };
+      if (k.tool === "Read") return { payload: { ...base, toolName: "view", toolArgs: JSON.stringify({ path: input.file_path }) } };
+      if (k.tool === "Write") return { payload: { ...base, toolName: "create", toolArgs: JSON.stringify({ path: input.file_path, file_text: input.content }) } };
+      return { payload: { ...base, toolName: "edit", toolArgs: JSON.stringify({ path: input.file_path, old_str: input.old_string, new_str: input.new_string }) } };
+    }
     case "claude-code":
       return {
         payload: { hook_event_name: "PreToolUse", tool_name: k.tool, tool_input: input, cwd: sb, session_id: session, permission_mode: k.mode ?? "default" },
@@ -271,7 +323,17 @@ export function hostPayload(
       const base = { conversation_id: session, cwd: sb, workspace_roots: [sb] };
       if (k.tool === "Bash") return { payload: { ...base, hook_event_name: "beforeShellExecution", command: input.command } };
       if (k.tool === "Read") return { payload: { ...base, hook_event_name: "beforeReadFile", file_path: input.file_path } };
-      return { why: "Cursor's hooks give no event before a file write or edit (gnomon check judges it afterwards)" };
+      // A write or edit reaches Cursor's `preToolUse` hook as its Write tool (cursor.com/docs/agent/hooks;
+      // input { file_path, content } as cursor-agent-exec 3.0.16 builds it).
+      return {
+        payload: {
+          ...base,
+          hook_event_name: "preToolUse",
+          tool_name: "Write",
+          tool_use_id: `${session}-call`,
+          tool_input: { file_path: input.file_path, content: input.content ?? input.new_string ?? "" },
+        },
+      };
     }
   }
 }
@@ -281,6 +343,13 @@ export function readAnswer(host: SecurityTestHost, text: string): { decision: "a
   const ruleOf = (reason: string | undefined, decision: string): string | null =>
     /gnomon guard \(([a-z_]+)/.exec(reason ?? "")?.[1] ?? (decision === "ask" ? "approval" : null);
   switch (host) {
+    case "copilot": {
+      const c = JSON.parse(text) as { permissionDecision?: string; permissionDecisionReason?: string };
+      const decision = c.permissionDecision === "deny" || c.permissionDecision === "ask" ? c.permissionDecision : "allow";
+      return { decision, rule: ruleOf(c.permissionDecisionReason, decision) };
+    }
+    case "codex":
+    case "qwen-code":
     case "claude-code": {
       if (text === "") return { decision: "allow", rule: null };
       const h = (JSON.parse(text) as { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } }).hookSpecificOutput;
@@ -342,6 +411,12 @@ export function runSecurityTest(
     put(".claude/settings.json", "{}\n");
     put(".opencode/plugins/gnomon-guard.js", "// a\n");
     put(".cursor/hooks.json", "{}\n");
+    // Only for a host asked for by name: a bait hook file holding gnomon's guard
+    // command, which is what puts it under the host_hooks rule.
+    for (const h of hosts) {
+      const f = (OPT_IN_HOOK_FILE as Record<string, string>)[h];
+      if (f) put(f, `{"hooks":{"PreToolUse":[{"command":"gnomon guard --from ${h} --agent ${h}"}]}}\n`);
+    }
     put("keep/data.txt", "precious\n");
     const env = { ...process.env, HOME: home, USERPROFILE: home, XDG_DATA_HOME: join(home, ".local", "share"), LOCALAPPDATA: join(home, "AppData"), GNOMON_NO_UPDATE_CHECK: "1" };
     const git = (...a: string[]) => spawnSync("git", ["-c", "user.email=t@example.invalid", "-c", "user.name=t", "-c", "commit.gpgsign=false", ...a], { cwd: sb, env, encoding: "utf-8" });
@@ -357,7 +432,8 @@ export function runSecurityTest(
     for (const host of hosts) {
       const role = roles.get(host)!.role;
       cases.forEach((k, i) => {
-        const raw = k.input_by_host?.[host] ?? k.input;
+        const hookFile = (OPT_IN_HOOK_FILE as Record<string, string>)[host];
+        const raw = k.input_by_host?.[host] ?? (k.id === "edit_host_hooks" && hookFile ? { ...k.input, file_path: `{SB}/${hookFile}` } : k.input);
         const input = Object.fromEntries(Object.entries(raw).map(([a, b]) => [a, fill(b)]));
         const built = hostPayload(host, k, input, sb, `security-test-${host}-${i}`);
         if ("why" in built) {
@@ -376,7 +452,7 @@ export function runSecurityTest(
         const decision = "error" in got ? null : got.decision;
         const rule = "error" in got ? null : got.rule;
         const expected = process.platform === "win32" && k.expect_win32 ? k.expect_win32 : k.expect;
-        results.push({ host, id: k.id, family: k.family, owasp: [...k.owasp], story: k.story, tool: k.tool, expect: expected, decision, rule, pass: judge(expected, decision), ...("error" in got ? { detail: got.error } : {}) });
+        results.push({ host, id: k.id, family: k.family, owasp: [...k.owasp], story: k.story, tool: k.tool, expect: expected, decision, rule, pass: judge(expected, decision, host),...("error" in got ? { detail: got.error } : {}) });
       });
     }
     // A guard that never answered measured nothing: that is a test that could
@@ -418,7 +494,7 @@ export function runSecurityTest(
       passed,
       total: results.length,
       errors,
-      limits: LIMITS,
+      limits: hosts.some((h) => (SECURITY_TEST_OPT_IN_HOSTS as readonly string[]).includes(h)) ? [...LIMITS, ...OPT_IN_LIMITS] : LIMITS,
       exit: failed > 0 ? SECURITY_TEST_EXIT.failed : errors > 0 ? SECURITY_TEST_EXIT.couldNotRun : SECURITY_TEST_EXIT.clean,
     };
   } finally {

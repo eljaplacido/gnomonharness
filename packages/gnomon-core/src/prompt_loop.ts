@@ -274,6 +274,8 @@ import {
 } from "./context_hygiene.js";
 import { resolveContextWindow, type ContextSource, type WindowResolution } from "./context_window.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
+import { listProposals, proposalPaths } from "./proposals.js";
+import { loadMemory, memoryIndexBlock, memoryRead, memoryId, MemoryUse, MEMORY_DIR, type MemoryCounters } from "./memory.js";
 import { listItems as listInboxItems, getItem as getInboxItem, resolveId as resolveInboxId, transition as inboxTransition, recordInbox, openCount as openInboxCount, INBOX_NOTICE } from "./inbox.js";
 import { applyCredentials } from "./credentials.js";
 import { assertContainableRoot, mcpSpawnDir, clampToDefaults, recordExecFloor, pinSessionRepository, type TrustOutcome } from "./trust.js";
@@ -458,6 +460,11 @@ export interface PromptState {
    * token_estimate = "calibrated"`, which sizes the turn's trims by it.
    */
   tokenCalibration?: TokenCalibration;
+  /**
+   * The same measurement under every mode: what a trim against a KNOWN window
+   * reads (CallLedger.knownTrim). Never consulted for an unresolved window.
+   */
+  tokenMeasured?: TokenCalibration;
   /**
    * The session checklist, as the `todo` tool last left it.
    *
@@ -3548,7 +3555,7 @@ export const CANCELLED = "Cancelled.";
  * and the startup banner names the override, as it already does for
  * GNOMON_MODEL_URL.
  */
-function modelTimeoutMs(config?: GnomonConfig): number {
+export function modelTimeoutMs(config?: GnomonConfig): number {
   if (config) {
     const declared = (config.config as { resilience?: { request_timeout_ms?: unknown } })
       ?.resilience?.request_timeout_ms;
@@ -5285,6 +5292,12 @@ export interface TurnCounters {
    */
   skills?: SkillCounters;
   /**
+   * Governed memory (memory.ts, CONTRACTS section 58): entries indexed in the
+   * prompt, entries the model opened, entries it proposed. Absent unless
+   * `.gnomon/memory/` has entries or the turn read or proposed one.
+   */
+  memory?: MemoryCounters;
+  /**
    * What actually changed in the worktree this turn — MEASURED, at the end,
    * from git. Never the model's account of it.
    *
@@ -5926,7 +5939,10 @@ export function buildSystemPrompt(
       dormant,
       `${basename(state.config.gnomonDir)}/${SKILLS_DIR}`,
       inlineMaxTokens(state.config)
-    ) + runNotesBlock(state)
+    ) + runNotesBlock(state) +
+      // "" without `.gnomon/memory/` entries, so a surface that has none builds
+      // the prompt it always did (memory.ts).
+      memoryIndexBlock(loadMemory(state.config), `${basename(state.config.gnomonDir)}/${MEMORY_DIR}`)
   ) + platformBlock() + `\n\n${sessionModeBlock(state.interactive === true && !opts.delegated)}` +
     promptProfileBlock(profile) +
     // Last, and only once a bootstrap has run: "" otherwise, so a surface
@@ -6063,7 +6079,7 @@ export async function runAgenticTurn(
   parentLedger?: CallLedger,
   sub?: { readOnly?: boolean }
 ): Promise<TurnResult> {
-  const held: { jobs?: JobTable; skills?: SkillUse } = {};
+  const held: { jobs?: JobTable; skills?: SkillUse; memory?: MemoryUse } = {};
   try {
     const result = await agenticTurn(state, role, route, messages, deps, depth, parentLedger, sub, held);
     // The turn's skill activity, on its counters and, for a turn a person
@@ -6076,6 +6092,8 @@ export async function runAgenticTurn(
         deps.say(fitRow(paint(deps.ui, "magenta", "  ◆ ") + paint(deps.ui, "gray", skillsUsedText(used)), terminalWidth()));
       }
     }
+    const mem = held.memory?.counters();
+    if (mem) result.counters.memory = mem;
     return result;
   } finally {
     await held.jobs?.closeAll("turn_end");
@@ -6101,7 +6119,7 @@ async function agenticTurn(
    */
   sub?: { readOnly?: boolean },
   /** Where this turn's job table is left for runAgenticTurn to close. */
-  held: { jobs?: JobTable; skills?: SkillUse } = {}
+  held: { jobs?: JobTable; skills?: SkillUse; memory?: MemoryUse } = {}
 ): Promise<TurnResult> {
   const config = state.config;
   // What this turn does with skills, derived from what the loop already sees.
@@ -6118,6 +6136,7 @@ async function agenticTurn(
         .map((sk) => ({ id: sk.id, saved: estimateTokens(skillBlock(sk)) - skillTokens(sk, limit) }))
     );
   })());
+  const memoryUse = (held.memory = new MemoryUse(loadMemory(config).length));
   // `gnomon task --deadline`'s stopping clock, when the caller set one. A
   // deadline with only `total_ms` and `started_at` is read by the
   // completion gate and stops nothing.
@@ -6425,6 +6444,7 @@ async function agenticTurn(
           ledger
         );
         skillUse.absorb(sub.counters.skills);
+        memoryUse.absorb(sub.counters.memory);
         if (shown) {
           const handed = splitThinking(sub.content ?? "").answer.trim().split("\n").find((l) => l.trim()) ?? "";
           const subSkills = sub.counters.skills ? ` · ${skillsUsedText(sub.counters.skills)}` : "";
@@ -6827,6 +6847,7 @@ async function agenticTurn(
       target: route.target,
       mode: estimateMode,
       calibration: estimateMode === "calibrated" ? (state.tokenCalibration ??= new Map()) : undefined,
+      measured: (state.tokenMeasured ??= new Map()),
       audit: deps.audit ? (fields) => deps.audit!.write("model_call", fields) : undefined,
       role,
     });
@@ -6842,6 +6863,10 @@ async function agenticTurn(
   const tokOptsFor = (t: RouteTarget): MessageTokenOptions => ({
     reasoning: adaptTarget(state, t).replayReasoning === true,
   });
+  // A window gnomon KNOWS: declared, read from the listing, or in the catalog;
+  // not the `[defaults]` guess (source "default").
+  const windowKnown = (t: RouteTarget): boolean =>
+    Boolean(t.contextTokens) && t.contextSource !== undefined && t.contextSource !== "default";
   const estOf = (ms: ChatMessage[], t: RouteTarget = route.target): number => messagesTokens(ms, tokOptsFor(t));
 
   // What the worktree looked like BEFORE this turn. Without it, `tree_delta`
@@ -7761,12 +7786,14 @@ async function agenticTurn(
     // there the checkpoint and the overflow retry stay the only decision points.
     {
       const next = escalation ? active : onFallback && route.fallback ? route.fallback : route.target;
-      if (next.contextTokens && next.contextSource !== undefined && next.contextSource !== "default") {
+      if (windowKnown(next)) {
         const window = resolveContext(config, next).max_context_tokens;
-        const ratio = ledger.ratioFor(next) ?? 1;
+        // The estimate runs low against real tokenizers (~1.4x), so against a
+        // known window it is scaled: by the measured ratio once a response with
+        // usage has been seen here, else by PRE_CALL_SAFETY (mediators.ts).
+        const { budget, ratio, basis } = ledger.knownTrim(legBudget(window), next, true);
         const est = estOf(working, next);
-        if (est * ratio > window) {
-          const { budget, ratio: used } = ledger.trimBudget(legBudget(window), next);
+        if (est * (ratio ?? 1) > window) {
           const trimmed = trimWorking(working, budget, tokOptsFor(next));
           if (trimmed.dropped > 0) {
             working.length = 0;
@@ -7777,7 +7804,8 @@ async function agenticTurn(
               before: est,
               after: estOf(working, next),
               budget,
-              ...(used !== undefined ? { ratio: used } : {}),
+              ...(ratio !== undefined ? { ratio } : {}),
+              ...(basis !== undefined ? { basis } : {}),
             });
             say(
               paint(
@@ -9341,10 +9369,12 @@ async function agenticTurn(
       // The window of the endpoint answering, when it declares one: a cloud
       // model was trimmed to 60% of a default sized for a local one. Divided
       // by the measured ratio only under token_estimate = "calibrated".
-      const { budget, ratio } = ledger.trimBudget(
-        legBudget(resolveContext(config, usedTarget).max_context_tokens),
-        usedTarget
-      );
+      // Against a known window, by the measured ratio under any mode once a
+      // response has reported usage (knownTrim); else as before.
+      const legB = legBudget(resolveContext(config, usedTarget).max_context_tokens);
+      const { budget, ratio, basis } = windowKnown(usedTarget)
+        ? ledger.knownTrim(legB, usedTarget, false)
+        : { ...ledger.trimBudget(legB, usedTarget), basis: undefined };
       const before = working.length;
       const trimmed = trimWorking(working, budget, tokOptsFor(usedTarget));
       if (trimmed.dropped > 0) {
@@ -9358,6 +9388,7 @@ async function agenticTurn(
           after: estOf(working, usedTarget),
           budget,
           ...(ratio !== undefined ? { ratio } : {}),
+          ...(basis !== undefined ? { basis } : {}),
         });
         say(
           paint(
@@ -9834,7 +9865,12 @@ async function agenticTurn(
       // Skill attribution is read off calls that ran: a refused read is no use.
       if (bucket === "result") {
         if (skillId) skillUse.noteRead(skillId);
+        else if (call.name === "skill" && call.args.kind === "memory" && typeof call.args.name === "string") memoryUse.noteProposed(memoryId(call.args.name));
         else if (call.name === "skill" && typeof call.args.name === "string") skillUse.noteProposed(skillIdOf(call.args.name));
+        else {
+          const memId = memoryRead(call, basename(config.gnomonDir));
+          if (memId) memoryUse.noteRead(memId);
+        }
       }
       if (announced) {
         say(stepResultRow(deps.ui, { glyph, colour: bcolor, summary: outcome.summary, glimpse: outcome.glimpse }));
@@ -11791,6 +11827,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/network", arg: "[on|off]", help: "May tools reach the network this session (webfetch, and what bash can dial)" },
   { name: "/sandbox", arg: "[off|confined|strict]", help: "How far outside this project tools may reach this session" },
   { name: "/skills", help: "Active skills and pending proposals" },
+  { name: "/proposals", help: "Pending proposals to change .gnomon/ (skills, memory, harness notes); a person decides them with gnomon proposals" },
   { name: "/inbox", arg: "[list|resolve <id> [note]]", help: "Work items flagged in the dashboard for this project (information, not instructions); resolve one when it is dealt with" },
   { name: "/session", arg: "[id]", help: "This session, earlier ones, and switching between them" },
   { name: "/new", help: "Start a fresh session; the current one stays resumable" },
@@ -12631,6 +12668,19 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       }
       for (const p of problems) console.log(`  (${p})`);
       if (pending.length) console.log(`\n  ${INBOX_NOTICE}\n  Resolve one: /inbox resolve <id> [note]`);
+      return true;
+    }
+
+    case "/proposals": {
+      // Printed for the person; never added to the model's context. Deciding
+      // is `gnomon proposals accept|reject`, at a terminal, outside the agent.
+      const { proposals, problems } = listProposals(state.config, { status: "pending" });
+      console.log(`\nProposals: ${proposals.length} pending (.gnomon-proposals/ and .gnomon/skills/proposed/)`);
+      for (const p of proposals) {
+        console.log(`  ${p.id}  ${p.kind.padEnd(8)} ${p.title}  (${proposalPaths(p).join(", ")})`);
+      }
+      for (const m of problems) console.log(`  (${m})`);
+      if (proposals.length) console.log(`\n  Read one: gnomon proposals show <id>. Decide: gnomon proposals accept|reject <id>, at a terminal.`);
       return true;
     }
 
@@ -14180,7 +14230,9 @@ export async function runPromptLoop(
     // is busy. Acknowledging only when a *cancellable turn* was running left
     // input typed during compaction with no echo, no prompt and no receipt,
     // which is the very symptom the queue was added to remove.
-    if (trimmed) {
+    // TTY only: a pipe delivers every line ahead of time by design, so the
+    // receipt would only add a line the transcript did not have before.
+    if (trimmed && process.stdin.isTTY) {
       const ui0 = uiOf(state);
       console.log(
         paint(

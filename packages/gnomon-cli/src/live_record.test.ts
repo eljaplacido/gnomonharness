@@ -320,3 +320,17 @@ describe("the record changes nothing the model sees", () => {
     expect(bodies.get("kept")!.map(sha)).toEqual(bodies.get("off")!.map(sha));
   }, 120_000);
 });
+
+describe("a piped session prints what it printed before the trace work", () => {
+  it("no queue receipt for lines a pipe delivers ahead of time, and the meta line keeps its turn number", async () => {
+    const root = tmp("gnomon-piped-");
+    await surface(root, "piped", "script", false);
+    const run = gnomon(root, ["prompt"], "pipe");
+    run.child.stdin!.end("make the files\n/quit\n");
+    const r = await run.done;
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain("Done: hello.txt and notes.md written.");
+    expect(r.stdout).not.toContain("queued (");
+    expect(r.stdout).toMatch(/turn 1/);
+  }, 90_000);
+});

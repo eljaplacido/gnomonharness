@@ -107,6 +107,11 @@ export function isGnomonAncestor(argv: string[]): boolean {
   // falls back to a tsx child; a sh wrapper may not exec).
   if (words[0] === "skill" && (words[1] === "accept" || words[1] === "reject")) return false;
   if (words[0] === "audit" && words[1] === "resolve") return false;
+  // The schedule a person installed (`gnomon loop install improve`) runs
+  // `gnomon loop run improve`, whose child may accept under the surface's
+  // declared [improve] auto_accept. Only this launcher: an agent's own
+  // `gnomon task` further up the chain still refuses, as does its marker.
+  if (words[0] === "loop" && words[1] === "run" && words[2] === "improve") return false;
   return true;
 }
 

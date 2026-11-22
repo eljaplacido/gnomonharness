@@ -26,6 +26,150 @@
 
 ## [Unreleased]
 
+### Fixed — a piped session prints what it printed in 0.6.5
+
+- With input from a pipe, the "⏎ queued — runs when the harness is free" receipt no longer prints (a pipe delivers
+  every line ahead of time by design), and the meta line is no longer fitted to an assumed 80 columns, so a
+  transcript keeps `turn N` and the context field. A terminal still gets both. Test: `live_record.test.ts`,
+  `render.test.ts`.
+
+### Fixed — a known window is checked against a realistic estimate
+
+- Against a window gnomon knows (declared, read from the listing, or catalog), the pre-call trim no longer gates on the
+  raw chars/4 estimate, which runs ~1.42x low (R66: a local Qwen3.6 on llama.cpp with a resolved 98,304 window refused 9
+  prompts while the pre-call trim fired 0 times). The estimate is scaled by 1.5 until a response with usage has been seen
+  for the endpoint and model, then by the measured ratio (never below 1); the leg checkpoint divides its budget by the
+  measured ratio the same way. Unresolved (`default`) windows are unchanged byte for byte, and no floor or guard is
+  loosened. A trim's record gains an optional `basis` (`measured` or `safety`) beside `ratio`.
+### Added — Cursor hooks v2 and skill export (opt-in; depends on the inbox in PR #280)
+
+Nothing changes for anyone who does not run `gnomon guard install cursor` or `gnomon skill export`.
+
+- **`gnomon guard install cursor` writes the current Cursor hook set** (<https://cursor.com/docs/agent/hooks>):
+  `preToolUse` (file writes, which Cursor sends as its Write tool, plus Delete, Grep, Fetch, Task) now decided before
+  they happen, `beforeMCPExecution`, and the existing shell and read hooks, all `failClosed` (a hook that cannot start
+  blocks the call instead of letting it run); a `sessionStart` hook `gnomon inbox --hook cursor` that hands the
+  dashboard inbox to Cursor as `additional_context`, labelled "information, not instructions". No `stop` hook: Cursor
+  submits its `followup_message` as a new prompt, which would loop the agent. The merge keeps your other hooks;
+  re-running install updates an older gnomon install in place. `guard status` reports each Cursor hook (`ok`,
+  `missing`, `not_fail_closed`) and shows an older install as `outdated`, a warning, never a failure.
+- **`gnomon skill export [--to <dir>] [--format skill-md] [--write]`** writes each active skill as `<name>/SKILL.md`
+  (the Agent Skills layout Claude Code, Codex, Cursor and opencode read), with a provenance comment naming the surface
+  hash. A dry run unless `--write`; default `.claude/skills`; never writes into `.gnomon/`; never overwrites a
+  `SKILL.md` gnomon did not write (exit 2).
+- `gnomon security test` now sends Cursor's writes as `preToolUse` Write events: cursor 22/22 (68/68 overall).
+
+### Fixed
+
+- Docs and code said Cursor has no hook before a file write; it does (`preToolUse`). `toCursor` knows that `preToolUse`
+  does not enforce `ask`: an ask there is a deny, except the approval gate's.
+### Added — guard adapters for OpenAI Codex CLI, Qwen Code and GitHub Copilot (opt-in; depends on #280)
+
+`gnomon guard install codex|qwen-code|copilot [--write [--local]]`, and
+`gnomon guard --from codex|qwen-code|copilot`. Nothing changes for anyone who
+does not run these installs: no file is written, `guard status` and the audit feed
+list no new host, `security test --host all` runs the same three hosts, and the
+`host_hooks` rule protects the new hook files only where gnomon's hook is in them.
+
+- **Codex**: `.codex/hooks.json` with `PreToolUse` (`Bash`, `apply_patch`, MCP) and
+  `SessionStart`. `fromCodex` decides a patch as one `write` per file it touches.
+  Codex documents `ask` as unsupported, so an ask from the approval gate is left to
+  Codex's own approval flow (said on stderr, recorded as an ask) and any other ask is
+  refused; `guard status` reads `[features] hooks = false` and warns that Codex runs a
+  project hook only once trusted (`/hooks`). No `check --format codex`: Codex's
+  transcript format is documented as unstable.
+- **Qwen Code**: the `hooks` of `.qwen/settings.json`, merged with the user's other
+  settings. Qwen sends runtime tool ids (`run_shell_command`, `write_file`, ...), not
+  Claude's names, so it has its own reader (`fromQwenCode`); `yolo` is treated as
+  `bypassPermissions`; `disableAllHooks` is read by `guard status`.
+- **Copilot**: `.github/hooks/gnomon.json` (`preToolUse`); answers with a top-level
+  `permissionDecision`; warns when `.claude/settings.json` also runs gnomon's guard,
+  which Copilot reads.
+- `install` merges into an existing file without replacing the user's hooks, and
+  refuses (exit 10, file untouched) one that is not a JSON object.
+- `gnomon security test --host codex|qwen-code|copilot` (by name only).
+- Fixtures: `harness_answers`, `project_sources`, `hook_agents`, the feed's `host`
+  enum, `opt_in_hosts` / `opt_in_not_covered`. Docs: GOVERNING-OTHER-HARNESSES.md,
+  GUIDE §7.3, CONTRACTS §10 and §50.
+- **Live verification pending**: none of the three CLIs was installed where this was
+  written. The schemas are from each host's documentation (URLs in
+  `packages/gnomon-core/src/guard.ts` and GOVERNING-OTHER-HARNESSES.md). Kimi Code's
+  hook schema could not be verified, so no adapter.
+### Fixed — review of governed self-improvement (#282, #285)
+
+- `gnomon improve --scheduled` with `[improve] scheduled = "run"` no longer skips the agent-session refusal.
+- `gnomon improve --run` refuses a probe that can reach a billed role with no declared rates unless
+  `--max-requests <n>` caps it (a billed cell was charged 0, so no budget stopped it), and refuses
+  without a confined `[sandbox]` (or `exec` docker/os) unless `--allow-host-probes` (recorded).
+- Policy acceptance also needs a hash-chained `eval_run` record for the report, the trial spec's
+  sha256 unchanged (`spec_sha256` in the evidence), a report path that is not `.`/`..`, a probe that
+  did not regress with no more refusals, and, when `min_pass_delta` is not declared, a strict
+  improvement for a skill or harness edit.
+- The memory index is sanitised to one line per entry and control characters in a name or
+  description are refused; loaded memory is cached by (name, mtime, size) and at most 200 files are
+  read; an agent may hold at most 20 pending proposals; accepting re-reads each file root-safely and
+  re-checks its hash and identity just before the write, and a retirement never removes through a symlink.
+
+### Added — governed self-improvement, step 2: `gnomon improve`
+
+- **`gnomon improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--schedule nightly|weekly] [--json]`**
+  (CONTRACTS §59, `gnomon.improve/1`). Harness^2's Propose, Probe, Compose over the
+  hashed surface, with Hermes Agent's skill-authoring rules as a deterministic lint
+  and its usage-based retirement as a proposal. **Mine** (deterministic, from the audit
+  trails): a repeated refusal (skill), a skill that fires and is never cited
+  (retire), a recurring build command, the files sessions open first or an approval a
+  person keeps declining (memory), a failure class (a `system.md` note); each with its
+  trail and record numbers. **Propose**: a local role (a cloud role only when named)
+  drafts the text, or a template does; every proposal is linted (class-level name, rule
+  plus why, no incident, no secret, nothing that loosens a limit, length caps; a
+  finding blocks auto-accept). **Probe**: each candidate surface against the base on
+  `.gnomon/trials/` through `gnomon eval`'s machinery (a commit built with git plumbing,
+  paired cells in temporary clones, `k` attempts, a USD/request budget), recording pass
+  rate, output tokens, steps, refusals and check verdicts; with no trial spec the
+  proposal is `unprobed`. **Compose**: candidates of one kind that each improved without
+  regressing become one probed proposal. Output is proposals plus one inbox item; a
+  dry run (the default) calls no model and writes nothing.
+- **Declared policy acceptance, opt-in**: `[improve] auto_accept = [skill, memory]`
+  with `min_probe_runs`, `min_pass_delta`, `max_token_increase` lets `improve --run`
+  accept as `policy:improve.auto_accept`, only for a lint-clean, probed proposal whose
+  cited eval report is intact and for this exact diff and surface, meeting the thresholds,
+  on a skill, memory or `system.md` path (harness only if listed). Never a retirement,
+  an unprobed proposal, or a policy/roles/tools/config/trials/loops file. `proposal_decision`
+  gains `policy_rule` and `policy_evidence`. This lifts #282's refusal of policy deciders
+  for exactly that rule.
+- A retirement is a `skill` proposal whose diff entry carries `delete: true`.
+- `gnomon improve --schedule nightly|weekly` writes `.gnomon/loops/improve.toml` (a person,
+  at a terminal; installing it in cron stays `gnomon loop install improve`); `--scheduled` is
+  a dry run unless `[improve] scheduled = run`. `gnomon loop run improve` is the one gnomon
+  ancestor a policy acceptance may have.
+- Dashboard Proposals section: lint, probe status and a base-against-candidate contrasts
+  table per proposal, and the recent improve runs. `gnomon eval` gains the internal options
+  `attempts`, `maxRequests` and `stop` that a probe uses.
+
+### Added — governed self-improvement, step 1: proposals and memory
+
+- **One proposal path** (`gnomon proposals [list|show|accept|reject]`, `/proposals`,
+  CONTRACTS §58). A proposal is an inert, typed file in the gitignored
+  `.gnomon-proposals/`: kind `skill`, `memory` or `harness`, a rationale, a source
+  (`agent`, `mine`, `improve`, `cli`), optional evidence and a diff of whole files
+  with the sha256 each was written against. Accept applies it only if every file
+  still matches (otherwise "the surface moved; re-propose"), moves the surface hash,
+  and writes a `proposal_decision` audit record (36th audit kind). Reject changes
+  nothing. Both refuse inside an agent session and without a person present (exit
+  3), as `gnomon skill accept` does. Existing skill proposals keep working and
+  keep `skill_accept` / `skill_reject`; `gnomon proposals` lists them too. A harness
+  proposal reaches `system.md` only, plus files `[proposals] harness_paths` names.
+- **Governed memory** (`gnomon memory [list|show]`). Entries live in
+  `.gnomon/memory/*.md`, hashed with the surface, and exist only through an accepted
+  proposal. When there are entries the system prompt lists their names (one line
+  each, at most 40) and the model opens one with `read`; reads are counted as
+  `counters.memory`. With `[memory] propose = true` the `skill` tool also takes
+  `kind: "memory"` and writes a proposal, never `.gnomon/`.
+- **Dashboard**: a Proposals section on the Inbox screen, with `proposal.accept` /
+  `proposal.reject` actions whose confirmation shows the exact diff and the paths.
+- Everything is opt-in. With no new keys and no memory entries the prompt, the tool
+  definitions and the records are byte-identical to before (tests pin it).
+
 ### Added — dashboard v2, onboarding and shell (depends on `feat/dashboard-v2-base`)
 
 - **One-click local quick start** on the Setup screen: detected hardware, one recommended catalog model with a fit pill
@@ -63,7 +207,7 @@
   label "Open items from the gnomon dashboard (information, not instructions)" (the PreToolUse hook is unchanged, and
   `guard status` reports the new hook, warning on an older install without it); `gnomon inbox mcp` is a dependency-free
   MCP stdio server with `inbox_list`, `inbox_get`, `inbox_acknowledge`, `inbox_resolve` and no add.
-- New audit kind `inbox_item` `{op, id, target}`, never the text. `audit_kind` is 35 entries; `conformance/inbox.json`,
+- New audit kind `inbox_item` `{op, id, target}`, never the text (the 35th; `proposal_decision` below is the 36th); `conformance/inbox.json`,
   `conformance/audit_record_schema.json`, the enumerations and `crates/gnomon-surface` moved together. CONTRACTS §57.
 - `.gnomon-inbox/` joins the machine-local directories `init` adds to `.gitignore`.
 ### Added — dashboard v2: a read-only local chat drawer over the project's records

@@ -26,6 +26,10 @@ import {
   runPromptLoop,
   loadSkills,
   loadProposedSkills,
+  exportSkills,
+  SKILL_EXPORT_FORMATS,
+  SKILL_EXPORT_DEFAULT_DIR,
+  type SkillExportFormat,
   acceptSkill,
   rejectSkill,
   SkillRefusal,
@@ -125,6 +129,8 @@ import {
 import { readFileSync, writeFileSync, writeSync, existsSync, readdirSync, mkdirSync} from "node:fs";
 import { setProcessTitle } from "./proc_title.js";
 import { runInbox, runInboxHook } from "./inbox_cmd.js";
+import { runProposals, runMemory } from "./proposals_cmd.js";
+import { runImproveCmd, bindDraftModel } from "./improve_cmd.js";
 import { serveInboxMcp } from "./inbox_mcp.js";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -2087,7 +2093,31 @@ async function cmdSkill(args: CliArgs): Promise<void> {
     return;
   }
 
-  console.error(`Unknown skill subcommand: ${sub}. Use: list | accept | reject | mine | trial`);
+  if (sub === "export") {
+    // Opt-in: a dry run unless --write, and only ever outside .gnomon/. Exit 0 done, 2 something refused, 1 usage.
+    const to = typeof args.flags["to"] === "string" && args.flags["to"] !== "true" ? args.flags["to"] : undefined;
+    const format = (typeof args.flags["format"] === "string" ? args.flags["format"] : "skill-md") as SkillExportFormat;
+    if (!(SKILL_EXPORT_FORMATS as readonly string[]).includes(format)) {
+      console.error(`gnomon skill export: --format is one of ${SKILL_EXPORT_FORMATS.join(", ")} (got "${format}")`);
+      process.exit(1);
+    }
+    const write = args.flags["write"] !== undefined;
+    const result = exportSkills(config, { project: resolve(args.dir ?? process.cwd()), to, format, write });
+    if (args.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`${write ? "Exported" : "Would export"} ${result.items.length} gnomon skill(s) as ${result.format} to ${result.dir} (surface ${result.surface_hash.slice(0, 12)}):`);
+      for (const i of result.items) {
+        const verb = write ? { create: "wrote", update: "updated", unchanged: "unchanged", refuse: "REFUSED" }[i.action] : { create: "create", update: "update", unchanged: "unchanged", refuse: "REFUSE" }[i.action];
+        console.log(`  ${verb.padEnd(9)} ${i.name || i.id}/SKILL.md${i.reason ? `  (${i.reason})` : ""}`);
+      }
+      if (result.items.length === 0) console.log("  (no active skills in .gnomon/skills/)");
+      if (!write) console.log(`\nNothing written. Re-run with --write to write these (default directory ${SKILL_EXPORT_DEFAULT_DIR}; --to <dir>, e.g. .agents/skills for Codex).`);
+    }
+    process.exit(result.items.some((i) => i.action === "refuse") ? 2 : 0);
+  }
+
+  console.error(`Unknown skill subcommand: ${sub}. Use: list | accept | reject | mine | trial | export`);
   process.exit(1);
 }
 
@@ -2582,13 +2612,15 @@ async function cmdSecurity(args: CliArgs): Promise<number> {
   }
   const sub = subcommandOr(args, "posture");
   if (sub === "test") {
-    const { runSecurityTest, formatSecurityTest, SECURITY_TEST_SCHEMA, SECURITY_TEST_EXIT, SECURITY_TEST_HOSTS } = await import("./security_test.js");
+    const { runSecurityTest, formatSecurityTest, SECURITY_TEST_SCHEMA, SECURITY_TEST_EXIT, SECURITY_TEST_HOSTS, SECURITY_TEST_OPT_IN_HOSTS } = await import("./security_test.js");
     const host = args.flags.host ?? "all";
-    if (host !== "all" && !(SECURITY_TEST_HOSTS as readonly string[]).includes(host)) {
-      return commandError(args, SECURITY_TEST_SCHEMA, `--host ${host}: use one of ${SECURITY_TEST_HOSTS.join(", ")}, or all (the default)`, SECURITY_TEST_EXIT.couldNotRun);
+    // `all` is the three hosts it always was; Codex, Qwen Code and Copilot are asked for by name.
+    const named = [...SECURITY_TEST_HOSTS, ...SECURITY_TEST_OPT_IN_HOSTS];
+    if (host !== "all" && !(named as readonly string[]).includes(host)) {
+      return commandError(args, SECURITY_TEST_SCHEMA, `--host ${host}: use one of ${named.join(", ")}, or all (the default: ${SECURITY_TEST_HOSTS.join(", ")})`, SECURITY_TEST_EXIT.couldNotRun);
     }
     try {
-      const hosts = host === "all" ? SECURITY_TEST_HOSTS : ([host] as Array<(typeof SECURITY_TEST_HOSTS)[number]>);
+      const hosts = host === "all" ? SECURITY_TEST_HOSTS : ([host] as Array<(typeof named)[number]>);
       const report = runSecurityTest(dir, { role: args.role, hosts });
       if (args.json) console.log(JSON.stringify(report, null, 2));
       else for (const l of formatSecurityTest(report)) console.log(l);
@@ -3001,12 +3033,15 @@ export const CLI_COMMANDS: ReadonlyArray<{ name: string; aliases?: string[] }> =
   { name: "check" },
   { name: "trust" },
   { name: "inbox" },
+  { name: "proposals", aliases: ["proposal"] },
+  { name: "memory" },
   { name: "guard" },
   { name: "dashboard", aliases: ["ui"] },
   { name: "chaos" },
   { name: "security" },
   { name: "compliance" },
   { name: "eval" },
+  { name: "improve" },
 ];
 
 /**
@@ -3186,6 +3221,15 @@ Commands:
     candidates (evidence with record pointers, not skill text) to
     .gnomon-skills/candidates/, which is not hashed.
 
+  skill export [--to <dir>] [--format skill-md] [--write] [--json] [--dir <path>]
+    Write each active skill (.gnomon/skills/*.md; proposals are not exported)
+    as <name>/SKILL.md, the Agent Skills layout Claude Code, Codex, Cursor
+    and opencode read: YAML name and description, the skill's text, and a
+    comment naming the source file and the surface hash. A DRY RUN unless
+    --write. Default directory .claude/skills (Claude Code; Cursor and
+    opencode read it too); --to .agents/skills for Codex. Never writes into
+    .gnomon/ and never overwrites a SKILL.md gnomon did not write (exit 2).
+
   skill trial <id> [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]
     Measure a proposal on the tasks in .gnomon/trials/<name>.toml (default
     "default"): each task x attempt runs once without the skill and once
@@ -3241,6 +3285,24 @@ Commands:
     change is an inbox_item audit record (id and target, never the text).
     Exit 0 done, 1 an item that is not there or a usage error.
 
+  proposals [list|show <id>|accept <id>|reject <id> [--note <text>]] [--status <s>] [--kind <k>] [--dir <path>] [--json]
+    The one path by which .gnomon/ changes itself. A proposal is an inert,
+    typed file in .gnomon-proposals/ (gitignored): a skill, a memory entry
+    or an edit to an allowed surface file, with its rationale, evidence and
+    the exact diff. list shows the pending ones; show prints the diff.
+    accept applies the diff only if every file still matches what it was
+    written against (otherwise: the surface moved, re-propose), which changes
+    the surface hash and applies from the next session; reject changes
+    nothing. Both are a person's: they refuse inside an agent session and
+    without a terminal, exit 3, and each writes a proposal_decision audit
+    record (a skill keeps skill_accept / skill_reject).
+
+  memory [list|show <name>] [--dir <path>] [--json]
+    The memory entries a person accepted into .gnomon/memory/: short notes
+    about this repository, hashed with the surface. The prompt lists their
+    names; the model opens one with read. An entry exists only through an
+    accepted proposal; nothing writes one directly.
+
   sessions [--dir <path>]
     Saved sessions, newest last.
 
@@ -3277,19 +3339,20 @@ Commands:
     gnomon.scorecard/1 JSON. Exit 0 clean, 2 a finding, 10 not governed.
 
   guard --tool <bash|write|edit|read|webfetch|grep|glob|execute> --input <json> [--role <r> | --agent <a>]
-  guard --from claude-code|opencode|cursor|generic  (the call on stdin)
+  guard --from claude-code|opencode|cursor|codex|qwen-code|copilot|generic  (the call on stdin)
     Decide one tool call another harness is about to make, before it runs,
     by this surface's rules as committed (the session's recorded base, else
     HEAD): allow, deny or ask, with the rule and the reason, as
     gnomon.guard/1 JSON. The same prechecks gnomon's own tools run decide it.
     Exit: 0 allow, 2 deny, 3 ask, 10 no decision (answered as ask). With
-    --from claude-code|cursor it answers in that harness's hook format.
+    --from claude-code|cursor|codex|qwen-code|copilot it answers in that harness's hook format.
     Recorded in the audit trail when [audit] is on.
-  guard install claude-code|opencode|cursor [--write] [--bin <path>]
+  guard install claude-code|opencode|cursor|codex|qwen-code|copilot [--write] [--bin <path>]
     Print the hook (Claude Code PreToolUse, an opencode 2.2 plugin, Cursor
-    hooks.json), or with --write add it to this project's own config. The
+    hooks.json, Codex .codex/hooks.json, Qwen Code .qwen/settings.json, Copilot
+    .github/hooks/gnomon.json), or with --write add it to this project's own config. The
     hook names an absolute gnomon that answers guard; none: exit 10.
-  guard status [--expect claude-code,opencode,cursor] [--json] [--dir <path>]
+  guard status [--expect claude-code,opencode,cursor,codex,qwen-code,copilot] [--json] [--dir <path>]
     Per host: the hook ok, missing, modified (differs from HEAD or from what
     install --write recorded), disabled (disableAllHooks) or not installed;
     and the host sessions the guard has decided for (liveness).
@@ -3314,7 +3377,7 @@ Commands:
     surface problem); advice names a setting that would contain more. Runs
     no model and changes nothing. Exit 0 no risk, 2 a risk, 10 could not run.
 
-  security test [--host claude-code|opencode|cursor|all] [--role <r>] [--json] [--dir <path>]
+  security test [--host claude-code|opencode|cursor|codex|qwen-code|copilot|all] [--role <r>] [--json] [--dir <path>]
     A model-free attack corpus run through the real guard against a scratch
     copy of this surface (bait .env, CI workflow, a precious directory, an
     isolated HOME; all removed afterwards): destructive commands,
@@ -3370,6 +3433,26 @@ Commands:
     --yes-spend unless the spec declares it local = true. Writes
     .gnomon-trials/_eval/<utc>/ and an eval_run audit record. Changes
     nothing. Exit 0 meets the spec, 2 does not, 10 no answer.
+
+  improve [--dry-run] [--run] [--k <n>] [--budget-usd <x>] [--role <role>]
+          [--max-requests <n>] [--allow-host-probes] [--schedule nightly|weekly] [--json] [--dir <path>]
+    Governed self-improvement (Harness^2's propose, probe, compose, over the
+    hashed surface). Mines the audit trails for what keeps recurring: a
+    refused rule (a skill), a skill that fires but is never cited (a
+    retirement), a build command or opening files (a memory entry), a
+    failure class (a note for system.md). --dry-run (the default) prints
+    what it would do: no model call, no write. --run drafts each with a
+    local role (--role names another; a cloud role only when named), lints
+    it, probes it against the base surface on .gnomon/trials/ (k attempts
+    per task, in temporary clones, under --budget-usd), composes the ones
+    that helped, and writes PROPOSALS plus one inbox item; nothing reaches
+    .gnomon/ until a person accepts (gnomon proposals) or the surface
+    declares [improve] auto_accept in policy.toml and a lint-clean, probed
+    proposal meets its thresholds. --run refuses without a confined
+    [sandbox] (or --allow-host-probes) and, for a billed probe role with no
+    declared rates, without --max-requests. --schedule writes
+    .gnomon/loops/improve.toml for a person to commit and install. Exit 0
+    done, 1 usage, 3 refused, 10 could not run.
 
   chaos [--json] [--seed <n>] [--faults <id,...>] [--schedules <s,...>] [--out <file>]
     The fault-injection suite. A scripted model behind a loopback endpoint
@@ -3612,10 +3695,21 @@ async function main(): Promise<void> {
     case "trust":
       await cmdTrust(args);
       break;
+    case "proposals":
+    case "proposal": {
+      const code = runProposals(loadConfig(args.dir, args.flags["profile"]), { sub: args.subcommand ?? "", positional: args.positional, flags: args.flags, json: !!args.json });
+      if (code !== 0) process.exit(code);
+      break;
+    }
+    case "memory": {
+      const code = runMemory(loadConfig(args.dir, args.flags["profile"]), { sub: args.subcommand ?? "", positional: args.positional, flags: args.flags, json: !!args.json });
+      if (code !== 0) process.exit(code);
+      break;
+    }
     case "inbox": {
       if (args.flags["hook"]) {
         // A hook never fails the host: see runInboxHook.
-        process.exitCode = runInboxHook(args.dir ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd());
+        process.exitCode = runInboxHook(args.dir ?? process.env.CLAUDE_PROJECT_DIR ?? process.cwd(), console.log, args.flags["hook"] === "cursor" ? "cursor" : "claude-code");
         break;
       }
       if (args.subcommand === "mcp") {
@@ -3642,6 +3736,19 @@ async function main(): Promise<void> {
     }
     case "eval": {
       process.exit(await cmdEval(args));
+    }
+    case "improve": {
+      const config = loadConfig(args.dir, args.flags["profile"]);
+      const code = await runImproveCmd(
+        config,
+        { flags: args.flags, json: !!args.json, dir: args.dir, role: args.role },
+        {
+          model: bindDraftModel(config),
+          settleTrust: (c) => settleTrustHeadless(c, trustOptions(args)).outcome,
+          runCell: (wt, prompt, o) => runTask(loadConfig(wt, o.profile), prompt, { role: o.role, yes: args.yes, trust: o.trust }),
+        }
+      );
+      process.exit(code);
     }
     case "chaos": {
       // Its own argv parser, like guard: subcommands and flags it alone reads.

@@ -13,6 +13,13 @@
 // anything: the only button that acts on an item is "Resolve", and it only
 // closes the item.
 //
+// Proposals (below the items) are the other direction: changes to .gnomon/ that
+// something proposed (the agent, a miner, a person) and a PERSON decides. Each
+// card shows the exact diff and its evidence; Accept and Reject go through
+// perform() as `proposal.accept` / `proposal.reject`, whose confirmation states
+// the diff and the surface paths before anything is written. Nothing here
+// applies a proposal by itself.
+//
 // Everything is built with createElement and textContent; item text is data.
 import { registerScreen, onAfterRender, S, h, projectApi, perform, load, header, tile, icon } from "/app.js";
 
@@ -31,7 +38,10 @@ const SCREEN_LABEL = {
 };
 
 // What the Inbox screen is showing: not data, so not in S.
-const view = { status: "open", target: "all" };
+const view = { status: "open", target: "all", notice: "" };
+const KIND_LABEL = { skill: "Skill", memory: "Memory", harness: "Harness" };
+const CANDIDATE_LABEL = { skill: "Skill", retire: "Retire", memory: "Memory", harness: "System note", composed: "Combined" };
+const pctText = (v) => (v === null || v === undefined ? "n/a" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`);
 
 const field = (text, control) => h("label", { class: "picker" }, text, control);
 const projectOf = () => (S.meta ? S.meta.projects.find((p) => p.id === S.pid) : null);
@@ -79,9 +89,156 @@ function itemCard(i, pid) {
         }, icon(["M5 12.5l4.5 4.5L19 7.5"], 18), "Resolve")));
 }
 
+function diffView(d) {
+  // The new file, or the old and new side by side as - and + lines. Text nodes only.
+  const lines = [];
+  if (d.before) for (const l of d.before.split("\n")) lines.push(h("span", { class: "dl del", text: `- ${l}` }));
+  for (const l of d.after.split("\n")) lines.push(h("span", { class: "dl add", text: `+ ${l}` }));
+  return h("pre", { class: "diffview mono", tabindex: "0", "aria-label": `Change to .gnomon/${d.path}` }, lines);
+}
+
+function diffOf(prop) {
+  return h("div", { class: "diffs" }, prop.diff.map((d) =>
+    h("div", null,
+      h("p", { class: "small" }, h("code", { class: "chip", text: `.gnomon/${d.path}` }),
+        d.before_sha256 ? ` replaces the file (sha256 ${d.before_sha256.slice(0, 12)})` : " is a new file",
+        d.moved ? h("span", { class: "pill dashed", text: "file changed since proposed" }) : null),
+      diffView(d))));
+}
+
+function decisionPreview(body) {
+  const pr = body.proposal;
+  return h("div", { class: "panel sunk" },
+    h("dl", { class: "facts" },
+      h("div", null, h("dt", { text: "Proposal" }), h("dd", { text: `${pr.id} · ${KIND_LABEL[pr.kind] || pr.kind} · ${pr.title}` })),
+      h("div", null, h("dt", { text: "Surface paths" }), h("dd", { text: pr.paths.join(", ") }))),
+    h("pre", { class: "diffview mono", tabindex: "0", "aria-label": "The exact diff" },
+      String(body.diff || "").split("\n").map((l) => h("span", { class: l.startsWith("-") ? "dl del" : l.startsWith("+") ? "dl add" : "dl", text: l }))));
+}
+
+async function decide(name, prop, note) {
+  const params = { id: prop.id, ...(name === "proposal.reject" && note ? { note } : {}) };
+  const accept = name === "proposal.accept";
+  const r = await perform(name, params, {
+    title: accept ? "Write this change to .gnomon/?" : "Reject this proposal?",
+    confirmLabel: accept ? "Accept and write" : "Reject",
+    details: decisionPreview,
+  });
+  view.notice = r && !r.failed && r.exit !== 0 ? `Not ${accept ? "accepted" : "rejected"}: ${r.stderr || "refused"}` : "";
+  if (r) load(true);
+}
+
+// What `gnomon improve` measured about a proposal: lint, and the probe's contrasts against the base surface.
+function improveBlock(prop) {
+  const im = prop.improve;
+  if (!im) return null;
+  const pr = im.probe || {};
+  const lint = im.lint || { clean: true, problems: [] };
+  const rows = [];
+  if (pr.status === "probed" && pr.base && pr.candidate) {
+    const b = pr.base;
+    const c = pr.candidate;
+    const rate = (a) => (a.n ? `${a.passes}/${a.n} (${Math.round((a.passes / a.n) * 100)}%)` : "none");
+    const num = (v) => (v === null || v === undefined ? "n/a" : String(v));
+    rows.push(
+      ["Pass rate", rate(b), rate(c), pctText(pr.pass_delta)],
+      ["Output tokens", num(b.tokens_out), num(c.tokens_out), pctText(pr.token_delta)],
+      ["Steps (model requests)", num(b.requests), num(c.requests), pctText(pr.request_delta)],
+      ["Refusals", String(b.refusals), String(c.refusals), ""],
+      ["Check verdicts (pass / fail / invalid)", `${b.checks.pass} / ${b.checks.fail} / ${b.checks.invalid}`, `${c.checks.pass} / ${c.checks.fail} / ${c.checks.invalid}`, ""]);
+  }
+  return h("div", { class: "panel sunk improve" },
+    h("div", { class: "row wrapping" },
+      h("span", { class: "pill", text: CANDIDATE_LABEL[im.candidate] || im.candidate }),
+      h("span", { class: "pill outline", text: `drafted by ${im.drafted_by}` }),
+      h("span", { class: `pill ${lint.clean ? "outline" : "dashed"}`, text: lint.clean ? "lint clean" : `lint: ${lint.problems.length} problem(s)` }),
+      h("span", { class: `pill ${pr.status === "probed" ? (pr.regressed ? "dashed" : "outline") : "dashed"}`, text: pr.status === "probed" ? (pr.regressed ? "probed: regressed" : pr.improved ? "probed: improved" : "probed: no change") : pr.status }),
+      prop.decided_by && prop.decided_by !== "human" ? h("span", { class: "pill", text: `accepted by ${prop.decided_by}` }) : null),
+    lint.clean ? null : h("ul", { class: "small bad" }, lint.problems.map((t) => h("li", { text: t }))),
+    rows.length
+      ? h("div", { class: "tablebox" },
+        h("table", { "aria-label": "Probe contrasts: the candidate surface against the base surface" },
+          h("thead", null, h("tr", null, ["Measure", "Base", "With this change", "Change"].map((t) => h("th", { scope: "col", text: t })))),
+          h("tbody", null, rows.map((r) => h("tr", null, r.map((t, n) => (n === 0 ? h("th", { scope: "row", text: t }) : h("td", { text: t }))))))))
+      : null,
+    rows.length
+      ? h("p", { class: "small muted", text: `${pr.pairs ? `${pr.pairs.valid} of ${pr.pairs.planned} pairs valid` : ""} on .gnomon/trials/${pr.spec}.toml, k = ${pr.k}; ${pr.eval_status}. Report ${pr.report || ""}` })
+      : h("p", { class: "small muted", text: `${pr.reason ? `${pr.reason}. ` : ""}${pr.hint || ""}` }),
+    im.composed_of && im.composed_of.length ? h("p", { class: "small muted" }, "Combines ", im.composed_of.map((id, n) => [n ? ", " : "", h("span", { class: "mono", text: id })])) : null);
+}
+
+function proposalCard(prop) {
+  const note = h("input", { type: "text", class: "field", maxlength: "1000", autocomplete: "off", placeholder: "Why (optional)" });
+  const evidence = prop.evidence && prop.evidence.length
+    ? h("p", { class: "small muted" }, "Evidence: ", prop.evidence.map((e, n) => [n ? ", " : "", h("span", { class: "mono", text: [e.trail, e.seq !== undefined ? `#${e.seq}` : "", e.note || ""].join("") })]))
+    : null;
+  const pending = prop.status === "pending";
+  return h("li", { class: `item ${pending ? "open" : "resolved"}` },
+    h("div", { class: "cardhead wrapping" },
+      h("h3", { text: prop.title }),
+      h("span", { class: "row" },
+        h("span", { class: "pill", text: KIND_LABEL[prop.kind] || prop.kind }),
+        h("span", { class: `pill ${pending ? "dashed" : "outline"}`, text: pending ? "Pending" : prop.status === "accepted" ? "Accepted" : "Rejected" }))),
+    h("p", { class: "muted small" }, `${whenText(prop.created)} · proposed by ${prop.source}`, h("span", { class: "mono", text: ` · ${prop.id}` })),
+    prop.rationale ? h("p", { class: "itemtext", text: prop.rationale }) : null,
+    evidence,
+    improveBlock(prop),
+    diffOf(prop),
+    pending
+      ? h("div", { class: "cardfoot" },
+        field("Note for a rejection", note),
+        h("button", {
+          type: "button", class: "btn primary",
+          title: `asks you first · gnomon proposals accept ${prop.id}`,
+          onClick: () => decide("proposal.accept", prop, ""),
+        }, icon(["M5 12.5l4.5 4.5L19 7.5"], 18), "Accept"),
+        h("button", {
+          type: "button", class: "btn",
+          title: `asks you first · gnomon proposals reject ${prop.id}`,
+          onClick: () => decide("proposal.reject", prop, note.value.trim()),
+        }, "Reject"))
+      : h("p", { class: "small muted" }, `${prop.status === "accepted" ? "Accepted" : "Rejected"} ${whenText(prop.decided_at)}${prop.note ? `: ${prop.note}` : "."}`));
+}
+
+function improveRuns(pr) {
+  const runs = pr.improve_runs || [];
+  if (!runs.length) return null;
+  return h("details", null,
+    h("summary", { text: `gnomon improve runs (${runs.length} most recent)` }),
+    h("div", { class: "tablebox" },
+      h("table", { "aria-label": "Recent gnomon improve runs" },
+        h("thead", null, h("tr", null, ["Run", "Mode", "Candidates", "Proposals", "Accepted by policy", "Probe", "Spent"].map((t) => h("th", { scope: "col", text: t })))),
+        h("tbody", null, runs.map((r) => h("tr", null,
+          h("th", { scope: "row", class: "mono", text: r.run }),
+          h("td", { text: r.mode }),
+          h("td", { text: String(r.candidates) }),
+          h("td", { text: String(r.proposals) }),
+          h("td", { text: String(r.accepted_by_policy) }),
+          h("td", { text: r.probe }),
+          h("td", { text: `${r.budget.requests} requests, $${r.budget.usd}${r.budget.cap_usd !== undefined ? ` of $${r.budget.cap_usd}` : ""}` })))))));
+}
+
+function proposalsSection(pr) {
+  if (!pr) return null;
+  const pending = pr.proposals.filter((x) => x.status === "pending");
+  const decided = pr.proposals.filter((x) => x.status !== "pending").slice(0, 10);
+  return h("section", { "aria-labelledby": "proposals-h" },
+    h("div", { class: "sechead" }, h("h2", { id: "proposals-h", text: "Proposals" }),
+      h("span", { class: "muted small", text: `${pr.counts.pending} pending · ${pr.counts.accepted} accepted · ${pr.counts.rejected} rejected` })),
+    h("p", { class: "muted small", text: "Changes to .gnomon/ that the agent, a miner or a person proposed. Nothing applies until you accept it; accepting moves the surface hash and takes effect from the next session. The diff below is exactly what is written." }),
+    view.notice ? h("p", { class: "bad small", role: "alert", text: view.notice }) : null,
+    pending.length
+      ? h("ul", { class: "inboxlist" }, pending.map(proposalCard))
+      : h("p", { class: "muted", role: "status", text: "No pending proposals." }),
+    improveRuns(pr),
+    decided.length ? h("details", null, h("summary", { text: `Decided (${decided.length} most recent)` }), h("ul", { class: "inboxlist" }, decided.map(proposalCard))) : null,
+    pr.problems && pr.problems.length ? h("p", { class: "bad small", role: "alert", text: `Not proposals, and not read: ${pr.problems.join("; ")}` }) : null);
+}
+
 function inboxFetch(ctx) {
   const p = projectOf();
-  return p && p.hasSurface ? ctx.projectApi("inbox") : Promise.resolve({ none: true });
+  if (!p || !p.hasSurface) return Promise.resolve({ none: true });
+  return Promise.all([ctx.projectApi("inbox"), ctx.projectApi("proposals").catch(() => null)]).then(([inbox, proposals]) => ({ ...inbox, proposals }));
 }
 
 function inboxRender(d, ctx) {
@@ -109,6 +266,7 @@ function inboxRender(d, ctx) {
         ? h("ul", { class: "inboxlist" }, shown.map((i) => itemCard(i, pid)))
         : h("p", { class: "muted", role: "status", text: d.items.length ? "Nothing matches this filter." : "Nothing flagged yet. Use Flag for fix at the top of any screen." }),
       d.problems.length ? h("p", { class: "bad small", role: "alert", text: `Not items, and not read: ${d.problems.join("; ")}` }) : null),
+    proposalsSection(d.proposals),
     h("section", { "aria-labelledby": "deliver-h" },
       h("h2", { id: "deliver-h", text: "How a harness gets them" }),
       h("ul", { class: "findings" },

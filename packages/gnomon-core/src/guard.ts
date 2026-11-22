@@ -1332,7 +1332,7 @@ function acquire(root: string, lock: string): boolean {
 // payload onto gnomon's tool names and argument names, and a verdict back onto
 // what that harness reads. They decide nothing.
 
-export const GUARD_HARNESSES = ["generic", "claude-code", "opencode", "cursor"] as const;
+export const GUARD_HARNESSES = ["generic", "claude-code", "opencode", "cursor", "codex", "qwen-code", "copilot"] as const;
 export type GuardHarness = (typeof GUARD_HARNESSES)[number];
 
 /** A harness payload, read: the calls it proposes (none: not a call gnomon decides). */
@@ -1480,11 +1480,24 @@ export function fromOpencode(raw: Record<string, unknown>): HarnessRequest {
 }
 
 /**
- * Cursor hooks (`.cursor/hooks.json`, version 1): `beforeShellExecution`
- * (`command`, `cwd`) and `beforeReadFile` (`file_path`). Cursor's documented
- * events give no file write BEFORE it happens — `afterFileEdit` is after the
- * fact, and `preToolUse` does not document Write's input — so writes in
- * Cursor are left to `gnomon check`.
+ * Cursor hooks (`.cursor/hooks.json`, version 1; https://cursor.com/docs/agent/hooks).
+ * The events gnomon decides, each before the call runs:
+ *
+ *   - `beforeShellExecution` (`command`, `cwd`) and `beforeReadFile` (`file_path`);
+ *   - `preToolUse` (`tool_name`, `tool_input`, `cwd`, `tool_use_id`), which
+ *     fires before every tool call and so is how a file WRITE is reached.
+ *     Cursor names its tools Shell, Read, Write (edits go through it too),
+ *     Delete, Grep, Task, Fetch/WebFetch and `MCP:<tool>`. Its docs do not
+ *     show every tool's input; the shapes read here are the ones
+ *     cursor-agent-exec 3.0.16 builds: Write `{ file_path, content }`,
+ *     Delete and Read `{ file_path }`, Grep `{ pattern, file_path, glob }`,
+ *     Shell `{ command, cwd }`, Fetch `{ url }`;
+ *   - `beforeMCPExecution` (`tool_name`, `tool_input` as a JSON string,
+ *     `mcp_server_name`): MCP is not a tool gnomon has rules for, so it is
+ *     decided as an ungoverned tool, by its name.
+ *
+ * Earlier releases read only the first two and left Cursor writes to
+ * `gnomon check`; that stopped being true when Cursor added `preToolUse`.
  */
 export function fromCursor(raw: Record<string, unknown>): HarnessRequest {
   const event = str(raw.hook_event_name) ?? "";
@@ -1503,7 +1516,220 @@ export function fromCursor(raw: Record<string, unknown>): HarnessRequest {
   };
   if (event === "beforeShellExecution") return { ...base, calls: [{ tool: "bash", input: { command: raw.command } }] };
   if (event === "beforeReadFile") return { ...base, calls: [{ tool: "read", input: { path: raw.file_path } }] };
+  if (event === "beforeMCPExecution") {
+    // Decided by its name, as ungoverned (and asked under a declared [governance]).
+    return { ...base, harnessTool: `MCP:${str(raw.tool_name) ?? ""}`, calls: [] };
+  }
+  if (event === "preToolUse") {
+    const name = str(raw.tool_name) ?? "";
+    const input = obj(raw.tool_input);
+    const at = { ...base, harnessTool: name, ...(str(raw.tool_use_id) ? { callId: str(raw.tool_use_id) } : {}) };
+    const file = input.file_path ?? input.path;
+    switch (name) {
+      case "Shell":
+        return { ...at, calls: [{ tool: "bash", input: { command: input.command } }] };
+      case "Write":
+        return { ...at, calls: [{ tool: "write", input: { path: file, content: input.content ?? "" } }] };
+      case "Delete":
+        // A deletion is decided by write's rules (write_allow, secret_path, ci_path), as an opencode patch's Delete is.
+        return { ...at, calls: [{ tool: "write", input: { path: file, content: "" } }] };
+      case "Read":
+        return { ...at, calls: [{ tool: "read", input: { path: file } }] };
+      case "Grep":
+        return { ...at, calls: [{ tool: "grep", input: { pattern: input.pattern, path: file } }] };
+      case "Fetch":
+      case "WebFetch":
+        return { ...at, calls: [{ tool: "webfetch", input: { url: input.url } }] };
+      case "WebSearch":
+        return { ...at, calls: [{ tool: "websearch", input: { query: input.query } }] };
+      case "Task":
+        return { ...at, calls: [{ tool: "agent", input: { description: input.description, subagent_type: input.subagent_type } }] };
+      default:
+        // MCP:<tool> and anything else: decided by its own name, as ungoverned.
+        return { ...at, calls: [] };
+    }
+  }
   return { ...base, calls: [] };
+}
+
+/** The tool input as an object, whether the host sent an object or the JSON text of one. */
+function inputOf(v: unknown): Record<string, unknown> {
+  if (typeof v === "string") {
+    try {
+      return obj(JSON.parse(v));
+    } catch {
+      return {};
+    }
+  }
+  return obj(v);
+}
+
+/**
+ * OpenAI Codex CLI's PreToolUse input (https://learn.chatgpt.com/docs/hooks,
+ * the page developers.openai.com/codex/hooks redirects to; generated schema
+ * openai/codex codex-rs/hooks/schema/generated/pre-tool-use.command.input.schema.json):
+ * `session_id`, `cwd`, `hook_event_name`, `model`, `permission_mode`,
+ * `turn_id`, `tool_name`, `tool_use_id`, `tool_input`, `transcript_path`.
+ * Documented: `Bash` and `apply_patch` carry `tool_input.command` (for
+ * apply_patch, the patch text), and MCP tools arrive as `mcp__<server>__<tool>`
+ * with their arguments in `tool_input`. Anything else is recorded as a tool
+ * gnomon has no kind for, as Claude Code's MCP tools are. A patch is several
+ * writes: each path it adds, updates, deletes or moves to is put to `write`'s
+ * rules, and one that names no path at all is decided as a write with none,
+ * which the guard does not allow through.
+ */
+export function fromCodex(raw: Record<string, unknown>): HarnessRequest {
+  const name = str(raw.tool_name) ?? "";
+  const input = inputOf(raw.tool_input);
+  const mode = str(raw.permission_mode);
+  const base = {
+    harnessTool: name,
+    cwd: str(raw.cwd),
+    session: str(raw.session_id),
+    ...(mode ? { permissionMode: mode } : {}),
+    ...(str(raw.tool_use_id) ? { callId: str(raw.tool_use_id) } : {}),
+  };
+  switch (name) {
+    case "Bash":
+      return { ...base, calls: [{ tool: "bash", input: { command: input.command } }] };
+    case "apply_patch": {
+      const paths = patchPaths(String(input.command ?? ""));
+      return {
+        ...base,
+        calls: paths.length
+          ? paths.map((p) => ({ tool: "write", input: { path: p, content: "" } }))
+          : [{ tool: "write", input: { path: undefined, content: "" } }],
+      };
+    }
+    default:
+      return { ...base, calls: [] };
+  }
+}
+
+/**
+ * Qwen Code's PreToolUse input (https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/):
+ * the Claude Code envelope (`session_id`, `cwd`, `permission_mode`,
+ * `tool_name`, `tool_input`, `tool_use_id`), but `tool_name` is the RUNTIME
+ * tool id ("Tool hooks receive the runtime tool id in `tool_name`"), not
+ * Claude's: `run_shell_command`, `write_file`, `read_file`, `edit`,
+ * `notebook_edit`, ... (ids from QwenLM/qwen-code packages/core/src/tools/
+ * tool-names.ts). The docs show `tool_input.file_path` for write_file; the
+ * input keys of the others are read from the tools' own parameter types
+ * (edit: `file_path`, `old_string`, `new_string`). A Claude-named call
+ * (Bash, Write ...) is read as Claude Code's. Permission modes are `default`,
+ * `plan`, `auto_edit`, `auto`, `yolo`.
+ */
+export function fromQwenCode(raw: Record<string, unknown>): HarnessRequest {
+  const name = str(raw.tool_name) ?? "";
+  const input = obj(raw.tool_input);
+  const mode = str(raw.permission_mode);
+  const callId = str(raw.tool_use_id) ?? str(raw.tool_call_id);
+  const base = {
+    harnessTool: name,
+    cwd: str(raw.cwd),
+    session: str(raw.session_id),
+    ...(mode ? { permissionMode: mode } : {}),
+    ...(callId ? { callId } : {}),
+  };
+  const at = input.file_path ?? input.path ?? input.absolute_path;
+  switch (name) {
+    case "run_shell_command":
+      return { ...base, calls: [{ tool: "bash", input: { command: input.command } }] };
+    case "write_file":
+      return { ...base, calls: [{ tool: "write", input: { path: at, content: input.content ?? "" } }] };
+    case "edit":
+      return { ...base, calls: [{ tool: "edit", input: { path: at, old_text: input.old_string, new_text: input.new_string } }] };
+    case "notebook_edit":
+      return { ...base, calls: [{ tool: "edit", input: { path: input.notebook_path ?? at } }] };
+    case "read_file":
+      return { ...base, calls: [{ tool: "read", input: { path: at } }] };
+    case "grep_search":
+      return { ...base, calls: [{ tool: "grep", input: { pattern: input.pattern, path: input.path } }] };
+    case "glob":
+      return { ...base, calls: [{ tool: "glob", input: { pattern: input.pattern, path: input.path } }] };
+    case "list_directory":
+      return { ...base, calls: [{ tool: "glob", input: { pattern: "*", path: input.path ?? input.dir_path } }] };
+    case "web_fetch":
+      return { ...base, calls: [{ tool: "webfetch", input: { url: input.url } }] };
+    case "web_search":
+      return { ...base, calls: [{ tool: "websearch", input: { query: input.query } }] };
+    case "agent":
+      return { ...base, calls: [{ tool: "agent", input: { description: input.description, subagent_type: input.subagent_type } }] };
+    default:
+      return fromClaudeCode(raw);
+  }
+}
+
+/**
+ * GitHub Copilot (CLI, cloud agent, VS Code) PreToolUse input
+ * (https://docs.github.com/en/copilot/reference/hooks-configuration and
+ * https://code.visualstudio.com/docs/copilot/customization/hooks). The
+ * camelCase `preToolUse` input is `{ sessionId, timestamp, cwd, toolName,
+ * toolArgs }` (the event `gnomon guard install copilot` writes: its tools are
+ * the documented `bash`, `powershell`, `create`, `edit`, `view`, `glob`,
+ * `grep`, `task`, `web_fetch`, `ask_user`); the PascalCase `PreToolUse` event
+ * (not written by install, but read) is `{ hook_event_name, session_id, timestamp, cwd,
+ * tool_name, tool_input }` and "reports `tool_name` as the Claude tool name"
+ * (bash -> Bash, view -> Read, create -> Write, edit/apply_patch -> Edit, grep
+ * -> Grep, glob -> Glob, task -> Agent). Both are read here; `tool_input` /
+ * `toolArgs` may be an object or JSON text. The docs give type declarations,
+ * not sample values, so the keys INSIDE the arguments are not documented: the
+ * Claude names (file_path, command) and Copilot's own (path, file_text,
+ * old_str, new_str) are both accepted. A tool with no kind here is recorded as
+ * ungoverned, as Claude Code's MCP tools are.
+ */
+export function fromCopilot(raw: Record<string, unknown>): HarnessRequest {
+  const name = str(raw.tool_name) ?? str(raw.toolName) ?? "";
+  const input = inputOf(raw.tool_input ?? raw.toolArgs);
+  const session = str(raw.session_id) ?? str(raw.sessionId);
+  const base = { harnessTool: name, cwd: str(raw.cwd), session };
+  const at = input.file_path ?? input.path ?? input.filePath;
+  switch (name) {
+    case "bash":
+    case "powershell":
+    case "Bash":
+    case "PowerShell":
+      return { ...base, calls: [{ tool: "bash", input: { command: input.command } }] };
+    case "create":
+    case "Write":
+      return { ...base, calls: [{ tool: "write", input: { path: at, content: input.content ?? input.file_text ?? "" } }] };
+    case "edit":
+    case "str_replace_editor":
+    case "Edit":
+    case "apply_patch": {
+      // apply_patch reports as Edit with an input the docs do not describe: a
+      // patch text, when that is what it holds, is several writes.
+      const text = [input.input, input.patch, input.command, input.patchText].find((v) => typeof v === "string" && /^\*\*\* Begin Patch/m.test(v));
+      if (typeof text === "string") {
+        const paths = patchPaths(text);
+        if (paths.length) return { ...base, calls: paths.map((p) => ({ tool: "write" as const, input: { path: p, content: "" } })) };
+      }
+      return {
+        ...base,
+        calls: [{ tool: "edit", input: { path: at, old_text: input.old_string ?? input.old_str, new_text: input.new_string ?? input.new_str } }],
+      };
+    }
+    case "view":
+    case "Read":
+      return { ...base, calls: [{ tool: "read", input: { path: at } }] };
+    case "web_fetch":
+    case "WebFetch":
+      return { ...base, calls: [{ tool: "webfetch", input: { url: input.url } }] };
+    case "grep":
+    case "Grep":
+      return { ...base, calls: [{ tool: "grep", input: { pattern: input.pattern, path: input.path } }] };
+    case "glob":
+    case "Glob":
+      return { ...base, calls: [{ tool: "glob", input: { pattern: input.pattern, path: input.path } }] };
+    case "task":
+    case "Agent":
+      return { ...base, calls: [{ tool: "agent", input: { description: input.description, subagent_type: input.subagent_type ?? input.agent_type } }] };
+    case "ask_user":
+      // A question to the person: no effect outside the conversation.
+      return { ...base, calls: [{ tool: "TodoWrite", input: {} }] };
+    default:
+      return { ...base, calls: [] };
+  }
 }
 
 /**
@@ -1530,6 +1756,12 @@ export function readHarness(harness: GuardHarness, raw: Record<string, unknown>)
       return fromOpencode(raw);
     case "cursor":
       return fromCursor(raw);
+    case "codex":
+      return fromCodex(raw);
+    case "qwen-code":
+      return fromQwenCode(raw);
+    case "copilot":
+      return fromCopilot(raw);
     default:
       return fromGeneric(raw);
   }
@@ -1538,7 +1770,12 @@ export function readHarness(harness: GuardHarness, raw: Record<string, unknown>)
 const SEVERITY: Record<GuardDecisionValue, number> = { allow: 0, ask: 1, deny: 2 };
 
 /** Host permission modes in which an ask is not put to anyone and the call runs. */
-export const BYPASS_MODES = new Set(["bypassPermissions"]);
+export const BYPASS_MODES = new Set([
+  "bypassPermissions",
+  // Qwen Code's yolo mode approves every tool call without asking
+  // (https://qwenlm.github.io/qwen-code-docs/en/users/features/hooks/ lists the modes).
+  "yolo",
+]);
 
 /**
  * Decide every call a payload proposes; the strictest decision stands. A
@@ -1562,7 +1799,7 @@ export async function guardHarnessRequest(
     // mode, so an ask is answered for the person: no.
     if (BYPASS_MODES.has(hr.permissionMode) && !opts.askUnanswerable) {
       opts.askUnanswerable =
-        `Claude Code is running with permission_mode "${hr.permissionMode}", where nobody is asked ` +
+        `${!opts.harness || opts.harness === "claude-code" ? "Claude Code" : "The host"} is running with permission_mode "${hr.permissionMode}", where nobody is asked ` +
         `and an "ask" would run unseen, so gnomon denies what it would have put to a person.`;
     }
   }
@@ -1613,18 +1850,79 @@ export function toClaudeCode(v: GuardVerdict): string {
 /**
  * Cursor's answer. On allow, `{}`: Cursor's validator (cursor-agent-exec,
  * 3.0.16) accepts an absent `permission`, which leaves the call to Cursor's
- * own flow — the same "no opinion" Claude Code gets. `beforeReadFile` takes
- * only allow or deny: an `ask` there becomes a deny that says a person must
- * approve the read, the tighter of the two. Its answer carries no
+ * own flow — the same "no opinion" Claude Code gets. Two events cannot ask:
+ * `beforeReadFile` takes only allow or deny, and `preToolUse` accepts "ask"
+ * but does not enforce it (cursor.com/docs/agent/hooks; in 3.0.16 only a deny
+ * stops the call). So an `ask` there becomes a deny that says a person must
+ * approve it, the tighter of the two, with one exception: at `preToolUse` an
+ * ask from the [approval] gate (rule "approval") is passed on as `ask`, which
+ * Cursor runs under its own approval flow. Turned into a deny, the default
+ * gate would refuse every write Cursor makes. Every other ask (a role without
+ * the tool, no role mapped) is a deny. `beforeReadFile`'s answer carries no
  * agent_message, which that event does not define.
  */
 export function toCursor(v: GuardVerdict, event?: string): string {
   if (v.decision === "allow") return "{}";
   const read = event === "beforeReadFile";
-  const out: Record<string, string> = {
-    permission: read && v.decision === "ask" ? "deny" : v.decision,
-    user_message: said(v),
-  };
-  if (!read) out.agent_message = said(v);
+  const cannotAsk = read || event === "preToolUse";
+  const refused = cannotAsk && v.decision === "ask" && !(event === "preToolUse" && v.rule === "approval");
+  const message = refused ? `${said(v)} A person must approve this; Cursor cannot ask at this point.` : said(v);
+  const out: Record<string, string> = { permission: refused ? "deny" : v.decision, user_message: message };
+  if (!read) out.agent_message = message;
   return JSON.stringify(out);
+}
+
+/**
+ * Codex's answer. The same `hookSpecificOutput.permissionDecision` as Claude
+ * Code's (https://learn.chatgpt.com/docs/hooks), with one difference that
+ * matters: Codex documents `"ask"` as "parsed but not supported yet" and
+ * carries on with the call, so gnomon cannot put a call to a person there.
+ *
+ *  - deny: `permissionDecision: "deny"`.
+ *  - an ask from the approval gate (rule `approval`, the `[approval]` setting
+ *    that asks before every mutating call): nothing, so the call goes to
+ *    Codex's own approval flow, as an allow does in Claude Code. Refusing it
+ *    would refuse every shell command and every patch under the default
+ *    gate, and no Codex session could work. The decision is still recorded
+ *    as an ask, and said on stderr (CODEX_DEFERRED).
+ *  - every other ask (the role holds no such tool, an ungoverned tool under
+ *    [governance], a call gnomon could not decide, no role): deny, with the
+ *    reason saying a person must approve it. No Codex flow stands behind those.
+ *  - Under a permission mode where nobody is asked (bypassPermissions) the
+ *    guard has already turned the ask into a deny.
+ */
+export function toCodex(v: GuardVerdict): string {
+  if (v.decision === "allow" || codexDefers(v)) return "";
+  const reason =
+    v.decision === "ask"
+      ? `${said(v)} (Codex cannot ask, so this call is refused: a person must approve it and run it themselves.)`
+      : said(v);
+  return JSON.stringify({
+    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason },
+  });
+}
+
+/** An ask Codex's own approval flow takes over from gnomon (see toCodex). */
+export function codexDefers(v: GuardVerdict): boolean {
+  return v.decision === "ask" && v.rule === "approval" && v.error === undefined;
+}
+
+/** What `gnomon guard --from codex` says on stderr when it defers an ask; `security test` reads it. */
+export const CODEX_DEFERRED = "gnomon guard: ask (approval), left to Codex's own approval flow";
+
+/**
+ * Copilot's answer: a top-level `permissionDecision` ("allow", "deny" or
+ * "ask") and `permissionDecisionReason` (https://docs.github.com/en/copilot/reference/hooks-configuration),
+ * with the Claude-format `hookSpecificOutput` beside it for the PascalCase
+ * `PreToolUse` event that reports Claude tool names. `{}` on allow: Copilot's
+ * "no decision", which "does not approve the tool". Copilot itself turns an ask
+ * into a deny where nobody can answer it (cloud agent, CLI autopilot).
+ */
+export function toCopilot(v: GuardVerdict): string {
+  if (v.decision === "allow") return "{}";
+  return JSON.stringify({
+    permissionDecision: v.decision,
+    permissionDecisionReason: said(v),
+    hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: v.decision, permissionDecisionReason: said(v) },
+  });
 }
