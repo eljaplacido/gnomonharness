@@ -26,6 +26,12 @@
 
 ## [Unreleased]
 
+### Added
+- `/think wrap` (and `[ui] think = "wrap"`): the first three reasoning lines written out whole, word-wrapped, at most 12 rows. `/expand think` reprints the last turn's reasoning and prose in full.
+
+### Changed
+- `/think show` word-wraps with a hanging indent instead of leaving long rows to the terminal; `collapse` cuts at a word boundary and names `/think wrap` and `/think show` (once per turn). Widths account for the `┊` gutter of delegated turns.
+
 ## [0.6.5] — 2026-11-21
 
 One fix, found by rerunning the 34-project capability matrix on v0.6.4: the

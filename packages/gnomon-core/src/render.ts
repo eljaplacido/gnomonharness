@@ -12,7 +12,7 @@
 import type { PromptExchange } from "./prompt_loop.js";
 import type { ResolvedUi, MetaField, ThinkMode } from "./config.js";
 import { renderMarkdown, DEFAULT_WIDTH } from "./markdown.js";
-import { cut } from "./width.js";
+import { cut, visibleWidth } from "./width.js";
 
 // ---------------------------------------------------------------------------
 // Colour
@@ -783,33 +783,129 @@ export function fitRow(text: string, columns: number): string {
   return tail ? `${head}…` : head;
 }
 
+/** What a list item starts with, so a wrapped row can hang under its text. */
+const LIST_LEAD = /^(\s*(?:[-*•]|\d+[.)])\s+)/;
+
+/**
+ * Word-wrap text to `width` display columns.
+ *
+ * Breaks at spaces; only a word wider than the row is split, at a grapheme
+ * boundary. A list item ("- ", "1. ") keeps a hanging indent so its
+ * continuation rows line up under the text. Control characters are escaped
+ * (safeForPrompt) before measuring, so a carriage return cannot rewrite a row,
+ * and every row is at most `width` columns. A "\n" starts a new paragraph.
+ */
+export function wordWrap(text: string, width: number): string[] {
+  const w = Math.max(8, Math.floor(width));
+  const out: string[] = [];
+  for (const raw0 of text.split("\n")) {
+    const raw = safeForPrompt(raw0);
+    const line = raw.trimEnd();
+    if (!line.trim()) {
+      out.push("");
+      continue;
+    }
+    const lead = LIST_LEAD.exec(line)?.[1];
+    const indent = lead ?? /^\s*/.exec(line)![0];
+    const hang = " ".repeat(Math.min(visibleWidth(indent), Math.floor(w / 2)));
+    // A lead too wide to hang under is dropped to the hang width.
+    const first = lead && visibleWidth(lead) <= Math.floor(w / 2) ? lead : hang;
+    const words = line.slice(indent.length).split(/ +/).filter(Boolean);
+    let row = first;
+    let hasWord = false;
+    const flush = (): void => {
+      out.push(row.trimEnd());
+      row = hang;
+      hasWord = false;
+    };
+    for (let word of words) {
+      if (hasWord && visibleWidth(row) + 1 + visibleWidth(word) > w) flush();
+      // A word wider than the row: hard-split it.
+      while (!hasWord && visibleWidth(row) + visibleWidth(word) > w) {
+        const { head, tail } = cut(word, Math.max(1, w - visibleWidth(row)));
+        if (!head) break;
+        row += head;
+        word = tail;
+        flush();
+      }
+      row += (hasWord ? " " : "") + word;
+      hasWord = word !== "";
+    }
+    out.push(row.trimEnd());
+  }
+  return out;
+}
+
+/** Cut at the last word boundary that fits, `…` marking the cut. */
+function cutAtWord(line: string, room: number): { text: string; cut: boolean } {
+  if (visibleWidth(line) <= room) return { text: line, cut: false };
+  const { head } = cut(line, room - 1);
+  const sp = head.lastIndexOf(" ");
+  // One long token has no boundary worth keeping: cut it where it falls.
+  const clipped = sp > head.length / 3 ? head.slice(0, sp) : head;
+  return { text: `${clipped.trimEnd()}…`, cut: true };
+}
+
+export interface TraceOptions {
+  /** Columns already spent left of the returned rows (prefix + gutter). Default 6. */
+  reserve?: number;
+  /** Whether a row naming the other modes may be added. Default true. */
+  hint?: boolean;
+}
+
 /**
  * Model prose shown while a turn works, as lines ready for a `  │ ` prefix.
  *
- * `collapse` keeps the first three lines, each clipped to one row; `show`
- * keeps everything. Clipping matters for more than tidiness: a line wider
- * than the terminal wraps, and a wrapped row is one the spinner's
- * erase-line cannot see, so long reasoning lines were left half-overwritten.
+ * - `collapse`: the first three lines, one row each, cut at a word boundary.
+ * - `wrap`: the first three lines in full, word-wrapped, at most 12 rows.
+ * - `show`: everything, word-wrapped with a hanging indent.
  *
+ * No row is wider than `columns - reserve`: a wider row wraps in the
+ * terminal, and a wrapped row is one the spinner's erase-line cannot see.
  * Every line is model-chosen text, so control characters are escaped -- a
  * carriage return in the reasoning rewrote the line before it.
  */
 export function traceLines(
   text: string,
   mode: ThinkMode,
-  columns: number
+  columns: number,
+  opts: TraceOptions = {}
 ): string[] {
   const body = text.trim();
   if (!body || mode === "hide" || isEmptyReasoning(body)) return [];
-  const all = body.split("\n").map((l) => safeForPrompt(l.trimEnd()));
-  if (mode === "show") return all;
-  const kept = all.filter((l) => l.trim()).slice(0, 3);
-  const room = Math.max(20, columns - 6);
-  const lines = kept.map((l) => {
-    const { head, tail } = cut(l, room - 1);
-    return tail ? `${head}…` : head;
+  const room = Math.max(20, columns - (opts.reserve ?? 6));
+  const hint = opts.hint !== false;
+  if (mode === "show") return wordWrap(body, room);
+  const lines = body
+    .split("\n")
+    .map((l) => safeForPrompt(l.trimEnd()))
+    .filter((l) => l.trim());
+  const kept = lines.slice(0, 3);
+  if (mode === "wrap") {
+    const rows: string[] = [];
+    let shown = 0;
+    for (const l of kept) {
+      const wrapped = wordWrap(l, room);
+      if (rows.length + wrapped.length > 12) {
+        rows.push(...wrapped.slice(0, 12 - rows.length));
+        break;
+      }
+      rows.push(...wrapped);
+      shown++;
+    }
+    const left = lines.length - shown;
+    if (left > 0) rows.push(`… ${left} more line(s)${hint ? " — /think show" : ""}`);
+    return rows;
+  }
+  let cutAny = false;
+  const rows = kept.map((l) => {
+    const r = cutAtWord(l, room);
+    cutAny ||= r.cut;
+    return r.text;
   });
-  const hidden = all.filter((l) => l.trim()).length - kept.length;
-  if (hidden > 0) lines.push(`… ${hidden} more line(s) — /think show for all`);
-  return lines;
+  const hidden = lines.length - kept.length;
+  const ways = " — /think wrap (whole lines) · /think show (all)";
+  if (hidden > 0) rows.push(`… ${hidden} more line(s)${hint ? ways : ""}`);
+  else if (cutAny && hint) rows.push(`… cut at the row edge${ways}`);
+  return rows;
 }

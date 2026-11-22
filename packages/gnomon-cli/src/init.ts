@@ -339,7 +339,7 @@ chain = true
 # Runtime /meta and /think override these for the session only.
 meta = ["turn", "role", "model", "bucket", "duration", "tokens", "context", "tools"]
 meta_style = "line"               # line | compact
-think = "collapse"                # hide | collapse | show
+think = "collapse"                # hide | collapse | wrap | show
 spinner = true
 color = true
 # Render the answer's markdown — tables as tables, **bold** as bold, and
