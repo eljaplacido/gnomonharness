@@ -181,6 +181,7 @@ describe("themes", () => {
     expect(THEMES["high-contrast"].look!.border).toBe("heavy");
     expect(THEMES.dim.look!.border).toBe("sharp");
     expect(THEMES.nord.look!.border).toBe("sharp");
+    expect(THEMES.gruvbox.look!.border).toBe("double");
     expect(THEMES.dark.look!.accent!.hex).toBe("#E2733F");
   });
 
@@ -324,7 +325,7 @@ describe("spinner", () => {
   it("reads like Claude Code: frame, label, seconds, esc", () => {
     // The frames this machine draws: the sundial, or ascii on a legacy Windows console
     // (the Windows CI runner is one). The frame set itself is pinned by the tests above.
-    const frames = spinnerSpec("sundial").frames.map((f) => f.replace(/[\\|]/g, "\\$&")).join("|");
+    const frames = spinnerSpec("sundial", process.platform, process.env, THEMES.dark.look?.spinner).frames.map((f) => f.replace(/[\\|]/g, "\\$&")).join("|");
     expect(rowAt("sundial", 80, "thinking")).toMatch(new RegExp(`^ {2}(?:${frames}) thinking · 12s · esc cancels$`));
   });
 

@@ -80,7 +80,7 @@ import {
   type EscalateRoute,
 } from "./config.js";
 import { thinkCapNote, thinkCapRecord, resolveThinkCap, type ThinkCapCounters } from "./think_cap.js";
-import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence,
+import { Progress, renderExchange, splitThinking, paint, THEMES, glyphsOf, terminalThemeSequence,
   safeForPrompt, traceLines, isToolTagStub, isEmptyReasoning, terminalWidth, summaryResult, fitRow, metaText, wordWrap,
 } from "./render.js";
 import {
@@ -4235,7 +4235,7 @@ export function reasoningOf(channel: string | undefined, inline: string): string
 export function stepCallRow(ui: ResolvedUi, tool: string, describe: string, columns: number = terminalWidth()): string {
   // A skill the model opened is drawn as a skill, not as one more read.
   if (tool === SKILL_STEP) return fitRow(paint(ui, "magenta", `  ◆ skill`) + `  ${safeForPrompt(describe)}`, columns);
-  return fitRow(paint(ui, "cyan", `  ⚙ ${tool}`) + (describe ? `  ${safeForPrompt(describe)}` : ""), columns);
+  return fitRow(paint(ui, "cyan", `  ${glyphsOf(ui).tool} ${tool}`) + (describe ? `  ${safeForPrompt(describe)}` : ""), columns);
 }
 
 /** FoldStep.tool for a `read` of a skill file (skillRead). */
@@ -6236,7 +6236,7 @@ async function agenticTurn(
     const paths = [...new Set(steps_.map((st) => st.path).filter(Boolean))] as string[];
     const shown = paths.slice(0, 3).join(", ") + (paths.length > 3 ? `, +${paths.length - 3}` : "");
     deps.say(
-      paint(deps.ui, "cyan", `  ⚙ ${steps_.length} steps folded`) +
+      paint(deps.ui, "cyan", `  ${glyphsOf(deps.ui).tool} ${steps_.length} steps folded`) +
         paint(deps.ui, "gray", ` · ${byTool}${paths.length ? ` · ${shown}` : ""} · nothing changed`) +
         paint(deps.ui, "gray", `  /expand`)
     );
@@ -6261,7 +6261,7 @@ async function agenticTurn(
       reserve: 6 + (deps.gutter ?? 0),
       hint: takeThinkHint(),
     }).forEach((line, i) =>
-      say(paint(deps.ui, "gray", `  ${i === 0 ? "✻" : " "} ${line}`) + (i === 0 && tag ? paint(deps.ui, "magenta", tag) : ""))
+      say(paint(deps.ui, "gray", `  ${i === 0 ? glyphsOf(deps.ui).think : " "} ${line}`) + (i === 0 && tag ? paint(deps.ui, "magenta", tag) : ""))
     );
   };
   // The "how to see more" hint names two commands; once a turn is enough.
@@ -11900,7 +11900,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/think", arg: "[mode]", help: "Chain-of-thought: hide | collapse | show" },
   { name: "/cot", arg: "[mode]", help: "Live trace while it works: off | brief | tools | think | work | full" },
   { name: "/expand", help: "List the steps inside the last folded run" },
-  { name: "/theme", arg: "[name]", help: "Colour theme — dark, dim, light, high-contrast, mono, tokyonight, catppuccin, gruvbox, nord (the last four recolour the whole terminal)" },
+  { name: "/theme", arg: "[name]", help: "Colour theme — dark, dim, light, high-contrast, mono, tokyonight, catppuccin, gruvbox, nord (each with its own border, glyphs, chip, spinner and palette; the last four recolour the whole terminal)" },
   { name: "/explain", arg: "[topic]", help: "What a feature is, how this repo has it set, and what to do with it" },
   { name: "/reflect", arg: "[topic]", help: "Alias for /explain" },
   { name: "/models", help: "Pick a model for a role (arrows, type to filter)" },
@@ -13104,7 +13104,7 @@ export function processCommand(cmd: string, state: PromptState): boolean {
           traceLines(b.text, "show", columns).forEach((line, i) =>
             console.log(
               b.kind === "reasoning"
-                ? paint(ui, "gray", `  ${i === 0 ? "✻" : " "} ${line}`)
+                ? paint(ui, "gray", `  ${i === 0 ? glyphsOf(ui).think : " "} ${line}`)
                 : i === 0
                   ? `  ${paint(ui, "bold", "●")} ${line}`
                   : `    ${line}`
@@ -14503,9 +14503,9 @@ export async function runPromptLoop(
     for (const raw of req.preview.slice(0, 60)) {
       const line = safeForPrompt(raw);
       const colour = line.startsWith("+ ")
-        ? "green"
+        ? "add"
         : line.startsWith("- ")
-          ? "red"
+          ? "del"
           : "gray";
       console.log(paint(ui, colour, `  │ ${line}`));
     }
@@ -14587,9 +14587,9 @@ export async function runPromptLoop(
         for (const raw of req.preview) {
           const line = safeForPrompt(raw);
           const colour = line.startsWith("+ ")
-            ? "green"
+            ? "add"
             : line.startsWith("- ")
-              ? "red"
+              ? "del"
               : "gray";
           console.log(paint(ui, colour, `  │ ${line}`));
         }

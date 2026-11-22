@@ -26,6 +26,14 @@
 
 ## [Unreleased]
 
+### Added — nine distinctive terminal themes
+
+- Each theme now has its own border, rail glyph, tool-row and reasoning glyph, role chip (bold, inverse, pill or
+  `[bracketed]`), spinner and, except `dark`, a semantic palette (ok/err/warn/info/muted and `+`/`-` diff sides)
+  from its own scheme, checked at WCAG 4.5:1 against the theme background. `dark` is unchanged. 16-colour terminals,
+  `NO_COLOR`, `mono` and ascii borders keep working; the terminal's own palette is never touched. No wire, record,
+  `--json` or `gnomon task` output changes.
+
 ### Fixed — a piped session prints what it printed in 0.6.5
 
 - With input from a pipe, the "⏎ queued — runs when the harness is free" receipt no longer prints (a pipe delivers
