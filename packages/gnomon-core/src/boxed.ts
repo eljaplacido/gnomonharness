@@ -333,7 +333,10 @@ export function railLine(ctx: BoxCtx, text: string): string {
     .map((l) => {
       if (l === "") return railTint(ctx, v);
       const m = LEAD_ESC.exec(l);
-      return m ? `${railTint(ctx, v)}${m[1]} ${l.slice(m[0].length)}` : l;
+      const row = m ? `${railTint(ctx, v)}${m[1]} ${l.slice(m[0].length)}` : l;
+      // A row wider than the terminal wraps, and a wrapped row is one the
+      // spinner's erase-line cannot see: cut it.
+      return visibleWidth(row) > ctx.columns ? fitRow(row, ctx.columns) + (ctx.color ? RESET : "") : row;
     })
     .join("\n");
 }
@@ -449,14 +452,14 @@ export function sampleTurn(ctx: BoxCtx): string[] {
   ];
   const out = [turnHeader(ctx, { role: "build", model: "qwen3.5:122b" })];
   for (const r of rows) out.push(railLine(ctx, r));
-  out.push("");
-  out.push("Fixed: parse() is imported from src/parse.ts; 12 pass.");
-  out.push("");
   out.push(
     turnFooter(ctx, {
       glyph: "✓",
       text: "turn 3  ·  build  ·  qwen3.5:122b  ·  result  ·  8.4s  ·  ctx 3 turns  ·  2 tool call(s)",
     })
   );
+  // The frame is closed first; the answer follows it with no prefix at all.
+  out.push("");
+  out.push("Fixed: parse() is imported from src/parse.ts; 12 pass.");
   return out;
 }

@@ -3188,6 +3188,28 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
   const problems: SurfaceProblem[] = [];
   const declared = config.config.endpoints ?? {};
 
+  // [ui] enums: a misspelling used to fall back to the default without a word.
+  const uiBlock = (config.config.ui ?? {}) as Record<string, unknown>;
+  const uiEnums: Array<[string, string[], boolean]> = [
+    ["style", UI_STYLES, false],
+    ["spinner", SPINNER_STYLES, true],
+    ["meta_style", META_STYLES, false],
+    ["think", THINK_MODES, false],
+    ["cot", COT_MODES, false],
+  ];
+  for (const [key, legal, orBool] of uiEnums) {
+    const v = uiBlock[key];
+    if (v === undefined || (orBool && typeof v === "boolean")) continue;
+    if (typeof v !== "string" || !legal.includes(v)) {
+      problems.push({
+        where: `.gnomon/config.toml [ui] ${key}`,
+        problem: `${JSON.stringify(v)} is not one of ${legal.join(" | ")}${orBool ? " | false" : ""}; the default is used instead.`,
+        fix: `Set [ui] ${key} = "${legal[0]}" (or another of: ${legal.join(", ")}).`,
+        fatal: false,
+      });
+    }
+  }
+
   // Files under .gnomon/extensions/ are NOT hashed and NOT loaded. Inert in
   // both directions, so this is a note about what the directory is, not a
   // warning about a hash that moves for nothing.

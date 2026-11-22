@@ -135,10 +135,9 @@ describe("framed turn", () => {
       │ ┊  ● run_tests parse.test.ts
       │ ┊    ⎿ 12 passed
       │ ↲ plan: 12 passed, nothing else to change
+      ╰─ ✓ turn 3  ·  build  ·  qwen3.5:122b  ·  result  ·  8.4s  ·  ctx 3 turns  … ──
 
-      Fixed: parse() is imported from src/parse.ts; 12 pass.
-
-      ╰─ ✓ turn 3  ·  build  ·  qwen3.5:122b  ·  result  ·  8.4s  ·  ctx 3 turns  … ──"
+      Fixed: parse() is imported from src/parse.ts; 12 pass."
     `);
   });
 
@@ -333,5 +332,32 @@ describe("spinner", () => {
       expect(r).toContain("esc cancels");
       expect(r).toContain("…");
     }
+  });
+});
+
+describe("the answer sits below the closed frame, unprefixed", () => {
+  it("the footer comes before the answer in a framed turn", () => {
+    const rows = plain(sampleTurn(ctxOf(80)).join("\n")).split("\n");
+    const footer = rows.findIndex((r) => r.startsWith("╰─"));
+    const answer = rows.findIndex((r) => r.startsWith("Fixed:"));
+    expect(footer).toBeGreaterThan(0);
+    expect(answer).toBeGreaterThan(footer);
+  });
+
+  it("boxed code has no gutter; classic keeps its own", async () => {
+    const { renderMarkdown } = await import("./markdown.js");
+    const src = "text\n\n```js\nconst a = 1;\nconsole.log(a);\n```\n";
+    const boxed = plain(renderMarkdown(src, ui({ color: false, boxed: true }), 80).join("\n"));
+    expect(boxed).toContain("\nconst a = 1;\n");
+    expect(boxed).not.toMatch(/│ const/);
+    const classic = plain(renderMarkdown(src, ui({ color: false, boxed: false }), 80).join("\n"));
+    expect(classic).toContain("  │ const a = 1;");
+  });
+
+  it("a rail row wider than the terminal is cut to fit", () => {
+    const c = ctxOf(60);
+    const r = railLine(c, "  " + "x".repeat(200));
+    expect(visibleWidth(r)).toBeLessThanOrEqual(60);
+    expect(plain(r)).toMatch(/^│ x+…$/);
   });
 });

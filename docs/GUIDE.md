@@ -1175,7 +1175,9 @@ status rule above each prompt (`╭─ role · model ──── ctx 12% · bra
 the values the loop has), and a rail `│` down the left of every turn between a
 `╭─ ◆ role · model` header and a `╰─` footer that carries the meta line. A
 delegated turn keeps its `┊` gutter inside the rail. The rail takes the place of
-the two-space indent, so no row gets wider; nothing is drawn to the right of or
+the two-space indent, so no row gets wider. The answer is printed below the
+closed frame with nothing in front of it, and its code blocks carry no gutter,
+so code copied from the terminal never includes a `│`; nothing is drawn to the right of or
 below the input line, because readline redraws that line and would erase it.
 
 `auto` (the default) is boxed only when stdout is a TTY at least 60 columns

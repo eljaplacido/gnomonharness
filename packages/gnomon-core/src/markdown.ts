@@ -409,8 +409,10 @@ function renderBlocks(src: string, ui: ResolvedUi, width: number): string[] {
   const blank = () => {
     if (out.length && out[out.length - 1] !== "") out.push("");
   };
+  // The boxed look prints code with nothing before it, so a copy from the
+  // terminal is the code and not a `│` gutter.
   const codeLine = (text: string) =>
-    `  ${paint(ui, "gray", "│")} ${paint(ui, "cyan", text)}`;
+    ui.boxed ? paint(ui, "cyan", text) : `  ${paint(ui, "gray", "│")} ${paint(ui, "cyan", text)}`;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];

@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 4242 TypeScript tests (3549 core, 668 cli, 18
-> natives, 7 tui) and 120 Rust tests — **4362 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 4248 TypeScript tests (3555 core, 668 cli, 18
+> natives, 7 tui) and 120 Rust tests — **4368 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -1171,11 +1171,13 @@ the plain `classic` output:
 │ ┊  ● run_tests parse.test.ts
 │ ┊    ⎿ 12 passed
 │ ↲ plan: 12 passed, nothing else to change
+╰─ ✓ turn 3  ·  build  ·  qwen3.5:122b  ·  result  ·  8.4s  ·  ctx 3 turns ─────
 
 Fixed: parse() is imported from src/parse.ts; 12 pass.
-
-╰─ ✓ turn 3  ·  build  ·  qwen3.5:122b  ·  result  ·  8.4s  ·  ctx 3 turns ─────
 ```
+
+The answer is printed below the closed frame with nothing before it, so code
+copied from it never carries a `│`.
 
 `meta` is an ordered list drawn from `turn`, `role`, `model`, `bucket`,
 `duration`, `context`, `tokens`, `think`, `tools`; an empty list shows no meta

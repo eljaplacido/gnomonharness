@@ -3871,10 +3871,12 @@ function printExchange(exchange: PromptExchange, ui: ResolvedUi): void {
 /** The boxed form: the answer, then the meta line as the turn's footer. */
 function printExchangeBoxed(exchange: PromptExchange, ui: ResolvedUi, box: BoxCtx): void {
   const thinkTokens = Math.ceil(splitThinking(exchange.output).think.length / 4);
-  for (const line of renderExchange(exchange, { ...ui, meta: [] })) console.log(line);
+  // Close the frame first, then the answer below it with no prefix at all, so
+  // code copied from the answer never carries a rail. The spinner was stopped
+  // (and its row erased) when the turn ended, before this runs.
   const m = metaText(exchange, ui, thinkTokens);
   console.log(turnFooter(box, m ? { glyph: m.glyph, glyphRole: m.color, text: m.text } : { text: "" }));
-  console.log("");
+  for (const line of renderExchange(exchange, { ...ui, meta: [] })) console.log(line);
 }
 
 // ---------------------------------------------------------------------------
@@ -13695,7 +13697,7 @@ export async function runPromptLoop(
     const gov = (config as unknown as { policy?: { governance?: { level?: string } } }).policy?.governance?.level;
     console.log("");
     for (const l of startupCard(box0, {
-      version: harnessBuild(),
+      version: harnessBuild().replace(/^gnomon\//, ""),
       role: state.currentRole,
       model: startRoute.model,
       where: isLocalEndpoint(startRoute.target.url) ? "local" : "cloud",
