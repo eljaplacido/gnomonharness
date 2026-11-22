@@ -174,8 +174,6 @@ const PARAMS: Record<ActionName, readonly (keyof ActionParams | "value")[]> = {
   "endpoint.test": ["endpoint"],
   "inbox.add": ["title", "detail", "target", "evidence", "scope"],
   "inbox.resolve": ["id", "note"],
-  init: [],
-  "guard.install": [],
   init: ["dir"],
   "guard.install": ["harness"],
 };
