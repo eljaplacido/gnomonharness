@@ -3241,7 +3241,7 @@ function editDistance(a: string, b: string): number {
  * published; it does not say a reader has to guess which of them work.
  *
  * `edit_format` is the live case: the enumeration offers ast | hashline |
- * str_replace, only the last is built, and a surface asking for `ast` used to
+ * str_replace, only `ast` is not built (hashline arrived in 0.6.7), and a surface asking for `ast` used to
  * run on `str_replace` in silence — the surface saying one thing and the
  * harness doing another, which is the sentence this project exists to prevent.
  *
@@ -3250,9 +3250,9 @@ function editDistance(a: string, b: string): number {
  */
 const DECLARED_NOT_IMPLEMENTED: Record<string, { values: string[]; inUse: string; why: string }> = {
   edit_format: {
-    values: ["ast", "hashline"],
+    values: ["ast"],
     inUse: "str_replace",
-    why: "the edit tool matches an exact string; the structural and hash-line formats are in the enumerations contract, not in this build",
+    why: "the edit tool matches an exact string; the structural format is in the enumerations contract, not in this build (hashline is implemented, edit_hashline.ts)",
   },
 };
 

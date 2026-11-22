@@ -35,16 +35,13 @@ const CONFIG_TOML = `# gnomon configuration — the active surface.
 # No machine-scoped config: if it changes what the agent does, it belongs here.
 
 [defaults]
-edit_format = "str_replace"       # ast (INERT) | hashline (INERT) | str_replace
-                                  # Only str_replace is implemented: the edit tool
-                                  # matches an exact string. The other two are in the
-                                  # enumerations contract, not in this build -- so
-                                  # setting either runs on str_replace, and the
-                                  # surface audit says so at startup rather than
-                                  # doing it in silence. They stay in the contract
-                                  # because entries should leave that list by being
-                                  # implemented, not by being dropped from what was
-                                  # already published.
+edit_format = "str_replace"       # ast (INERT) | hashline | str_replace
+                                  # str_replace: the edit tool matches an exact string.
+                                  # hashline: read tags each line LINE:HASH|text and edit
+                                  # takes those anchors; a stale anchor is refused.
+                                  # ast is in the enumerations contract, not in this
+                                  # build: setting it runs on str_replace, and the
+                                  # surface audit says so at startup.
 sandbox = "confined"              # off | confined | strict
 approval = "on_write"             # never | on_write | always
 role_profile = "local_first"      # local_first | frontier_plan | all_remote

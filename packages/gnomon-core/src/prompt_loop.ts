@@ -212,13 +212,13 @@ import { connectMcp, type McpRegistry } from "./mcp.js";
 import { AFTER_REFUSAL_REASON, AfterRefusalWindow, resolveAfterRefusal } from "./after_refusal.js";
 import { governanceGapLine, governanceGaps, resolveLevels, resolveProtectedPaths } from "./governance.js";
 import { settleMcpTools, toolsHash } from "./tools_hash.js";
+import { resolveEditMode } from "./edit_hashline.js";
 import {
   REASONING_EFFORT_FIELD,
   TODO_GATE_ROUNDS,
   envSnapshotNetworkLine,
   openTodos,
   renderTodoHandBack,
-  resolveEditVariant,
   resolvePackageIndex,
   resolveTodoGate,
   type EditMatchTier,
@@ -6360,7 +6360,7 @@ async function agenticTurn(
   const declaredNetwork = pinned.container ? true : pinned.network;
   const network = state.network ?? declaredNetwork;
   const packageIndex = resolvePackageIndex(config);
-  const editVariant = resolveEditVariant(config);
+  const editVariant = resolveEditMode(config);
 
   // The shadow is told about each tool call after it has run. A delegated
   // sub-turn is part of its parent's call and is not scored on its own.
@@ -6434,7 +6434,7 @@ async function agenticTurn(
     // The sweep knobs (sweep_knobs.ts): absent unless declared, so an
     // undeclared surface builds the context it always did.
     ...(packageIndex.length > 0 ? { packageIndex } : {}),
-    ...(editVariant === "compat" ? { editVariant } : {}),
+    ...(editVariant === "compat" || editVariant === "hashline" ? { editVariant } : {}),
     ...(jobs ? { jobs } : {}),
     // Turn-scoped: a command that blocked once will block again, and the loop
     // owns the lifetime of that fact.

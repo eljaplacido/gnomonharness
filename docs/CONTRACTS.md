@@ -306,12 +306,19 @@ at `config.ts:793`. Corrected 2026-09-06 — a disclosure that outlives the defe
 it discloses is its own defect, and it was telling readers a working feature was
 inert.
 
-**`edit_format` is still the real case.** Of `ast`, `hashline` and
-`str_replace`, only `str_replace` is implemented; the other two are published in
-the enumerations contract and inert. They stay published because entries leave
-that list by being implemented, never by being dropped from what was already
-published — and `auditSurface` reports a surface that selects one, so nobody
-gets the inert behaviour in silence.
+**`edit_format`: `hashline` is implemented, `ast` is the real case.** Of `ast`,
+`hashline` and `str_replace`, `str_replace` (the default) and `hashline` (0.6.7,
+opt-in) are implemented; `ast` is published in the enumerations contract and
+inert. It stays published because entries leave that list by being implemented,
+never by being dropped from what was already published — and `auditSurface`
+reports a surface that selects it, so nobody gets the inert behaviour in
+silence. The hashline format, after Can Bölük, "The Harness Problem" (2026):
+`read` shows `LINE:HASH|text`, where HASH is FNV-1a 32 over the UTF-8 bytes of
+the line (no trailing CR), xor-folded to 8 bits, two lowercase hex digits;
+`edit` takes `edits` of `{op, anchor, end?, text?}` with `op` one of
+`replace`, `delete`, `insert_before`, `insert_after`. Every anchor is checked
+against the file as it is, and one stale anchor refuses the whole call.
+Vectors: `conformance/edit_hashline.json`.
 
 **Fixture**: `conformance/enumerations_schema.json` — JSON Schema for the
 enumerations output. CI asserts the output conforms.

@@ -64,10 +64,18 @@ import type { McpRegistry, McpToolInfo } from "./mcp.js";
 import {
   COMPAT_EDIT_PARAMETERS,
   fuzzyEdit,
-  resolveEditVariant,
   type EditMatchTier,
-  type EditVariant,
 } from "./sweep_knobs.js";
+import {
+  HASHLINE_EDIT_DESCRIPTION,
+  HASHLINE_EDIT_PARAMETERS,
+  HASHLINE_READ_DESCRIPTION,
+  anchoredLines,
+  applyHashlineEdits,
+  resolveEditMode,
+  splitAnchorLines,
+  type EditMode,
+} from "./edit_hashline.js";
 import {
   bashEnvDump,
   bashNetworkEgress,
@@ -457,7 +465,7 @@ export function readParameters(window?: number): Record<string, unknown> {
 function parametersFor(
   name: string,
   readWindow?: number,
-  editVariant?: EditVariant,
+  editVariant?: EditMode,
   /** bash soft_timeout = "handle": bash takes `interactive`, and `job` exists. */
   softShell?: boolean,
   /** `[memory] propose = true`: the `skill` tool also proposes memory entries. */
@@ -469,6 +477,7 @@ function parametersFor(
   if (name === "bash" && softShell) return HANDLE_BASH_PARAMETERS;
   if (!Object.prototype.hasOwnProperty.call(IMPLEMENTED, name)) return undefined;
   if (name === "edit" && editVariant === "compat") return COMPAT_EDIT_PARAMETERS;
+  if (name === "edit" && editVariant === "hashline") return HASHLINE_EDIT_PARAMETERS;
   if (name === "skill") return skillParameters(memoryPropose);
   return name === "read" ? readParameters(readWindow) : IMPLEMENTED[name];
 }
@@ -515,7 +524,7 @@ export function buildToolSet(
   const allowed = role ? config.roles[role]?.tools : undefined;
   const roleLimited = Array.isArray(allowed);
   const readWindow = toolMaxLines(config, "read");
-  const editVariant = resolveEditVariant(config);
+  const editVariant = resolveEditMode(config);
   const handle = resolveSoftTimeout(config) === "handle";
   const container = resolveSandboxProfile(config) === "container";
 
@@ -542,10 +551,16 @@ export function buildToolSet(
     // `[sandbox] profile = "container"` runs bash under /bin/bash where it
     // exists, so the scaffold's "/bin/sh, not bash" sentence is replaced
     // (sandbox_profile.ts); any other description is the surface's own.
+    // `edit_format = "hashline"` changes what read shows and edit takes, so
+    // the two descriptions say that (edit_hashline.ts).
     const description =
       tool.name === "bash" && container
         ? containerBashDescription(tool.description ?? tool.name, containerShell())
-        : (tool.description ?? tool.name);
+        : editVariant === "hashline" && tool.name === "read"
+          ? HASHLINE_READ_DESCRIPTION
+          : editVariant === "hashline" && tool.name === "edit"
+            ? HASHLINE_EDIT_DESCRIPTION
+            : (tool.description ?? tool.name);
     schemas.push({
       type: "function",
       function: {
@@ -1336,7 +1351,7 @@ export interface ToolContext {
    * The edit tool's declared variant (sweep_knobs.ts resolveEditVariant).
    * Absent or `default` is edit as it always was.
    */
-  editVariant?: EditVariant;
+  editVariant?: EditMode;
   /**
    * Whether the agent may write inside `.gnomon/` this session. Absent =
    * `strict` = the surface is human-only (the default, and the pillar).
@@ -1719,10 +1734,13 @@ async function readTool(
     // below this line changed.
     const window = ctx.maxLines?.read;
     if (window) return readWindowed(path, raw, crlf, args, window, ctx);
-    const numbered = raw
-      .split(/\r?\n/)
-      .map((l, n) => `${String(n + 1).padStart(5)}\t${l}`)
-      .join("\n");
+    const numbered =
+      ctx.editVariant === "hashline"
+        ? anchoredLines(splitAnchorLines(raw).lines.map((l) => l.text)).join("\n")
+        : raw
+            .split(/\r?\n/)
+            .map((l, n) => `${String(n + 1).padStart(5)}\t${l}`)
+            .join("\n");
     return {
       code: TOOL_OK,
       content: clamp(
@@ -1767,7 +1785,8 @@ function readWindowed(
   window: number,
   ctx: ToolContext
 ): ToolOutcome {
-  const lines = raw.split(/\r?\n/);
+  const hashline = ctx.editVariant === "hashline";
+  const lines = hashline ? splitAnchorLines(raw).lines.map((l) => l.text) : raw.split(/\r?\n/);
   const total = lines.length;
   const whole = (v: unknown) => (typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : undefined);
   const start = whole(args.offset) ?? 1;
@@ -1781,10 +1800,12 @@ function readWindowed(
     };
   }
   const end = Math.min(total, start + count - 1);
-  const shown = lines
-    .slice(start - 1, end)
-    .map((l, i) => `${String(start + i).padStart(5)}\t${l}`)
-    .join("\n");
+  const shown = hashline
+    ? anchoredLines(lines.slice(start - 1, end), start).join("\n")
+    : lines
+        .slice(start - 1, end)
+        .map((l, i) => `${String(start + i).padStart(5)}\t${l}`)
+        .join("\n");
   const partial = start > 1 || end < total;
   const footer = !partial
     ? ""
@@ -8130,7 +8151,18 @@ async function editTool(
     oldText = oldText.replace(/\n/g, "\r\n");
     newText = newText.replace(/\r?\n/g, "\r\n");
   }
-  const hits = before.split(oldText).length - 1;
+  // `edit_format = "hashline"`: the edits name anchors, and nothing below
+  // matches text (edit_hashline.ts). A stale anchor refuses the whole call.
+  const hashline = ctx.editVariant === "hashline";
+  let anchored: string | undefined;
+  if (hashline) {
+    const r = applyHashlineEdits(before, args.edits, path);
+    if (!r.ok) {
+      return { code: TOOL_FAILED, content: r.why, summary: `edit ${path} — ${r.why.startsWith("Stale") ? "stale anchor" : "refused"}` };
+    }
+    anchored = r.after;
+  }
+  const hits = hashline ? 1 : before.split(oldText).length - 1;
   // The compat variant's tiers (sweep_knobs.ts fuzzyEdit): an exact match
   // first, then whole lines with whitespace, then indentation, ignored. Each
   // tier must find one place; two or more are refused, never guessed between.
@@ -8180,7 +8212,7 @@ async function editTool(
 
   // A function replacer: with a string, `$$`, `$&` and `$'` in new_text are
   // replacement patterns, so `echo $$` was written as `echo $`.
-  const after = fuzzyAfter ?? before.replace(oldText, () => newText);
+  const after = anchored ?? fuzzyAfter ?? before.replace(oldText, () => newText);
   const diff = diffLines(before, after);
   const { added, removed } = diffStat(diff);
 
@@ -8734,7 +8766,7 @@ function typeText(spec: unknown): string {
  * `path (string, required), old_text (string, required), …` -- or null for a
  * name with no schema in this build.
  */
-export function toolParamsText(name: string, readWindow?: number, editVariant?: EditVariant, softShell?: boolean): string | null {
+export function toolParamsText(name: string, readWindow?: number, editVariant?: EditMode, softShell?: boolean): string | null {
   const params = parametersFor(name, readWindow, editVariant, softShell);
   const props = (params?.properties ?? undefined) as Record<string, unknown> | undefined;
   if (!props) return null;
@@ -8771,7 +8803,7 @@ export function argProblems(
   name: string,
   args: Record<string, unknown>,
   readWindow?: number,
-  editVariant?: EditVariant,
+  editVariant?: EditMode,
   softShell?: boolean
 ): ArgProblems | null {
   const params = parametersFor(name, readWindow, editVariant, softShell);
@@ -8809,7 +8841,7 @@ export function schemaRepairText(
   name: string,
   args: Record<string, unknown>,
   readWindow?: number,
-  editVariant?: EditVariant,
+  editVariant?: EditMode,
   softShell?: boolean
 ): string {
   const p = argProblems(name, args, readWindow, editVariant, softShell);
@@ -8838,7 +8870,7 @@ function withSchemaRepair(
   args: Record<string, unknown>,
   outcome: ToolOutcome,
   readWindow?: number,
-  editVariant?: EditVariant,
+  editVariant?: EditMode,
   softShell?: boolean
 ): ToolOutcome {
   if (outcome.code === TOOL_OK || outcome.code === TOOL_OK_EMPTY) return outcome;
