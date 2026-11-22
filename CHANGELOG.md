@@ -26,6 +26,35 @@
 
 ## [Unreleased]
 
+## [0.6.6] — 2026-11-22
+
+The daily-runtime release, audited against v0.6.5 before it was cut. With no new
+key set, the surface hash, system prompt, tool schemas and first request body are
+byte-identical to v0.6.5, and a piped session prints what it printed before.
+Startup and per-turn overhead are within the pre-registered bound of v0.6.5
+(UX4, model-free: one warm turn CPU +15 ms [0, 30], wall +13 ms, RSS +2.4 MB).
+
+- **The terminal:** a boxed layout with the sundial spinner, and nine themes that
+  each look different (border, rail, step and reasoning glyphs, role chip,
+  spinner, palette); the live trace (`/cot`, `/think wrap`) wraps whole lines.
+- **Context:** an endpoint's own window is read from its listing in the background
+  and remembered per machine, so no request waits for it. A known window is
+  checked against a realistic estimate before each call.
+- **Governed self-improvement, inert until used:** one proposal store for skills,
+  memory and system notes (`gnomon proposals`, `gnomon memory`), and `gnomon
+  improve`, which mines the trails, drafts with a local role, lints, probes each
+  candidate against the surface on the trial specs and composes what improved.
+  It is a dry run by default. Nothing reaches `.gnomon/` without acceptance, by a
+  person or by an `[improve] auto_accept` policy the surface declares.
+- **The dashboard v2:** onboarding, a per-project lens from spec to verify, an
+  inbox whose "flag for fix" items reach Claude Code and Cursor, and a read-only
+  local chat.
+- **Other harnesses:** Cursor hooks v2, guard adapters for OpenAI Codex CLI, Qwen
+  Code and GitHub Copilot, and `gnomon skill export`.
+
+`.gnomon/ci.sh` passes on the release commit, and the property suites hold their
+published figures (5/5).
+
 ### Added — nine distinctive terminal themes
 
 - Each theme now has its own border, rail glyph, tool-row and reasoning glyph, role chip (bold, inverse, pill or
@@ -49,7 +78,7 @@
   for the endpoint and model, then by the measured ratio (never below 1); the leg checkpoint divides its budget by the
   measured ratio the same way. Unresolved (`default`) windows are unchanged byte for byte, and no floor or guard is
   loosened. A trim's record gains an optional `basis` (`measured` or `safety`) beside `ratio`.
-### Added — Cursor hooks v2 and skill export (opt-in; depends on the inbox in PR #280)
+### Added — Cursor hooks v2 and skill export (opt-in)
 
 Nothing changes for anyone who does not run `gnomon guard install cursor` or `gnomon skill export`.
 
@@ -71,7 +100,7 @@ Nothing changes for anyone who does not run `gnomon guard install cursor` or `gn
 
 - Docs and code said Cursor has no hook before a file write; it does (`preToolUse`). `toCursor` knows that `preToolUse`
   does not enforce `ask`: an ask there is a deny, except the approval gate's.
-### Added — guard adapters for OpenAI Codex CLI, Qwen Code and GitHub Copilot (opt-in; depends on #280)
+### Added — guard adapters for OpenAI Codex CLI, Qwen Code and GitHub Copilot (opt-in)
 
 `gnomon guard install codex|qwen-code|copilot [--write [--local]]`, and
 `gnomon guard --from codex|qwen-code|copilot`. Nothing changes for anyone who
@@ -178,7 +207,7 @@ list no new host, `security test --host all` runs the same three hosts, and the
 - Everything is opt-in. With no new keys and no memory entries the prompt, the tool
   definitions and the records are byte-identical to before (tests pin it).
 
-### Added — dashboard v2, onboarding and shell (depends on `feat/dashboard-v2-base`)
+### Added — dashboard v2, onboarding and shell
 
 - **One-click local quick start** on the Setup screen: detected hardware, one recommended catalog model with a fit pill
   (fits / tight / over, the reason on hover and in the page text; tokens/s only when measured here), an engine, model,
@@ -6113,7 +6142,8 @@ was written.
 
 <!-- 0.4.4 and 0.4.5 were never published, so 0.5.0 compares against 0.4.3 and
      their links point at the tags, not at (draft) release pages. -->
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.5...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.6...HEAD
+[0.6.6]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.3...v0.6.4
 [0.6.3]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.2...v0.6.3
