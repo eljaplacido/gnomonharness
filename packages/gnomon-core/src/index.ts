@@ -96,6 +96,8 @@ export * from "./proposals.js";
 export { agentReason, decisionContext } from "./agent_context.js";
 export * from "./improve_lint.js";
 export * from "./improve_policy.js";
+export * from "./failure_attribution.js";
+export * from "./incident_trials.js";
 export * from "./improve_mine.js";
 export * from "./improve.js";
 export * from "./memory.js";

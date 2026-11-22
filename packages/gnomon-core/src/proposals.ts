@@ -37,7 +37,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ensureDirIn, identityOf, readExactIn, removeIn, sameIdentity, writeFileIn } from "./root_fs.js";
-import { recomputeManifest, manifestHash, type GnomonConfig } from "./config.js";
+import { recomputeManifest, manifestHash, parseToml, type GnomonConfig } from "./config.js";
 import {
   PROPOSED_DIR,
   requireTrial,
@@ -227,6 +227,17 @@ export const DEFAULT_HARNESS_PATHS: readonly string[] = ["system.md"];
 
 const SEGMENT = /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/;
 
+/**
+ * The one place under `trials/` a proposal may write: a regression trial drafted
+ * from an incident (incident_trials.ts, CONTRACTS section 60). A trial spec is the
+ * judge, so this path is a person's to accept: policy never accepts it
+ * (improve_policy.ts, acceptProposal) and the agent never proposes it (writeProposal).
+ */
+export const INCIDENT_TRIAL_PATH = /^trials\/incident-(?:guard-hold|tamper|verify|overflow)-[0-9a-f]{8}\.toml$/;
+
+/** Whether a proposal touches a trial spec: the judge. */
+export const touchesTrials = (p: Pick<Proposal, "diff">): boolean => p.diff.some((d) => d.path.startsWith("trials/"));
+
 function shapeProblem(p: unknown): string | null {
   if (typeof p !== "string" || !p) return "a path is required";
   if (p.length > PROPOSAL_LIMITS.path || /[\u0000-\u001f\u007f\\]/.test(p)) return `${JSON.stringify(p.slice(0, 40))} is not a path`;
@@ -255,6 +266,7 @@ export function pathProblem(config: GnomonConfig, kind: ProposalKind, path: stri
   if (path.startsWith("skills/") || path.startsWith("memory/") || path.startsWith("extensions/")) {
     return `${path}: skills and memory have their own proposal kinds, and extensions are not changed by a proposal`;
   }
+  if (INCIDENT_TRIAL_PATH.test(path)) return null;
   const allowed = [...DEFAULT_HARNESS_PATHS, ...declaredHarnessPaths(config)];
   if (!allowed.includes(path)) {
     return (
@@ -338,9 +350,33 @@ function currentSha(config: GnomonConfig, path: string): string | null {
   return sha256Hex(readFileSync(file));
 }
 
+/** Why `text` is not a trial spec a run could use (one [[task]] with an id, a prompt and a check), or null. */
+export function trialSpecProblem(text: string): string | null {
+  let doc: Record<string, unknown>;
+  try {
+    doc = parseToml(text);
+  } catch (err) {
+    return `not valid TOML: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  const tasks = Array.isArray(doc.task) ? (doc.task as Array<Record<string, unknown>>) : [];
+  if (tasks.length === 0) return "no [[task]]";
+  for (const t of tasks) {
+    if (typeof t.id !== "string" || !t.id) return "a [[task]] has no id";
+    if (typeof t.prompt !== "string" || !t.prompt.trim()) return `task ${t.id} has no prompt`;
+    if (typeof t.check !== "string" || !t.check.trim()) return `task ${t.id} has no check: pass or fail comes from a declared command`;
+  }
+  return null;
+}
+
 function checkStored(config: GnomonConfig, p: Proposal): void {
   if (!(PROPOSAL_KINDS as readonly string[]).includes(p.kind)) throw new ProposalError(`unknown kind ${String(p.kind)}`);
   checkDiff(config, p.kind, p.diff);
+  for (const d of p.diff) {
+    if (INCIDENT_TRIAL_PATH.test(d.path) && !d.delete) {
+      const bad = trialSpecProblem(d.after);
+      if (bad) throw new ProposalError(`${d.path}: ${bad}`);
+    }
+  }
   if (p.kind === "memory") {
     for (const d of p.diff) {
       const bad = memoryContentProblem(p.id, d.after);
@@ -503,6 +539,9 @@ export function writeProposal(config: GnomonConfig, input: NewProposal, now: Dat
   }
   const evidence = checkEvidence(input.evidence);
   if (evidence?.length) p.evidence = evidence;
+  if (p.source === "agent" && touchesTrials(p)) {
+    throw new ProposalRefusal("A trial spec is the judge a change is measured by: the agent does not propose one. A person writes it, or runs `gnomon improve --incidents`.");
+  }
   checkStored(config, p);
   const pending = listProposals(config, { status: "pending" }).proposals;
   if (pending.length >= PROPOSAL_LIMITS.pending) {
@@ -665,6 +704,9 @@ export function acceptProposal(config: GnomonConfig, given: string, opts: Propos
   refuseOnTamperedRecords(config);
   const p = pendingOrThrow(config, given);
   let grant: AutoAcceptEvidence | null = null;
+  if (policy && touchesTrials(p)) {
+    throw new ProposalRefusal("Not accepted: a trial spec is the judge a change is measured by, so only a person accepts one. [improve] auto_accept never covers a proposal that touches trials/.");
+  }
   if (policy) {
     const v = autoAcceptVerdict(config, p);
     if (!v.ok) throw new ProposalRefusal(`Not accepted: [improve] auto_accept does not cover this proposal: ${v.reasons.join("; ")}.`);

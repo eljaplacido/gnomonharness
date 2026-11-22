@@ -604,3 +604,36 @@ fs.appendFileSync(out, JSON.stringify({ mode, scanned, found, trials: fs.existsS
     expect(read.every((r) => r.mode === "history" && r.found === TOKEN && r.trials === false)).toBe(true);
   }, 60_000);
 });
+
+describe("gnomon eval: failure attribution (CONTRACTS section 60)", () => {
+  it("a scored failure carries its attribution and the report a per-arm histogram; a clean report has neither", async () => {
+    project({ thresholds: "min_pass_gain = 1\nmin_pass_rate = 0.5" });
+    const dull = await evaluate(scripted);
+    const failed = dull.cells.filter((c) => c.valid && c.passed === false);
+    expect(failed.length).toBe(6);
+    // The dull model answered and changed nothing: nothing was delivered.
+    for (const c of failed) expect(c.attribution).toMatchObject({ tag: "no_deliverable", layer: "execution" });
+    shapeHolds(dull.report);
+    expect(dull.report.attribution).toEqual({
+      base: { failed: 6, by_tag: { no_deliverable: 6 }, by_layer: { execution: 6 } },
+      candidate: null,
+    });
+    // A paired run: the candidate arm has its own histogram.
+    const paired = await evaluate(scripted, { against: "profile:smart" });
+    expect(paired.report.attribution?.base.failed).toBe(6);
+    expect(paired.report.attribution?.candidate?.failed ?? 0).toBe(0);
+    expect(paired.cells.filter((c) => c.arm === "candidate").every((c) => c.passed === true && c.attribution === undefined)).toBe(true);
+
+    // Nothing failed: no attribution anywhere, so a clean report is what it was.
+    const original = globalThis.fetch;
+    globalThis.fetch = scripted;
+    try {
+      const smart = await runEval(loadConfig(root, "smart"), { runCell });
+      expect(smart.report.endpoints.pass.base.passes).toBe(smart.report.endpoints.pass.base.n);
+      expect("attribution" in smart.report).toBe(false);
+      expect(smart.cells.some((c) => c.attribution !== undefined)).toBe(false);
+    } finally {
+      globalThis.fetch = original;
+    }
+  }, 120_000);
+});

@@ -26,6 +26,24 @@
 
 ## [Unreleased]
 
+- **Failure attribution (CONTRACTS section 60.1).** A failed turn or cell is given one primary
+  cause and its harness layer (ETCLOVG), deterministically, from signals gnomon already records
+  (stop reason, exit code, tool log, counters, verify, trail records); no model call. `gnomon eval`
+  cells carry `attribution` and the report an optional per-arm `attribution` histogram;
+  `gnomon audit attribute [<trail>] [--last n] [--json]` summarises verified trails;
+  `gnomon improve` mines the attributed cause into a note (Tools, Verification) or a note with a
+  `[context]` suggestion in the rationale only (Context; config stays unreachable). Precedence is
+  pinned by `conformance/failure_attribution.json`. On 72 hand-labelled failed cells from three
+  internal benchmark ledgers (gnomon cells only) it agreed on 70 (63 before one rule fix; stratified, so agreement, not
+  prevalence). Nothing in a session changes.
+- **Regression trials from incidents (CONTRACTS section 60.2).** `gnomon improve --incidents [--run]`
+  drafts a trial spec per kind of incident in the verified trails (a guard hold, a caught tamper,
+  a check that failed then passed, an overflow survived) as a `harness` proposal for
+  `trials/incident-<kind>-<hash>.toml`, with the trail and seq as evidence. Dry by default,
+  deterministic, nothing copied from a record but the incident kind. A trial spec is the judge, so
+  only a person accepts one: `[improve] auto_accept` never covers `trials/` and an agent-sourced
+  proposal for it is refused.
+
 ## [0.6.6] — 2026-11-22
 
 The daily-runtime release, audited against v0.6.5 before it was cut. With no new

@@ -21,6 +21,8 @@ import {
   modelTimeoutMs,
   routeRole,
   runImprove,
+  draftIncidentTrials,
+  type IncidentReport,
   splitThinking,
   loadLoops,
   writeFileIn,
@@ -118,6 +120,19 @@ export function formatImprove(r: ImproveReport): string[] {
   return out;
 }
 
+export function formatIncidents(r: IncidentReport): string[] {
+  const out: string[] = [];
+  out.push(r.mode === "dry-run" ? "gnomon improve --incidents (dry run): nothing is written and no model is called." : "gnomon improve --incidents (run)");
+  out.push(`Read ${r.trails} trail(s), ${r.records} record(s) from verified trails: ${r.incidents.length} kind(s) of incident.`);
+  for (const n of r.notes) out.push(`  note: ${n}`);
+  for (const i of r.incidents) {
+    out.push(`  ${i.kind.padEnd(19)} ${i.key.slice(0, 16).padEnd(16)} ${String(i.count).padStart(3)}x in ${String(i.sessions).padStart(2)} session(s)  ${i.action === "propose" ? (r.mode === "dry-run" ? `would propose ${i.path}` : `proposed ${i.path}`) : `skipped: ${i.reason}`}`);
+  }
+  if (r.mode === "dry-run") out.push("Run `gnomon improve --incidents --run` to write them as proposals. A trial spec is the judge: only a person accepts one (gnomon proposals accept), never policy.");
+  else if (r.proposals.length > 0) out.push(`Wrote ${r.proposals.length} proposal(s). Read them with \`gnomon proposals\`; nothing changed under .gnomon/.`);
+  return out;
+}
+
 /** Exit 0 done (including a dry run and a run that found nothing), 1 usage, 3 refused, 10 could not run. */
 export async function runImproveCmd(config: GnomonConfig, a: ImproveCliArgs, bind: ImproveBindings = {}, out: (s: string) => void = console.log, err: (s: string) => void = console.error): Promise<number> {
   const fail = (msg: string, code: number): number => {
@@ -127,9 +142,28 @@ export async function runImproveCmd(config: GnomonConfig, a: ImproveCliArgs, bin
   };
   const f = a.flags;
   const flag = (k: string): string | undefined => (typeof f[k] === "string" && f[k] !== "true" ? f[k] : undefined);
-  const known = new Set(["run", "dry-run", "k", "budget-usd", "role", "json", "schedule", "scheduled", "profile", "dir", "yes-spend", "trust", "yes", "max-requests", "allow-host-probes"]);
+  const known = new Set(["run", "dry-run", "k", "budget-usd", "role", "json", "schedule", "scheduled", "profile", "dir", "yes-spend", "trust", "yes", "max-requests", "allow-host-probes", "incidents"]);
   const stray = Object.keys(f).filter((k) => !known.has(k));
-  if (stray.length > 0) return fail(`unknown option --${stray[0]}: improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--max-requests N] [--allow-host-probes] [--schedule nightly|weekly] [--json]`, IMPROVE_EXIT.usage);
+  if (stray.length > 0) return fail(`unknown option --${stray[0]}: improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--max-requests N] [--allow-host-probes] [--schedule nightly|weekly] [--incidents] [--json]`, IMPROVE_EXIT.usage);
+
+  // Regression trials from incidents: deterministic, no model, no probe. Dry unless --run.
+  if (f.incidents !== undefined) {
+    if (f.run !== undefined && f["dry-run"] !== undefined) return fail("--run and --dry-run are opposites; pass one", IMPROVE_EXIT.usage);
+    const run = f.run !== undefined;
+    if (run) {
+      const why = agentReason();
+      if (why) return fail(`not run: ${why}. gnomon improve --incidents --run writes proposals for a trial spec, which is the judge: a person starts it.`, IMPROVE_EXIT.refused);
+    }
+    let rep: IncidentReport;
+    try {
+      rep = draftIncidentTrials(config, { run });
+    } catch (e) {
+      return fail(`could not run: ${e instanceof Error ? e.message : String(e)}`, IMPROVE_EXIT.couldNotRun);
+    }
+    if (a.json) out(JSON.stringify(rep, null, 2));
+    else for (const l of formatIncidents(rep)) out(l);
+    return IMPROVE_EXIT.ok;
+  }
 
   if (f.schedule !== undefined) {
     const every = EVERY[flag("schedule") ?? ""];

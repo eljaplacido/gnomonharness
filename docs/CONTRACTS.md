@@ -5359,6 +5359,9 @@ and dashes, at most 60). `harness`: `system.md`, and any file the surface itself
 lists under `[proposals] harness_paths` in `policy.toml`; never `skills/`,
 `memory/` or `extensions/`, and never policy, roles, tools or config unless a
 person listed them. No absolute path, no `..`, no hidden or non-plain segment.
+One exception names `trials/`: a regression trial drafted from an incident,
+`trials/incident-<stem>-<hash8>.toml` (60.2). It is a person's to accept: policy never
+accepts it and the agent never proposes it.
 
 **Accept** (`gnomon proposals accept <id>`): refused inside an agent session and
 without a person present, exactly as a skill decision is (§11: `refused_by_gate`,
@@ -5597,7 +5600,9 @@ exit 3 where a CLI reports one): the proposal's kind is listed (and `harness` on
 if `harness` itself is); each path is `skills/<id>.md`, `memory/<id>.md` or, for
 a harness edit, `system.md`, never a deletion and never `policy.toml`,
 `roles.toml`, `tools.toml`, `config.toml`, `trials/`, `loops/`, `extensions/` or
-`profiles/` even if `[proposals] harness_paths` lists them; `improve.lint` is
+`profiles/` even if `[proposals] harness_paths` lists them (this includes the
+incident trials of 60.2: `acceptProposal` refuses a policy decision on any
+proposal that touches `trials/`, whatever the lint and the probe say); `improve.lint` is
 clean and a fresh lint is clean; the probe is `probed`; the cited report file
 exists at `.gnomon-trials/_eval/<run>/report.json` (`<run>` is not `.` or `..`), its bytes hash to
 `report_sha256`, a hash-chained `eval_run` record under the audit directory carries that report
@@ -5647,3 +5652,154 @@ scripted model, k, regression, composition, the budget, the policy's every
 refusal, retirement, byte-identity of a normal run with an `[improve]` table) and
 `packages/gnomon-cli/src/improve_cmd.test.ts` (flags, refusals, the schedule file,
 output, the dashboard view).
+
+## 60. Failure attribution and regression trials from incidents — `gnomon audit attribute`, `cells[].attribution`, `gnomon improve --incidents`, `gnomon.attribution/1`, `gnomon.incident_trials/1`, `v: 1`
+
+Two read-side features that close the loop between a failure and the next build.
+Neither changes a session: nothing in the loop calls them, no audit kind is added
+(the published `audit_kind` enumeration is unchanged), and a session's record and
+trail hold no attribution (`attribution_inert.test.ts`).
+
+### 60.1 Layer-tagged failure attribution
+
+A failed turn or cell is given ONE primary cause, tagged with the harness layer it
+belongs to, and the other causes it also showed. Deterministic and model-free:
+`failure_attribution.ts` reads the turn's own fields (`stop_reason`, `bucket`,
+`code`, `stop_detail`, `tool_log`, `verify`, `counters`) and, when there is a
+trail, its `model_call`, `verify` and `record_tamper` records. It reads no prompt or
+response text, so it works on `record = "metadata"` trails.
+
+**Layers** (ETCLOVG): `execution`, `tools`, `context`, `lifecycle`,
+`observability`, `verification`, `governance`. A tag with no recorded cause is
+`unknown`, whose layer is `null`. (`observability` is in the enumeration for the
+published layer set; no tag is assigned to it yet.)
+
+**Precedence.** The first matching rule wins; every other match is `secondary`, in
+this order. An advisory match (a weaker signal of the same tag) is only ever
+secondary. The catch-all `wrong_result` is never secondary.
+
+| # | tag | layer | primary when |
+|---|---|---|---|
+| 1 | `record_tamper` | governance | `stop_reason` tamper, or a `record_tamper` record |
+| 2 | `launch_failure` | lifecycle | `stop_reason` apparatus |
+| 3 | `context_overflow` | context | `endpoint_error` with code 13 (the context could not be fitted), or the last `model_call` code 13 |
+| 4 | `endpoint_error` | execution | `endpoint_error` with another code, or the last `model_call` code 10, 11, 12 |
+| 5 | `budget_exhausted` | lifecycle | `stop_reason` deadline, step_wall or killed, or a tool call cut by the deadline |
+| 6 | `tool_call_malformed` | tools | `stop_reason` malformed; `truncated` with `stop_detail.repeats` above 0 (tool calls cut at the output limit); 3 malformed calls |
+| 7 | `output_truncated` | context | `stop_reason` truncated without repeats |
+| 8 | `loop_stall` | execution | `stop_reason` stall (any stall-signal counter is advisory) |
+| 9 | `policy_refusal` | governance | a refused write or edit outside the OS temp directory, or 2 calls refused outside the root or sandbox (any other refusal is advisory) |
+| 10 | `edit_failed` | tools | the last write or edit failed, or 3 failed |
+| 11 | `tool_timeout` | tools | the last acting call timed out, or 5 timeouts |
+| 12 | `tool_error` | tools | 3 rejected `compute`/`glob`/`grep`/`read` calls |
+| 13 | `verify_misled` | verification | the declared `[verify]` check passed and the external check failed |
+| 14 | `verify_failed` | verification | the declared `[verify]` check failed at the end |
+| 15 | `wrong_thing_verified` | verification | a failing command, then an edit of a test or check file, then a passing command, with no other file changed in between |
+| 16 | `context_loss` | context | `counters.model_calls.trims.overflow` above 0 (the provider refused a request as too long and gnomon dropped half the conversation) |
+| 17 | `no_deliverable` | execution | finished with no write, no edit and no change to the tree |
+| 18 | `unverified_finish` | verification | finished and no command ran after the last write to a non-document file |
+| 19 | `wrong_result` | execution | finished after a change and the check still failed (the catch-all) |
+| 20 | `unknown` | none | nothing recorded says why |
+
+A tag names where to look, not what a model did. `wrong_result` is where the harness
+cannot tell a wrong solution from a right one: it says only that the run finished,
+changed something, ran commands, and still failed the check. It is the honest floor,
+not a verdict on the model.
+
+**What is a failure.** With the caller's check result: a failed check is a failure, a
+passed one never is (`attributeFailure` returns null). With no check result (a
+trail), a turn shows a failure signal when its `stop_reason` is other than
+`answered` or `empty`, its `bucket` is other than `result`, or its last `verify`
+failed. A trail does not know whether the task's own check passed, so "no failure
+signal" is not "succeeded".
+
+**Where it appears.**
+- `gnomon eval`: each scored (`valid`) gnomon-arm cell with `passed === false` gets
+  `attribution: { tag, layer, rank, signals, secondary }` in `cells.jsonl`; the report
+  gets the optional key `attribution: { base, candidate }`, each a histogram
+  `{ failed, by_tag, by_layer }` in contract order. A report with no attributed cell
+  has no `attribution` key and is what it was (`conformance/eval_report.json`).
+  Command arms and apparatus failures have none.
+- `gnomon audit attribute [<trail>...] [--last <n>] [--json]`: for each verified
+  session trail (default the newest 20; guard, check, trial and eval trails are not
+  sessions), the primary cause or "no failure signal recorded"; a histogram; a trail
+  whose chain does not verify is listed in `excluded`, left out, and makes the exit 2.
+  Exit 0, 2, 10 as `audit metrics`. Schema `gnomon.attribution/1`.
+- `gnomon improve` mining (59): a failure's attributed cause chooses its candidate.
+  The stop-reason classes that mined before (stall, step limit, malformed,
+  truncated, failed check) are unchanged, and one failure is mined into one class.
+  New classes, each a note for `system.md` whose candidate records its `layer`:
+  `edit_failed`, `tool_timeout`, `tool_error` (Tools), `wrong_thing_verified`,
+  `unverified_finish` (Verification), `context_overflow`, `context_loss` (Context).
+  A Context cause also carries a suggestion in the proposal's rationale, for a person
+  to read: that `[context]` in config.toml controls when the context is trimmed.
+  The suggestion is rationale text only. `[context]` is config, and no proposal
+  reaches config: the proposal's diff is `system.md` and nothing else.
+
+**Validation (reported, not claimed).** On a set of 72 failed cells from three
+internal benchmark ledgers (gnomon cells only), each read and labelled by a person
+from its record, stderr and verifier output with written criteria before the
+classifier ran, the classifier first agreed on 63 of 72; after one rule was fixed
+(a refused write into the OS temp directory is scratch, not a blocked deliverable) it
+agreed on 70 of 72. The set is stratified toward rare causes, so the figures are
+agreement, not prevalence, and the fix was made on the set it is measured on. The two
+disagreements are cells that survived a context overflow by dropping half the
+conversation: the label said `wrong_result`, the rule says `context_loss`. Tags with
+no real cell in the set (`edit_failed`, `tool_timeout`, `tool_error`,
+`unverified_finish`, `record_tamper`, `launch_failure`) are pinned by synthetic cases
+only. The raw ledgers are not in this repository.
+
+**Fixture**: `conformance/failure_attribution.json` (the precedence, the thresholds and
+a synthetic case per tag, asserted against the code by
+`packages/gnomon-core/src/failure_attribution.test.ts`).
+
+### 60.2 Regression trials from incidents
+
+`gnomon improve --incidents [--run] [--json]` reads the verified audit trails for
+incidents and drafts, per kind, a trial spec as a PROPOSAL (`incident_trials.ts`).
+Deterministic: no model is called and nothing is probed. A dry run (the default)
+prints what it would draft and writes nothing. `--run` writes the proposals, and
+refuses inside an agent session: it is a person's.
+
+| incident | the record it is read from | the drafted task |
+|---|---|---|
+| `guard_hold` | a `tool_call` with `bucket: "refusal"` and `governance.decision: "deny"`, or a `guard` record with `decision: "deny"`; keyed by the rule | a generic probe of the same boundary for `outside_root`, `sandbox`, `network`, `surface`; passes while the boundary holds. Any other rule is listed as skipped |
+| `tamper` | a `record_tamper` record | append to a record file; passes when the run leaves a `record_tamper` event |
+| `verify_recovered` | a `verify` record with `ok: false`, later one with `ok: true`, same declared command | run the project's declared `[verify]` command; the check is that command |
+| `overflow_recovered` | a `turn` with `counters.model_calls.trims.overflow` above 0 and no `endpoint_error` stop | count the lines of a file too large to read whole |
+
+**A proposal, and who accepts it.** Each draft is a `harness` proposal, `source:
+"mine"`, with one diff entry for `trials/incident-<stem>-<hash8>.toml` (`stem`:
+`guard-hold`, `tamper`, `verify`, `overflow`) and the incident's `{trail, seq}`
+pointers as evidence. That is the only path under `trials/` a proposal may name
+(`pathProblem`), and `before_sha256` is null: the file must not exist. A trial spec
+is the judge a change is measured by (23, orthogonality), so:
+- **only a person accepts it.** `[improve] auto_accept` never covers a proposal that
+  touches `trials/`, whatever kinds it lists: `autoAcceptVerdict` refuses the path
+  and `acceptProposal` refuses a `policy:improve.auto_accept` decision outright;
+- **the agent never proposes it.** `writeProposal` refuses a `source: "agent"`
+  proposal that touches `trials/`;
+- a draft that is not a usable spec (no `[[task]]`, a task without a prompt or a
+  check) is refused at write and at accept.
+
+**What it copies.** Records are metadata-only by default, so a draft is built from
+the incident's kind and its pointers. It copies from a record only the incident's
+kind, the rule's name and a declared `[verify]` command (and that only when it is
+plain words, with no shell control). It copies no path, no command line, no prompt
+and no file content. A task statement is a generic probe written in this module.
+
+**Limits, said plainly.** The `verify_recovered` draft cannot recreate the failing
+state (the record holds no file contents): as drafted it passes whenever the check
+passes, and its head says so and asks the person to add a `setup`. The `tamper` draft
+is not exercised end to end here. Re-running a drafted spec on a later build is
+`gnomon eval --spec <name>`; the round trip "fails on a build that regresses, passes
+on one that holds" is checked for the probe tasks by running each task's `setup` and
+`check` with and without the forbidden effect, not by a model.
+
+Drafts are idempotent (a draft already in the surface or already pending is skipped)
+and capped at 6 per run. A trail whose hash chain does not verify is left out and
+named in `notes`.
+
+**Fixture**: `conformance/incident_trials.json` (and the `harness_incident_trial`
+path in `conformance/proposals.json`); `packages/gnomon-core/src/incident_trials.test.ts`
+and `packages/gnomon-cli/src/attribute.test.ts`.

@@ -1138,7 +1138,7 @@ nothing; `gnomon --help` prints all of it.
 | `gnomon acp [--role R] [--profile N]` | Serves the Agent Client Protocol on stdin/stdout for an editor. Same surface, roles, approvals and audit as `prompt`. | Zed, JetBrains IDEs |
 | `gnomon trust [list \| grant \| revoke]` | What this project's `.gnomon/` grants beyond the defaults, and whether this machine trusts it | A repository you did not write |
 | `gnomon proposals [list \| show ID \| accept ID \| reject ID [--note N]] [--json]` | The pending proposals to change `.gnomon/` (a skill, a memory entry, an edit to `system.md`): `show` prints the exact diff, `accept` applies it (the surface hash moves; from the next session) and refuses if the files changed since, `reject` changes nothing. A person's decision: it refuses inside an agent session and without a terminal (exit 3). See 7.10 | Letting the harness learn without it editing itself |
-| `gnomon improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--max-requests N] [--allow-host-probes] [--schedule nightly\|weekly] [--json]` | Mines the audit trails for what keeps recurring (a refused rule, an unused skill, a build command, a failure class), drafts, lints and probes each against the current surface on `.gnomon/trials/`, composes the ones that helped, and writes proposals. A dry run by default; nothing reaches `.gnomon/` until you accept, or a policy you declared (`[improve] auto_accept`) does. See 7.11 | Letting the harness find its own improvements, measured, under your rules |
+| `gnomon improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--max-requests N] [--allow-host-probes] [--schedule nightly\|weekly] [--incidents] [--json]` | Mines the audit trails for what keeps recurring (a refused rule, an unused skill, a build command, a failure class), drafts, lints and probes each against the current surface on `.gnomon/trials/`, composes the ones that helped, and writes proposals. A dry run by default; nothing reaches `.gnomon/` until you accept, or a policy you declared (`[improve] auto_accept`) does. See 7.11 | Letting the harness find its own improvements, measured, under your rules |
 | `gnomon memory [list \| show NAME] [--json]` | The notes a person accepted into `.gnomon/memory/` | Seeing what the harness remembers about this repository |
 | `gnomon inbox [list \| show ID \| add --title T \| ack ID \| resolve ID \| mcp] [--json]` | Work items the dashboard's **Flag for fix** (or you) wrote to `.gnomon-inbox/` for a harness to read as information, never as an instruction. `gnomon guard install claude-code --write` (and `install cursor --write`, via Cursor's `sessionStart` hook) hands the open ones to the harness at session start; `gnomon inbox mcp` serves them to Cursor and Claude Code (list, get, acknowledge, resolve; no add) | Telling a harness what to fix |
 | `gnomon audit [show \| verify]` | Lists trails; checks every chain, seal and signature anchor. `verify` exits 1 on a break or when there is nothing to verify. | Review, release gates |
@@ -2047,6 +2047,46 @@ run (the report records it). If a probe cell's role can reach a billed endpoint 
 declared, it also refuses unless you pass `--max-requests <n>`, a ceiling on model requests. Run
 inside an agent session, even `--scheduled`, it refuses; a cron `gnomon loop run improve` does not.
 Contract: [CONTRACTS.md §59](CONTRACTS.md).
+
+### 7.12 Why a run failed, and a regression test for what you learned
+
+A failed benchmark cell says it failed, not which part of the harness to look at.
+Two read-side commands give you that, and neither calls a model or changes a session.
+
+```bash
+gnomon audit attribute                 # the newest 20 session trails: one primary cause per failure
+gnomon audit attribute <trail> --json  # one trail
+gnomon eval --against profile:smart    # a failed cell carries its cause; the report a per-arm histogram
+gnomon improve --incidents             # dry run: the regression trials it would draft from incidents
+gnomon improve --incidents --run       # write them as proposals
+```
+
+Each cause is a tag and one of the ETCLOVG layers (execution, tools, context,
+lifecycle, verification, governance), for example `tools / tool_call_malformed` (a tool
+call cut off at the output limit), `context / context_overflow` (the context could not be
+fitted), `lifecycle / budget_exhausted`, `governance / policy_refusal` (a write to the
+location the task needed was refused), `verification / verify_misled` (your `[verify]`
+check passed and the real check failed). The first rule that matches is primary and the
+others are listed; the order is in [CONTRACTS.md §60](CONTRACTS.md). `wrong_result` is the
+floor: the run finished, changed something and ran commands, and the check still failed.
+It says the harness cannot tell, not that the model was wrong. A trail does not know the
+task's own check, so a trail with no failure signal is not a success.
+
+`gnomon improve` uses the cause to choose what to propose. A Tools or Verification cause
+becomes a note for `system.md` (an edit that did not match: read the file again before
+editing). A Context cause becomes the same kind of note, and the proposal's rationale adds a
+suggestion for you about `[context]` in `config.toml`; improve never edits config.
+
+`gnomon improve --incidents` drafts a trial spec per kind of incident in the trails: a boundary
+that held (a refusal by the sandbox, the network, the surface), a tamper that was caught, a
+declared check that failed and then passed, an overflow that was survived. Each is a proposal for
+`trials/incident-<kind>-<hash>.toml`. A trial spec decides what counts as better, so **only you
+accept one**: policy `auto_accept` never covers it and the agent cannot propose it. A draft is
+built from the kind of incident and the trail and sequence number it came from, never from file
+contents; a task is a generic probe of the same boundary. A draft from a failed check cannot
+recreate the failing state, so it says so in its head and asks you to add a `setup`. After you
+accept one, run it on later builds with `gnomon eval --spec <name>`.
+Contract: [CONTRACTS.md §60](CONTRACTS.md).
 
 ---
 

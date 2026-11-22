@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 5074 TypeScript tests (4207 core, 842 cli, 18
-> natives, 7 tui) and 120 Rust tests — **5194 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 5148 TypeScript tests (4275 core, 848 cli, 18
+> natives, 7 tui) and 120 Rust tests — **5268 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -3599,7 +3599,7 @@ target; never the text) when the surface keeps a trail. Contract:
 | `gnomon skill trial <id> [--spec <name>] [--yes] [--yes-spend] [--trust] [--json]` | Measure a proposal against its absence on `.gnomon/trials/<name>.toml`. Exit 0 meets the declared thresholds, 2 does not, 10 no answer. Never accepts. |
 | `gnomon key [set\|list\|unset] <endpoint\|VAR>` | Store an API key for an endpoint that declares one. |
 | `gnomon endpoint [add\|test\|list]` | Declare an endpoint end to end — provider, key, model, roles — and prove it runs one token before writing anything. Presets: `opencode-go`, `opencode-zen`, `openrouter`, `ollama`. |
-| `gnomon audit [show\|verify\|anchor\|tamper\|metrics\|resolve <trail>:<seq> --reason <text>]` | Audit trails. `metrics` counts how the agent worked from the verified session trails (see [Process metrics](#process-metrics--gnomon-audit-metrics)). `anchor` delivers queued heads to the `[audit.anchor]` witness now. `tamper` lists `record_tamper` events and exits 3 while any is unresolved; `resolve` is a person's recorded acknowledgement of one. |
+| `gnomon audit [show\|verify\|anchor\|tamper\|metrics\|attribute\|resolve <trail>:<seq> --reason <text>]` | Audit trails. `metrics` counts how the agent worked from the verified session trails (see [Process metrics](#process-metrics--gnomon-audit-metrics)). `attribute` names why a session failed, by harness layer (CONTRACTS section 60). `anchor` delivers queued heads to the `[audit.anchor]` witness now. `tamper` lists `record_tamper` events and exits 3 while any is unresolved; `resolve` is a person's recorded acknowledgement of one. |
 | `gnomon check --base <rev> [--head <rev>] [--role <r> \| --agent <name>] [--transcript <file> --format <fmt>] [--json]` | Judge a change another harness made by this surface's rules as of `<rev>`. Exit 0 held, 2 failed, 10 no verdict. See [Governing other harnesses](#governing-other-harnesses). |
 | `gnomon guard [--from claude-code\|opencode\|cursor] [--tool <kind> --input <json>] [--role <r> \| --agent <name>]` | Decide one tool call another harness is about to make, by the committed rules: allow (0), deny (2), ask (3), no decision (10). `gnomon guard install claude-code\|opencode\|cursor [--write [--local]]` installs the hook (`--local` keeps it, which names this machine's gnomon by absolute path, out of git); `gnomon guard status` reports one missing, changed or switched off (0 none, 2 a finding), or `outdated` (an older gnomon's hook, a warning). See [Before the call](#before-the-call-gnomon-guard). |
 | `gnomon dashboard [--port <n>] [--no-open] [--dir <path>]` | A command center in the browser, on 127.0.0.1 only: projects, sessions as a timeline, what the policy refused, audit-chain verification, contracts, token measurements; setup, check, trust and endpoint test as buttons that run those commands, asking first before anything that writes, downloads or spends. Alias: `ui`. See [The command center](#the-command-center--gnomon-dashboard). |

@@ -43,6 +43,7 @@ import { harnessBuild } from "./build.js";
 import { appendFileIn, writeFileIn } from "./root_fs.js";
 import type { TrustOutcome } from "./trust.js";
 import type { TaskRecord } from "./prompt_loop.js";
+import { attributeFailure, attributionHistogram, type Attribution, type AttributionHistogram } from "./failure_attribution.js";
 import {
   loadTrialSpec,
   mcnemarExact,
@@ -261,6 +262,8 @@ export interface EvalCell {
   requests: number;
   tokens_out?: number;
   duration_ms: number;
+  /** Why a scored failure failed (failure_attribution.ts, CONTRACTS section 60). Only a gnomon arm's cell with passed === false has one. */
+  attribution?: Attribution;
 }
 
 interface Sign {
@@ -306,6 +309,8 @@ export interface EvalReport {
   status: TrialStatus;
   meets_thresholds: TrialVerdict;
   reasons: string[];
+  /** Per arm, the failed cells by tag and ETCLOVG layer. Absent when no failed cell was attributed, so a clean report is unchanged. */
+  attribution?: { base: AttributionHistogram; candidate: AttributionHistogram | null };
 }
 
 /**
@@ -644,6 +649,10 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
                 pinned[arm] ??= { model: rec.model, endpoint: rec.endpoint };
                 cell.valid = true;
                 cell.passed = ran.code === 0;
+                if (!cell.passed) {
+                  const a = attributeFailure({ turn: rec as unknown as Parameters<typeof attributeFailure>[0]["turn"], check: { passed: false } });
+                  if (a) cell.attribution = a;
+                }
               }
             }
           } catch (err) {
@@ -702,6 +711,10 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
       trust: { base: baseTrust?.decision ?? null, candidate: against ? (candTrust?.decision ?? null) : null },
       leftovers,
     };
+    if (cells.some((c) => c.attribution)) {
+      const of = (arm: EvalArmName) => attributionHistogram(cells.filter((c) => c.arm === arm).map((c) => c.attribution));
+      report.attribution = { base: of("base"), candidate: against ? of("candidate") : null };
+    }
     const ordered = orderReport(report);
     const final = trialFreeze(ordered) as EvalReport;
     const frozenCells = trialFreeze(cells) as EvalCell[];
@@ -730,10 +743,10 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
 /** The published key order, so two runs' reports diff line by line. */
 const REPORT_ORDER: Array<keyof EvalReport> = [
   "schema", "mode", "spec", "harness", "role", "arms", "pairs", "cells", "endpoints",
-  "mde", "thresholds", "budget", "trust", "leftovers", "status", "meets_thresholds", "reasons",
+  "mde", "thresholds", "budget", "trust", "leftovers", "status", "meets_thresholds", "reasons", "attribution",
 ];
 function orderReport(r: EvalReport): EvalReport {
-  return Object.fromEntries(REPORT_ORDER.map((k) => [k, r[k]])) as unknown as EvalReport;
+  return Object.fromEntries(REPORT_ORDER.filter((k) => r[k] !== undefined).map((k) => [k, r[k]])) as unknown as EvalReport;
 }
 
 type Summary = Omit<EvalReport, "harness" | "role" | "arms" | "trust" | "leftovers">;

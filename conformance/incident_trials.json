@@ -1,0 +1,38 @@
+{
+  "contract": "regression trials from incidents — docs/CONTRACTS.md section 60",
+  "_comment": [
+    "`gnomon improve --incidents` drafts a trial spec per kind of incident found in the verified audit trails, as a `harness` proposal for trials/incident-<stem>-<hash8>.toml.",
+    "A trial spec is the judge a change is measured by, so only a person accepts one: [improve] auto_accept never covers a proposal that touches trials/, and the agent never proposes one.",
+    "packages/gnomon-core/src/incident_trials.test.ts asserts this file against the code."
+  ],
+  "schema": "gnomon.incident_trials/1",
+  "flag": "gnomon improve --incidents [--run] [--json]",
+  "modes": ["dry-run", "run"],
+  "default_mode": "dry-run",
+  "model_calls": 0,
+  "incident_kinds": ["guard_hold", "tamper", "verify_recovered", "overflow_recovered"],
+  "path": "^trials/incident-(?:guard-hold|tamper|verify|overflow)-[0-9a-f]{8}\\.toml$",
+  "stems": { "guard_hold": "guard-hold", "tamper": "tamper", "verify_recovered": "verify", "overflow_recovered": "overflow" },
+  "proposal": { "kind": "harness", "source": "mine", "diff_files": 1, "before_sha256": null, "evidence": "trail and seq of the first records of the incident, at most 5" },
+  "signals": {
+    "guard_hold": "a tool_call record with bucket refusal and governance.decision deny, or a guard record with decision deny; keyed by the rule",
+    "tamper": "a record_tamper record",
+    "verify_recovered": "a verify record with ok false followed, in the same trail, by one with ok true for the same declared command",
+    "overflow_recovered": "a turn record with counters.model_calls.trims.overflow > 0 and a stop_reason other than endpoint_error"
+  },
+  "probe_rules": ["outside_root", "sandbox", "network", "surface"],
+  "skipped": "a guard rule with no probe (for example secret_path), a declared command with characters a check line should not repeat, a draft already in the surface or already pending, and any beyond the cap",
+  "max_drafts_per_run": 6,
+  "trails": "only a trail whose hash chain verifies is read; a broken one is named in notes and left out",
+  "copies": "nothing from a record but the incident's kind, its rule name and a declared [verify] command: no path, no command line, no prompt, no file content",
+  "who_accepts": { "person": true, "policy": false, "agent_proposes": false },
+  "refusals": {
+    "policy_accept": "a trial spec is the judge a change is measured by, so only a person accepts one",
+    "agent_propose": "the agent does not propose one",
+    "run_in_agent_session": "refused: --run is a person's"
+  },
+  "exit_codes": { "done": 0, "usage": 1, "refused": 3, "could_not_run": 10 },
+  "report_keys": ["schema", "mode", "trails", "records", "incidents", "proposals", "notes"],
+  "incident_keys": { "required": ["kind", "key", "id", "path", "title", "count", "sessions", "evidence", "action"], "optional": ["reason", "spec"] },
+  "spec": "[trial] attempts 2, check_timeout_seconds 60; [budget] max_requests 40; one [[task]] with id, prompt, optional setup and a check; a comment head naming the incident kind, its evidence and what it does not check"
+}
