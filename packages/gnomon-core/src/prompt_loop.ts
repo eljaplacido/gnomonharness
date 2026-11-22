@@ -81,7 +81,7 @@ import {
 } from "./config.js";
 import { thinkCapNote, thinkCapRecord, resolveThinkCap, type ThinkCapCounters } from "./think_cap.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence,
-  safeForPrompt, traceLines, isEmptyReasoning, terminalWidth, summaryResult, fitRow,
+  safeForPrompt, traceLines, isToolTagStub, isEmptyReasoning, terminalWidth, summaryResult, fitRow,
 } from "./render.js";
 export { isLocalEndpoint } from "./config.js";
 import {
@@ -9301,7 +9301,8 @@ async function agenticTurn(
     if (showTrace) {
       const columns = terminalWidth();
       if (reasoning) sayReasoning(reasoning, uses);
-      const rationale = split.answer.trim();
+      // A tool-call parser's leaked tag start (`<t`) beside a real call is not prose.
+      const rationale = isToolTagStub(split.answer.trim()) ? "" : split.answer.trim();
       if (rationale && rationale !== lastRationale) {
         keepThink(state, "prose", rationale);
         traceLines(rationale, deps.ui.think === "hide" ? "collapse" : deps.ui.think, columns, {

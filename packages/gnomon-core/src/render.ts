@@ -854,6 +854,16 @@ export interface TraceOptions {
 }
 
 /**
+ * The leading characters of a tool-call tag and nothing else (`<`, `<t`,
+ * `<tool_ca`). A server's tool-call parser can leak the start of the tag it
+ * swallowed into the content beside a real call (nemotron-3-super via
+ * OpenRouter sends `<t`); that is not prose and is not shown as it.
+ */
+export function isToolTagStub(text: string): boolean {
+  return text.length > 0 && text.startsWith("<") && ["<tool_call>", "<function=", "<function_call>"].some((t) => t.startsWith(text));
+}
+
+/**
  * A trace note and the longest of its "how to see more" tails that still fits
  * `room`: a note wider than the row wraps in the terminal, and a wrapped row
  * is one the spinner's erase-line cannot see. With no tail that fits, the

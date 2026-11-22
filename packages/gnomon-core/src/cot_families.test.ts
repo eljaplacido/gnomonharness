@@ -218,6 +218,11 @@ const FAMILIES: Family[] = [
     extra: true,
   },
   {
+    name: "leaked tool-tag stub beside the call (nemotron via vLLM)",
+    step: toolStep([...pieces(RSN1, "reasoning"), { content: "<t" }]),
+    final: [...pieces(RSN2, "reasoning"), ...pieces(ANS)],
+  },
+  {
     name: "content-only (reasoning off)",
     step: toolStep(pieces(PROSE)),
     final: pieces(ANS),
@@ -384,6 +389,7 @@ function check(fam: Family, r: Run, cot: string, think: string, columns: number,
   if (cot === "brief") expect(r.text, `${where}: no brief row\n${r.text}`).toMatch(/•/);
   if (cot === "think" || cot === "off") expect(r.text, `${where}: tool row at ${cot}`).not.toMatch(/⚙ glob/);
   if (nested) for (const row of r.rows) if (row) expect(row, `${where}: no gutter`).toMatch(/┊/);
+  if (fam.name.startsWith("leaked tool-tag")) expect(r.text, `${where}: stub shown as prose`).not.toMatch(/● <t/);
   if (fam.prose && cot === "full") expect(r.text, `${where}: prose lost`).toContain("prose-step");
 }
 
