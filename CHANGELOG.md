@@ -26,6 +26,14 @@
 
 ## [Unreleased]
 
+### Fixed — a refusal outside the project root says how to grant a second root
+
+- The `outside_root` refusal (shell) and the `sandbox` refusal (`read`, `write`, `edit`, `glob`, `grep`) now carry the
+  same operator instruction: `[sandbox] extra_roots = ["../other-repo"]` in `.gnomon/policy.toml` plus a restart
+  (a running session cannot loosen its own sandbox), or `/sandbox off` for this session only; without a grant the safest
+  route is running gnomon from the other repository or leaving a patch inside this project. The agent is told not to
+  edit `policy.toml` itself. Before, only the shell refusal named `extra_roots`, and the file tools said nothing.
+
 ### Added — the audit record schema, and the skill enumerations (#113), CONTRACTS §55
 
 - `conformance/audit_record_schema.json` (`gnomon.audit_record/1`): for every audit kind, its required and
