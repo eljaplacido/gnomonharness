@@ -1801,10 +1801,10 @@ export function defaultContextWindow(config: GnomonConfig): number {
  * for the URL and model (settleContextWindows in prompt_loop.ts does the
  * asking); until then, or when nothing was found, it is `[defaults]
  * max_context_tokens` marked `default`, which trims exactly as an undeclared
- * endpoint does. Declared nowhere (no endpoint key, no `[defaults]` number) on
- * an endpoint kind with a listing is treated as "auto" (`contextImplicit`); a
- * number at either level always wins. Anything else is the object an
- * undeclared endpoint always got.
+ * endpoint does. No key on the endpoint, on a kind with a listing, is treated
+ * as "auto" (`contextImplicit`) with `[defaults]` as the fallback; a number on
+ * the endpoint always wins. Anything else is the object an undeclared endpoint
+ * always got.
  */
 function contextWindowOf(
   config: GnomonConfig,
@@ -1812,14 +1812,13 @@ function contextWindowOf(
   at: { url: string; kind?: EndpointKind; model: string }
 ): Pick<RouteTarget, "contextTokens" | "contextSource" | "contextAuto" | "contextImplicit" | "ollamaCtx"> {
   const tokens = positiveInt(declared);
-  const defaultsTokens = positiveInt(config.config.defaults?.max_context_tokens);
-  // B1 (2026-11-22): a window declared nowhere is asked of the endpoint, as
-  // "auto" does, when its kind has a listing that can answer. A number at either
-  // level is the surface's word and wins.
+  // B1 (2026-11-22): a window not declared on the endpoint is asked of the
+  // endpoint, as "auto" does, when its kind has a listing that can answer.
+  // `[defaults] max_context_tokens` is only the fallback for when it cannot;
+  // a number on the endpoint is the surface's word and wins.
   const asks =
     declared === AUTO_WINDOW ||
     (declared === undefined &&
-      defaultsTokens === undefined &&
       // The test suite's switch (vitest.setup.ts): most suites script one fetch per
       // model call, and a listing probe would be an extra call they did not script.
       process.env.GNOMON_WINDOW_LOOKUP !== "off" &&
@@ -1843,8 +1842,9 @@ function contextWindowOf(
         };
   }
   // B2: Ollama runs a model with its own context unless the request names one,
-  // so a number the surface declared is also what the request carries.
-  const sent = at.kind === "ollama" ? (tokens ?? defaultsTokens) : undefined;
+  // so a number the endpoint declared is also what the request carries. The
+  // `[defaults]` number is a fallback, not an instruction to allocate.
+  const sent = at.kind === "ollama" ? tokens : undefined;
   return {
     ...(tokens ? { contextTokens: tokens, contextSource: "declared" as const } : { contextTokens: undefined }),
     ...(sent ? { ollamaCtx: sent } : {}),

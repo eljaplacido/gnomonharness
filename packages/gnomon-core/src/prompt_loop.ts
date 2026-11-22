@@ -3216,6 +3216,7 @@ export async function settleContextWindows<R extends { target: RouteTarget; fall
   const needs = (t: RouteTarget | undefined): boolean => t?.contextAuto === true;
   if (!needs(route.target) && !needs(route.fallback)) return route;
   const fallbackWindow = defaultContextWindow(config);
+  const defaultsDeclared = typeof config.config.defaults?.max_context_tokens === "number";
   const settle = async (t: RouteTarget | undefined): Promise<RouteTarget | undefined> => {
     if (!t || !needs(t)) return t;
     const { resolution, fresh } = await resolveContextWindow(t);
@@ -3225,7 +3226,9 @@ export async function settleContextWindows<R extends { target: RouteTarget; fall
         paint(hooks.ui, "gray",
           `  [context] ${where}: window ${resolution.tokens} tokens, read from the endpoint (${resolution.from})`)
       );
-    } else if (fresh) {
+    } else if (fresh && !(t.contextImplicit && defaultsDeclared)) {
+      // Silent for an endpoint that declared nothing under a `[defaults]` number:
+      // that number is its declared fallback, and this is today's behaviour.
       hooks.warn(
         paint(hooks.ui, "yellow",
           `  [context] ${where}: ${!t.contextImplicit ? 'max_context_tokens = "auto"' : "no max_context_tokens is declared, and asking the endpoint"} found no window ` +

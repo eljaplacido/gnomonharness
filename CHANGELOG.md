@@ -26,17 +26,24 @@
 
 ## [Unreleased]
 
+### Behaviour change — `[defaults] max_context_tokens` is a fallback
+
+- `[defaults] max_context_tokens` (65536 in every scaffolded surface) no longer fixes the window of an endpoint whose
+  listing publishes one. It is used only when the lookup finds nothing (relay 404, no listing route). To cap a model's
+  context, set `max_context_tokens` on its endpoint, which still wins and asks nothing. Without this, #252's
+  corrected estimate would trim hosted models at about 39k real tokens.
+
 ### Fixed — context-window defaults (B1, B2)
 
-- **An endpoint that declares no `max_context_tokens` is asked for its window.** With no number at the endpoint or in
-  `[defaults]`, an endpoint with a listing route (opencode Go/Zen, OpenRouter, vLLM, llama.cpp `/props`, Ollama
+- **An endpoint that declares no `max_context_tokens` is asked for its window.** With no number on the
+  endpoint, an endpoint with a listing route (opencode Go/Zen, OpenRouter, vLLM, llama.cpp `/props`, Ollama
   `/api/show`) is resolved as `"auto"` is, once per process per URL and model. Before, every such endpoint was trimmed
   to the 65,536 fallback, which after the corrected token estimate (#252) would have cut context on hosted models
   from about 39k real tokens. Nothing found (a relay that 404s `/models`) behaves as before: default window, stderr
-  note, `context_window_unresolved`, `max_context_tokens_source: "default"`. A declared number always wins. History
+  note, `context_window_unresolved`, `max_context_tokens_source: "default"`. A number on the endpoint always wins. History
   replay (`buildMessages`, `/context`, compaction) is now sized by the routed endpoint's window, not `[defaults]` alone.
 - **Ollama requests carry `options.num_ctx`** when the surface names the number (declared window, or a Modelfile
-  `num_ctx`), bounded by the trained length. A window that is only the trained length is not sent; gnomon warns once
+  `num_ctx`; a `[defaults]` number is not sent), bounded by the trained length. A window that is only the trained length is not sent; gnomon warns once
   with `OLLAMA_CONTEXT_LENGTH` / Modelfile `num_ctx` / `max_context_tokens`. No other endpoint kind sends it.
 
 ### Added — think cap (opt-in, unmeasured), CONTRACTS §52

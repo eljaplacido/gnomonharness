@@ -2260,9 +2260,9 @@ temporary root.
 ## 24. Endpoint context window — `wire.max_context_tokens_source`
 
 The window a turn's working context is trimmed to, at a leg checkpoint and
-after an overflow, and where it came from. `[defaults] max_context_tokens`
-(`gnomon init` writes 65536) applies unless the endpoint the turn is routed to
-declares its own in `[endpoints.<name>] max_context_tokens`:
+after an overflow, and where it came from. The endpoint the turn is routed to
+declares its own in `[endpoints.<name>] max_context_tokens`, or is asked;
+`[defaults] max_context_tokens` (`gnomon init` writes 65536) is the fallback:
 
 - **a number** is that model's window;
 - **`"auto"`** reads it from the endpoint, once per process for each endpoint
@@ -2271,14 +2271,16 @@ declares its own in `[endpoints.<name>] max_context_tokens`:
   degradation. A listing that answers 404 is the common case in front of a
   metering relay, and is one of the tested paths.
 
-An endpoint that declares no window, on a surface whose `[defaults]` declares
-none either, is asked as `"auto"` is when its chat route has a listing to ask
-(a URL ending `/chat/completions`, or an Ollama endpoint); it records the
-same keys. A number at either level wins, and nothing is asked. The turn
-record's `wire` carries two keys, absent for an endpoint that declares nothing
-and has no listing route to ask, or whose `[defaults]` declares the number,
-so a record from a surface that never uses the key is the record it was
-before it existed:
+**Semantics change (2026-11-22).** `[defaults] max_context_tokens` is now the
+fallback, not the window: an endpoint that declares no number is asked as
+`"auto"` is when its chat route has a listing to ask (a URL ending
+`/chat/completions`, or an Ollama endpoint), and the `[defaults]` number is used
+only when that finds nothing (marked `default`). A window the endpoint
+publishes is used even when it is smaller or larger than `[defaults]`. To cap a
+model's context, set `max_context_tokens` on its endpoint; that number wins and
+nothing is asked. The turn record's `wire` carries two keys, absent for an
+endpoint that declares nothing and has no listing route to ask, so a record
+from such a surface is the record it was before the key existed:
 
 | `max_context_tokens_source` | `max_context_tokens` is |
 |---|---|

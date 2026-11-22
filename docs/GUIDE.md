@@ -696,27 +696,27 @@ gives the window as `max_context_tokens` and its origin as
 the provider changes its listing. Declare the number where the window must
 stay fixed, as in a benchmark arm.
 
-**What happens when nothing is declared.** An endpoint with no
-`max_context_tokens`, on a surface whose `[defaults]` has none either, is
-treated as `"auto"` when its chat route has a listing to ask (a URL ending
-`/chat/completions`, or an Ollama endpoint). A hosted model whose listing
-publishes its window is trimmed to that window, not to 65,536, and the
-conversation history gnomon replays is sized by it too. If the lookup finds
-nothing, as behind a relay that answers 404 for `/models`, the turn runs on the
-default window exactly as it always did, with the same stderr line, the
-`context_window_unresolved` degradation and `max_context_tokens_source:
-"default"`. A number at either level always wins and nothing is asked: the
-`[defaults] max_context_tokens = 65536` that `gnomon init` writes counts as
-declared, so delete that line, or put `max_context_tokens = "auto"` on the
-endpoint, for a hosted model with a larger window. An endpoint URL with no
-listing route records neither key, as before.
+**What happens when the endpoint declares nothing.** An endpoint with no
+`max_context_tokens` is treated as `"auto"` when its chat route has a listing
+to ask (a URL ending `/chat/completions`, or an Ollama endpoint). A hosted
+model whose listing publishes its window is trimmed to that window, and the
+conversation history gnomon replays is sized by it too. `[defaults]
+max_context_tokens` (65536 as `gnomon init` writes it) is only the fallback,
+used when the listing cannot say: behind a relay that answers 404 for
+`/models` the turn runs on it exactly as it always did. A window smaller than
+the fallback is used as it is. **To cap a model's context, set
+`max_context_tokens = <n>` on its endpoint**: a number there is a hard
+declaration, wins over any listing, and asks nothing. Without a `[defaults]`
+number the fallback is 65,536 and an unresolved lookup also prints the stderr
+note and records `context_window_unresolved`. A URL with no listing route
+records neither key, as before.
 
 **Ollama.** gnomon calls Ollama's native `/api/chat`, which takes the context
 the model runs with as `options.num_ctx`; without it Ollama uses its own
 default (a few thousand tokens, depending on version and VRAM) and silently
 drops the start of a longer prompt. gnomon sends `num_ctx` when the surface
-names the number: a declared `max_context_tokens` (endpoint, else
-`[defaults]`), or a Modelfile `num_ctx` that `/api/show` reports, bounded by
+names the number: a `max_context_tokens` declared on the endpoint (the
+`[defaults]` fallback is not an instruction to allocate), or a Modelfile `num_ctx` that `/api/show` reports, bounded by
 the model's trained context length. A window that is only the trained length is
 not sent, because it can mean hundreds of thousands of tokens of KV cache you
 never asked for; gnomon warns once and names the fix: set `OLLAMA_CONTEXT_LENGTH`

@@ -442,9 +442,10 @@ describe("the cache", () => {
 });
 
 describe("what an existing surface gets: unchanged", () => {
-  it("an endpoint that declares nothing records neither key, and nothing asks it for a listing, when [defaults] declares the number", async () => {
-    const { url, hits } = await fake({ chat: [answer("ok")] });
-    const config = loadConfig(surface(url, { defaults: "max_context_tokens = 65536" }));
+  it("an endpoint that declares nothing records neither key, and nothing asks it for a listing, when its URL has no listing route", async () => {
+    const f = await fake({ chat: [answer("ok")] });
+    const { hits } = f;
+    const config = loadConfig(surface(`${f.base}/api/chat`));
     const route = routeRole(config, "smol");
     expect(route.target.contextTokens).toBeUndefined();
     expect(route.target.contextSource).toBeUndefined();
@@ -456,7 +457,7 @@ describe("what an existing surface gets: unchanged", () => {
     const rec = await runTask(config, "hi", { role: "smol", yes: true });
     expect(rec.code).toBe(0);
     expect(rec.degradations).toBeUndefined();
-    expect(hits).toEqual(["POST /v1/chat/completions"]);
+    expect(hits).toEqual(["POST /api/chat"]);
   });
 
   it("a declared number trims as before and is recorded as `declared`", async () => {
@@ -486,7 +487,7 @@ describe("what an existing surface gets: unchanged", () => {
 
   it("a remote endpoint on the undeclared default gets a startup note naming the key; local, declared and auto do not", async () => {
     const { url } = await fake();
-    const remote = loadConfig(surface("https://relay.example.invalid/v1/chat/completions", { defaults: "max_context_tokens = 65536" }));
+    const remote = loadConfig(surface("https://relay.example.invalid/custom"));
     const notes = undeclaredWindowNotes(remote, ["smol"]);
     expect(notes).toHaveLength(1);
     expect(notes[0]).toContain('endpoint "target"');
@@ -496,7 +497,7 @@ describe("what an existing surface gets: unchanged", () => {
     // A note only: the route is the one an undeclared endpoint always got.
     expect(routeRole(remote, "smol").target.contextTokens).toBeUndefined();
 
-    expect(undeclaredWindowNotes(loadConfig(surface(url, { defaults: "max_context_tokens = 65536" })), ["smol"])).toEqual([]);
+    expect(undeclaredWindowNotes(loadConfig(surface(url)), ["smol"])).toEqual([]);
     const declared = loadConfig(surface("https://relay.example.invalid/v1/chat/completions", { endpoint: "max_context_tokens = 1000000" }));
     expect(undeclaredWindowNotes(declared, ["smol"])).toEqual([]);
     const auto = loadConfig(surface("https://relay.example.invalid/v1/chat/completions", { endpoint: AUTO }));
@@ -642,17 +643,36 @@ describe("a window declared nowhere is asked of the endpoint (B1)", () => {
     expect(hits).toEqual(["GET /v1/models", "GET /props"]);
   });
 
-  it("an explicit number wins at the endpoint and at [defaults]; neither asks for a listing", async () => {
+  it("a number on the endpoint wins over a listing and asks nothing", async () => {
     const f = await fake({ models: listing({ id: "m1", limit: { context: 1_000_000 } }) });
-    const atEndpoint = loadConfig(surface(f.url, { endpoint: "max_context_tokens = 32768" }));
-    expect((await settleContextWindows(atEndpoint, routeRole(atEndpoint, "smol"), hooks(atEndpoint).h)).target)
-      .toMatchObject({ contextTokens: 32_768, contextSource: "declared" });
-    const atDefaults = loadConfig(surface(f.url, { defaults: DEFAULTS_65K }));
-    const r = routeRole(atDefaults, "smol");
-    expect(r.target.contextTokens).toBeUndefined();
-    expect(resolveContext(atDefaults, r.target).max_context_tokens).toBe(65_536);
-    expect(await settleContextWindows(atDefaults, r, hooks(atDefaults).h)).toBe(r);
+    const atEndpoint = loadConfig(surface(f.url, { endpoint: "max_context_tokens = 32768", defaults: DEFAULTS_65K }));
+    const r = routeRole(atEndpoint, "smol");
+    expect(await settleContextWindows(atEndpoint, r, hooks(atEndpoint).h)).toBe(r);
+    expect(r.target).toMatchObject({ contextTokens: 32_768, contextSource: "declared" });
     expect(f.hits).toEqual([]);
+  });
+
+  it("[defaults] is the fallback: a hosted 1M listing beats 65536, a smaller real window beats it too", async () => {
+    const big = await fake({ models: listing({ id: "m1", limit: { context: 1_000_000 } }) });
+    const cfgBig = loadConfig(surface(big.url, { defaults: DEFAULTS_65K }));
+    expect((await settleContextWindows(cfgBig, routeRole(cfgBig, "smol"), hooks(cfgBig).h)).target)
+      .toMatchObject({ contextTokens: 1_000_000, contextSource: "listing:opencode" });
+    const small = await fake({ props: { body: { default_generation_settings: { n_ctx: 8_192 } } } });
+    const cfgSmall = loadConfig(surface(small.url, { defaults: DEFAULTS_65K }));
+    expect((await settleContextWindows(cfgSmall, routeRole(cfgSmall, "smol"), hooks(cfgSmall).h)).target)
+      .toMatchObject({ contextTokens: 8_192, contextSource: "listing:llamacpp" });
+  });
+
+  it("[defaults] with a relay that 404s is today's behaviour: 65536, silent, nothing recorded", async () => {
+    const f = await fake({ chat: [answer("ok")] });
+    const config = loadConfig(surface(f.url, { defaults: DEFAULTS_65K }));
+    const h = hooks(config);
+    const route = await settleContextWindows(config, routeRole(config, "smol"), h.h);
+    expect(route.target).toMatchObject({ contextTokens: 65_536, contextSource: "default" });
+    expect(h.warned).toEqual([]);
+    expect(h.recs).toEqual([]);
+    expect((await runTask(config, "hi", { role: "smol", yes: true })).code).toBe(0);
+    expect(resolveContext(config, route.target).max_context_tokens).toBe(65_536);
   });
 
   it("buildMessages sizes replay by the target's window", () => {
@@ -691,11 +711,11 @@ describe("Ollama's request carries num_ctx (B2)", () => {
     expect(f.chat[0]!.options).toMatchObject({ num_ctx: 24_576 });
   });
 
-  it("[defaults] max_context_tokens is what an undeclaring Ollama endpoint's request carries", async () => {
+  it("[defaults] is a fallback, not an instruction: an Ollama request does not carry it", async () => {
     const f = await fake({ chat: [ollamaReply] });
     const config = loadConfig(surface(`${f.base}/api/chat`, { kind: "ollama", defaults: DEFAULTS_65K }));
     await runTask(config, "hi", { role: "smol", yes: true });
-    expect(f.chat[0]!.options).toMatchObject({ num_ctx: 65_536 });
+    expect((f.chat[0]!.options as Record<string, unknown>).num_ctx).toBeUndefined();
   });
 
   it("a Modelfile num_ctx found by /api/show (nothing declared) is sent and is the budget", async () => {
