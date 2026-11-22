@@ -1554,6 +1554,16 @@ chain = true
   verify` then reports a re-chained, deleted or rolled-back trail, with the
   time after which the change was made
   ([docs/CONTRACTS.md §21](CONTRACTS.md)).
+- **For tools that read the trail.** `gnomon audit schema --json` prints, for
+  the installed version, every record kind's fields with their JSON types and
+  a class each: `metadata` (counts, durations, verdicts, names), `content`
+  (anything that can carry user, model or command text: commands, summaries,
+  prompts, tool arguments and results) or `identifier` (hashes, ids, paths).
+  An observability tool shows `metadata`, joins on `identifier`, and withholds
+  or redacts `content`; the chain fields `seq`, `prev` and `hash` are
+  identifiers. A field the schema does not list is treated as `content`.
+  Additive changes raise the minor version, removals the major
+  ([docs/CONTRACTS.md §55](CONTRACTS.md)).
 - Beside each trail, `<session>.record.json` is the turn's record as it
   stands, rewritten after every model reply and tool call: what is left when a
   run is killed. A run ended by SIGINT, SIGTERM or SIGHUP gets a last `turn`

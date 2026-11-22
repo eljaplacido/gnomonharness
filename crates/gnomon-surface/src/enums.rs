@@ -31,6 +31,13 @@ pub struct Enumerations {
     /// `[sandbox] exec`: where `bash` runs. Added last, so the keys
     /// published before it keep their positions.
     pub exec: Vec<String>,
+    /// `gnomon skill mine` candidate signals (docs/CONTRACTS.md §12; #113).
+    pub candidate_signal: Vec<String>,
+    /// `meets_thresholds` of a skill trial: `true`, `false` or
+    /// `"undetermined"` (docs/CONTRACTS.md §13; #113). Mixed JSON types.
+    pub trial_verdict: Vec<serde_json::Value>,
+    /// `status` of a skill trial (docs/CONTRACTS.md §13; #113).
+    pub trial_status: Vec<String>,
 }
 
 impl Enumerations {
@@ -119,6 +126,13 @@ impl Enumerations {
                 "execute".into(),
             ],
             exec: vec!["off".into(), "docker".into(), "os".into()],
+            candidate_signal: vec!["repeated_refusal".into()],
+            trial_verdict: vec![
+                serde_json::Value::Bool(true),
+                serde_json::Value::Bool(false),
+                serde_json::Value::String("undetermined".into()),
+            ],
+            trial_status: vec!["complete".into(), "budget_exhausted".into(), "apparatus_failure".into()],
         }
     }
 }
@@ -225,7 +239,7 @@ mod tests {
         // Should not have any extra keys
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         let obj = parsed.as_object().unwrap();
-        assert_eq!(obj.len(), 11);
+        assert_eq!(obj.len(), 14);
         assert!(obj.contains_key("edit_format"));
         assert!(obj.contains_key("sandbox"));
         assert!(obj.contains_key("approval"));
@@ -236,5 +250,10 @@ mod tests {
             assert!(obj.contains_key(k));
         }
         assert!(obj.contains_key("exec"));
+        for k in ["candidate_signal", "trial_verdict", "trial_status"] {
+            assert!(obj.contains_key(k));
+        }
+        // A trial verdict mixes JSON types: booleans stay booleans.
+        assert_eq!(obj["trial_verdict"], serde_json::json!([true, false, "undetermined"]));
     }
 }

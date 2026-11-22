@@ -51,6 +51,12 @@ export interface Enumerations {
   guard_tool: string[];
   /** `[sandbox] exec`: where bash runs. */
   exec: string[];
+  /** `gnomon skill mine` candidate signals (CONTRACTS.md §12). */
+  candidate_signal: string[];
+  /** A skill trial's `meets_thresholds`: true, false or "undetermined" (§13). */
+  trial_verdict: Array<boolean | string>;
+  /** A skill trial's `status` (§13). */
+  trial_status: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -385,7 +391,7 @@ export function listPaths(dir?: string): string[] {
  * Load the enumerations contract from the gnomon-enums binary.
  * Returns the 11 top-level keys: edit_format, sandbox, approval, role_profile,
  * governance_level, governance_family, audit_kind, guard_decision, guard_rule,
- * guard_tool, exec.
+ * guard_tool, exec, candidate_signal, trial_verdict, trial_status.
  */
 export function enumerations(): Enumerations {
   const result = spawnSync(nativeBin("gnomon-enums"), [], {

@@ -1,0 +1,618 @@
+{
+  "schema": "gnomon.audit_record/1",
+  "v": 1,
+  "description": "The fields of every audit trail record, by kind, with each field's type and data class. A record carries the envelope fields plus the fields of its kind and no others. Rules in docs/CONTRACTS.md section 55.",
+  "classes": {
+    "metadata": "A count, duration, token number, verdict, rule id, boolean, enumerated word, or model or endpoint name: harness-generated, never user or model text.",
+    "content": "Anything that can carry user, model or command text: command strings, summaries, prompts, outputs, file contents, notes, operator reasons, error and probe text. Withhold or redact before showing it to anyone the trail's owner has not cleared.",
+    "identifier": "A hash, id, skill id, session id, host or user name, or a path. Stable keys for joining records; not prose. Paths are identifiers, not content, but they reveal project layout: a consumer that must not expose layout drops them as it would content."
+  },
+  "nesting": "A field holding an array or object has the class of the most sensitive thing it can hold. Content wins over identifier, identifier over metadata.",
+  "unknown": "A kind or field this schema does not list is not covered by any class here: a consumer treats it as content until its schema version is known.",
+  "envelope": {
+    "required": {
+      "seq": {"type": ["integer"], "class": "identifier", "note": "0-based position in the trail file"},
+      "ts": {"type": ["string"], "class": "metadata", "note": "ISO 8601 UTC"},
+      "kind": {"type": ["string"], "class": "metadata", "note": "one of the enumerations' audit_kind"},
+      "prev": {"type": ["string", "null"], "class": "identifier", "note": "the previous record's hash; null on the first or when [audit] chain = false"}
+    },
+    "optional": {
+      "hash": {"type": ["string"], "class": "identifier", "note": "sha256 hex over the record without hash; absent when [audit] chain = false"}
+    }
+  },
+  "kinds": {
+    "session_start": {
+      "required": {
+        "surface_hash": {"type": ["string"], "class": "identifier"},
+        "harness": {"type": ["string"], "class": "metadata"},
+        "cwd": {"type": ["string"], "class": "identifier"}
+      },
+      "optional": {
+        "mode": {"type": ["string"], "class": "metadata"},
+        "role": {"type": ["string"], "class": "metadata"},
+        "roles": {"type": ["array"], "class": "metadata"},
+        "resolved": {"type": ["object"], "class": "metadata"},
+        "record": {"type": ["string"], "class": "metadata"},
+        "approvals": {"type": ["string"], "class": "metadata"},
+        "agent": {"type": ["string"], "class": "metadata"},
+        "via": {"type": ["string"], "class": "metadata"},
+        "client": {"type": ["object", "null"], "class": "metadata"},
+        "deadline": {"type": ["object"], "class": "metadata"}
+      }
+    },
+    "session_resume": {
+      "required": {
+        "surface_hash": {"type": ["string"], "class": "identifier"}
+      },
+      "optional": {
+        "resumed": {"type": ["string"], "class": "identifier"},
+        "turns": {"type": ["integer"], "class": "metadata"},
+        "surface_hash_at_save": {"type": ["string"], "class": "identifier"},
+        "surface_changed": {"type": ["boolean"], "class": "metadata"}
+      }
+    },
+    "turn": {
+      "required": {
+        "role": {"type": ["string"], "class": "metadata"}
+      },
+      "optional": {
+        "turn": {"type": ["integer"], "class": "metadata"},
+        "n": {"type": ["integer"], "class": "metadata"},
+        "i": {"type": ["integer"], "class": "metadata"},
+        "model": {"type": ["string"], "class": "metadata"},
+        "endpoint": {"type": ["string"], "class": "metadata"},
+        "endpoint_url": {"type": ["string"], "class": "metadata"},
+        "endpoint_overridden": {"type": ["boolean"], "class": "metadata"},
+        "wire": {"type": ["object"], "class": "metadata"},
+        "bucket": {"type": ["string"], "class": "metadata"},
+        "code": {"type": ["integer"], "class": "metadata"},
+        "duration_ms": {"type": ["integer"], "class": "metadata"},
+        "tool_steps": {"type": ["integer"], "class": "metadata"},
+        "tool_log": {"type": ["array"], "class": "content", "note": "one line per tool call: the call's summary, which names files and commands"},
+        "stop_reason": {"type": ["string"], "class": "metadata"},
+        "stop_detail": {"type": ["object"], "class": "metadata"},
+        "counters": {"type": ["object"], "class": "metadata"},
+        "escalation": {"type": ["object"], "class": "metadata"},
+        "tokens_in": {"type": ["integer"], "class": "metadata"},
+        "tokens_out": {"type": ["integer"], "class": "metadata"},
+        "usage": {"type": ["object"], "class": "metadata"},
+        "skills": {"type": ["array"], "class": "identifier"},
+        "context_turns": {"type": ["integer"], "class": "metadata"},
+        "context_dropped": {"type": ["integer"], "class": "metadata"},
+        "context_tokens": {"type": ["integer"], "class": "metadata"},
+        "context_window": {"type": ["integer"], "class": "metadata"},
+        "context_budget": {"type": ["integer"], "class": "metadata"},
+        "context_estimate": {"type": ["string"], "class": "metadata"},
+        "context_trims": {"type": ["integer"], "class": "metadata"},
+        "context_trimmed": {"type": ["integer"], "class": "metadata"},
+        "model_calls": {"type": ["object"], "class": "metadata"},
+        "shadow": {"type": ["object"], "class": "metadata"},
+        "surface_hash": {"type": ["string"], "class": "identifier"},
+        "input": {"type": ["string"], "class": "content", "note": "the prompt; written only under [audit] record = \"full\""},
+        "output": {"type": ["string"], "class": "content", "note": "the reply; written only under [audit] record = \"full\""}
+      }
+    },
+    "chain_stage": {
+      "required": {
+        "stage": {"type": ["integer"], "class": "metadata"},
+        "of": {"type": ["integer"], "class": "metadata"},
+        "role": {"type": ["string"], "class": "metadata"}
+      },
+      "optional": {
+        "bucket": {"type": ["string"], "class": "metadata"},
+        "code": {"type": ["integer"], "class": "metadata"},
+        "stop_reason": {"type": ["string"], "class": "metadata"},
+        "tool_steps": {"type": ["integer"], "class": "metadata"},
+        "context_turns": {"type": ["integer"], "class": "metadata"},
+        "context_dropped": {"type": ["integer"], "class": "metadata"},
+        "context_tokens": {"type": ["integer"], "class": "metadata"},
+        "context_window": {"type": ["integer"], "class": "metadata"},
+        "context_budget": {"type": ["integer"], "class": "metadata"},
+        "context_estimate": {"type": ["string"], "class": "metadata"},
+        "context_trims": {"type": ["integer"], "class": "metadata"},
+        "context_trimmed": {"type": ["integer"], "class": "metadata"},
+        "surface_hash": {"type": ["string"], "class": "identifier"},
+        "stopped_by": {"type": ["string"], "class": "metadata"},
+        "gate": {"type": ["string"], "class": "metadata"}
+      }
+    },
+    "tool_call": {
+      "required": {
+        "role": {"type": ["string"], "class": "metadata"},
+        "tool": {"type": ["string"], "class": "metadata"},
+        "target": {"type": ["string"], "class": "content", "note": "for bash the command string, after [audit] redact; for file tools a path or description"},
+        "gated": {"type": ["boolean"], "class": "metadata"},
+        "code": {"type": ["integer"], "class": "metadata"},
+        "bucket": {"type": ["string"], "class": "metadata"},
+        "summary": {"type": ["string"], "class": "content", "note": "a one-line description of the call that names its files or command"},
+        "started_at": {"type": ["string"], "class": "metadata"},
+        "duration_ms": {"type": ["integer"], "class": "metadata"}
+      },
+      "optional": {
+        "exempt": {"type": ["string"], "class": "metadata"},
+        "worktree_changed": {"type": ["boolean", "null"], "class": "metadata"},
+        "edit_tier": {"type": ["string"], "class": "metadata"},
+        "package_index": {"type": ["array"], "class": "metadata"},
+        "governance": {"type": ["object"], "class": "metadata"},
+        "args": {"type": ["string"], "class": "content", "note": "JSON of the call's arguments; written only under record = \"full\""},
+        "result": {"type": ["string"], "class": "content", "note": "the tool's output; written only under record = \"full\""}
+      }
+    },
+    "approval": {
+      "required": {
+        "tool": {"type": ["string"], "class": "metadata"},
+        "by": {"type": ["string"], "class": "metadata"}
+      },
+      "optional": {
+        "summary": {"type": ["string"], "class": "content", "note": "describes the call that was asked about"},
+        "decision": {"type": ["string"], "class": "metadata"},
+        "interactive": {"type": ["boolean"], "class": "metadata"},
+        "escalated": {"type": ["string"], "class": "metadata"}
+      }
+    },
+    "verify": {
+      "required": {
+        "command": {"type": ["string"], "class": "content"}
+      },
+      "optional": {
+        "role": {"type": ["string"], "class": "metadata"},
+        "declined": {"type": ["boolean"], "class": "metadata"},
+        "ok": {"type": ["boolean"], "class": "metadata"},
+        "passed": {"type": ["boolean"], "class": "metadata"},
+        "unrunnable": {"type": ["boolean"], "class": "metadata"},
+        "regressed": {"type": ["boolean"], "class": "metadata"},
+        "exit": {"type": ["integer", "null"], "class": "metadata"},
+        "reason": {"type": ["string"], "class": "content", "note": "why the check could not run; may quote output"},
+        "round": {"type": ["integer"], "class": "metadata"},
+        "phase": {"type": ["string"], "class": "metadata"},
+        "network": {"type": ["string", "boolean"], "class": "metadata"},
+        "protects_changed": {"type": ["array"], "class": "identifier"},
+        "protects_truncated": {"type": ["boolean"], "class": "metadata"},
+        "verdict": {"type": ["string"], "class": "metadata"}
+      }
+    },
+    "bootstrap": {
+      "required": {
+        "role": {"type": ["string"], "class": "metadata"},
+        "id": {"type": ["string"], "class": "metadata"},
+        "platform": {"type": ["string"], "class": "metadata"},
+        "outcome": {"type": ["string"], "class": "metadata"},
+        "command": {"type": ["string", "null"], "class": "content"},
+        "bytes": {"type": ["integer"], "class": "metadata"},
+        "tokens": {"type": ["integer"], "class": "metadata"},
+        "truncated": {"type": ["boolean"], "class": "metadata"},
+        "duration_ms": {"type": ["integer"], "class": "metadata"}
+      },
+      "optional": {
+        "code": {"type": ["integer"], "class": "metadata"},
+        "bucket": {"type": ["string"], "class": "metadata"},
+        "summary": {"type": ["string"], "class": "content"},
+        "exit": {"type": ["integer"], "class": "metadata"},
+        "worktree_changed": {"type": ["boolean", "null"], "class": "metadata"}
+      }
+    },
+    "context_mask": {
+      "required": {
+        "role": {"type": ["string"], "class": "metadata"},
+        "batch": {"type": ["integer"], "class": "metadata"},
+        "step": {"type": ["integer"], "class": "metadata"},
+        "masked": {"type": ["integer"], "class": "metadata"},
+        "tokens_saved": {"type": ["integer"], "class": "metadata"},
+        "tokens_before": {"type": ["integer"], "class": "metadata"},
+        "tokens_after": {"type": ["integer"], "class": "metadata"},
+        "window": {"type": ["integer"], "class": "metadata"},
+        "first_index": {"type": ["integer"], "class": "metadata"}
+      },
+      "optional": {}
+    },
+    "degradation": {
+      "required": {
+        "id": {"type": ["string"], "class": "metadata"},
+        "declared": {"type": ["string"], "class": "metadata"},
+        "actual": {"type": ["string"], "class": "metadata"}
+      },
+      "optional": {
+        "detail": {"type": ["object"], "class": "content", "note": "probe results and error text; may quote a server's reply"}
+      }
+    },
+    "check": {
+      "required": {
+        "schema": {"type": ["string"], "class": "metadata"},
+        "base": {"type": ["string"], "class": "identifier"},
+        "head": {"type": ["string"], "class": "identifier"},
+        "role": {"type": ["string"], "class": "metadata"},
+        "surface_hash": {"type": ["string"], "class": "identifier"},
+        "checks": {"type": ["array"], "class": "content", "note": "per check: id, status, reason and findings, which name files and commands"},
+        "exit": {"type": ["integer"], "class": "metadata"}
+      },
+      "optional": {
+        "base_given": {"type": ["string"], "class": "identifier"},
+        "head_given": {"type": ["string"], "class": "identifier"},
+        "role_source": {"type": ["string"], "class": "metadata"},
+        "agent": {"type": ["string"], "class": "metadata"},
+        "setup": {"type": ["object"], "class": "content", "note": "the declared setup's result; may carry an output tail"}
+      }
+    },
+    "trust": {
+      "required": {
+        "decision": {"type": ["string"], "class": "metadata"},
+        "by": {"type": ["string"], "class": "metadata"},
+        "surface_hash": {"type": ["string"], "class": "identifier"},
+        "grants": {"type": ["array"], "class": "metadata"},
+        "root": {"type": ["string"], "class": "identifier"}
+      },
+      "optional": {
+        "tools_changed": {"type": ["array"], "class": "identifier"}
+      }
+    },
+    "guard": {
+      "required": {
+        "tool": {"type": ["string"], "class": "metadata"},
+        "target": {"type": ["string"], "class": "content", "note": "path, URL, command, query or description, after [audit] redact"},
+        "decision": {"type": ["string"], "class": "metadata"},
+        "exit": {"type": ["integer"], "class": "metadata"}
+      },
+      "optional": {
+        "rule": {"type": ["string", "null"], "class": "metadata"},
+        "pattern": {"type": ["string"], "class": "metadata", "note": "the surface's own rule pattern, not the call's text"},
+        "role": {"type": ["string"], "class": "metadata"},
+        "agent": {"type": ["string"], "class": "metadata"},
+        "via": {"type": ["string"], "class": "metadata"},
+        "host_tool": {"type": ["string"], "class": "metadata"},
+        "host_mode": {"type": ["string"], "class": "metadata"},
+        "base": {"type": ["string"], "class": "identifier"},
+        "surface_hash": {"type": ["string"], "class": "identifier"},
+        "exempt": {"type": ["string"], "class": "metadata"},
+        "verdict": {"type": ["string"], "class": "metadata"},
+        "family": {"type": ["string", "null"], "class": "metadata"},
+        "level": {"type": ["string", "null"], "class": "metadata"},
+        "call_id": {"type": ["string"], "class": "identifier"},
+        "delivered": {"type": ["boolean"], "class": "metadata"}
+      }
+    },
+    "skill_accept": {
+      "required": {
+        "skill": {"type": ["string"], "class": "identifier"}
+      },
+      "optional": {
+        "name": {"type": ["string"], "class": "content", "note": "the skill's human-written title"},
+        "path": {"type": ["string"], "class": "identifier"},
+        "content_sha256": {"type": ["string"], "class": "identifier"},
+        "surface_hash_before": {"type": ["string"], "class": "identifier"},
+        "surface_hash_after": {"type": ["string"], "class": "identifier"},
+        "by": {"type": ["string"], "class": "metadata"},
+        "user": {"type": ["string"], "class": "identifier", "note": "the operating-system user who decided"},
+        "host": {"type": ["string"], "class": "identifier"},
+        "interactive": {"type": ["boolean"], "class": "metadata"},
+        "authorised_by": {"type": ["string"], "class": "metadata"},
+        "agent_session_marker": {"type": ["string"], "class": "metadata"},
+        "evidence": {"type": ["string", "object"], "class": "metadata"},
+        "require_trial": {"type": ["boolean"], "class": "metadata"}
+      }
+    },
+    "skill_reject": {
+      "required": {
+        "skill": {"type": ["string"], "class": "identifier"}
+      },
+      "optional": {
+        "name": {"type": ["string"], "class": "content", "note": "the skill's human-written title"},
+        "path": {"type": ["string"], "class": "identifier"},
+        "content_sha256": {"type": ["string"], "class": "identifier"},
+        "surface_hash_before": {"type": ["string"], "class": "identifier"},
+        "surface_hash_after": {"type": ["string"], "class": "identifier"},
+        "by": {"type": ["string"], "class": "metadata"},
+        "user": {"type": ["string"], "class": "identifier", "note": "the operating-system user who decided"},
+        "host": {"type": ["string"], "class": "identifier"},
+        "interactive": {"type": ["boolean"], "class": "metadata"},
+        "authorised_by": {"type": ["string"], "class": "metadata"},
+        "agent_session_marker": {"type": ["string"], "class": "metadata"},
+        "reason": {"type": ["string"], "class": "content", "note": "the operator's free-text reason"}
+      }
+    },
+    "skill_trial": {
+      "required": {
+        "skill": {"type": ["string"], "class": "identifier"},
+        "content_sha256": {"type": ["string"], "class": "identifier"},
+        "report": {"type": ["string"], "class": "identifier"},
+        "report_sha256": {"type": ["string"], "class": "identifier"},
+        "surface_hash_base": {"type": ["string"], "class": "identifier"},
+        "surface_hash_skill": {"type": ["string"], "class": "identifier"},
+        "meets_thresholds": {"type": ["boolean", "string"], "class": "metadata", "note": "true, false or \"undetermined\" (enumerations: trial_verdict)"}
+      },
+      "optional": {
+        "schema": {"type": ["string"], "class": "metadata"},
+        "spec": {"type": ["object"], "class": "identifier"},
+        "role": {"type": ["string"], "class": "metadata"},
+        "model": {"type": ["string"], "class": "metadata"},
+        "endpoint": {"type": ["string"], "class": "metadata"},
+        "pairs": {"type": ["object"], "class": "metadata"},
+        "cells": {"type": ["object"], "class": "metadata"},
+        "endpoints": {"type": ["object"], "class": "metadata"},
+        "status": {"type": ["string"], "class": "metadata", "note": "enumerations: trial_status"}
+      }
+    },
+    "skill_use": {
+      "required": {
+        "turn": {"type": ["integer"], "class": "metadata"},
+        "role": {"type": ["string"], "class": "metadata"},
+        "fired": {"type": ["array"], "class": "identifier", "note": "[{name, tokens}]: skill ids and their token cost"},
+        "read": {"type": ["object"], "class": "identifier", "note": "skill id -> times read"},
+        "cited_in_reasoning": {"type": ["array"], "class": "identifier"},
+        "proposed": {"type": ["array"], "class": "identifier"}
+      },
+      "optional": {}
+    },
+    "record_tamper": {
+      "required": {
+        "when": {"type": ["string"], "class": "metadata"},
+        "changes": {"type": ["array"], "class": "identifier", "note": "[{path, change}]: which of gnomon's own files changed"}
+      },
+      "optional": {
+        "tool": {"type": ["string"], "class": "metadata"},
+        "target": {"type": ["string"], "class": "content", "note": "the call that was running, as a description or command"},
+        "changed": {"type": ["integer"], "class": "metadata"},
+        "session": {"type": ["string"], "class": "identifier"},
+        "role": {"type": ["string"], "class": "metadata"}
+      }
+    },
+    "record_tamper_resolved": {
+      "required": {
+        "tamper": {"type": ["object"], "class": "identifier"},
+        "reason": {"type": ["string"], "class": "content", "note": "the operator's free-text reason"}
+      },
+      "optional": {
+        "by": {"type": ["string"], "class": "metadata"},
+        "user": {"type": ["string"], "class": "identifier"},
+        "host": {"type": ["string"], "class": "identifier"},
+        "interactive": {"type": ["boolean"], "class": "metadata"},
+        "authorised_by": {"type": ["string"], "class": "metadata"},
+        "agent_session_marker": {"type": ["string"], "class": "metadata"}
+      }
+    },
+    "record_notice": {
+      "required": {
+        "when": {"type": ["string"], "class": "metadata"},
+        "added": {"type": ["array"], "class": "identifier"},
+        "reason": {"type": ["string"], "class": "metadata"}
+      },
+      "optional": {
+        "tool": {"type": ["string"], "class": "metadata"},
+        "target": {"type": ["string"], "class": "content"},
+        "session": {"type": ["string"], "class": "identifier"}
+      }
+    },
+    "mcp_tools": {
+      "required": {
+        "servers": {"type": ["array"], "class": "identifier", "note": "per server: its name, grant key, tool count and tools hash"}
+      },
+      "optional": {}
+    },
+    "stall_signal": {
+      "required": {
+        "role": {"type": ["string"], "class": "metadata"},
+        "signal": {"type": ["string"], "class": "metadata"},
+        "step": {"type": ["integer"], "class": "metadata"},
+        "episode": {"type": ["integer"], "class": "metadata"}
+      },
+      "optional": {
+        "period": {"type": ["integer"], "class": "metadata"},
+        "streak": {"type": ["integer"], "class": "metadata"},
+        "cusum": {"type": ["integer", "number"], "class": "metadata"}
+      }
+    },
+    "completion_gate": {
+      "required": {
+        "role": {"type": ["string"], "class": "metadata"},
+        "round": {"type": ["integer"], "class": "metadata"},
+        "action": {"type": ["string"], "class": "metadata"},
+        "step": {"type": ["integer"], "class": "metadata"},
+        "budget_left": {"type": ["integer", "number"], "class": "metadata"},
+        "budget_by": {"type": ["string"], "class": "metadata"},
+        "ms": {"type": ["integer"], "class": "metadata"}
+      },
+      "optional": {
+        "outcome": {"type": ["string"], "class": "metadata"},
+        "findings": {"type": ["integer"], "class": "metadata"},
+        "review_failed": {"type": ["string"], "class": "metadata"}
+      }
+    },
+    "todo_gate": {
+      "required": {
+        "role": {"type": ["string"], "class": "metadata"},
+        "round": {"type": ["integer"], "class": "metadata"},
+        "open": {"type": ["integer"], "class": "metadata"},
+        "step": {"type": ["integer"], "class": "metadata"},
+        "budget_left": {"type": ["integer", "number"], "class": "metadata"},
+        "budget_by": {"type": ["string"], "class": "metadata"},
+        "action": {"type": ["string"], "class": "metadata"}
+      },
+      "optional": {
+        "outcome": {"type": ["string"], "class": "metadata"}
+      }
+    },
+    "job": {
+      "required": {
+        "event": {"type": ["string"], "class": "metadata"},
+        "id": {"type": ["string"], "class": "identifier"},
+        "role": {"type": ["string"], "class": "metadata"},
+        "wall_ms": {"type": ["integer"], "class": "metadata"},
+        "lines": {"type": ["integer"], "class": "metadata"}
+      },
+      "optional": {
+        "command": {"type": ["string"], "class": "content"},
+        "reason": {"type": ["string"], "class": "metadata"},
+        "exit": {"type": ["integer", "null"], "class": "metadata"},
+        "signal": {"type": ["string", "null"], "class": "metadata"},
+        "container_gone": {"type": ["boolean"], "class": "metadata"}
+      }
+    },
+    "deliverable_first": {
+      "required": {
+        "event": {"type": ["string"], "class": "metadata"},
+        "at": {"type": ["array", "number"], "class": "metadata"},
+        "named": {"type": ["array"], "class": "identifier", "note": "output paths the task named"}
+      },
+      "optional": {
+        "step": {"type": ["integer"], "class": "metadata"},
+        "used": {"type": ["integer", "number"], "class": "metadata"},
+        "missing": {"type": ["array"], "class": "identifier"},
+        "present": {"type": ["array"], "class": "identifier"},
+        "noted": {"type": ["boolean"], "class": "metadata"}
+      }
+    },
+    "first_token_stall": {
+      "required": {
+        "role": {"type": ["string"], "class": "metadata"},
+        "step": {"type": ["integer"], "class": "metadata"},
+        "attempt": {"type": ["integer"], "class": "metadata"},
+        "waited_ms": {"type": ["integer"], "class": "metadata"},
+        "recovered": {"type": ["boolean"], "class": "metadata"}
+      },
+      "optional": {}
+    },
+    "checkpoint": {
+      "required": {
+        "event": {"type": ["string"], "class": "metadata"},
+        "role": {"type": ["string"], "class": "metadata"},
+        "step": {"type": ["integer"], "class": "metadata"}
+      },
+      "optional": {
+        "how": {"type": ["string"], "class": "metadata"},
+        "round": {"type": ["integer"], "class": "metadata"},
+        "rounds": {"type": ["integer"], "class": "metadata"},
+        "decision": {"type": ["string"], "class": "metadata"},
+        "why": {"type": ["string"], "class": "metadata"},
+        "checkpoint_hash": {"type": ["string"], "class": "identifier"},
+        "content_hash": {"type": ["string"], "class": "identifier"},
+        "check_source": {"type": ["string"], "class": "metadata"},
+        "command": {"type": ["string"], "class": "content"},
+        "checkpoint_score": {"type": ["object"], "class": "metadata"},
+        "best_score": {"type": ["object"], "class": "metadata"},
+        "round_score": {"type": ["object"], "class": "metadata"},
+        "final_score": {"type": ["object"], "class": "metadata"},
+        "left_ms": {"type": ["integer", "number"], "class": "metadata"},
+        "share_left": {"type": ["integer", "number"], "class": "metadata"},
+        "files": {"type": ["integer"], "class": "metadata"},
+        "bytes": {"type": ["integer"], "class": "metadata"},
+        "rewritten": {"type": ["integer"], "class": "metadata"},
+        "removed": {"type": ["integer"], "class": "metadata"},
+        "verified": {"type": ["boolean"], "class": "metadata"}
+      }
+    },
+    "think_cap": {
+      "required": {
+        "role": {"type": ["string"], "class": "metadata"},
+        "step": {"type": ["integer"], "class": "metadata"},
+        "cap": {"type": ["integer"], "class": "metadata"},
+        "reasoning_tokens": {"type": ["integer"], "class": "metadata"},
+        "reasoning_chars": {"type": ["integer"], "class": "metadata"},
+        "consecutive": {"type": ["integer"], "class": "metadata"},
+        "rearmed": {"type": ["boolean"], "class": "metadata"},
+        "model": {"type": ["string"], "class": "metadata"}
+      },
+      "optional": {}
+    },
+    "finish_gate": {
+      "required": {
+        "role": {"type": ["string"], "class": "metadata"},
+        "round": {"type": ["integer"], "class": "metadata"},
+        "step": {"type": ["integer"], "class": "metadata"},
+        "budget_left": {"type": ["integer", "number"], "class": "metadata"},
+        "budget_by": {"type": ["string"], "class": "metadata"},
+        "caveats": {"type": ["integer"], "class": "metadata"},
+        "caveat_ids": {"type": ["array"], "class": "metadata"},
+        "action": {"type": ["string"], "class": "metadata"}
+      },
+      "optional": {
+        "open_todos": {"type": ["integer"], "class": "metadata"},
+        "evidence_gaps": {"type": ["array"], "class": "metadata"},
+        "outcome": {"type": ["string"], "class": "metadata"},
+        "tools_since": {"type": ["integer"], "class": "metadata"}
+      }
+    },
+    "model_call": {
+      "required": {
+        "model": {"type": ["string"], "class": "metadata"},
+        "ms": {"type": ["integer"], "class": "metadata"},
+        "code": {"type": ["integer"], "class": "metadata"}
+      },
+      "optional": {
+        "i": {"type": ["integer"], "class": "metadata"},
+        "role": {"type": ["string"], "class": "metadata"},
+        "endpoint": {"type": ["string"], "class": "metadata"},
+        "window": {"type": ["integer"], "class": "metadata"},
+        "estimate": {"type": ["string"], "class": "metadata"},
+        "est": {"type": ["integer"], "class": "metadata"},
+        "est_body": {"type": ["integer"], "class": "metadata"},
+        "ratio": {"type": ["integer", "number"], "class": "metadata"},
+        "replayed": {"type": ["integer"], "class": "metadata"},
+        "steer": {"type": ["object"], "class": "metadata"},
+        "via": {"type": ["string"], "class": "metadata"},
+        "delivered": {"type": ["boolean"], "class": "metadata"},
+        "trim": {"type": ["object"], "class": "metadata"},
+        "leg": {"type": ["integer"], "class": "metadata"},
+        "depth": {"type": ["integer"], "class": "metadata"},
+        "first_byte_ms": {"type": ["integer"], "class": "metadata"},
+        "prompt_tokens": {"type": ["integer"], "class": "metadata"},
+        "cached_tokens": {"type": ["integer"], "class": "metadata"},
+        "cache_write_tokens": {"type": ["integer"], "class": "metadata"},
+        "completion_tokens": {"type": ["integer"], "class": "metadata"},
+        "reasoning_tokens": {"type": ["integer"], "class": "metadata"},
+        "reasoning_chars": {"type": ["integer"], "class": "metadata"},
+        "finish": {"type": ["string"], "class": "metadata"}
+      }
+    },
+    "escalation": {
+      "required": {
+        "role": {"type": ["string"], "class": "metadata"},
+        "depth": {"type": ["integer"], "class": "metadata"},
+        "trigger": {"type": ["string"], "class": "metadata"},
+        "at_step": {"type": ["integer"], "class": "metadata"},
+        "from": {"type": ["object"], "class": "metadata", "note": "{model, endpoint}: names only"},
+        "to": {"type": ["object"], "class": "metadata", "note": "{model, endpoint}: names only"},
+        "carried": {"type": ["string"], "class": "metadata"},
+        "handover_chars": {"type": ["integer"], "class": "metadata"},
+        "elapsed_ms": {"type": ["integer"], "class": "metadata"}
+      },
+      "optional": {
+        "max_steps_total_after": {"type": ["integer"], "class": "metadata"},
+        "detail": {"type": ["string"], "class": "metadata"},
+        "tokens_before": {"type": ["object"], "class": "metadata"},
+        "handover": {"type": ["string"], "class": "content", "note": "the handover text; written only under record = \"full\""}
+      }
+    },
+    "eval_run": {
+      "required": {
+        "schema": {"type": ["string"], "class": "metadata"},
+        "mode": {"type": ["string"], "class": "metadata"},
+        "report": {"type": ["string"], "class": "identifier"},
+        "report_sha256": {"type": ["string"], "class": "identifier"},
+        "spec": {"type": ["object"], "class": "identifier", "note": "the spec's name and path"},
+        "role": {"type": ["string"], "class": "metadata"},
+        "arms": {"type": ["object"], "class": "metadata"},
+        "pairs": {"type": ["object"], "class": "metadata"},
+        "cells": {"type": ["object"], "class": "metadata"},
+        "endpoints": {"type": ["object"], "class": "metadata"},
+        "status": {"type": ["string"], "class": "metadata"},
+        "meets_thresholds": {"type": ["boolean", "string"], "class": "metadata", "note": "true, false or \"undetermined\" (enumerations: trial_verdict)"}
+      },
+      "optional": {}
+    },
+    "session_end": {
+      "required": {},
+      "optional": {
+        "turns": {"type": ["integer"], "class": "metadata"},
+        "surface_hash": {"type": ["string"], "class": "identifier"},
+        "signal": {"type": ["string"], "class": "metadata"},
+        "shadow": {"type": ["object"], "class": "metadata"},
+        "records_digest": {"type": ["string"], "class": "identifier"},
+        "records_count": {"type": ["integer"], "class": "metadata"},
+        "records_map": {"type": ["string"], "class": "identifier"},
+        "truncated": {"type": ["boolean"], "class": "metadata"},
+        "applied": {"type": ["boolean"], "class": "metadata"},
+        "surface_hash_after": {"type": ["string"], "class": "identifier"},
+        "error": {"type": ["string"], "class": "content", "note": "an error message; may quote a path or text from the failing operation"}
+      }
+    }
+  }
+}
