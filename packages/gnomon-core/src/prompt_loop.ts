@@ -60,6 +60,8 @@ import {
   MetaField,
   META_FIELDS,
   COT_MODES,
+  THINK_MODES,
+  type ThinkMode,
   loadConfig,
   auditSurface,
   probeEndpointAuth,
@@ -461,6 +463,12 @@ export interface PromptState {
    * what ran — this only spares the operator a re-read of it.
    */
   lastFold?: FoldStep[];
+  /**
+   * The last turn's reasoning (`✻`) and prose (`●`) blocks, whole, for
+   * `/expand think`. Display state like `lastFold`: never sent to the model,
+   * never saved. Bounded by THINK_KEEP_BYTES.
+   */
+  lastThink?: { kind: "reasoning" | "prose"; text: string }[];
   /**
    * Where over-long tool output is written instead of being discarded.
    *
@@ -3849,6 +3857,8 @@ export interface TurnDeps {
   ui: ResolvedUi;
   /** Emit a transcript line as work happens */
   say: (line: string) => void;
+  /** Columns `say` adds to the left of every line (the `┊` gutter of a delegated turn). */
+  gutter?: number;
   /** Aborted when the user presses Esc (or Ctrl+C) mid-turn */
   signal?: AbortSignal;
   /** Append-only trail; a disabled one is a no-op */
@@ -4213,7 +4223,22 @@ export function nestedDeps(deps: TurnDeps): TurnDeps {
       .map((l) => (l === "" ? l : `${gutter}${l}`))
       .join("\n");
   const warn = deps.warn ?? deps.say;
-  return { ...deps, say: (l) => deps.say(indent(l)), warn: (l) => warn(indent(l)) };
+  return {
+    ...deps,
+    gutter: (deps.gutter ?? 0) + 3,
+    say: (l) => deps.say(indent(l)),
+    warn: (l) => warn(indent(l)),
+  };
+}
+
+/** Most reasoning text `/expand think` keeps from one turn. */
+const THINK_KEEP_BYTES = 256 * 1024;
+
+/** Remember a reasoning/prose block for `/expand think`, up to the bound. */
+function keepThink(state: PromptState, kind: "reasoning" | "prose", text: string): void {
+  const kept = (state.lastThink ??= []);
+  const room = THINK_KEEP_BYTES - kept.reduce((n, b) => n + b.text.length, 0);
+  if (room > 0) kept.push({ kind, text: text.length > room ? text.slice(0, room) : text });
 }
 
 /** Result of one agentic turn, before it becomes a PromptExchange. */
@@ -6031,13 +6056,26 @@ async function agenticTurn(
   };
   /** Reasoning as the trace shows it: `✻`, muted, at /think's verbosity. */
   const sayReasoning = (text: string, uses: string[] = []): void => {
+    keepThink(state, "reasoning", text);
     // `·uses <skill>`: which loaded skill this reasoning names. Appended to the
     // first row, which is clipped to leave room for it.
     const tag = uses.length > 0 ? `  ·uses ${uses.join(", ")}` : "";
-    traceLines(text, deps.ui.think, Math.max(20, terminalWidth() - tag.length)).forEach((line, i) =>
+    traceLines(text, deps.ui.think, Math.max(20, terminalWidth() - tag.length), {
+      reserve: 6 + (deps.gutter ?? 0),
+      hint: takeThinkHint(),
+    }).forEach((line, i) =>
       say(paint(deps.ui, "gray", `  ${i === 0 ? "✻" : " "} ${line}`) + (i === 0 && tag ? paint(deps.ui, "magenta", tag) : ""))
     );
   };
+  // The "how to see more" hint names two commands; once a turn is enough.
+  let thinkHintShown = false;
+  const takeThinkHint = (): boolean => {
+    if (thinkHintShown) return false;
+    thinkHintShown = true;
+    return true;
+  };
+  // `/expand think` is about the last top-level turn; a delegated one adds to it.
+  if (depth === 0) state.lastThink = [];
 
   /**
    * Announce a degradation on a channel nobody can silence.
@@ -9265,7 +9303,11 @@ async function agenticTurn(
       if (reasoning) sayReasoning(reasoning, uses);
       const rationale = split.answer.trim();
       if (rationale && rationale !== lastRationale) {
-        traceLines(rationale, deps.ui.think === "hide" ? "collapse" : deps.ui.think, columns).forEach((line, i) =>
+        keepThink(state, "prose", rationale);
+        traceLines(rationale, deps.ui.think === "hide" ? "collapse" : deps.ui.think, columns, {
+          reserve: 6 + (deps.gutter ?? 0),
+          hint: takeThinkHint(),
+        }).forEach((line, i) =>
           say(i === 0 ? `  ${paint(deps.ui, "bold", "●")} ${line}` : `    ${line}`)
         );
       }
@@ -11568,7 +11610,7 @@ export function completeInput(
   if (thinkArg) {
     const partial = thinkArg[1];
     return [
-      ["hide", "collapse", "show"].filter((m) => m.startsWith(partial)),
+      THINK_MODES.filter((m) => m.startsWith(partial)),
       partial,
     ];
   }
@@ -12600,15 +12642,17 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       if (!mode) {
         console.log(`\nChain-of-thought: ${ui.think}`);
         console.log(`  hide      — drop reasoning entirely`);
-        console.log(`  collapse  — one line, so you see it happened`);
-        console.log(`  show      — full reasoning block`);
+        console.log(`  collapse  — first 3 lines, one row each, cut at a word (compact; default)`);
+        console.log(`  wrap      — first 3 lines written out whole, word-wrapped (max 12 rows)`);
+        console.log(`  show      — everything, word-wrapped`);
+        console.log(`/expand think reprints the last turn's reasoning in full.`);
         return true;
       }
-      if (mode !== "hide" && mode !== "collapse" && mode !== "show") {
-        console.log(`\nUnknown mode: "${mode}". Use: hide | collapse | show`);
+      if (!(THINK_MODES as string[]).includes(mode)) {
+        console.log(`\nUnknown mode: "${mode}". Use: ${THINK_MODES.join(" | ")}`);
         return true;
       }
-      ui.think = mode;
+      ui.think = mode as ThinkMode;
       console.log(`\nChain-of-thought: ${ui.think}`);
       console.log(`Session only — edit [ui].think in .gnomon/config.toml to make it stick.`);
       return true;
@@ -12641,6 +12685,27 @@ export function processCommand(cmd: string, state: PromptState): boolean {
 
     case "/expand": {
       const ui = uiOf(state);
+      if ((parts[1] ?? "").trim() === "think") {
+        const blocks = state.lastThink ?? [];
+        if (blocks.length === 0) {
+          console.log(`\nNo reasoning or prose from the last turn to expand.`);
+          return true;
+        }
+        const columns = terminalWidth();
+        console.log(`\n${blocks.length} block(s) from the last turn, in full:`);
+        for (const b of blocks) {
+          traceLines(b.text, "show", columns).forEach((line, i) =>
+            console.log(
+              b.kind === "reasoning"
+                ? paint(ui, "gray", `  ${i === 0 ? "✻" : " "} ${line}`)
+                : i === 0
+                  ? `  ${paint(ui, "bold", "●")} ${line}`
+                  : `    ${line}`
+            )
+          );
+        }
+        return true;
+      }
       const steps = state.lastFold ?? [];
       if (steps.length === 0) {
         console.log(`\nNothing folded yet this session.`);

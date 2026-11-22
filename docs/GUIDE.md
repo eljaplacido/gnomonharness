@@ -1129,7 +1129,7 @@ Press **Tab** after `/` to list everything. These matter most:
 | `/network on\|off` · `/sandbox off\|confined\|strict` | Session-only consent dials. The surface default is untouched. |
 | `/session [id]` · `/new` | Switch sessions · start a fresh one (the old one stays resumable) |
 | `/context` · `/todo` · `/manifest` | The window · the agent's checklist · the surface hash and what it covers |
-| `/cot MODE` · `/think MODE` · `/expand` | How much of the live trace and reasoning to show · list the steps in the last folded run |
+| `/cot MODE` · `/think MODE` · `/expand [think]` | How much of the live trace and reasoning to show (`/think`: `hide`, `collapse`, `wrap`, `show`) · list the steps in the last folded run, or reprint the last turn's reasoning in full |
 | `/skills` | Active skills: times fired, read and cited this session, estimated tokens per firing, and from the audit trail total firings, cited rate, last used and the latest trial verdict; pending proposals |
 | `/quit` | Leave. See the note on sealing in [section 9](#9-troubleshooting). |
 
@@ -1148,6 +1148,15 @@ so a skill the model ignores simply shows as loaded and uncited. `gnomon skill
 mine` turns those records into signals: a skill loaded five or more times and
 never cited (tighten its `match`, or prune it), one cited in at least half its
 firings (a candidate for `gnomon skill trial`), and its context cost per firing.
+
+`/think` sets how reasoning (`✻`) and prose (`●`) read in the live trace.
+`collapse` (the default) is compact: the first three lines, one row each, cut at
+a word, with a hint once per turn. `wrap` writes those lines out whole,
+word-wrapped to the terminal and capped at 12 rows. `show` prints everything,
+wrapped with a hanging indent for list items. `hide` drops it. Set the default
+with `[ui] think = "wrap"` in `config.toml`. Rows never exceed the terminal
+width, including under the `┊` gutter of a delegated turn, so the spinner can
+erase them. `/expand think` reprints the last turn's reasoning in full.
 
 **Esc** cancels the turn in progress. Anything you type during a turn is queued.
 

@@ -3,7 +3,8 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { splitThinking, renderMeta, renderExchange, Progress, paint, THEMES, terminalThemeSequence, safeForPrompt, traceLines, summaryResult, outputGlimpse, fitRow } from "./render.js";
+import { visibleWidth } from "./width.js";
+import { splitThinking, renderMeta, renderExchange, Progress, paint, THEMES, terminalThemeSequence, safeForPrompt, traceLines, summaryResult, outputGlimpse, fitRow, wordWrap } from "./render.js";
 import { ResolvedUi, parseMetaFields, META_FIELDS } from "./config.js";
 import { PromptExchange } from "./prompt_loop.js";
 
@@ -491,6 +492,102 @@ describe("traceLines", () => {
     const [line] = traceLines("cannot edit.\rI should", "collapse", 80);
     expect(line).not.toContain("\r");
     expect(line).toContain("\\x0d");
+  });
+});
+
+const LONG =
+  "Let me think about how the parser handles a nested quote, because the failing case has a quote inside a quote and the tokenizer resets its state at the first closing one, which is the bug I suspect.";
+
+describe("wordWrap", () => {
+  it("breaks at spaces and never past the width", () => {
+    const rows = wordWrap(LONG, 40);
+    expect(rows.length).toBeGreaterThan(3);
+    for (const r of rows) expect(visibleWidth(r)).toBeLessThanOrEqual(40);
+    // Nothing lost, nothing split mid-word.
+    expect(rows.join(" ")).toBe(LONG);
+  });
+
+  it("hard-splits only a word longer than the row", () => {
+    const rows = wordWrap(`see ${"x".repeat(50)} done`, 20);
+    for (const r of rows) expect(visibleWidth(r)).toBeLessThanOrEqual(20);
+    expect(rows.join("").replace(/ /g, "")).toBe(`see${"x".repeat(50)}done`);
+    expect(wordWrap("short words only", 20)).toEqual(["short words only"]);
+  });
+
+  it("hangs a list item's continuation rows under its text", () => {
+    const dash = wordWrap("- one two three four five six seven eight", 16);
+    expect(dash[0].startsWith("- ")).toBe(true);
+    for (const r of dash.slice(1)) expect(r.startsWith("  ") && !r.startsWith("   ")).toBe(true);
+    const num = wordWrap("12. one two three four five six seven eight", 18);
+    expect(num[0].startsWith("12. ")).toBe(true);
+    for (const r of num.slice(1)) expect(r.startsWith("    ")).toBe(true);
+  });
+
+  it("counts a wide character as two columns", () => {
+    const rows = wordWrap("日本語 日本語 日本語 日本語", 10);
+    for (const r of rows) expect(visibleWidth(r)).toBeLessThanOrEqual(10);
+    expect(rows.length).toBeGreaterThan(1);
+    const tall = wordWrap("日".repeat(20), 10);
+    for (const r of tall) expect(visibleWidth(r)).toBeLessThanOrEqual(10);
+  });
+
+  it("escapes control characters", () => {
+    const rows = wordWrap("a\rb\x1b[31m red", 40);
+    expect(rows.join("")).not.toMatch(/[\r\x1b]/);
+    expect(rows.join("")).toContain("\\x0d");
+  });
+});
+
+describe("traceLines modes", () => {
+  const para = [LONG, "second line that is also fairly long and needs more than one row at sixty columns", "third", "fourth", "fifth"].join("\n");
+  const wide = (rows: string[], cols: number, reserve = 6) => rows.every((r) => visibleWidth(r) <= cols - reserve);
+
+  it("collapse is one row per line, cut at a word, and the hint names both ways out", () => {
+    const rows = traceLines(para, "collapse", 60);
+    expect(rows).toHaveLength(4);
+    expect(wide(rows.slice(0, 3), 60)).toBe(true);
+    expect(rows[0].endsWith("…")).toBe(true);
+    // The cut falls on a space of the original, never inside a word.
+    expect(LONG[rows[0].length - 1]).toBe(" ");
+    expect(rows[3]).toMatch(/2 more line\(s\).*\/think wrap.*\/think show/);
+    expect(traceLines(para, "collapse", 60, { hint: false })[3]).toBe("… 2 more line(s)");
+  });
+
+  it("collapse says so when only a row was cut", () => {
+    const rows = traceLines(LONG, "collapse", 60);
+    expect(rows).toHaveLength(2);
+    expect(rows[1]).toMatch(/\/think wrap/);
+    expect(traceLines(LONG, "collapse", 60, { hint: false })).toHaveLength(1);
+    expect(traceLines("short", "collapse", 60)).toEqual(["short"]);
+  });
+
+  it("wrap writes the first three lines out whole, in rows that fit", () => {
+    const rows = traceLines(para, "wrap", 60);
+    expect(wide(rows.slice(0, -1), 60)).toBe(true);
+    expect(rows.slice(0, -1).join(" ")).toContain(LONG);
+    expect(rows.at(-1)).toBe("… 2 more line(s) — /think show");
+    expect(traceLines("a\nb", "wrap", 60)).toEqual(["a", "b"]);
+  });
+
+  it("wrap stops at 12 rows and counts what it did not finish", () => {
+    const big = `${"word ".repeat(400)}\nnext`;
+    const rows = traceLines(big, "wrap", 60);
+    expect(rows).toHaveLength(13);
+    expect(rows[12]).toMatch(/2 more line\(s\)/);
+  });
+
+  it("show prints everything, wrapped to fit", () => {
+    const rows = traceLines(para, "show", 60);
+    expect(wide(rows, 60)).toBe(true);
+    expect(rows.join(" ")).toContain("fifth");
+    expect(rows.some((r) => r.includes("more line"))).toBe(false);
+  });
+
+  it("a gutter's columns come out of the room, in every mode", () => {
+    for (const mode of ["collapse", "wrap", "show"] as const) {
+      const rows = traceLines(para, mode, 60, { reserve: 9, hint: false });
+      expect(wide(rows.filter((r) => !r.startsWith("…")), 60, 9), mode).toBe(true);
+    }
   });
 });
 

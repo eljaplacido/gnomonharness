@@ -267,7 +267,7 @@ export type MetaField =
   | "tools";
 
 export type MetaStyle = "line" | "compact";
-export type ThinkMode = "hide" | "collapse" | "show";
+export type ThinkMode = "hide" | "collapse" | "wrap" | "show";
 
 /**
  * How much of the live "while it works" trace to show, set by /cot:
@@ -2065,7 +2065,7 @@ export const META_FIELDS: MetaField[] = [
 ];
 
 const META_STYLES: MetaStyle[] = ["line", "compact"];
-const THINK_MODES: ThinkMode[] = ["hide", "collapse", "show"];
+export const THINK_MODES: ThinkMode[] = ["hide", "collapse", "wrap", "show"];
 export const COT_MODES: CotMode[] = ["off", "brief", "tools", "think", "work", "full"];
 
 /**

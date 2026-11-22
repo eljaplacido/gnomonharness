@@ -1136,7 +1136,7 @@ See [Roles and the Trust Dial](#roles-and-the-trust-dial).
 [ui]
 meta = ["turn", "role", "model", "bucket", "duration", "context", "tokens", "tools"]
 meta_style = "line"               # line | compact
-think = "collapse"                # hide | collapse | show
+think = "collapse"                # hide | collapse | wrap | show
 spinner = true
 color = true
 markdown = true
@@ -1146,8 +1146,10 @@ theme = "dark"                    # dark | dim | light | high-contrast | mono | 
 `meta` is an ordered list drawn from `turn`, `role`, `model`, `bucket`,
 `duration`, `context`, `tokens`, `think`, `tools`; an empty list shows no meta
 line. `think` controls how much chain-of-thought survives — reasoning models
-wrap their scratchpad in `<think>…</think>`, and `collapse` shows one line of
-it so you can see it happened without reading it.
+wrap their scratchpad in `<think>…</think>`. `collapse` (the default) shows three
+rows, each cut at a word, so you can see it happened without reading it; `wrap`
+writes the first three lines out whole, word-wrapped, up to 12 rows; `show`
+prints everything, wrapped. No row ever outruns the terminal.
 
 `theme` sets the palette the loop draws in — `dark` (default), `dim`, `light`,
 `high-contrast`, and `mono` recolour gnomon's own output only. `tokyonight` and
@@ -3583,7 +3585,7 @@ undiscoverable.
 | `/manifest` | The surface hash and what it covers |
 | `/reset` | Alias for `/new`. It does **not** clear history in place — that overwrote the record |
 | `/meta [fields]` | Set the meta line — `/meta all`, `/meta none`, `/meta style compact` |
-| `/think [mode]` | Chain-of-thought: `hide` \| `collapse` \| `show` |
+| `/think [mode]` | Chain-of-thought: `hide` \| `collapse` (one cut row per line) \| `wrap` (first lines written out whole, word-wrapped) \| `show` (everything, wrapped). `/expand think` reprints the last turn's reasoning in full. |
 | `/cot [mode]` | Live trace while it works: `off` \| `brief` \| `tools` \| `think` \| `work` \| `full`. `work` is the default: it shows reasoning and prose in full, and folds a run of steps that succeeded and changed nothing into one line. `full` never folds. |
 | `/expand` | List the steps inside the last folded run. |
 | `/theme [name]` | Colour theme; `tokyonight`/`catppuccin` recolour the whole terminal |
@@ -3614,7 +3616,8 @@ Reasoning is shown whichever way the model sends it: a reasoning field
 `reasoning_details`), thinking content parts (Mistral, Anthropic-shaped
 relays), or inline markup (`<think>`, Seed's `<seed:think>`, Gemma 4's
 thought channel, gpt-oss Harmony, and the rest listed in
-[GUIDE §5](docs/GUIDE.md#5-model-setup-recipes)). `/think show` prints all of it; the default
+[GUIDE §5](docs/GUIDE.md#5-model-setup-recipes)). `/think show` prints all of it, `/think wrap` the first lines whole, and
+`/expand think` reprints the last turn's reasoning in full; the default
 `collapse` shows three rows. Skills a turn loads print as `◆ skills`, with
 the word that fired each; a skill the model opens itself prints as
 `◆ skill`, and a delegated turn shows its own. Each loaded skill carries its
