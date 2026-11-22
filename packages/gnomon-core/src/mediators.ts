@@ -26,6 +26,7 @@
  * them on stderr; that changes what is said, never what is sent.
  */
 import { isLocalEndpoint, type RouteTarget, type TokenEstimate } from "./config.js";
+import type { MessageTokenOptions, TokenBearing } from "./message_tokens.js";
 import { isAnthropicTarget, promptCacheOn } from "./prompt_cache.js";
 
 /**
@@ -39,11 +40,14 @@ export type SteerKind = "nudge" | "converge" | "other";
  * Why the working context was trimmed. `leg`: the leg checkpoint, every
  * `max_steps` calls, to 60% of the window. `overflow`: the provider refused
  * the request as too long (code 13) and gnomon trimmed to 50% and sent it
- * again. There is no per-request window check: between two checkpoints a
- * request can grow past the window, and `prompt_tokens` against `window` in
- * this record is where that shows.
+ * again. `pre_call`: the estimate of the next request exceeded a window the
+ * endpoint's own listing or the surface declared (never the unresolved
+ * default), so gnomon trimmed to the leg budget before sending it rather than
+ * waiting for the provider to refuse it. Against an unresolved window there is
+ * still no per-request check: between two checkpoints a request can grow past
+ * it, and `prompt_tokens` against `window` in this record is where that shows.
  */
-export type TrimWhy = "leg" | "overflow";
+export type TrimWhy = "leg" | "overflow" | "pre_call";
 
 /** A trim, recorded on the first request after it. Tokens are gnomon's estimate. */
 export interface TrimRecord {
@@ -162,7 +166,7 @@ export interface ModelCallsRecord {
    * last MAX_CALL_ENTRIES are kept.
    */
   steer_messages?: SteerMessageRecord[];
-  trims: { leg: number; overflow: number; dropped: number };
+  trims: { leg: number; overflow: number; dropped: number; pre_call?: number };
   /** `i` of `calls[0]`, when the oldest entries were let go */
   first?: number;
   /** The last 512 requests */
@@ -265,8 +269,8 @@ export const RATIO_MAX = 4;
 export type TokenCalibration = Map<string, { prompt: number; est: number; calls: number }>;
 
 export interface CallLedgerOptions {
-  /** gnomon's estimate of a string: estimateTokens */
-  estimate: (text: string) => number;
+  /** gnomon's estimate of one message: messageTokens, the one every context decision uses */
+  estimate: (m: TokenBearing, opts?: MessageTokenOptions) => number;
   /** The window of a target: resolveContext(config, target).max_context_tokens */
   windowOf: (target: RouteTarget) => number;
   /** The target the turn starts on */
@@ -332,7 +336,9 @@ export class CallLedger {
   /** A trim of `working`; recorded on the next request that sends that list. */
   trimmed(working: object, t: TrimRecord): void {
     this.pending.set(working, t);
-    this.sent.trims[t.why]++;
+    // `pre_call` is present only once there has been one, so a turn without one
+    // keeps the record it always had.
+    this.sent.trims[t.why] = (this.sent.trims[t.why] ?? 0) + 1;
     this.sent.trims.dropped += t.dropped;
   }
 
@@ -393,10 +399,11 @@ export class CallLedger {
     const i = ++s.count;
 
     let est = 0;
-    for (const m of o.messages) est += estimate(m.content);
-    // Sent only to an OpenAI-shaped endpoint with replay on -- declared, or
-    // on by default once it answered a tool call with reasoning
-    // (callEndpoint's wire filter, on the adapted target): counted only there.
+    // Replayed reasoning costs tokens only where the target is sent it (declared
+    // on, or on by default once it answered a tool call with reasoning:
+    // callEndpoint's wire filter, on the adapted target).
+    for (const m of o.messages) est += estimate(m, { reasoning: o.target.replayReasoning === true });
+    // `replayed` counts only an OpenAI-shaped endpoint, where it goes out as reasoning_content.
     const carries = (o.target.kind ?? "ollama") !== "ollama" && o.target.replayReasoning === true;
     let replayed = 0;
     let lead = 0;

@@ -36,11 +36,10 @@
  * block the prompt carries.
  */
 import { createHash } from "node:crypto";
-// A cycle, used only inside function bodies (never at module scope), the way
-// config.ts and skills.ts already import each other: the estimator is the one
-// trimWorking slides the window with, and a second copy would be a second
-// definition of a token.
-import { estimateTokens as estimate, type ChatMessage } from "./prompt_loop.js";
+// The estimator the trims slide the window with; a second copy would be a
+// second definition of a token.
+import { estimateTokens as estimate, messagesTokens, type MessageTokenOptions } from "./message_tokens.js";
+import type { ChatMessage } from "./prompt_loop.js";
 import type { ResolvedMasking } from "./config.js";
 import { mapBucket } from "./session.js";
 import { pipelineStatusNote } from "./tools.js";
@@ -170,9 +169,12 @@ export function maskObservations(
   meta: WeakMap<ChatMessage, ObservationMeta>,
   spec: ResolvedMasking,
   windowTokens: number,
-  lastChangeSeq: number
+  lastChangeSeq: number,
+  /** What the request carries beyond text: replayed reasoning, when the target replays it */
+  tokenOpts: MessageTokenOptions = {}
 ): MaskBatch | null {
-  const tokensBefore = working.reduce((n, m) => n + estimate(m.content), 0);
+  // The same estimate as the trims (messageTokens): tool-call arguments count.
+  const tokensBefore = messagesTokens(working, tokenOpts);
   if (tokensBefore < spec.at_fill * windowTokens) return null;
 
   const toolAt: number[] = [];

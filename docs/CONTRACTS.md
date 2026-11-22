@@ -2620,7 +2620,7 @@ the surface, so it is outside `volatile`.
 | `est_max` | the largest request, by `est` |
 | `replayed_calls` | requests that carried replayed reasoning |
 | `steered_calls` | `{nudge, converge, other}`: requests carrying at least one steering message of that kind |
-| `trims` | `{leg, overflow, dropped}`: trims by reason, and the messages they dropped |
+| `trims` | `{leg, overflow, dropped}`, and `pre_call` once there has been one: trims by reason, and the messages they dropped |
 | `first` | `i` of `calls[0]`, present only when older entries were let go |
 | `steer_messages` | each of gnomon's mid-turn messages once, on the first request that carried it: `{i, kind, via, delivered}` (§39). Present once there is one; the last 512 |
 | `calls` | the last 512 requests, one entry each (below) |
@@ -2636,15 +2636,17 @@ One entry per request:
 | `steer` | gnomon's own system messages after the leading ones, present in the request, by kind: `nudge` (the idle nudge), `converge` (the convergence push), `other` (a trim's ledger, a failed check, the wrap-up, a context notice) |
 | `via` | `system`, or `user` under `steer_role = "user"` (declared, or learned from a refusal): the role they went out in. Present with `steer` |
 | `delivered` | beside `via`, always: `true` when that channel is known to reach the model (user content; a late system message to a remote endpoint), `false` for a late system message to a local lane, whose chat templates dropped every one on the M2 lanes (§39) |
-| `trim` | a trim since the request before: `why` (`leg`: the leg checkpoint; `overflow`: the provider refused the request as too long, code 13, and gnomon trimmed to 50% to send it again), `dropped` messages, the working context's estimate `before` and `after`, the `budget` it was trimmed to, and the `ratio` it was divided by under `calibrated` |
+| `trim` | a trim since the request before: `why` (`leg`: the leg checkpoint; `overflow`: the provider refused the request as too long, code 13, and gnomon trimmed to 50% to send it again; `pre_call`: the estimate of the request about to go out exceeded a window the surface declared or `auto` read from the endpoint, never the `[defaults]` fallback, and gnomon trimmed to the leg budget before sending it), `dropped` messages, the working context's estimate `before` and `after`, the `budget` it was trimmed to, and the `ratio` it was divided by under `calibrated` |
 | `leg` | the turn's leg, from 2 on |
 | `depth` | `1` for a request a delegated sub-turn (the `task` tool) made; its requests are its parent's |
 | `window` | this request's window, when its target's differs from the turn's (a fallback) |
 
 Absent keys mean none: no `replayed` is no reasoning replayed, no `steer` is no
-steering present. There is no per-request window check: between two
-checkpoints a request can grow past the window, and `prompt_tokens` against
-`window` below is where that shows.
+steering present. Against a window that is only `[defaults]`'s fallback
+(`max_context_tokens_source = "default"`) there is no per-request window check:
+between two checkpoints a request can grow past the window, and `prompt_tokens`
+against `window` below is where that shows. Against a declared or `auto`-read
+window, a request whose estimate exceeds it is trimmed first (`pre_call`).
 
 **What came back: `model_calls`.** Under `volatile` on the `TaskRecord`, as
 `tokens_in` is, because it is the backend's measurement and the clock. As
@@ -2688,7 +2690,7 @@ keep their meaning):
 | `context_window` | `counters.model_calls.window` |
 | `context_budget` | `counters.model_calls.budget` |
 | `context_estimate` | `chars4` or `calibrated` |
-| `context_trims` | trims made in the turn, both reasons |
+| `context_trims` | trims made in the turn, every reason |
 | `context_trimmed` | messages they dropped |
 
 **`[context] token_estimate`** (config.toml, content-hashed with the surface):
