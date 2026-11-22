@@ -26,6 +26,15 @@
 
 ## [Unreleased]
 
+### Added — dashboard v2: the per-project Lens (spec to verify)
+
+- `gnomon dashboard` gains a Lens screen per project (`#/lens/<project>`, linked from each project card) and
+  `GET /api/p/<id>/lens` plus `/lens/run?name=<trail>`: intent (the `[verify]` check, trial specs, requests), runs
+  (harnesses, roles, delegations, models, skills, hand-offs), evidence (tests, verify verdicts, checks, evals, gates),
+  governance and measures (tokens, cache share, latency, context fill, trims, cost only when recorded). Evidence is a
+  quorum meter, one segment per kind, never a score; a per-session swimlane and a path map show how each request was
+  worked. Read-only, cached per trail mtime. Depends on the v2 module registry (feat/dashboard-v2-base).
+
 ### Fixed — two trace rows wrapped at 80 columns
 
 - The once-per-session "0 cached prompt tokens" notice now wraps to the terminal width with a hanging indent under

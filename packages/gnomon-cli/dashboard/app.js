@@ -642,6 +642,7 @@ function projectCard(p) {
     h("div", { class: "cardfoot" },
       actionButton("check.run", "Run check", { params: { rev: "HEAD~1" }, pid: p.id, run: () => runCheck("HEAD~1", p.id) }),
       h("button", { type: "button", class: "btn", text: "Verify trail", onClick: () => verifyNow(null, p.id) }),
+      h("a", { class: "btn", href: `#/lens/${p.id}` }, "Lens", icon(ICONS.arrow, 16)),
       h("a", { class: "btn", href: `#/session/${p.id}` }, "Sessions", icon(ICONS.arrow, 16))));
 }
 
