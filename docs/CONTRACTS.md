@@ -2271,9 +2271,14 @@ declares its own in `[endpoints.<name>] max_context_tokens`:
   degradation. A listing that answers 404 is the common case in front of a
   metering relay, and is one of the tested paths.
 
-The turn record's `wire` carries two keys, both absent for an endpoint that
-declares no window, so a record from a surface that never uses the key is the
-record it was before it existed:
+An endpoint that declares no window, on a surface whose `[defaults]` declares
+none either, is asked as `"auto"` is when its chat route has a listing to ask
+(a URL ending `/chat/completions`, or an Ollama endpoint); it records the
+same keys. A number at either level wins, and nothing is asked. The turn
+record's `wire` carries two keys, absent for an endpoint that declares nothing
+and has no listing route to ask, or whose `[defaults]` declares the number,
+so a record from a surface that never uses the key is the record it was
+before it existed:
 
 | `max_context_tokens_source` | `max_context_tokens` is |
 |---|---|

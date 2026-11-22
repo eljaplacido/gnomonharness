@@ -7,7 +7,7 @@
  * token window, and every leg checkpoint trimmed its working context to ~39k.
  * Every server here is a fake on 127.0.0.1; nothing reaches a network.
  */
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
@@ -21,6 +21,7 @@ import {
   windowFromModelList,
   windowFromLlamaProps,
   windowFromOllamaShow,
+  ollamaShowExtras,
   windowProbes,
   rememberedWindow,
   forgetContextWindows,
@@ -29,6 +30,7 @@ import {
 } from "./context_window.js";
 import {
   runAgenticTurn,
+  buildMessages,
   runTask,
   settleContextWindows,
   undeclaredWindowNotes,
@@ -43,7 +45,13 @@ const FIXTURE = JSON.parse(readFileSync(join(REPO, "conformance", "endpoint_wind
 
 let servers: Server[] = [];
 const roots: string[] = [];
+// This file is about the lookup, so it is on here; the rest of the suite runs
+// with it off (vitest.setup.ts) because it scripts one fetch per model call.
+beforeEach(() => {
+  delete process.env.GNOMON_WINDOW_LOOKUP;
+});
 afterEach(async () => {
+  process.env.GNOMON_WINDOW_LOOKUP = "off";
   for (const s of servers) {
     s.closeAllConnections?.();
     await new Promise<void>((r) => s.close(() => r()));
@@ -434,9 +442,9 @@ describe("the cache", () => {
 });
 
 describe("what an existing surface gets: unchanged", () => {
-  it("an endpoint that declares nothing records neither key, and nothing asks it for a listing", async () => {
+  it("an endpoint that declares nothing records neither key, and nothing asks it for a listing, when [defaults] declares the number", async () => {
     const { url, hits } = await fake({ chat: [answer("ok")] });
-    const config = loadConfig(surface(url));
+    const config = loadConfig(surface(url, { defaults: "max_context_tokens = 65536" }));
     const route = routeRole(config, "smol");
     expect(route.target.contextTokens).toBeUndefined();
     expect(route.target.contextSource).toBeUndefined();
@@ -478,7 +486,7 @@ describe("what an existing surface gets: unchanged", () => {
 
   it("a remote endpoint on the undeclared default gets a startup note naming the key; local, declared and auto do not", async () => {
     const { url } = await fake();
-    const remote = loadConfig(surface("https://relay.example.invalid/v1/chat/completions"));
+    const remote = loadConfig(surface("https://relay.example.invalid/v1/chat/completions", { defaults: "max_context_tokens = 65536" }));
     const notes = undeclaredWindowNotes(remote, ["smol"]);
     expect(notes).toHaveLength(1);
     expect(notes[0]).toContain('endpoint "target"');
@@ -488,7 +496,7 @@ describe("what an existing surface gets: unchanged", () => {
     // A note only: the route is the one an undeclared endpoint always got.
     expect(routeRole(remote, "smol").target.contextTokens).toBeUndefined();
 
-    expect(undeclaredWindowNotes(loadConfig(surface(url)), ["smol"])).toEqual([]);
+    expect(undeclaredWindowNotes(loadConfig(surface(url, { defaults: "max_context_tokens = 65536" })), ["smol"])).toEqual([]);
     const declared = loadConfig(surface("https://relay.example.invalid/v1/chat/completions", { endpoint: "max_context_tokens = 1000000" }));
     expect(undeclaredWindowNotes(declared, ["smol"])).toEqual([]);
     const auto = loadConfig(surface("https://relay.example.invalid/v1/chat/completions", { endpoint: AUTO }));
@@ -549,7 +557,8 @@ describe("the leg checkpoint, in the loop", () => {
     expect(plain.said).toMatch(/turn grew past the window — dropped \d+/);
     expect(fillersIn(plain.chat[2]!)).toBeLessThan(FILLER);
     expect(fillersIn(plain.chat[2]!)).toBeGreaterThan(0);
-    expect(plain.turn.wire?.max_context_tokens).toBeUndefined();
+    // Nothing declared: asked, and /models 404ed, so the default, said so.
+    expect(plain.turn.wire).toMatchObject({ max_context_tokens: 65_536, max_context_tokens_source: "default" });
 
     // Auto: 0.6 x 1,000,000, so nothing is dropped.
     expect(auto.said).not.toMatch(/turn grew past the window/);
@@ -572,3 +581,205 @@ describe("the leg checkpoint, in the loop", () => {
     expect(norm(missed)).toBe(norm(plain));
   });
 });
+
+// ---------------------------------------------------------------------------
+// B1 (2026-11-22): nothing declared asks the endpoint, as "auto" does.
+// ---------------------------------------------------------------------------
+
+const DEFAULTS_65K = "max_context_tokens = 65536";
+
+describe("a window declared nowhere is asked of the endpoint (B1)", () => {
+  it("a hosted listing that publishes one is used, cached, and recorded as the listing", async () => {
+    const { url, hits } = await fake({ models: listing({ id: "m1", limit: { context: 1_000_000 } }) });
+    const config = loadConfig(surface(url));
+    const before = routeRole(config, "smol");
+    expect(before.target).toMatchObject({ contextTokens: 65_536, contextSource: "default", contextAuto: true, contextImplicit: true });
+    const h = hooks(config);
+    const route = await settleContextWindows(config, before, h.h);
+    expect(route.target).toMatchObject({ contextTokens: 1_000_000, contextSource: "listing:opencode" });
+    expect(h.said.join("\n")).toContain("window 1000000 tokens");
+    expect(h.warned).toEqual([]);
+    expect(h.recs).toEqual([]);
+    // Once per process and URL+model: the second settle asks nothing.
+    await settleContextWindows(config, routeRole(config, "smol"), hooks(config).h);
+    expect(hits).toEqual(["GET /v1/models"]);
+    expect(routeRole(config, "smol").target.contextTokens).toBe(1_000_000);
+    expect(wireOf(routeRole(config, "smol").target)).toMatchObject({
+      max_context_tokens: 1_000_000,
+      max_context_tokens_source: "listing:opencode",
+    });
+  });
+
+  it("history replay and the turn's trim both use the resolved window", async () => {
+    const big = await legTurn_("", { models: listing({ id: "m1", limit: { context: 1_000_000 } }) });
+    const none = await legTurn_("", {});
+    expect(big.turn.code).toBe(0);
+    expect(big.said).not.toMatch(/turn grew past the window/);
+    expect(fillersIn_(big.chat[2]!)).toBe(FILLER_);
+    expect(big.turn.wire).toMatchObject({ max_context_tokens: 1_000_000, max_context_tokens_source: "listing:opencode" });
+    expect(none.said).toMatch(/turn grew past the window — dropped \d+/);
+    expect(fillersIn_(none.chat[2]!)).toBeLessThan(FILLER_);
+  });
+
+  it("a small resolved window trims below the default, before the call (llama.cpp /props)", async () => {
+    const small = await legTurn_("", { props: { body: { default_generation_settings: { n_ctx: 16_384 } } } });
+    expect(small.turn.wire).toMatchObject({ max_context_tokens: 16_384, max_context_tokens_source: "listing:llamacpp" });
+    // 60k of filler cannot ride in a 16k window: dropped, at the first step boundary.
+    expect(small.said).toMatch(/dropped \d+/);
+    expect(fillersIn_(small.chat[1]!)).toBeLessThan(FILLER_);
+  });
+
+  it("a relay that 404s /models behaves as before: the default window, announced, recorded, `default`", async () => {
+    const { url, hits } = await fake({ chat: [answer("ok")] });
+    const config = loadConfig(surface(url));
+    const h = hooks(config);
+    const route = await settleContextWindows(config, routeRole(config, "smol"), h.h);
+    expect(route.target).toMatchObject({ contextTokens: 65_536, contextSource: "default" });
+    expect(h.warned.join("\n")).toContain("65536");
+    expect(h.recs).toHaveLength(1);
+    expect(h.recs[0]).toMatchObject({ kind: "degradation" });
+    expect(JSON.stringify(h.recs[0])).toContain("context_window_unresolved");
+    expect(hits).toEqual(["GET /v1/models", "GET /props"]);
+  });
+
+  it("an explicit number wins at the endpoint and at [defaults]; neither asks for a listing", async () => {
+    const f = await fake({ models: listing({ id: "m1", limit: { context: 1_000_000 } }) });
+    const atEndpoint = loadConfig(surface(f.url, { endpoint: "max_context_tokens = 32768" }));
+    expect((await settleContextWindows(atEndpoint, routeRole(atEndpoint, "smol"), hooks(atEndpoint).h)).target)
+      .toMatchObject({ contextTokens: 32_768, contextSource: "declared" });
+    const atDefaults = loadConfig(surface(f.url, { defaults: DEFAULTS_65K }));
+    const r = routeRole(atDefaults, "smol");
+    expect(r.target.contextTokens).toBeUndefined();
+    expect(resolveContext(atDefaults, r.target).max_context_tokens).toBe(65_536);
+    expect(await settleContextWindows(atDefaults, r, hooks(atDefaults).h)).toBe(r);
+    expect(f.hits).toEqual([]);
+  });
+
+  it("buildMessages sizes replay by the target's window", () => {
+    const config = loadConfig(surface("http://127.0.0.1:9/v1/chat/completions"));
+    const exchanges = Array.from({ length: 40 }, (_, i) => ({
+      input: `q${i} ${"x".repeat(4000)}`, output: `a${i} ${"y".repeat(4000)}`, role: "smol", code: 0,
+    })) as never;
+    const state = { config, exchanges, currentRole: "smol" } as never;
+    const small = buildMessages(state, "SYS", "next", { contextTokens: 8_192 });
+    const large = buildMessages(state, "SYS", "next", { contextTokens: 1_000_000 });
+    expect(large.included).toBe(40);
+    expect(small.included).toBeLessThan(large.included);
+    expect(buildMessages(state, "SYS", "next").included).toBeLessThan(40);
+  });
+
+  it("a kind with no listing route (no chat/completions path) is left as before: no lookup, no note", async () => {
+    const config = loadConfig(surface("https://relay.example.invalid/custom"));
+    const r = routeRole(config, "smol");
+    expect(r.target.contextTokens).toBeUndefined();
+    expect(r.target.contextAuto).toBeUndefined();
+    expect(await settleContextWindows(config, r, hooks(config).h)).toBe(r);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// B2: Ollama carries the context gnomon budgets for.
+// ---------------------------------------------------------------------------
+
+describe("Ollama's request carries num_ctx (B2)", () => {
+  const ollamaReply: Reply = { body: { message: { role: "assistant", content: "ok" }, done: true } };
+
+  it("a declared number goes out as options.num_ctx", async () => {
+    const f = await fake({ chat: [ollamaReply] });
+    const config = loadConfig(surface(`${f.base}/api/chat`, { kind: "ollama", endpoint: "max_context_tokens = 24576" }));
+    expect((await runTask(config, "hi", { role: "smol", yes: true })).code).toBe(0);
+    expect(f.chat[0]!.options).toMatchObject({ num_ctx: 24_576 });
+  });
+
+  it("[defaults] max_context_tokens is what an undeclaring Ollama endpoint's request carries", async () => {
+    const f = await fake({ chat: [ollamaReply] });
+    const config = loadConfig(surface(`${f.base}/api/chat`, { kind: "ollama", defaults: DEFAULTS_65K }));
+    await runTask(config, "hi", { role: "smol", yes: true });
+    expect(f.chat[0]!.options).toMatchObject({ num_ctx: 65_536 });
+  });
+
+  it("a Modelfile num_ctx found by /api/show (nothing declared) is sent and is the budget", async () => {
+    const f = await fake({
+      show: { body: { parameters: "num_ctx 16384", model_info: { "qwen3.context_length": 40_960 } } },
+      chat: [ollamaReply],
+    });
+    const config = loadConfig(surface(`${f.base}/api/chat`, { kind: "ollama" }));
+    const rec = await runTask(config, "hi", { role: "smol", yes: true });
+    expect(rec.code).toBe(0);
+    expect(f.chat[0]!.options).toMatchObject({ num_ctx: 16_384 });
+    expect(rememberedWindow({ url: `${f.base}/api/chat`, kind: "ollama", model: "m1" })).toMatchObject({
+      tokens: 16_384,
+      source: "listing:ollama",
+      modelfile: true,
+    });
+  });
+
+  it("a window that is only the trained length is not sent (it may be 262k of KV); the warning names the fix", async () => {
+    const f = await fake({
+      show: { body: { model_info: { "qwen3.context_length": 262_144 } } },
+      chat: [ollamaReply],
+    });
+    const config = loadConfig(surface(`${f.base}/api/chat`, { kind: "ollama" }));
+    const h = hooks(config);
+    const route = await settleContextWindows(config, routeRole(config, "smol"), h.h);
+    expect(route.target).toMatchObject({ contextTokens: 262_144, contextSource: "listing:ollama" });
+    expect(route.target.ollamaCtx).toBeUndefined();
+    const text = h.warned.join("\n");
+    expect(text).toContain("OLLAMA_CONTEXT_LENGTH");
+    expect(text).toContain("num_ctx");
+    // Said once: the second settle is cached and silent.
+    const again = hooks(config);
+    await settleContextWindows(config, routeRole(config, "smol"), again.h);
+    expect(again.warned).toEqual([]);
+    await runTask(config, "hi", { role: "smol", yes: true });
+    expect((f.chat[0]!.options as Record<string, unknown>).num_ctx).toBeUndefined();
+  });
+
+  it("an \"auto\" Modelfile num_ctx above the trained length is bounded by it", () => {
+    // settleOllamaCtx reads trained from the same body: Modelfile 65536, trained 32768.
+    expect(ollamaShowExtras({ parameters: "num_ctx 65536", model_info: { "x.context_length": 32_768 } }))
+      .toEqual({ trained: 32_768, modelfile: true });
+    expect(ollamaShowExtras({ model_info: { "x.context_length": 32_768 } })).toEqual({ trained: 32_768 });
+  });
+
+  it("an OpenAI-shaped request never carries num_ctx or options", async () => {
+    const f = await fake({ models: listing({ id: "m1", limit: { context: 131_072 } }), chat: [answer("ok")] });
+    for (const endpoint of ["", "max_context_tokens = 20000", AUTO]) {
+      const config = loadConfig(surface(f.url, { endpoint, defaults: endpoint ? undefined : undefined }));
+      expect((await runTask(config, "hi", { role: "smol", yes: true })).code).toBe(0);
+    }
+    for (const body of f.chat) {
+      expect(JSON.stringify(body)).not.toContain("num_ctx");
+      expect(body.options).toBeUndefined();
+    }
+  });
+});
+
+// Shared with the leg tests above, outside their describe.
+const FILLER_ = 30;
+const fillersIn_ = (body: Record<string, any>) =>
+  (body.messages as Array<{ content?: unknown }>).filter(
+    (m) => typeof m.content === "string" && m.content.startsWith("FILLER-")
+  ).length;
+async function legTurn_(endpoint: string, f: Parameters<typeof fake>[0] = {}) {
+  const server = await fake({ ...f, chat: [readCall("c1", "x.txt"), readCall("c2", "y.txt"), answer("done")] });
+  const config = loadConfig(surface(server.url, { endpoint, maxSteps: 1, role: "max_steps_total = 4" }));
+  const said: string[] = [];
+  const turn = await runAgenticTurn(
+    { config, exchanges: [], currentRole: "smol" },
+    "smol",
+    await settleContextWindows(config, routeRole(config, "smol"), hooks(config).h),
+    [
+      { role: "system" as const, content: "be brief" },
+      { role: "user" as const, content: "read x.txt, then y.txt" },
+      ...Array.from({ length: FILLER_ }, (_, i) => ({ role: "assistant" as const, content: `FILLER-${i} ${"x".repeat(8000)}` })),
+    ],
+    {
+      approve: async () => true,
+      progress: { start() {}, update() {}, stop() {}, print() {} } as never,
+      ui: { ...resolveUi(config), color: false, spinner: false },
+      say: (l) => said.push(l),
+    }
+  );
+  return { turn, said: said.join("\n"), chat: server.chat };
+}

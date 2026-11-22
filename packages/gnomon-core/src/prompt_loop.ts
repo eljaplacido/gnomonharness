@@ -265,7 +265,7 @@ import {
   type BootstrapOutcome,
   type ObservationMeta,
 } from "./context_hygiene.js";
-import { resolveContextWindow, type ContextSource } from "./context_window.js";
+import { resolveContextWindow, type ContextSource, type WindowResolution } from "./context_window.js";
 import { explain, explainTopics, topicNames } from "./explain.js";
 import { applyCredentials } from "./credentials.js";
 import { assertContainableRoot, mcpSpawnDir, clampToDefaults, recordExecFloor, pinSessionRepository, type TrustOutcome } from "./trust.js";
@@ -725,9 +725,11 @@ function exchangeCost(e: PromptExchange): number {
 export function buildMessages(
   state: PromptState,
   systemPrompt: string,
-  input: string
+  input: string,
+  /** The target the turn is routed to: its endpoint's window sizes the replay (audit B1) */
+  target?: { contextTokens?: number }
 ): BuiltContext {
-  const ctx = resolveContext(state.config);
+  const ctx = resolveContext(state.config, target);
   const messages: ChatMessage[] = [];
   let notice: string | undefined;
 
@@ -2193,6 +2195,10 @@ async function callEndpointOnce(
       temperature: target.temperature,
       top_p: target.top_p,
       ...(maxTokens > 0 ? { num_predict: maxTokens } : {}),
+      // B2: Ollama's native route takes the context it runs the model with here,
+      // and truncates silently from the front when it is smaller than the prompt.
+      // Only ever set on an Ollama target; see RouteTarget.ollamaCtx.
+      ...(target.ollamaCtx ? { num_ctx: target.ollamaCtx } : {}),
     };
   } else {
     payload.temperature = target.temperature;
@@ -3131,6 +3137,56 @@ export function wireOf(target: RouteTarget): WireRecord {
   };
 }
 
+/**
+ * B2: the `num_ctx` an Ollama request carries, bounded by what the model was
+ * trained for. A number the surface declared (or a Modelfile's `num_ctx`)
+ * goes out as it is, clamped to the trained length when /api/show states it.
+ * A window that is only the trained length is NOT sent: that can be hundreds
+ * of thousands of tokens of KV cache the user never asked Ollama to allocate.
+ * It is said once instead, with the two settings that do carry it.
+ */
+function settleOllamaCtx(
+  t: RouteTarget,
+  hooks: WindowHooks,
+  res: WindowResolution,
+  probed: boolean
+): RouteTarget {
+  const where = `${t.endpoint ?? "endpoint"} · ${t.model}`;
+  let want = t.ollamaCtx ?? (res.modelfile ? res.tokens : undefined);
+  if (want && res.trained && want > res.trained) {
+    if (probed) {
+      hooks.say(
+        paint(hooks.ui, "gray",
+          `  [context] ${where}: num_ctx ${want} is above the model's trained length ${res.trained}; sending ${res.trained}`)
+      );
+    }
+    want = res.trained;
+  }
+  if (!want && res.tokens && res.source === "listing:ollama" && !res.modelfile && probed) {
+    hooks.warn(
+      paint(hooks.ui, "yellow",
+        `  [context] ${where}: gnomon budgets ${res.tokens} tokens (the model's trained length) but sends no ` +
+          `num_ctx, so Ollama runs its own default and drops the start of a longer prompt without an error. ` +
+          `Set OLLAMA_CONTEXT_LENGTH=<n> for the server, a Modelfile "PARAMETER num_ctx <n>", or declare ` +
+          `max_context_tokens = <n> in [endpoints.${t.endpoint ?? "<name>"}] and gnomon sends it.`)
+    );
+  }
+  return want === t.ollamaCtx ? t : { ...t, ...(want ? { ollamaCtx: want } : {}) };
+}
+
+/**
+ * The route target of the session's current role, for sizing history by the
+ * window of the endpoint it goes to. Undefined when the role cannot be routed
+ * (the surface audit reports that), which leaves `[defaults]`.
+ */
+function currentTarget(state: PromptState): RouteTarget | undefined {
+  try {
+    return routeRole(state.config, state.currentRole).target;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Where settleContextWindows says what it found. */
 export interface WindowHooks {
   ui: ResolvedUi;
@@ -3157,10 +3213,11 @@ export async function settleContextWindows<R extends { target: RouteTarget; fall
   route: R,
   hooks: WindowHooks
 ): Promise<R> {
-  if (!route.target.contextAuto && !route.fallback?.contextAuto) return route;
+  const needs = (t: RouteTarget | undefined): boolean => t?.contextAuto === true;
+  if (!needs(route.target) && !needs(route.fallback)) return route;
   const fallbackWindow = defaultContextWindow(config);
   const settle = async (t: RouteTarget | undefined): Promise<RouteTarget | undefined> => {
-    if (!t?.contextAuto) return t;
+    if (!t || !needs(t)) return t;
     const { resolution, fresh } = await resolveContextWindow(t);
     const where = `${t.endpoint ?? "endpoint"} · ${t.model}`;
     if (fresh && resolution.tokens) {
@@ -3171,20 +3228,22 @@ export async function settleContextWindows<R extends { target: RouteTarget; fall
     } else if (fresh) {
       hooks.warn(
         paint(hooks.ui, "yellow",
-          `  [context] ${where}: max_context_tokens = "auto" found no window ` +
+          `  [context] ${where}: ${!t.contextImplicit ? 'max_context_tokens = "auto"' : "no max_context_tokens is declared, and asking the endpoint"} found no window ` +
             `(${resolution.misses.join("; ")}). Trimming to [defaults] max_context_tokens = ` +
             `${fallbackWindow}; declare the number in [endpoints.${t.endpoint ?? "<name>"}] to skip the lookup.`)
       );
       recordDegradation(hooks.audit, {
         id: "context_window_unresolved",
-        declared: `max_context_tokens = "auto" for ${t.model} at ${t.endpoint ?? "endpoint"}`,
+        declared: !t.contextImplicit
+          ? `max_context_tokens = "auto" for ${t.model} at ${t.endpoint ?? "endpoint"}`
+          : `no max_context_tokens: asked ${t.endpoint ?? "endpoint"} for ${t.model}`,
         actual: `[defaults] max_context_tokens = ${fallbackWindow}`,
         detail: { probes: resolution.misses },
       });
     }
-    return resolution.tokens
-      ? { ...t, contextTokens: resolution.tokens, contextSource: resolution.source }
-      : { ...t, contextTokens: fallbackWindow, contextSource: "default" };
+    if (!resolution.tokens) return { ...t, contextTokens: fallbackWindow, contextSource: "default" };
+    const settled: RouteTarget = { ...t, contextTokens: resolution.tokens, contextSource: resolution.source };
+    return t.kind === "ollama" ? settleOllamaCtx(settled, hooks, resolution, fresh) : settled;
   };
   const [target, fallback] = await Promise.all([settle(route.target), settle(route.fallback)]);
   return { ...route, target: target!, ...(route.fallback ? { fallback } : {}) };
@@ -9984,12 +10043,13 @@ export async function compactSession(
   systemPrompt: string,
   onNote?: (line: string) => void
 ): Promise<CompactionResult> {
-  const ctx = resolveContext(state.config);
+  const target = currentTarget(state);
+  const ctx = resolveContext(state.config, target);
   const wants = ctx.compaction === "summary" || ctx.policy === "summary";
   if (!wants) return { folded: 0, reclaimed: 0 };
 
   // Build against an empty next input to see what the window sheds.
-  const probe = buildMessages(state, systemPrompt, "");
+  const probe = buildMessages(state, systemPrompt, "", target);
   const pending = probe.evicted.filter((e) => !e.folded);
   if (pending.length === 0) return { folded: 0, reclaimed: 0 };
 
@@ -10683,7 +10743,7 @@ export async function runTask(
 
   const active = selectSkills(loadSkills(config), role, input);
   const systemPrompt = buildSystemPrompt(state, role, input);
-  const built = buildMessages(state, systemPrompt, input);
+  let built = buildMessages(state, systemPrompt, input, route.target);
 
   const errOut = options.stderr ?? process.stderr;
   const note = (line: string) => {
@@ -10915,6 +10975,7 @@ export async function runTask(
     note(`  ${line}`);
   }
   route = await settleContextWindows(config, route, { ui, say: note, warn, audit: auditForTurn });
+  built = buildMessages(state, systemPrompt, input, route.target);
 
   // Connect declared MCP servers here too. They were wired only in
   // runPromptLoop, so a surface declaring [mcp_servers] handed its tools to
@@ -11009,7 +11070,8 @@ export async function runTask(
         const stageMsgs = buildMessages(
           stageState,
           buildSystemPrompt(stageState, stageRole, stageInput),
-          stageInput
+          stageInput,
+          stageRoute.target
         );
         note(`[chain] stage ${i + 1}/${chain.length} — ${stageRole}`);
         {
@@ -12762,8 +12824,8 @@ export function processCommand(cmd: string, state: PromptState): boolean {
     }
 
     case "/context": {
-      const ctx = resolveContext(state.config);
-      const built = buildMessages(state, state.config.system.content ?? "", "");
+      const ctx = resolveContext(state.config, currentTarget(state));
+      const built = buildMessages(state, state.config.system.content ?? "", "", currentTarget(state));
       console.log(`\nContext policy (from .gnomon/config.toml):`);
       console.log(`  policy             ${ctx.policy}`);
       console.log(`  retain_after       ${ctx.retain_after} tok`);
@@ -13084,7 +13146,7 @@ export async function runSessionTurn(
   const systemPrompt = buildSystemPrompt(state, role, cleanedInput);
 
   // Build the window from prior turns before calling.
-  const built = buildMessages(state, systemPrompt, cleanedInput);
+  const built = buildMessages(state, systemPrompt, cleanedInput, route.target);
   if (built.notice) {
     deps.log(paint(ui, "yellow", `  [context] ${built.notice}`));
   }
@@ -13160,7 +13222,8 @@ export async function runSessionTurn(
         const stageBuilt = buildMessages(
           stageState,
           buildSystemPrompt(stageState, stageRole, stageInput),
-          stageInput
+          stageInput,
+          stageRoute.target
         );
         print(
           paint(ui, "gray", `  [chain] stage ${i + 1}/${turnChain.length} — ${stageRole}`)

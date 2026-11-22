@@ -57,3 +57,8 @@ for (const name of Object.keys(process.env)) {
 for (const name of ["GNOMON_MODEL_URL", "GNOMON_BUILD"]) {
   delete process.env[name];
 }
+
+// An endpoint that declares no window is asked for it (context_window.ts), one
+// extra request that suites scripting one fetch per model call did not plan for.
+// Off here; the suites about that lookup delete this before they build a route.
+process.env.GNOMON_WINDOW_LOOKUP = "off";

@@ -26,6 +26,19 @@
 
 ## [Unreleased]
 
+### Fixed — context-window defaults (B1, B2)
+
+- **An endpoint that declares no `max_context_tokens` is asked for its window.** With no number at the endpoint or in
+  `[defaults]`, an endpoint with a listing route (opencode Go/Zen, OpenRouter, vLLM, llama.cpp `/props`, Ollama
+  `/api/show`) is resolved as `"auto"` is, once per process per URL and model. Before, every such endpoint was trimmed
+  to the 65,536 fallback, which after the corrected token estimate (#252) would have cut context on hosted models
+  from about 39k real tokens. Nothing found (a relay that 404s `/models`) behaves as before: default window, stderr
+  note, `context_window_unresolved`, `max_context_tokens_source: "default"`. A declared number always wins. History
+  replay (`buildMessages`, `/context`, compaction) is now sized by the routed endpoint's window, not `[defaults]` alone.
+- **Ollama requests carry `options.num_ctx`** when the surface names the number (declared window, or a Modelfile
+  `num_ctx`), bounded by the trained length. A window that is only the trained length is not sent; gnomon warns once
+  with `OLLAMA_CONTEXT_LENGTH` / Modelfile `num_ctx` / `max_context_tokens`. No other endpoint kind sends it.
+
 ### Added — think cap (opt-in, unmeasured), CONTRACTS §52
 
 - `[turn] max_reasoning_tokens_without_action` (integer of at least 1000): a streamed reply whose reasoning passes
