@@ -1527,6 +1527,26 @@ async function cmdAudit(args: CliArgs): Promise<void> {
     return;
   }
 
+  // Failure attribution (attribute.ts): why a session failed, by harness layer.
+  if (sub === "attribute") {
+    const { buildAttributeReport, formatAttribute, ATTRIBUTE_EXIT } = await import("./attribute.js");
+    const { ATTRIBUTION_SCHEMA } = await import("gnomon-core");
+    const lastFlag = args.flags.last;
+    const last = lastFlag && lastFlag !== "true" ? Number(lastFlag) : undefined;
+    if (last !== undefined && !(Number.isInteger(last) && last > 0)) {
+      process.exit(commandError(args, ATTRIBUTION_SCHEMA, `--last needs a positive whole number, not ${lastFlag}.`, ATTRIBUTE_EXIT.couldNotRun));
+    }
+    try {
+      const report = buildAttributeReport(projectRoot(args), { last, trails: args.positional });
+      if (args.json) console.log(JSON.stringify(report, null, 2));
+      else for (const l of formatAttribute(report)) console.log(l);
+      if (report.exit !== 0) process.exit(report.exit);
+    } catch (err) {
+      process.exit(commandError(args, ATTRIBUTION_SCHEMA, `attribute could not run: ${err instanceof Error ? err.message : String(err)}`, ATTRIBUTE_EXIT.couldNotRun));
+    }
+    return;
+  }
+
   // record_tamper events (record_guard.ts): list them, and let a person
   // resolve one. Accepting a skill is refused while any is unresolved.
   if (sub === "tamper") {
@@ -1596,7 +1616,7 @@ async function cmdAudit(args: CliArgs): Promise<void> {
   }
 
   if (sub !== "show" && sub !== "list" && sub !== "verify") {
-    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify | anchor | tamper | metrics | schema | resolve`);
+    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify | anchor | tamper | metrics | attribute | schema | resolve`);
     process.exit(1);
   }
 
@@ -3184,7 +3204,7 @@ Commands:
           report what came back. A model listing is not a test of a key —
           some providers serve one to no key at all.
 
-  audit [show|verify|anchor|tamper|metrics|schema|resolve <trail>:<seq> --reason <text>] [--dir <path>]
+  audit [show|verify|anchor|tamper|metrics|attribute|schema|resolve <trail>:<seq> --reason <text>] [--dir <path>]
     Audit trails, when [audit] is enabled. 'verify' re-hashes each record
     and checks the chain, so a trail altered after the fact is detectable.
     With [audit.anchor] declared it also checks every sealed head against
@@ -3205,6 +3225,11 @@ Commands:
     guard's trails, other harnesses' sessions (Claude Code, opencode,
     Cursor): calls, decisions, rules and tools per host. Model-free. Exit 0,
     2 when a trail failed verification (left out), 10 could not run.
+    'attribute [<trail>...] [--last <n>] [--json]' names why a session
+    failed, by harness layer (execution, tools, context, lifecycle,
+    verification, governance): one primary cause per verified trail with
+    a failure signal, the others it also saw, and a histogram. Rules and
+    precedence: docs/CONTRACTS.md section 60. Model-free. Exit as metrics.
 
   skill [list [--candidates]|accept <id> [--evidence <report.json>]|reject <id> [--reason <text>]|mine [--json]] [--dir <path>]
     Skills the harness has learned. An agent proposes into
@@ -3439,7 +3464,7 @@ Commands:
     nothing. Exit 0 meets the spec, 2 does not, 10 no answer.
 
   improve [--dry-run] [--run] [--k <n>] [--budget-usd <x>] [--role <role>]
-          [--max-requests <n>] [--allow-host-probes] [--schedule nightly|weekly] [--json] [--dir <path>]
+          [--max-requests <n>] [--allow-host-probes] [--schedule nightly|weekly] [--incidents] [--json] [--dir <path>]
     Governed self-improvement (Harness^2's propose, probe, compose, over the
     hashed surface). Mines the audit trails for what keeps recurring: a
     refused rule (a skill), a skill that fires but is never cited (a
@@ -3455,8 +3480,15 @@ Commands:
     proposal meets its thresholds. --run refuses without a confined
     [sandbox] (or --allow-host-probes) and, for a billed probe role with no
     declared rates, without --max-requests. --schedule writes
-    .gnomon/loops/improve.toml for a person to commit and install. Exit 0
-    done, 1 usage, 3 refused, 10 could not run.
+    .gnomon/loops/improve.toml for a person to commit and install. A failure
+    is mined by its attributed cause (docs/CONTRACTS.md section 60): a Tools
+    cause is a note, a Context cause a note plus a suggestion in the
+    rationale for a person (config is never edited). --incidents drafts
+    regression trial specs from incidents in the trails (a boundary that
+    held, a tamper caught, a check that failed then passed, an overflow
+    survived), deterministic, no model, dry by default; --run writes them as
+    proposals for trials/incident-*.toml, which only a person accepts, never
+    policy. Exit 0 done, 1 usage, 3 refused, 10 could not run.
 
   chaos [--json] [--seed <n>] [--faults <id,...>] [--schedules <s,...>] [--out <file>]
     The fault-injection suite. A scripted model behind a loopback endpoint
