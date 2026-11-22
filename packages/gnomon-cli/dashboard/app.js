@@ -181,6 +181,25 @@ const SCREENS = [
   ["contracts", "Contracts"],
   ["measurements", "Measurements"],
 ];
+/**
+ * Screens and overlays added by the dashboard's other modules (lens.js,
+ * inbox.js, chat.js, palette.js). A module calls registerScreen() when it is
+ * evaluated, which is before sign-in finishes, so its screen is routable on the
+ * first render. fetch(ctx) answers the screen's data; render(data, ctx) answers
+ * its nodes. afterRender hooks get the root after every render (drawers, the
+ * palette); they must not fetch.
+ */
+const EXT = new Map();
+const AFTER_RENDER = [];
+export function registerScreen(key, label, iconPath, { fetch, render }) {
+  if (EXT.has(key) || SCREENS.some(([k]) => k === key)) throw new Error(`screen ${key} registered twice`);
+  SCREENS.push([key, label]);
+  if (iconPath) ICONS[key] = iconPath;
+  EXT.set(key, { fetch, render });
+}
+export function onAfterRender(fn) {
+  AFTER_RENDER.push(fn);
+}
 function go(screen, pid = S.pid, trail = null) {
   location.hash = `#/${screen}${pid ? "/" + pid : ""}${trail ? "/" + encodeURIComponent(trail) : ""}`;
 }
@@ -232,6 +251,7 @@ async function fetchScreen() {
     case "measurements":
       return p?.hasSurface ? projectApi("measurements") : { none: true };
   }
+  if (EXT.has(S.screen)) return EXT.get(S.screen).fetch(ctx());
   return null;
 }
 const current = () => S.data[`${S.screen}:${S.pid}:${S.trail || ""}`];
@@ -502,6 +522,9 @@ function render() {
     h("div", { class: "wrap" }, screen()));
   root.replaceChildren(nav, main);
   renderBar();
+  for (const fn of AFTER_RENDER) {
+    try { fn(root, ctx()); } catch (e) { console.error("afterRender", e); }
+  }
 }
 function screen() {
   const d = current();
@@ -516,6 +539,7 @@ function screen() {
     case "contracts": return contractsScreen(d);
     case "measurements": return measurementsScreen(d);
   }
+  if (EXT.has(S.screen)) return EXT.get(S.screen).render(d, ctx());
   return [];
 }
 function header(kicker, title, lede, ...buttons) {
@@ -1798,3 +1822,12 @@ window.addEventListener("resize", () => {
 });
 
 signIn();
+
+
+// ── for the other dashboard modules ─────────────────────────────────────────
+// One context object, so a module never reaches into module state it should
+// not own. Writes go through perform(): the server's confirm dialog and nonce.
+function ctx() {
+  return { S, P: P(), pid: S.pid, api, projectApi, perform, go, load, h, icon, header, tile, confirmDialog };
+}
+export { S, h, api, projectApi, perform, go, load, header, tile, icon, confirmDialog, ICONS };
