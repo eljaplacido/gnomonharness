@@ -160,6 +160,15 @@ task whose bucket says `0` exits `1` for a check that ran and did not pass
 one that never measured anything (`unrunnable`). `passed`, `declined`, `skipped`
 and no check at all stay `0`, and a refusal (`2`) or apparatus failure (`10`) is
 never demoted or replaced by it. Both codes are already in the table above.
+**A deviation, stated:** `conformance/exit_codes.json` maps `4` to the `refusal`
+bucket and `1` to `result`. Under `--require-verify` a task whose record says
+`bucket: "result"` can exit `4` (`unrunnable`), so a caller that switches on the
+exit's bucket reads it as a refusal while the record's own `bucket` stays
+`result`. The record is authoritative for what the run did; `4` is
+`preconditions_unmet`, which is what an unrunnable check is, and no `result`
+code is free to carry it. `taskExitCode` and `mapBucket` are pinned to this in
+`verify_exit_detail.test.ts`; `gnomon chaos` reads the record's bucket and never
+passes the flag, so it is unaffected.
 The command and its exit, per round, are the trail's `verify` records. A role that declares `escalate` on
 `verify_failed` hands the turn on instead (§42).
 
@@ -4738,8 +4747,8 @@ record.
 | Key | Value | Effect |
 |---|---|---|
 | `timeout_seconds` | a positive number | The check's own budget in place of the bash tool's. Applies to the check and to the `test_must_fail_first` re-run. A timeout is `unrunnable` (§1). Anything else is ignored, with a surface warning. |
-| `setup` | a shell command | Runs once per worktree (per process) before the first check. Its text is in the hashed surface, so changing it moves the surface hash; the model cannot set it. Not bound by the role's `write_allow` or `bash_allow` (an install writes `node_modules`); the sandbox root and `bash_deny` still bind it. A setup that does not exit 0 makes the check `unrunnable`: the check is not run, nothing is handed back, and the work is not blamed. |
-| `setup_network` | `none` (default) or `registry` | `registry` opens the network for the `setup` command only; the check and the agent keep the surface's network setting. gnomon does not filter hosts, so the name is the declared purpose, not an allowlist. Any other value reads as `none` (surface audit: the value is not one of the enumeration). |
+| `setup` | a shell command | Runs once per worktree (per process), at the start of the turn before the model's first call, so before any write the turn makes (an install runs lifecycle scripts, build backends and `.npmrc`/`pip.conf` from the working tree, and must see the manifests as they were, not as the model left them). The check reads the remembered result. Its text is in the hashed surface, so changing it moves the surface hash; the model cannot set it. Not bound by the role's `write_allow` or `bash_allow` (an install writes `node_modules`); the sandbox root and `bash_deny` still bind it. A setup that does not exit 0 makes the check `unrunnable`: the check is not run, nothing is handed back, and the work is not blamed. |
+| `setup_network` | `none` (default) or `registry` | `registry` opens the network for the `setup` command only; the check and the agent keep the surface's network setting. It applies only where bash runs on the host (`exec` off): under `exec = "docker"` or `"os"` the floor stays as declared and the effective network is `none` (one function, `effectiveSetupNetwork`, for the loop and `gnomon check`). gnomon does not filter hosts, so the name is the declared purpose, not an allowlist. Any other value reads as `none` (surface audit: the value is not one of the enumeration). |
 | `setup_timeout_seconds` | a positive number | The budget for `setup`; absent, `timeout_seconds`, else the tool's. |
 
 Each setup run is a `verify` audit record with `phase: "setup"`, `command`,
@@ -4751,7 +4760,21 @@ like a declined check.
 that is not checked out (which has no installed dependencies), never in the
 worktree it judges in place, and opens the network for it only where `[verify]`
 runs on the host (`exec = "off"`). A failed setup is `verify` = `error`
-("the check could not run: [verify] setup ..."), exit 10.
+("the check could not run: [verify] setup ..."), exit 10. The verdict carries
+`setup: {command_sha256, network, exit, ok}` and the check's trail record the
+same; the failure finding names the network and the hash too.
+
+**The limit, stated plainly.** In `gnomon check` the tree setup runs in is the
+head being judged, and the head is someone else's change. With
+`setup_network = "registry"` on a host `[verify]`, an install that runs
+lifecycle scripts executes that head's `package.json` scripts, build backend
+and registry config with network access. Do not judge an untrusted head with a
+networked setup on the host: leave `setup_network` at `none`, run `[verify]`
+under `exec = "docker"` (where the network stays as the floor left it), or write
+setup so it cannot run the head's code: `pnpm install --frozen-lockfile
+--ignore-scripts`, `npm ci --ignore-scripts`, `uv sync --frozen`. In the loop the
+pre-turn ordering above removes the model's own edits from this; it does not
+make a cloned repository's own manifests trustworthy.
 
 **Fixture**: `conformance/verify_contract.json`;
 `packages/gnomon-core/src/verify_setup.test.ts`.
@@ -4810,16 +4833,28 @@ network), the more such an edit is worth to a model that wants the gate green.
 relative, `/`-separated; gnomon's glob dialect, `**/` matches zero or more
 directories). `"@detected"` stands for the known runners' config
 (`**/conftest.py`, `pytest.ini`, `pyproject.toml`, `package.json`,
-`.septacore.json`) and the files the declared command itself names
-(`bash scripts/verify.sh`, `./run_tests.sh`). Nothing is protected unless the
+`.septacore.json`, `**/vitest.config.*`, `**/jest.config.*`, `tox.ini`,
+`setup.cfg`, `noxfile.py`, `.coveragerc`) and the files the declared command
+itself names (`bash scripts/verify.sh`, `./run_tests.sh`; the Makefile when it
+runs `make`). Nothing is protected unless the
 key is declared: a surface without it takes no snapshot and adds nothing to any
 record or request.
 
-What counts as a change: for `package.json`, the `scripts` object (adding a
-dependency is not a change); for `pyproject.toml`, the `[tool.pytest*]` tables;
-for any other file, its bytes. A file created or deleted is a change. Files over
-4 MiB, `node_modules`, `.git`, virtualenvs, build output and gnomon's own
-directories are not read.
+What counts as a change: for `package.json`, the `scripts` object and the `jest`
+key (adding a dependency is not a change); for `pyproject.toml`, the
+`[tool.pytest*]` tables; for `setup.cfg`, `[tool:pytest]`; for any other file,
+its bytes. A file created or deleted is a change. Files over 4 MiB,
+`node_modules`, `.git`, virtualenvs, build output and gnomon's own directories
+are not read.
+
+**What is not protected.** A file the check merely imports (a helper module a
+test pulls in, a data file) is not protected unless a glob names it: `protects`
+lists what configures the check, it is not a dependency analysis. And the walk
+that finds glob matches stops at 50,000 entries or 8 directories deep. That is
+not fail-open silently: the loop prints a warning and the `verify` audit record
+carries `protects_truncated: true`, and files past the limit are not protected.
+A path named without a wildcard is read directly and is not subject to the
+walk.
 
 - **`gnomon task` and sessions.** The protected files are hashed before the turn
   and after it, by any route: `write`, `edit` or the shell. A check that exits 0

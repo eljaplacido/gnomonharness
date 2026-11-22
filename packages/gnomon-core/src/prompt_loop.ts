@@ -6037,6 +6037,19 @@ async function agenticTurn(
   // the gate exists to prevent. Nothing else reads it.
   let shellMayHaveTouched = false;
   const verify = resolveVerify(config);
+  // `[verify] setup` runs HERE, before the model's first call and so before any
+  // write of the turn: an install executes lifecycle scripts, build backends and
+  // .npmrc/pip.conf from the working tree, and must see the manifests as they
+  // were, not as the model left them. Once per fresh worktree (memoised by
+  // root); the check later reads the remembered result.
+  if (verify?.setup && !sub?.readOnly && depth === 0) {
+    await runVerifySetup(
+      verify,
+      { ...verifyContext(ctx, verify), gate: gate === "always" ? "always" : "never", allow: "strict" as SurfaceConsent },
+      (command, sctx) => executeTool("bash", { command }, sctx, new Set(["bash"])),
+      { audit: deps.audit, role }
+    );
+  }
   // `[verify] protects` (#234): what the check executes, as it stood before the
   // turn changed anything. Taken only when declared; read at the end of the turn.
   const protectsBefore = verify?.protects ? snapshotProtected(ctx.root, verify) : null;
@@ -8017,6 +8030,12 @@ async function agenticTurn(
                 (passed && protChanged.length > 0 ? `; changed ${protChanged.join(", ")}` : ""),
             ...(passed ? {} : { tail: verifyTail(check.content) }),
           };
+          // A walk that stopped at its limit read only part of the tree: said
+          // here and in the trail, never read as "nothing changed".
+          const protTruncated = protectsBefore?.truncated === true;
+          if (protTruncated) {
+            warn(paint(deps.ui, "yellow", `  ⚠ [verify] protects: the file walk hit its limit (50,000 entries, 8 deep); files past it are not protected`));
+          }
           toolLog.push(`verify — ${check.summary}${pinsNothing ? " · test pins nothing" : ""}`);
           deps.audit?.write("verify", {
             role,
@@ -8024,6 +8043,7 @@ async function agenticTurn(
             exit: notRun ? null : shellExit,
             passed,
             ...(protChanged.length > 0 ? { protects_changed: protChanged } : {}),
+            ...(protTruncated ? { protects_truncated: true } : {}),
             // Only when the surface declared a table: a record a surface that
             // declares none writes is the record it always wrote.
             ...(verify.exit_map ? { verdict: verifyExit.verdict } : {}),

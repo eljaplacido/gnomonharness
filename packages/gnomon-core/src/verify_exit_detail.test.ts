@@ -12,6 +12,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "./config.js";
 import * as promptLoop from "./prompt_loop.js";
+import { mapBucket } from "./session.js";
+import { executeTool } from "./tools.js";
+import { readVerifyRun } from "./must_fail_first.js";
 import { probeVerify, VERIFY_PROBE_KINDS, VERIFY_PROBE_EXIT, VERIFY_PROBE_SCHEMA } from "./verify_probe.js";
 
 const fixture = JSON.parse(readFileSync(join("..", "..", "conformance", "verify_contract.json"), "utf-8")) as {
@@ -176,5 +179,52 @@ describe("gnomon doctor verify (#235)", () => {
     const r = await probeVerify(dir);
     expect(r.findings.map((f) => f.kind)).toContain("setup_not_run");
     expect(r.exit_code).toBe(0);
+  });
+});
+
+describe("exit 4 and the bucket table (#235 review)", () => {
+  it("pins the documented deviation: the exit's bucket is refusal, the record's stays result", () => {
+    const exitCodes = JSON.parse(readFileSync(join("..", "..", "conformance", "exit_codes.json"), "utf-8")).exit_codes as Record<string, string>;
+    const rec = { bucket: "result", verify: "unrunnable" as const };
+    const code = promptLoop.taskExitCode(rec, { requireVerify: true });
+    expect(code).toBe(4);
+    expect(exitCodes["4"]).toBe("refusal");
+    expect(mapBucket(4)).toBe("refusal");
+    expect(rec.bucket).toBe("result");
+    // 1 agrees with the table.
+    expect(mapBucket(promptLoop.taskExitCode({ bucket: "result", verify: "failed" }, { requireVerify: true }))).toBe("result");
+  });
+});
+
+describe("a non-zero tool code never carries an exit N summary (#235 review)", () => {
+  it("every way bash can refuse or fail to run has no `exit N`, so readVerifyRun reads it as not-run", async () => {
+    const root = mkdtempSync(join(tmpdir(), "gnomon-bash-summary-"));
+    try {
+      const ctx: any = {
+        root, sandbox: "off", gate: "never", approve: async () => false, timeoutMs: 300,
+        maxOutputBytes: 32_000, allow: "strict", bashDeny: ["forbiddenword"], timedOutCommands: new Set<string>(),
+      };
+      const runs = [
+        "sleep 5", // timeout
+        "sleep 5", // re-run after a timeout
+        "echo forbiddenword", // bash_deny
+        "sudo true", // sudo refusal
+        "", // empty
+      ];
+      for (const command of runs) {
+        const out = await executeTool("bash", { command }, ctx, new Set(["bash"]));
+        if (out.code === 0) continue;
+        expect(out.summary, `${JSON.stringify(command)}: ${out.summary}`).not.toMatch(/exit -?\d+/);
+        const r = readVerifyRun(out, undefined);
+        expect(r.notRun, command).toBe(true);
+        expect(r.verdict, command).toBe("unrunnable");
+      }
+      // A command that ran and exited non-zero is tool code 0 with the exit in the summary.
+      const ran = await executeTool("bash", { command: "exit 3" }, ctx, new Set(["bash"]));
+      expect(ran.code).toBe(0);
+      expect(ran.summary).toMatch(/exit 3/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

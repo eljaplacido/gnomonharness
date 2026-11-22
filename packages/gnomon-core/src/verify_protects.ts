@@ -16,11 +16,19 @@
  * functions here, so the loop and `gnomon check` read "changed" the same way.
  *
  * What counts as changed, by file:
- *   package.json    the `scripts` object (a new dependency is not a change)
+ *   package.json    the `scripts` object and the `jest` key (a new dependency
+ *                   is not a change)
  *   pyproject.toml  the `[tool.pytest*]` tables
+ *   setup.cfg       the `[tool:pytest]` section
  *   anything else   the whole file's bytes
- * A file that appears or disappears is a change. Nothing is read from the
- * model, and nothing here runs a command.
+ * A file that appears or disappears is a change. Files the check merely
+ * IMPORTS (a helper module a test pulls in, a fixture file) are not protected
+ * unless a glob names them: this is a list of what the check is configured by,
+ * not a dependency analysis. The walk that finds glob matches stops at 50,000
+ * entries and 8 directories deep; when it stops early the snapshot says so
+ * (`truncated`), and the loop records and prints it, never silently reading a
+ * partial walk as "nothing changed". Nothing is read from the model, and
+ * nothing here runs a command.
  *
  * Opt-in: a surface without `protects` snapshots nothing and adds nothing to
  * any record.
@@ -41,7 +49,19 @@ export const PROTECTS_DETECTED = "@detected";
  * the test runners gnomon knows. A published list (CONTRACTS section 52,
  * conformance/verify_contract.json).
  */
-export const PROTECTS_DEFAULTS = ["**/conftest.py", "pytest.ini", "pyproject.toml", "package.json", ".septacore.json"] as const;
+export const PROTECTS_DEFAULTS = [
+  "**/conftest.py",
+  "pytest.ini",
+  "pyproject.toml",
+  "package.json",
+  ".septacore.json",
+  "**/vitest.config.*",
+  "**/jest.config.*",
+  "tox.ini",
+  "setup.cfg",
+  "noxfile.py",
+  ".coveragerc",
+] as const;
 
 /** Directories never walked, and never worth hashing. */
 const SKIP_DIRS = new Set(["node_modules", ".git", ".venv", "venv", "__pycache__", "target", "dist", "build", ".gnomon", ".gnomon-jobs", ".gnomon-out"]);
@@ -60,6 +80,8 @@ function commandFiles(command: string): string[] {
     if (!w || w.startsWith("-") || w.startsWith("/") || w.includes("..") || w.includes("=")) continue;
     if (/[\\/]|\.[A-Za-z0-9]{1,6}$/.test(w) && !/^[a-z]+:\/\//.test(w)) out.push(posix(w));
   }
+  // `make test`: the Makefile is what runs.
+  if (/(^|[\s;&|])make(\s|$)/.test(command)) out.push("Makefile", "makefile", "GNUmakefile");
   return out;
 }
 
@@ -97,18 +119,19 @@ export function protectedDigest(rel: string, content: Buffer | string | null): s
   const text = typeof content === "string" ? content : content.toString("utf-8");
   if (base === "package.json") {
     try {
-      const j = JSON.parse(text) as { scripts?: unknown };
-      return sha(`scripts:${JSON.stringify(j.scripts ?? null)}`);
+      const j = JSON.parse(text) as { scripts?: unknown; jest?: unknown };
+      return sha(`scripts:${JSON.stringify(j.scripts ?? null)}\njest:${JSON.stringify(j.jest ?? null)}`);
     } catch {
       return sha(content);
     }
   }
-  if (base === "pyproject.toml") {
+  if (base === "pyproject.toml" || base === "setup.cfg") {
+    const want = base === "setup.cfg" ? "tool:pytest" : "tool.pytest";
     let keep = false;
     const lines: string[] = [];
     for (const line of text.split(/\r?\n/)) {
       const h = /^\s*\[+\s*([^\]]+?)\s*\]+/.exec(line);
-      if (h) keep = h[1]!.startsWith("tool.pytest");
+      if (h) keep = h[1]!.startsWith(want);
       if (keep) lines.push(line);
     }
     return sha(`pytest:${lines.join("\n")}`);
@@ -137,22 +160,34 @@ function readSmall(path: string): Buffer | null {
   }
 }
 
+/** What `snapshotProtected` saw: digests by path, and whether the walk stopped early. */
+export interface ProtectSnapshot {
+  files: Map<string, string | null>;
+  /** The glob walk hit its entry or depth limit: files past it were not read. */
+  truncated: boolean;
+}
+
 /** Every file under `root` the patterns name, repo-relative with `/`, as digests. */
-export function snapshotProtected(root: string, verify: Pick<ResolvedVerify, "protects" | "command">): Map<string, string | null> {
+export function snapshotProtected(root: string, verify: Pick<ResolvedVerify, "protects" | "command">): ProtectSnapshot {
   const patterns = protectPatterns(verify);
   const snap = new Map<string, string | null>();
-  if (patterns.length === 0) return snap;
+  const result = (truncated: boolean): ProtectSnapshot => ({ files: snap, truncated });
+  if (patterns.length === 0) return result(false);
   // A pattern with no wildcard is a path: read it directly, walk nothing.
   for (const p of patterns.filter((g) => !hasGlob(g))) {
     if (p.startsWith("/") || p.split("/").includes("..")) continue;
     snap.set(p, protectedDigest(p, readSmall(join(root, p))));
   }
   const globs = patterns.filter(hasGlob);
-  if (globs.length === 0) return snap;
+  if (globs.length === 0) return result(false);
   const match = matcher(globs);
   let seen = 0;
+  let truncated = false;
   const walk = (dir: string, rel: string, depth: number): void => {
-    if (depth > MAX_DEPTH || seen > MAX_ENTRIES) return;
+    if (depth > MAX_DEPTH || seen > MAX_ENTRIES) {
+      truncated = true;
+      return;
+    }
     let entries;
     try {
       entries = readdirSync(dir, { withFileTypes: true });
@@ -160,7 +195,10 @@ export function snapshotProtected(root: string, verify: Pick<ResolvedVerify, "pr
       return;
     }
     for (const e of entries) {
-      if (++seen > MAX_ENTRIES) return;
+      if (++seen > MAX_ENTRIES) {
+        truncated = true;
+        return;
+      }
       const r = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) {
         if (!SKIP_DIRS.has(e.name)) walk(join(dir, e.name), r, depth + 1);
@@ -170,18 +208,18 @@ export function snapshotProtected(root: string, verify: Pick<ResolvedVerify, "pr
     }
   };
   if (existsSync(root)) walk(root, "", 0);
-  return snap;
+  return result(truncated);
 }
 
 /** The protected files whose digest now differs from `before`, sorted. */
 export function changedProtected(
-  before: Map<string, string | null>,
+  before: ProtectSnapshot,
   root: string,
   verify: Pick<ResolvedVerify, "protects" | "command">
 ): string[] {
-  const now = snapshotProtected(root, verify);
-  const paths = new Set([...before.keys(), ...now.keys()]);
-  return [...paths].filter((p) => (before.get(p) ?? null) !== (now.get(p) ?? null)).sort();
+  const now = snapshotProtected(root, verify).files;
+  const paths = new Set([...before.files.keys(), ...now.keys()]);
+  return [...paths].filter((p) => (before.files.get(p) ?? null) !== (now.get(p) ?? null)).sort();
 }
 
 /** The hand-back for a green check that the turn itself may have weakened. */
