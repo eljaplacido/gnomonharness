@@ -81,7 +81,7 @@ import {
 } from "./config.js";
 import { thinkCapNote, thinkCapRecord, resolveThinkCap, type ThinkCapCounters } from "./think_cap.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence,
-  safeForPrompt, traceLines, isToolTagStub, isEmptyReasoning, terminalWidth, summaryResult, fitRow, metaText,
+  safeForPrompt, traceLines, isToolTagStub, isEmptyReasoning, terminalWidth, summaryResult, fitRow, metaText, wordWrap,
 } from "./render.js";
 import {
   boxedActive, boxCtx, startupCard, statusRule, promptGlyph, turnHeader, turnFooter,
@@ -3923,6 +3923,20 @@ export function printEndpoints(
   );
 }
 
+/**
+ * The once-per-session "0 cached prompt tokens" notice as rows that fit
+ * `columns`: wrapped at spaces, continuation rows hanging under the text
+ * after "[endpoint] ", never a word split unless one is wider than the row.
+ */
+export function cacheMissNotice(model: string, reusable: number, columns: number): string[] {
+  const lead = "  [endpoint] ";
+  const text =
+    `${model} reported 0 cached prompt tokens on a request that only appended to the one before ` +
+    `(${reusable} tokens were there to reuse) — a prefix-cache miss, so the whole prompt was ` +
+    `prefilled again. Said once this session; counters.prefix_cache_misses counts every one.`;
+  return wordWrap(text, Math.max(8, columns - lead.length - 1)).map((r, i) => (i === 0 ? lead : " ".repeat(lead.length)) + r);
+}
+
 /** Print a styled exchange through the configurable renderer */
 function printExchange(exchange: PromptExchange, ui: ResolvedUi): void {
   for (const line of renderExchange(exchange, ui)) {
@@ -3936,7 +3950,7 @@ function printExchangeBoxed(exchange: PromptExchange, ui: ResolvedUi, box: BoxCt
   // Close the frame first, then the answer below it with no prefix at all, so
   // code copied from the answer never carries a rail. The spinner was stopped
   // (and its row erased) when the turn ended, before this runs.
-  const m = metaText(exchange, ui, thinkTokens);
+  const m = metaText(exchange, ui, thinkTokens, Math.max(8, box.columns - 6 - 2));
   console.log(turnFooter(box, m ? { glyph: m.glyph, glyphRole: m.color, text: m.text } : { text: "" }));
   for (const line of renderExchange(exchange, { ...ui, meta: [] })) console.log(line);
 }
@@ -7869,15 +7883,7 @@ async function agenticTurn(
       if (!saidCacheMiss && !told.includes(usedModel)) {
         saidCacheMiss = true;
         told.push(usedModel);
-        warn(
-          paint(
-            deps.ui,
-            "yellow",
-            `  [endpoint] ${usedModel} reported 0 cached prompt tokens on a request that only appended to the one before ` +
-              `(${misses.last.reusable} tokens were there to reuse) — a prefix-cache miss, so the whole prompt was ` +
-              `prefilled again. Said once this session; counters.prefix_cache_misses counts every one.`
-          )
-        );
+        for (const row of cacheMissNotice(usedModel, misses.last.reusable, terminalWidth())) warn(paint(deps.ui, "yellow", row));
       }
     }
     // The reply to a late-system hand-back is the answer that was handed

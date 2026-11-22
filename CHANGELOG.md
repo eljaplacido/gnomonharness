@@ -26,6 +26,13 @@
 
 ## [Unreleased]
 
+### Fixed — two trace rows wrapped at 80 columns
+
+- The once-per-session "0 cached prompt tokens" notice now wraps to the terminal width with a hanging indent under
+  `[endpoint]`, and the turn meta line (classic rule or compact, and the boxed footer) fits it too: the long
+  `refusal (answered anyway)` wording shortens first, then whole low-priority fields drop (think, ctx, turn, role,
+  tools, model, then tokens, duration, bucket). No row is ever cut mid-word. Tests at 60, 80 and 120 columns.
+
 ### Added — the audit record schema, and the skill enumerations (#113), CONTRACTS §55
 
 - `conformance/audit_record_schema.json` (`gnomon.audit_record/1`): for every audit kind, its required and

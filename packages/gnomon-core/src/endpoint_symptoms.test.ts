@@ -187,10 +187,13 @@ describe("cache_miss is said on stderr and counted on the record", () => {
   it("a re-prefill on the second request is named, once, with the prefix it threw away", async () => {
     const { record, err } = await run("read", "cache_miss");
     expect(record.counters.prefix_cache_misses).toBe(1);
-    const lines = err.filter((l) => /prefix-cache miss/.test(l));
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatch(/reported 0 cached prompt tokens .* \(\d+ tokens were there to reuse\)/);
-    expect(lines[0]).toMatch(chaosFault("cache_miss")!.names);
+    // The notice wraps to the terminal width, so it is one or more rows: join them.
+    const rows = err.filter((l) => /^\s+\[endpoint\]|^ {13}\S/.test(l));
+    expect(rows.filter((l) => l.includes("[endpoint]"))).toHaveLength(1);
+    const notice = rows.map((l) => l.trim()).join(" ");
+    expect(notice).toMatch(/reported 0 cached prompt tokens .* \(\d+ tokens were there to reuse\)/);
+    expect(notice).toMatch(/prefix-cache miss/);
+    expect(notice).toMatch(chaosFault("cache_miss")!.names);
     // Said, not acted on: the task still finishes, as it did before.
     expect(taskExitCode(record)).toBe(0);
   }, 30_000);

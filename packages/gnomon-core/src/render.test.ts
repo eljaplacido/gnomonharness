@@ -103,6 +103,34 @@ describe("renderMeta", () => {
     expect(lines.join()).toContain("−4");
   });
 
+  it("fits 60, 80 and 120 columns: low-priority fields drop whole, never mid-word", () => {
+    const e = exchange({
+      model: "qwen3.6:35b-a3b-instruct", usage: { input: 12345, output: 678 }, duration_ms: 4200,
+      tool_steps: 7, context_dropped: 4, bucket: "refusal", stop_reason: "answered",
+    });
+    const u = ui({ meta: [...META_FIELDS], color: false });
+    for (const cols of [60, 80, 120]) {
+      for (const style of ["compact", "rule"] as const) {
+        const rows = renderMeta(e, { ...u, meta_style: style }, 40, cols);
+        for (const r of rows) expect(visibleWidth(r)).toBeLessThanOrEqual(cols);
+        const body = rows.join("\n");
+        // How it ended and how long it took outlast everything else.
+        expect(body).toContain("refusal");
+        expect(body).toContain("4.2s");
+        // Whatever stays is a whole field, not a cut one.
+        expect(body).not.toMatch(/tool call\(?$|qwen3\.6:35b-a3b-instr$/m);
+      }
+    }
+    // Wide enough: nothing is dropped.
+    expect(renderMeta(e, { ...u, meta_style: "compact" }, 40, 200).join()).toContain("think ~");
+    // Narrow: the lowest-priority field (think) is the first to go.
+    expect(renderMeta(e, { ...u, meta_style: "compact" }, 40, 60).join()).not.toContain("think ~");
+  });
+
+  it("an unbounded width leaves every field in, as before", () => {
+    expect(renderMeta(exchange(), ui({ meta: [...META_FIELDS] }), 40).join()).toContain("think ~");
+  });
+
   it("every declared field renders without throwing", () => {
     expect(() =>
       renderMeta(exchange(), ui({ meta: [...META_FIELDS] }), 40)
@@ -666,5 +694,21 @@ describe("splitThinking reads every inline reasoning markup in the 2026-11 surve
     // An answer about the tags themselves, as this repository's own work produces.
     const aboutTags = "splitThinking now reads a lone `</think>` and an opener like `<think>` in code.";
     expect(splitThinking(aboutTags)).toEqual({ think: "", answer: aboutTags });
+  });
+});
+
+describe("the 0-cached-tokens notice at 60, 80 and 120 columns", () => {
+  it("wraps with a hanging indent, loses no words, and never exceeds the width", async () => {
+    const { cacheMissNotice } = await import("./prompt_loop.js");
+    const whole = cacheMissNotice("claude-sonnet-5-5", 12345, 10_000).map((r) => r.trim()).join(" ");
+    for (const cols of [60, 80, 120]) {
+      const rows = cacheMissNotice("claude-sonnet-5-5", 12345, cols);
+      for (const r of rows) expect(visibleWidth(r)).toBeLessThanOrEqual(cols);
+      expect(rows[0]!.startsWith("  [endpoint] ")).toBe(true);
+      for (const r of rows.slice(1)) expect(r.startsWith(" ".repeat(13))).toBe(true);
+      // Same words in the same order: wrapping dropped nothing.
+      expect(rows.map((r) => r.trim()).join(" ").replace(/ +/g, " ")).toBe(whole.replace(/ +/g, " "));
+    }
+    expect(cacheMissNotice("m", 1, 60).length).toBeGreaterThan(cacheMissNotice("m", 1, 120).length);
   });
 });
