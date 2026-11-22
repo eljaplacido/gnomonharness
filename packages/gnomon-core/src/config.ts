@@ -309,6 +309,14 @@ export interface ContextConfig {
   /** Role used to fold evicted turns into a summary. Default "smol". */
   summary_role?: string;
   /**
+   * How `summary_role` writes the record. "prose" (the default, and what an
+   * absent key means) is the free-prose instruction; "structured" asks for
+   * headed sections (Goal, Constraints, Decisions, Files touched, Verified,
+   * UNVERIFIED) and, when the summary call fails, folds the turns into a
+   * record the harness builds without a model. docs/CONTRACTS.md section 56.
+   */
+  summary_style?: SummaryStyle;
+  /**
    * Tokens held back from the window for the model's reply.
    *
    * The window used to fill `max_context_tokens` completely, leaving nothing
@@ -383,6 +391,9 @@ export interface BootstrapDecl {
   /** Deadline for the whole command; never longer than the tool timeout. */
   timeout_ms?: number;
 }
+
+/** `[context] summary_style` */
+export type SummaryStyle = "prose" | "structured";
 
 /** `[context] token_estimate` */
 export type TokenEstimate = "chars4" | "calibrated";
@@ -1765,12 +1776,14 @@ export interface ResolvedContext {
   max_context_tokens: number;
   compaction: Compaction;
   summary_role: string;
+  summary_style: SummaryStyle;
   reserve_output: number;
   /** "chars4" unless the surface declares "calibrated" */
   token_estimate: TokenEstimate;
 }
 
 const CONTEXT_POLICIES: ContextPolicy[] = ["full", "sliding_window", "summary"];
+const SUMMARY_STYLES: SummaryStyle[] = ["prose", "structured"];
 const COMPACTIONS: Compaction[] = ["discard", "summary", "truncate"];
 
 function pickEnum<T extends string>(value: unknown, legal: T[], fallback: T): T {
@@ -1880,6 +1893,7 @@ export function resolveContext(
     compaction: pickEnum(defaults.compaction, COMPACTIONS, "summary"),
     summary_role:
       typeof ctx.summary_role === "string" ? ctx.summary_role : "smol",
+    summary_style: pickEnum(ctx.summary_style, SUMMARY_STYLES, "prose"),
     reserve_output: (() => {
       const budget = window;
       // 15% of the window, at least 1024 — but never more than 40% of it.
@@ -2952,6 +2966,7 @@ const KEY_OWNER: Record<string, string> = {
   policy: "context",
   retain_after: "context",
   summary_role: "context",
+  summary_style: "context",
   reserve_output: "context",
   mask_observations: "context",
   bootstrap: "context",

@@ -5091,3 +5091,36 @@ reveals nothing. It does not validate values beyond type (enumerated words are
 **Fixture**: `conformance/audit_record_schema.json`;
 `packages/gnomon-core/src/audit_schema.test.ts` (kinds equal `AUDIT_KINDS`,
 every record real sessions write validates), `packages/gnomon-cli/src/audit_schema_cmd.test.ts`.
+
+## 56. Structured compaction summary — `[context] summary_style`, `counters.compaction`, `v: 1`
+
+`[context] summary_style` is `"prose"` or `"structured"`. Absent, or any other
+value, is `"prose"`: the summary role gets the instruction it always got and
+the request is byte-identical. It only matters with `compaction = "summary"`
+(or `policy = "summary"`); it is read from `[context]`.
+
+**`"structured"`** replaces the instruction with one that asks for these
+headings, in order: `## Goal`, `## Constraints` (requirements quoted from the
+task), `## Decisions`, `## Files touched`, `## Verified` (only what an external
+check confirmed, with the command or evidence) and `## UNVERIFIED` (one
+`UNVERIFIED: claim - basis` line for each belief not checked against anything
+outside the agent's own reasoning). A section with nothing to say reads `none`.
+
+**Fallback.** When the summary call returns a non-zero code or an empty answer,
+the harness builds the record without a model and folds the turns: `## Goal`
+(the first task text, clipped), `## Files touched` (successful write/edit
+lines of the turns' `tool_log`), the last eight actions as logged, and the last
+`verify` line if it reported a failure under `## Failing check`. Its
+`## Verified` is `none` and its `## UNVERIFIED` says no action was reviewed.
+Under `"prose"` a failed call leaves the turns unfolded, as before.
+
+**`counters.compaction`** is stamped on the first turn record after a fold, then
+cleared, and is absent under `"prose"`: `v` (1), `style` (`"structured"`),
+`passes`, `model` (passes the summary role wrote), `fallback` (passes the
+harness wrote), `folded` (turns), `reclaimed` (estimated tokens). `counters` is
+one `metadata` object in `conformance/audit_record_schema.json`; no audit kind
+or field was added.
+
+**Fixture**: `packages/gnomon-core/src/summary_style.test.ts` (absent key
+sends the same bytes, the sections are asked for, the fallback folds when the
+call fails).

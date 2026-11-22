@@ -26,6 +26,16 @@
 
 ## [Unreleased]
 
+### Added — `[context] summary_style = "structured"` (opt-in), CONTRACTS §56
+
+- A compaction summary with headed sections: Goal, Constraints (verbatim), Decisions, Files touched, Verified
+  (with the evidence) and `UNVERIFIED: claim - basis` for beliefs not checked outside the agent's own
+  reasoning, so a model inheriting a record, as in a hybrid hand-off, does not take another model's self-check as
+  fact. When the summary call fails or is empty the harness folds the turns with a record it builds without a
+  model (task, files changed, last actions, failing check). `counters.compaction` on the next turn record says
+  how many passes ran and whether the summary role or the fallback wrote them. Absent key: the original prose
+  summary, byte-identical request. Adopted from a reverse-engineering study of Hermes Agent's compressor.
+
 ### Added — the audit record schema, and the skill enumerations (#113), CONTRACTS §55
 
 - `conformance/audit_record_schema.json` (`gnomon.audit_record/1`): for every audit kind, its required and
