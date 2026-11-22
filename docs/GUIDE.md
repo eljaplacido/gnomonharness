@@ -691,8 +691,12 @@ answers with a window (a metering relay in front of a provider often returns
 trim an endpoint that declares nothing gets. gnomon says so on stderr and
 records a `context_window_unresolved` degradation. The turn record's `wire`
 gives the window as `max_context_tokens` and its origin as
-`max_context_tokens_source`: `declared`, `listing:<shape>` or `default`
-([CONTRACTS.md](CONTRACTS.md)). `"auto"` is answered at run time, so one surface hash can trim to different windows if
+`max_context_tokens_source`: `declared`, `listing:<shape>`, `catalog` or `default`
+([CONTRACTS.md](CONTRACTS.md)). `catalog` is gnomon's own dated table of known
+hosted windows (the Claude 5.x models, which the Anthropic API does not list a
+window for), used after the listing and before `[defaults]`; it carries the
+standard window, so declare `max_context_tokens` on the endpoint to use a larger
+opt-in tier or to pin it. `"auto"` is answered at run time, so one surface hash can trim to different windows if
 the provider changes its listing. Declare the number where the window must
 stay fixed, as in a benchmark arm.
 

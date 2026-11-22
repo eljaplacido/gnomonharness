@@ -34,6 +34,7 @@
  */
 
 import type { EndpointKind } from "./config.js";
+import { knownHostedWindow } from "./known_windows.js";
 
 /** The value of `[endpoints.<name>] max_context_tokens` that asks the endpoint. */
 export const AUTO_WINDOW = "auto";
@@ -48,17 +49,20 @@ export type ListingShape = (typeof LISTING_SHAPES)[number];
  *
  *   declared          `[endpoints.<name>] max_context_tokens = <n>`
  *   listing:<shape>   `"auto"`, read from the endpoint's listing
- *   default           `"auto"`, nothing found: `[defaults] max_context_tokens`
+ *   catalog           the listing gave none; the model is in gnomon's dated table of
+ *                     known hosted windows (known_windows.ts)
+ *   default           nothing found: `[defaults] max_context_tokens`
  *
  * An endpoint that declares nothing records neither key, as before the key
  * existed.
  */
-export type ContextSource = "declared" | `listing:${ListingShape}` | "default";
+export type ContextSource = "declared" | `listing:${ListingShape}` | "catalog" | "default";
 
 /** Every value `max_context_tokens_source` takes, in a stable order. */
 export const CONTEXT_SOURCES: readonly ContextSource[] = [
   "declared",
   ...LISTING_SHAPES.map((s) => `listing:${s}` as const),
+  "catalog",
   "default",
 ];
 
@@ -302,9 +306,10 @@ export async function probeContextWindow(
   // not into a note.
   const apiKey = target.apiKeyEnv ? process.env[target.apiKeyEnv] : undefined;
   const misses: string[] = [];
-  const probes = windowProbes(target);
+  // The test suite's switch (vitest.setup.ts) turns the network probes off; the table needs none.
+  const probes = process.env.GNOMON_WINDOW_LOOKUP === "off" ? [] : windowProbes(target);
   if (probes.length === 0) {
-    return { source: "default", misses: [`no listing route can be derived from ${bare(target.url)}`] };
+    misses.push(`no listing route can be derived from ${bare(target.url)}`);
   }
   for (const probe of probes) {
     const r = await runProbe(probe, apiKey, timeoutMs);
@@ -318,6 +323,17 @@ export async function probeContextWindow(
       from: `${probe.method} ${probe.url} → ${r.field}`,
       ...(r.trained ? { trained: r.trained } : {}),
       ...(r.modelfile ? { modelfile: true as const } : {}),
+      misses,
+    };
+  }
+  // The listing said nothing: a model gnomon's table knows is better than the
+  // local-sized `[defaults]` guess. A listing, when it answers, has won above.
+  const known = knownHostedWindow(target);
+  if (known) {
+    return {
+      tokens: known.tokens,
+      source: "catalog",
+      from: `gnomon's table of known hosted windows (${known.model}, ${known.as_of}; ${known.source})`,
       misses,
     };
   }

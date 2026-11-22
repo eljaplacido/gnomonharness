@@ -3228,7 +3228,7 @@ export async function settleContextWindows<R extends { target: RouteTarget; fall
     if (fresh && resolution.tokens) {
       hooks.say(
         paint(hooks.ui, "gray",
-          `  [context] ${where}: window ${resolution.tokens} tokens, read from the endpoint (${resolution.from})`)
+          `  [context] ${where}: window ${resolution.tokens} tokens, ${resolution.source === "catalog" ? "from the catalog" : "read from the endpoint"} (${resolution.from})`)
       );
     } else if (fresh && !(t.contextImplicit && defaultsDeclared)) {
       // Silent for an endpoint that declared nothing under a `[defaults]` number:

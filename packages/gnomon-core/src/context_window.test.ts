@@ -7,7 +7,7 @@
  * token window, and every leg checkpoint trimmed its working context to ~39k.
  * Every server here is a fake on 127.0.0.1; nothing reaches a network.
  */
-import { describe, it, expect, afterEach, beforeEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
@@ -39,6 +39,7 @@ import {
 } from "./prompt_loop.js";
 import { auditSurface, loadConfig, resolveContext, resolveUi, routeRole, type GnomonConfig } from "./config.js";
 import { DEGRADATIONS } from "./degradation.js";
+import { KNOWN_HOSTED_WINDOWS, KNOWN_WINDOWS_AS_OF, knownHostedWindow } from "./known_windows.js";
 
 const REPO = join(__dirname, "..", "..", "..");
 const FIXTURE = JSON.parse(readFileSync(join(REPO, "conformance", "endpoint_window.json"), "utf8"));
@@ -224,6 +225,69 @@ describe("the listing shapes — conformance/endpoint_window.json", () => {
       expect(section, s.field).toContain(named);
     }
     expect(section).toContain("context_window_unresolved");
+  });
+});
+
+describe("the catalog of known hosted windows (CONTRACTS section 24)", () => {
+  it("is the table conformance/endpoint_window.json pins, dated, each entry with a source", () => {
+    expect(KNOWN_WINDOWS_AS_OF).toBe(FIXTURE.catalog.as_of);
+    expect(KNOWN_HOSTED_WINDOWS.map((k) => ({ model: k.model, tokens: k.tokens }))).toEqual(FIXTURE.catalog.models);
+    for (const k of KNOWN_HOSTED_WINDOWS) {
+      expect(k.as_of, k.model).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(k.source, k.model).toMatch(/https?:\/\/|conformance\//);
+      expect(Number.isInteger(k.tokens) && k.tokens > 0, k.model).toBe(true);
+    }
+    for (const id of ["claude-haiku-5-5", "claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-2"]) {
+      expect(KNOWN_HOSTED_WINDOWS.map((k) => k.model)).toContain(id);
+    }
+  });
+
+  it("matches the id whole, a provider prefix and a dated snapshot, never a neighbour or a local server", () => {
+    const at = (url: string, model: string) => knownHostedWindow({ url, model })?.model;
+    const api = "https://api.anthropic.com/v1/chat/completions";
+    expect(at(api, "claude-sonnet-5-5")).toBe("claude-sonnet-5-5");
+    expect(at(api, "Claude-Sonnet-5-5")).toBe("claude-sonnet-5-5");
+    expect(at(api, "anthropic/claude-opus-5-5")).toBe("claude-opus-5-5");
+    expect(at(api, "claude-haiku-5-5-20261101")).toBe("claude-haiku-5-5");
+    expect(at(api, "claude-sonnet-5-5-latest")).toBe("claude-sonnet-5-5");
+    expect(at(api, "claude-sonnet-5")).toBeUndefined();
+    expect(at(api, "claude-sonnet-5-55")).toBeUndefined();
+    expect(at(api, "claude-sonnet-5-5-mini")).toBeUndefined();
+    expect(at("http://127.0.0.1:8080/v1/chat/completions", "claude-sonnet-5-5")).toBeUndefined();
+    expect(at("http://localhost:11434/v1/chat/completions", "claude-sonnet-5-5")).toBeUndefined();
+  });
+
+  it("an Anthropic-shaped endpoint whose listing says nothing: the catalog window, said as such, recorded as catalog", async () => {
+    vi.stubGlobal("fetch", async () => new Response("{}", { status: 404 }));
+    try {
+      const config = loadConfig(surface("https://api.anthropic.com/v1/chat/completions", { model: "claude-opus-5-5", defaults: DEFAULTS_65K }));
+      const h = hooks(config);
+      const route = await settleContextWindows(config, routeRole(config, "smol"), h.h);
+      expect(route.target).toMatchObject({ contextTokens: 200_000, contextSource: "catalog" });
+      expect(h.said.join("\n")).toContain("from the catalog");
+      expect(h.said.join("\n")).toContain("claude-opus-5-5");
+      // A catalog window is a resolved one: no warning, no degradation.
+      expect(h.warned).toEqual([]);
+      expect(h.recs).toEqual([]);
+      expect(rememberedWindow(route.target)).toMatchObject({ tokens: 200_000, source: "catalog" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("a route with no listing path still gets its catalog window, without a request", async () => {
+    let calls = 0;
+    vi.stubGlobal("fetch", async () => (calls++, new Response("{}", { status: 404 })));
+    try {
+      const config = loadConfig(surface("https://api.anthropic.com/v1/responses", { model: "claude-haiku-5-5" }));
+      const route = await settleContextWindows(config, routeRole(config, "smol"), hooks(config).h);
+      expect(route.target).toMatchObject({ contextTokens: 200_000, contextSource: "catalog" });
+      expect(calls).toBe(0);
+      const unknown = loadConfig(surface("https://api.anthropic.com/v1/responses", { model: "unlisted-model" }));
+      expect(routeRole(unknown, "smol").target.contextTokens).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -700,9 +764,30 @@ describe("a window declared nowhere is asked of the endpoint (B1)", () => {
     const fixture = FIXTURE as {
       precedence: { endpoint: string | null; defaults: string | null; publishes: string; tokens: number; source: string }[];
     };
-    expect(fixture.precedence.length).toBeGreaterThanOrEqual(7);
+    expect(fixture.precedence.length).toBeGreaterThanOrEqual(13);
     for (const c of fixture.precedence) {
       const [what, n] = c.publishes.split(":");
+      if (c.hosted) {
+        // A hosted URL: the network is stubbed to publish a listing for the model, or 404.
+        vi.stubGlobal("fetch", async (u: string) =>
+          what === "models" && String(u).endsWith("/models")
+            ? new Response(JSON.stringify({ data: [{ id: c.hosted.model, limit: { context: Number(n) } }] }), { status: 200 })
+            : new Response("{}", { status: 404 })
+        );
+        try {
+          const cfg = loadConfig(surface(c.hosted.url, {
+            model: c.hosted.model,
+            ...(c.endpoint ? { endpoint: c.endpoint } : {}),
+            ...(c.defaults ? { defaults: c.defaults } : {}),
+          }));
+          const settled = await settleContextWindows(cfg, routeRole(cfg, "smol"), hooks(cfg).h);
+          expect(settled.target, JSON.stringify(c)).toMatchObject({ contextTokens: c.tokens, contextSource: c.source });
+        } finally {
+          vi.unstubAllGlobals();
+          forgetContextWindows();
+        }
+        continue;
+      }
       const f = await fake(
         what === "models" ? { models: listing({ id: "m1", limit: { context: Number(n) } }) }
           : what === "props" ? { props: { body: { default_generation_settings: { n_ctx: Number(n) } } } }

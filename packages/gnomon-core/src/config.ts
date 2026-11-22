@@ -20,6 +20,7 @@ import { SourceEntry } from "./session.js";
 import { loadSkills } from "./skills.js";
 import { harnessBuild } from "./build.js";
 import { AUTO_WINDOW, rememberedWindow, windowProbes, type ContextSource } from "./context_window.js";
+import { knownHostedWindow } from "./known_windows.js";
 import { COMPLETION_GATE_MODES, auditCompletionGate } from "./completion_gate.js";
 import { auditVerifyKeys } from "./verify_run.js";
 import { resolveExitMap, type ExitMap, type VerifyContract } from "./verify_outcome.js";
@@ -1823,8 +1824,9 @@ function contextWindowOf(
     (declared === undefined &&
       // The test suite's switch (vitest.setup.ts): most suites script one fetch per
       // model call, and a listing probe would be an extra call they did not script.
-      process.env.GNOMON_WINDOW_LOOKUP !== "off" &&
-      windowProbes(at).length > 0);
+      ((process.env.GNOMON_WINDOW_LOOKUP !== "off" && windowProbes(at).length > 0) ||
+        // A hosted model the catalog knows is resolved without a network call.
+        knownHostedWindow(at) !== undefined));
   if (asks) {
     const known = rememberedWindow(at);
     const ollamaCtx = at.kind === "ollama" && known?.modelfile ? known.tokens : undefined;

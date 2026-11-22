@@ -26,6 +26,17 @@
 
 ## [Unreleased]
 
+### Fixed — hosted models with no published window no longer trim at ~39k: a dated catalog of known windows
+
+- An endpoint whose provider publishes no window (the Anthropic API) fell back to `[defaults] max_context_tokens`
+  (65,536), and with the honest token estimate a Claude run trimmed at ~39k real tokens, earlier than 0.6.5. gnomon
+  now has a dated, data-only table of known hosted windows (`claude-haiku-5-5`, `claude-sonnet-5-5`,
+  `claude-opus-5-5`, `claude-fable-5-2`: 200,000, the standard window; `deepseek-v4.1-flash`: 1,000,000), used after
+  the endpoint's listing and before `[defaults]`, recorded as `max_context_tokens_source: "catalog"`. A number on
+  the endpoint still wins, a listing still wins over the table, an endpoint on this machine never matches, an unknown
+  model falls to `[defaults]`. CONTRACTS §24, GUIDE and `conformance/endpoint_window.json` (sources, the table,
+  the precedence cases) move with it.
+
 ### Added — the audit record schema, and the skill enumerations (#113), CONTRACTS §55
 
 - `conformance/audit_record_schema.json` (`gnomon.audit_record/1`): for every audit kind, its required and
