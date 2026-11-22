@@ -17,7 +17,7 @@
  */
 
 import type { ResolvedUi } from "./config.js";
-import { themeOf, wordWrap, fitRow, type Theme, type ThemeColor, type BorderName } from "./render.js";
+import { themeOf, wordWrap, fitRow, glyphsOf, type Theme, type ThemeColor, type BorderName } from "./render.js";
 import { cut, plain, visibleWidth } from "./width.js";
 
 const ESC = "\x1b[";
@@ -233,12 +233,35 @@ export function clip(text: string, w: number): string {
   return `${cut(text, w - 1).head}…`;
 }
 
+/** The SGR parameters that set a background to a theme colour at a depth. */
+function bgCode(c: ThemeColor, depth: Depth): string {
+  if (depth === 4) return String(c.c16 + 10);
+  return colorCode(c, depth).replace(/^38/, "48");
+}
+
+/** The text colour on a pill: the theme's own background, else dark on a coloured ground. */
+function pillFg(ctx: BoxCtx): ThemeColor {
+  const t = ctx.theme;
+  return t.look?.pillFg ?? { hex: t.terminal?.bg ?? "#000000", c16: 30 };
+}
+
+/** The glyph down the left of a turn: the theme's own, `|` on ascii borders, else the border's vertical. */
+export function railGlyph(ctx: BoxCtx): string {
+  return ctx.ascii ? "|" : ctx.theme.look?.railGlyph ?? bordersOf(ctx).v;
+}
+
 function chip(ctx: BoxCtx, text: string): string {
   const look = ctx.theme.look;
   const c = look?.accent;
   switch (look?.chip) {
     case "inverse":
       return ctx.color ? `${ESC}1;7;${colorCode(c ?? { hex: "#fff", c16: 37 }, ctx.depth)}m ${text} ${RESET}` : `[${text}]`;
+    case "pill":
+      return ctx.color && c
+        ? `${ESC}1;${colorCode(pillFg(ctx), ctx.depth)};${bgCode(c, ctx.depth)}m ${text} ${RESET}`
+        : `[${text}]`;
+    case "bracket":
+      return `${railTint(ctx, "[")}${tint(ctx, c, text, "1")}${railTint(ctx, "]")}`;
     case "bold":
       return tint(ctx, c, text, "1");
     default:
@@ -327,7 +350,7 @@ const LEAD_ESC = /^((?:\x1b\[[0-9;]*m)*)  /;
  * row ever grows. A blank row keeps the rail unbroken.
  */
 export function railLine(ctx: BoxCtx, text: string): string {
-  const v = bordersOf(ctx).v;
+  const v = railGlyph(ctx);
   return text
     .split("\n")
     .map((l) => {
@@ -411,7 +434,7 @@ export function swatch(ctx: BoxCtx): string {
   return (
     accent(ctx, `${mark(ctx)} ${t.name}`, true) +
     "  " +
-    railTint(ctx, `${b.v} rail`) +
+    railTint(ctx, `${railGlyph(ctx)} rail`) +
     "  " +
     railTint(ctx, `${b.tl}${b.h} `) +
     chip(ctx, `${bullet(ctx)} role`) +
@@ -419,7 +442,9 @@ export function swatch(ctx: BoxCtx): string {
     "  " +
     role(ctx, "gray", "secondary") +
     " " +
-    role(ctx, "yellow", "attention")
+    role(ctx, "yellow", "attention") +
+    "  " +
+    role(ctx, "cyan", `${glyphsOf(ctx.ui, ctx.ascii).tool} tool`)
   );
 }
 

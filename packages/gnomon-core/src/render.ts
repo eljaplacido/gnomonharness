@@ -13,7 +13,7 @@ import type { PromptExchange } from "./prompt_loop.js";
 import type { ResolvedUi, MetaField, ThinkMode } from "./config.js";
 import { renderMarkdown, DEFAULT_WIDTH } from "./markdown.js";
 import { cut, visibleWidth } from "./width.js";
-import { downgradeCode, colorDepth, colorCode, legacyWindowsConsole } from "./boxed.js";
+import { downgradeCode, colorDepth, colorCode, legacyWindowsConsole, asciiOnly, type Depth } from "./boxed.js";
 
 // ---------------------------------------------------------------------------
 // Colour
@@ -51,15 +51,73 @@ export interface ThemeColor {
   c16: number;
 }
 export type BorderName = "rounded" | "sharp" | "heavy" | "double" | "ascii";
+/** The semantic colours a theme can own: status, secondary text, diff sides. */
+export type PaletteKey = "ok" | "err" | "warn" | "info" | "muted" | "add" | "del";
+export type Palette = Partial<Record<PaletteKey, ThemeColor>>;
+export type ChipStyle = "plain" | "bold" | "inverse" | "pill" | "bracket";
 export interface ThemeLook {
   accent?: ThemeColor;
   rail?: ThemeColor;
   border: BorderName;
-  /** How the role chip in a turn header is set. */
-  chip: "plain" | "bold" | "inverse";
+  /**
+   * How the role chip in a turn header is set: `bold` text, `inverse` (the
+   * terminal's reverse video), a `pill` (accent background, the theme's own
+   * background as the text colour, one space of padding) or `[bracketed]`.
+   */
+  chip: ChipStyle;
+  /** The glyph down the left of a turn; the border's vertical when omitted. */
+  railGlyph?: string;
+  /** The step row's glyph (default `⚙`) and the reasoning row's (default `✻`). */
+  toolGlyph?: string;
+  thinkGlyph?: string;
+  /** The default spinner's frames and the milliseconds each stays. */
+  spinner?: { frames: string[]; ms: number };
+  /** Text colour on a `pill`, when the theme has no `terminal.bg` to borrow. */
+  pillFg?: ThemeColor;
+  /**
+   * Own colours for ok / err / warn / info / muted / diff. Used on a terminal
+   * that shows 256 colours or more; on 16 the theme's `codes` apply, unchanged.
+   * Only gnomon's own text is painted: the terminal's palette is never touched.
+   */
+  palette?: Palette;
+}
+
+/** The palette key a paint role stands for. */
+const ROLE_PALETTE: Record<string, PaletteKey> = {
+  green: "ok", red: "err", yellow: "warn", cyan: "info", gray: "muted", add: "add", del: "del",
+};
+/** `add` and `del` are palette-only names; without a palette they are green and red. */
+const ROLE_FALLBACK: Record<string, string> = { add: "green", del: "red" };
+
+/** The theme's own colour for a paint role at this depth, or undefined to use `codes`. */
+export function paletteCode(theme: Theme, role: string, depth: Depth, boxed: boolean): string | undefined {
+  const key = ROLE_PALETTE[role];
+  const c = key ? theme.look?.palette?.[key] : undefined;
+  if (!c || depth === 4 || !boxed) return undefined;
+  return colorCode(c, depth);
+}
+
+/** The glyphs a theme sets, ascii where borders are: a tool row, a reasoning row, the rail. */
+export function glyphsOf(ui: ResolvedUi, ascii: boolean = asciiOnly()): { tool: string; think: string } {
+  const look = themeOf(ui).look;
+  if (ascii && look?.toolGlyph) return { tool: ">", think: "*" };
+  return { tool: look?.toolGlyph ?? "⚙", think: look?.thinkGlyph ?? "✻" };
 }
 
 const RESET = `${ESC}0m`;
+
+/** A palette from five hex colours; the diff sides share ok and err. `c16` is the muted role's 16-colour code. */
+function pal(ok: string, err: string, warn: string, info: string, muted: string, c16: number): Palette {
+  return {
+    ok: { hex: ok, c16: 32 },
+    err: { hex: err, c16: 31 },
+    warn: { hex: warn, c16: 33 },
+    info: { hex: info, c16: 36 },
+    muted: { hex: muted, c16 },
+    add: { hex: ok, c16: 32 },
+    del: { hex: err, c16: 31 },
+  };
+}
 
 export const THEMES: Record<string, Theme> = {
   dark: {
@@ -83,7 +141,12 @@ export const THEMES: Record<string, Theme> = {
   },
   dim: {
     name: "dim",
-    look: { accent: { hex: "#7C8FA6", c16: 36 }, rail: { hex: "#4B5563", c16: 90 }, border: "sharp", chip: "plain" },
+    look: {
+      accent: { hex: "#7C8FA6", c16: 36 }, rail: { hex: "#4B5563", c16: 90 }, border: "sharp", chip: "plain",
+      railGlyph: "╎", toolGlyph: "·", thinkGlyph: "∴",
+      spinner: { frames: ["◜", "◝", "◞", "◟"], ms: 150 },
+      palette: pal("#7FC97F", "#E07A7A", "#D6B36A", "#7FB5D6", "#8B95A5", 90),
+    },
     description: "Quieter. Secondary text recedes — good on a bright terminal.",
     codes: {
       gray: `${ESC}90m`,
@@ -99,7 +162,13 @@ export const THEMES: Record<string, Theme> = {
   },
   light: {
     name: "light",
-    look: { accent: { hex: "#1D4ED8", c16: 34 }, rail: { hex: "#9CA3AF", c16: 90 }, border: "rounded", chip: "bold" },
+    look: {
+      accent: { hex: "#1D4ED8", c16: 34 }, rail: { hex: "#9CA3AF", c16: 90 }, border: "rounded", chip: "pill",
+      railGlyph: "▏", toolGlyph: "▸", thinkGlyph: "❖",
+      spinner: { frames: ["◴", "◷", "◶", "◵"], ms: 150 },
+      pillFg: { hex: "#FFFFFF", c16: 97 },
+      palette: pal("#15803D", "#B91C1C", "#A16207", "#0369A1", "#4B5563", 90),
+    },
     description: "For a light background: darker foregrounds, blue for accent.",
     codes: {
       gray: `${ESC}90m`,
@@ -115,7 +184,12 @@ export const THEMES: Record<string, Theme> = {
   },
   "high-contrast": {
     name: "high-contrast",
-    look: { accent: { hex: "#FFFF00", c16: 93 }, rail: { hex: "#FFFFFF", c16: 97 }, border: "heavy", chip: "inverse" },
+    look: {
+      accent: { hex: "#FFFF00", c16: 93 }, rail: { hex: "#FFFFFF", c16: 97 }, border: "heavy", chip: "inverse",
+      railGlyph: "┃", toolGlyph: "▶", thinkGlyph: "✱",
+      spinner: { frames: ["▁", "▃", "▅", "▇", "▅", "▃"], ms: 120 },
+      palette: pal("#5FFF87", "#FF5F5F", "#FFFF5F", "#5FFFFF", "#E5E5E5", 97),
+    },
     description: "Bright and bold throughout. For small text or poor displays.",
     codes: {
       gray: `${ESC}97m`,
@@ -131,7 +205,11 @@ export const THEMES: Record<string, Theme> = {
   },
   mono: {
     name: "mono",
-    look: { border: "rounded", chip: "plain" },
+    look: {
+      border: "rounded", chip: "bracket",
+      railGlyph: "|", toolGlyph: "›", thinkGlyph: "~",
+      spinner: { frames: ["|", "/", "-", "\\"], ms: 120 },
+    },
     description: "No colour, but keeps the layout. For logs and screenshots.",
     codes: {},
   },
@@ -140,7 +218,12 @@ export const THEMES: Record<string, Theme> = {
   // exit. Foreground roles are RGB; bold/italic/dim stay attribute-only.
   tokyonight: {
     name: "tokyonight",
-    look: { accent: { hex: "#7AA2F7", c16: 94 }, rail: { hex: "#3B4261", c16: 90 }, border: "rounded", chip: "bold" },
+    look: {
+      accent: { hex: "#7AA2F7", c16: 94 }, rail: { hex: "#3B4261", c16: 90 }, border: "rounded", chip: "pill",
+      railGlyph: "▎", toolGlyph: "◇", thinkGlyph: "◌",
+      spinner: { frames: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"], ms: 80 },
+      palette: pal("#9ECE6A", "#F7768E", "#E0AF68", "#7DCFFF", "#7982A9", 90),
+    },
     description: "Deep indigo with soft neon. Recolours the whole terminal.",
     codes: {
       gray: `${ESC}38;2;86;95;137m`,
@@ -157,7 +240,12 @@ export const THEMES: Record<string, Theme> = {
   },
   catppuccin: {
     name: "catppuccin",
-    look: { accent: { hex: "#CBA6F7", c16: 95 }, rail: { hex: "#585B70", c16: 90 }, border: "rounded", chip: "bold" },
+    look: {
+      accent: { hex: "#CBA6F7", c16: 95 }, rail: { hex: "#585B70", c16: 90 }, border: "rounded", chip: "pill",
+      railGlyph: "┊", toolGlyph: "✦", thinkGlyph: "☾",
+      spinner: { frames: ["✶", "✸", "✹", "✺"], ms: 150 },
+      palette: { ...pal("#A6E3A1", "#F38BA8", "#F9E2AF", "#89B4FA", "#9399B2", 90), info: { hex: "#89B4FA", c16: 36 }, add: { hex: "#94E2D5", c16: 32 } },
+    },
     description: "Mocha — warm pastels on a plum background. Whole terminal.",
     codes: {
       gray: `${ESC}38;2;108;112;134m`,
@@ -175,7 +263,12 @@ export const THEMES: Record<string, Theme> = {
   gruvbox: {
     name: "gruvbox",
     description: "Warm retro earth tones. Recolours the whole terminal.",
-    look: { accent: { hex: "#FABD2F", c16: 93 }, rail: { hex: "#928374", c16: 90 }, border: "rounded", chip: "bold" },
+    look: {
+      accent: { hex: "#FABD2F", c16: 93 }, rail: { hex: "#928374", c16: 90 }, border: "double", chip: "pill",
+      railGlyph: "║", toolGlyph: "▸", thinkGlyph: "§",
+      spinner: { frames: ["▖", "▘", "▝", "▗"], ms: 150 },
+      palette: { ...pal("#B8BB26", "#FD6A58", "#FABD2F", "#83A598", "#A89984", 90), add: { hex: "#8EC07C", c16: 32 } },
+    },
     codes: {
       gray: `${ESC}38;2;146;131;116m`,
       bold: `${ESC}1m`,
@@ -192,7 +285,12 @@ export const THEMES: Record<string, Theme> = {
   nord: {
     name: "nord",
     description: "Cool arctic blues, sharp corners. Recolours the whole terminal.",
-    look: { accent: { hex: "#88C0D0", c16: 36 }, rail: { hex: "#4C566A", c16: 90 }, border: "sharp", chip: "plain" },
+    look: {
+      accent: { hex: "#88C0D0", c16: 36 }, rail: { hex: "#4C566A", c16: 90 }, border: "sharp", chip: "bracket",
+      railGlyph: "│", toolGlyph: "›", thinkGlyph: "∿",
+      spinner: { frames: ["◢", "◣", "◤", "◥"], ms: 150 },
+      palette: pal("#A3BE8C", "#E58B92", "#EBCB8B", "#81A1C1", "#9AA5B8", 90),
+    },
     codes: {
       gray: `${ESC}38;2;129;140;160m`,
       bold: `${ESC}1m`,
@@ -235,7 +333,10 @@ export function paint(ui: ResolvedUi, color: string, text: string): string {
   // NO_COLOR (no-color.org) is the operator's machine saying no, and it wins
   // over the surface the same way an exported key wins over the store.
   if (!ui.color || process.env.NO_COLOR) return text;
-  const code = themeOf(ui).codes[color];
+  const theme = themeOf(ui);
+  const own = paletteCode(theme, color, colorDepth(), Boolean(ui.boxed));
+  if (own) return `${ESC}${own}m${text}${RESET}`;
+  const code = theme.codes[color] ?? theme.codes[ROLE_FALLBACK[color] ?? ""];
   // The boxed look also fits a truecolor palette to a terminal that is not.
   return code ? `${ui.boxed ? downgradeCode(code, colorDepth()) : code}${text}${RESET}` : text;
 }
@@ -648,7 +749,8 @@ export interface SpinnerSpec {
 export function spinnerSpec(
   style: "sundial" | "clock" | "braille" | "ascii" = "sundial",
   platform: NodeJS.Platform = process.platform,
-  env: Record<string, string | undefined> = process.env
+  env: Record<string, string | undefined> = process.env,
+  themed?: { frames: string[]; ms: number }
 ): SpinnerSpec {
   const ascii = { frames: ["|", "/", "-", "\\"], ms: 100, width: 1 };
   if (legacyWindowsConsole(platform, env) || style === "ascii") return ascii;
@@ -662,7 +764,8 @@ export function spinnerSpec(
     case "braille":
       return { frames: spinnerFrames(platform, env), ms: 80, width: 1 };
     default:
-      return { frames: ["◐", "◓", "◑", "◒"], ms: 150, width: 1 };
+      // The default style takes the theme's own frames; dark's are the sundial.
+      return { frames: themed?.frames ?? ["◐", "◓", "◑", "◒"], ms: themed?.ms ?? 150, width: 1 };
   }
 }
 
@@ -691,7 +794,7 @@ export class Progress {
     private ui: ResolvedUi,
     private out: NodeJS.WriteStream = process.stdout
   ) {
-    this.spec = spinnerSpec(ui.spinner_style);
+    this.spec = spinnerSpec(ui.spinner_style, process.platform, process.env, themeOf(ui).look?.spinner);
   }
 
   /** Would a spinner be drawn here at all? */
