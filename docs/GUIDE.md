@@ -1155,6 +1155,12 @@ esac
   [exit contract](CONTRACTS.md) is stable. A declared `[verify]` check that
   still fails after its last round does not change it: the run is a `result`
   (0) with `verify: "failed"`, so read `verify` as well before calling it done.
+  A script that wants the check in the exit asks for it: `--require-verify`
+  (or `[verify] exit_on_fail = true`) exits `1` for a check that failed,
+  regressed or passed unverified and `4` for one that could not run, and adds
+  `verify_exit`, `verify_rounds`, `verify_reason` and `verify_tail` to the record
+  ([CONTRACTS.md §53](CONTRACTS.md)). `[verify] record_detail = true` adds the
+  fields without the exit.
 - **`--deadline <seconds|ISO time>`** (since v0.5.0)
   (or `GNOMON_DEADLINE`) gives the run a
   wall clock, opt-in. At `[turn] deadline_notes` (default 50% and 80% of the
@@ -1716,6 +1722,110 @@ enabled = true
 max_lines = 200
 ```
 
+**Opt-in: the check's own timeout and a setup command.** The declared `[verify]`
+check used to inherit the bash tool's timeout (120 s on typical surfaces) and
+whatever dependencies the worktree had, so a full suite was killed every time
+and a fresh worktree (an eval cell, `gnomon check`'s temporary worktree) failed
+for want of an install. Two keys fix that, and a surface that declares neither
+runs the check as before ([CONTRACTS.md §53](CONTRACTS.md)):
+
+```toml
+# policy.toml: inside the existing [verify] block
+[verify]
+timeout_seconds = 900             # the check's own budget; a timeout reads as `unrunnable`
+setup = "uv sync --frozen"        # once per fresh worktree, before the model's first call
+setup_network = "registry"        # "none" (default) or "registry": open for setup alone
+setup_timeout_seconds = 1200      # defaults to timeout_seconds
+```
+
+Write `setup` so it cannot run code from the tree: `pnpm install
+--frozen-lockfile --ignore-scripts`, `npm ci --ignore-scripts`, `uv sync
+--frozen`. An install otherwise runs lifecycle scripts, build backends and
+`.npmrc`/`pip.conf` from the working tree. In a session `setup` runs at the
+start of the turn, before the model can edit a manifest; in `gnomon check` it
+runs on the head being judged, so **with `setup_network = "registry"` on a host
+`[verify]` an untrusted head's install scripts run with network access**: keep
+`none`, use `exec = "docker"`, or use the flags above. `registry` has no effect
+under `exec = "docker"` or `"os"`: the floor stays as declared. `setup` comes
+from the hashed surface (changing it moves the surface hash), runs once per
+worktree, is not bound by the role's `write_allow` (an install
+writes `node_modules`), and is recorded as a `verify` audit record with
+`phase: "setup"` and the network it had. A setup that fails makes the check
+`unrunnable`: nothing is handed back to the model as "fix your code".
+`gnomon check` runs it in the temporary worktree it makes for a head that is not
+checked out.
+
+**Opt-in: what the check's other exit codes mean.** A check has four
+verdicts: `passed` (exit 0, and only exit 0), `failed` (handed back to the
+model), `unrunnable` (nothing was measured: not found, timed out, refused; never
+handed back as "fix your code") and `regressed` (measured and worse than a
+baseline the check keeps; recorded, handed back only on request). By default
+126 and 127 are `unrunnable` and every other non-zero exit is `failed`. Tools
+use other codes, so name them ([CONTRACTS.md §53](CONTRACTS.md)):
+
+```toml
+# policy.toml: inside the existing [verify] block
+[verify]
+contract = "pytest"               # "septacore" or "pytest": 2, 4, 5 are unrunnable
+regressed_hand_back = false       # true: hand a `regressed` verdict back like `failed`
+
+# the exit_map is read over the preset; a sub-table, not an inline table
+[verify.exit_map]
+4 = "unrunnable"                  # a script that prints "NOT RUN" and exits 4
+3 = "regressed"
+```
+
+`gnomon task` and `gnomon check` read a run through the same table, so a check
+cannot come out `unrunnable` in one and `failed` in the other. In `gnomon check`
+`regressed` is a `fail` (no model to hand it to). Nothing can make a non-zero
+exit pass.
+
+**Opt-in: tell a green check from a weakened one.** The check runs code the
+agent can edit in the same turn: `package.json` scripts, `conftest.py`, pytest
+`addopts`, your `scripts/verify.sh`, a `.septacore.json`. `protects` names them;
+a turn that changes one cannot come out `passed` ([CONTRACTS.md §53](CONTRACTS.md)):
+
+```toml
+# policy.toml: inside the existing [verify] block
+[verify]
+protects = ["@detected", "scripts/verify.sh"]   # @detected: conftest.py, pytest.ini, pyproject.toml, package.json,
+                                                # .septacore.json, vitest/jest config, tox.ini, setup.cfg, noxfile.py,
+                                                # .coveragerc, and the command's own script (the Makefile for make)
+```
+
+The files are hashed before and after the turn, by `write`, `edit` or the shell.
+A green check over a changed one is `passed_unverified`, and the answer is handed
+back once, naming the file: revert it, or say why it does not weaken the check.
+Only `package.json` `scripts` and `jest`, `pyproject.toml` `[tool.pytest*]` and
+`setup.cfg` `[tool:pytest]` count as changes in those files; any other file
+counts by its bytes. **Files the check merely imports (a helper a test pulls
+in) are not protected** unless you list them. The walk that finds glob matches
+stops at 50,000 entries or 8 directories deep; when it does, gnomon warns and
+the `verify` audit record carries `protects_truncated: true`, and files past the
+limit are not protected. `gnomon check`
+reads the list from the base commit and reports a change to it as a `fail`
+(`passed_unverified`). Not declared, nothing is snapshotted.
+
+**Opt-in: the exit, the detail, and a probe.** A failed or unrunnable check
+leaves `gnomon task` at exit 0 (the bucket's), as #211 documents, and the
+record carries only `verify`. Two opt-ins for a script, and one command to try
+the check before relying on it ([CONTRACTS.md §53](CONTRACTS.md)):
+
+```toml
+# policy.toml: inside the existing [verify] block
+[verify]
+exit_on_fail = true               # task exits 1 (failed/regressed/passed_unverified) or 4 (unrunnable)
+record_detail = true              # verify_exit, verify_rounds, verify_reason, verify_tail in the record
+```
+
+`gnomon task --require-verify` is `exit_on_fail` for one run. `gnomon doctor
+verify` runs the declared check once on the tree as it is (or the one `init`
+would detect, if none is declared) and says what it means: it could not run, it
+exits 0 but ran no test, it exits 4 or 5 (pytest's usage error and "nothing
+collected", which read as failures unless `contract` or `exit_map` says
+otherwise), or it fails on a clean tree. It does not run `setup`, and plain
+`gnomon doctor` still runs nothing of the project's.
+
 **Opt-in: the completion gate** (since v0.5.0). Off unless declared. When a turn that changed
 the worktree first answers "done" with budget left, gnomon does not accept it:
 it hands the turn back with a checklist lifted from the task's own text (each
@@ -1943,7 +2053,7 @@ answer." Reasoning counts from every channel gnomon reads (`reasoning_content`,
 stopped, and after `max_consecutive_malformed` stops in a row the next call runs
 uncapped. Each stop is a `think_cap` audit record and the turn's
 `counters.think_cap` says how many and at how many tokens
-([CONTRACTS.md §52](CONTRACTS.md)).
+([CONTRACTS.md §53](CONTRACTS.md)).
 
 ```toml
 # config.toml

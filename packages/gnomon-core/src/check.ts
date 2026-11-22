@@ -60,7 +60,9 @@ import { readsRank } from "./sandbox_pin.js";
 import { parseSurfaceTree, readSurfaceBlobs, SurfaceTreeError, writeSurfaceTree, type SurfaceEntry } from "./surface_tree.js";
 import { AuditTrail, redact, resolveAudit, verifyTrail } from "./audit.js";
 import { harnessBuild } from "./build.js";
-import { mustFailFirst, readVerifyExit, isTestPath, unwritablePreImage, type PreImage } from "./must_fail_first.js";
+import { runVerifySetup, verifyContext } from "./verify_run.js";
+import { protectedChange } from "./verify_protects.js";
+import { mustFailFirst, readVerifyRun, isTestPath, unwritablePreImage, type PreImage } from "./must_fail_first.js";
 import {
   bashPolicy,
   executeTool,
@@ -134,6 +136,13 @@ export interface CheckVerdict {
   rules_rev?: string;
   /** Where [verify] and the must-fail-first re-run ran, after this machine's floors. */
   exec?: { mode: string; image: string; network: boolean };
+  /**
+   * `[verify] setup`, when it ran in the temporary worktree: the command's
+   * sha256, the network it had (`none` unless `registry` was declared AND
+   * [verify] runs on the host), its exit, and whether it completed. Absent
+   * when no setup ran.
+   */
+  setup?: { command_sha256: string; network: "none" | "registry"; exit: number | null; ok: boolean };
   /** Things a person should know about how this verdict was reached. */
   warnings?: string[];
 }
@@ -752,28 +761,97 @@ async function judge(
       verdict.checks.push({ id: "must_fail_first", status: "skipped", reason: "no [verify] declared" });
       return;
     }
-    const run = (command: string) => executeTool("bash", { command }, ctx, new Set(["bash"]));
+    const vctx = verifyContext(ctx, verify);
+    // `[verify] setup` (#233): a temporary worktree has no installed
+    // dependencies, which is most of what made a check fail there. Run in a
+    // fresh one only: the worktree being judged in place already has its own.
+    // The network opens for it only where [verify] runs on the host; under a
+    // container or sandbox floor it stays as the floor left it.
+    if (verify.setup && !inPlace) {
+      const setup = await runVerifySetup(
+        verify,
+        vctx,
+        (command, c) => executeTool("bash", { command }, c, new Set(["bash"])),
+        { force: true }
+      );
+      // Said in the verdict and the trail, whatever it came to.
+      if (setup) {
+        verdict.setup = { command_sha256: setup.command_sha256, network: setup.network, exit: setup.exit, ok: setup.ok };
+      }
+      if (setup && !setup.ok) {
+        verdict.checks.push({
+          id: "verify",
+          status: "error",
+          reason: `the check could not run: [verify] setup ${setup.reason ?? "did not complete"}`,
+          findings: [{ command: verify.setup, exit: setup.exit, network: setup.network, command_sha256: setup.command_sha256, output: setup.output ?? "" }],
+        });
+        verdict.checks.push({ id: "must_fail_first", status: "skipped", reason: "[verify] setup did not complete" });
+        return;
+      }
+    }
+    const run = (command: string) => executeTool("bash", { command }, vctx, new Set(["bash"]));
     const out = await run(verify.command);
-    const v = readVerifyExit(out);
+    // The same reading the loop gives (must_fail_first.ts readVerifyRun, one
+    // table in verify_outcome.ts), so the two cannot drift. `verdict` is added
+    // to a finding only when the surface declared a table.
+    const v = readVerifyRun(out, verify);
     const tail = out.content.split("\n").slice(-20).join("\n");
-    if (v.passed) {
+    const named = verify.exit_map ? { verdict: v.verdict } : {};
+    // `[verify] protects` (#234): files the check executes that the change
+    // edited. The rules are the base's, so the head cannot widen the list.
+    const protectedChanged: string[] = [];
+    if (verify.protects) {
+      for (const c of paths) {
+        const rel = posix(relative(projRoot, abs(c.path)));
+        let after: Buffer | null = null;
+        try {
+          after = c.status === "D" ? null : readFileSync(abs(c.path));
+        } catch {
+          after = null;
+        }
+        let before: Buffer | null = null;
+        if (c.status !== "A") {
+          try {
+            before = git(toplevel, ["show", `${from}:${c.path}`]) as unknown as Buffer;
+          } catch {
+            before = null;
+          }
+        }
+        if (protectedChange(verify, rel, before, after)) protectedChanged.push(rel);
+      }
+    }
+    if (v.passed && protectedChanged.length > 0) {
+      verifyPassed = true; // it ran green: must-fail-first still has something to re-run
+      // Green, but the change edited what the check executes: the pass says
+      // nothing about the work. `fail` rather than `error`: the check ran.
+      verdict.checks.push({
+        id: "verify",
+        status: "fail",
+        inspected: 1,
+        reason: `passed_unverified: the change edited ${protectedChanged.join(", ")}, which the check executes, so its pass cannot be told from a weakened check`,
+        findings: [{ command: verify.command, exit: 0, verdict: "passed_unverified", protects_changed: protectedChanged }],
+      });
+    } else if (v.passed) {
       verifyPassed = true;
       verdict.checks.push({ id: "verify", status: "pass", inspected: 1, findings: [{ command: verify.command, exit: 0 }] });
-    } else if (v.unrunnable || out.code !== 0) {
+    } else if (v.verdict === "unrunnable") {
       verdict.checks.push({
         id: "verify",
         status: "error",
         reason:
           `the check could not run (${out.summary})` +
           (inPlace ? "" : " — head was judged in a temporary worktree, which has no installed dependencies"),
-        findings: [{ command: verify.command, exit: v.exit, output: tail }],
+        findings: [{ command: verify.command, exit: v.exit, output: tail, ...named }],
       });
     } else {
+      // `failed`, and `regressed`: measured and worse. `gnomon task` records a
+      // regression without handing it back to a model; a judge of someone
+      // else's change has no model to hand it to, so it is a fail.
       verdict.checks.push({
         id: "verify",
         status: "fail",
         inspected: 1,
-        findings: [{ command: verify.command, exit: v.exit, output: tail }],
+        findings: [{ command: verify.command, exit: v.exit, output: tail, ...named }],
       });
     }
 
@@ -810,7 +888,7 @@ async function judge(
     }
     const sources = [...preImages.keys()].filter((p) => !isTestPath(verify.test_paths, posix(relative(projRoot, p))));
     const reRun = () =>
-      mustFailFirst(projRoot, verify, preImages, (command) => executeTool("bash", { command }, ctx, new Set(["bash"])));
+      mustFailFirst(projRoot, verify, preImages, (command) => executeTool("bash", { command }, vctx, new Set(["bash"])));
     const mff = inPlace ? await withJournal(journal, toplevel, sources, reRun) : await reRun();
     if (!mff.ran) {
       verdict.checks.push({ id: "must_fail_first", status: "skipped", reason: mff.reason ?? "did not run" });
@@ -940,6 +1018,7 @@ function appendVerdict(
       role_source: meta.roleSource,
       agent: meta.agent,
       surface_hash: verdict.surface_hash,
+      ...(verdict.setup ? { setup: verdict.setup } : {}),
       checks: verdict.checks.map((c) => ({
         id: c.id,
         status: c.status,

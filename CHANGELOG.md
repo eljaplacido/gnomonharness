@@ -64,6 +64,50 @@
   --write` is printed, never run. `--no-verify` and `--from` write neither.
   `gnomon security` shows `gnomon migrate --check` drift as a `rules_drift`
   advice finding.
+### Added
+
+- **An opt-in non-zero exit for the declared check, verify detail in the task
+  record, and `gnomon doctor verify`** (#235). `gnomon task --require-verify`
+  (or `[verify] exit_on_fail = true`) exits `1` for a check that failed,
+  regressed or passed unverified and `4` for one that could not run, where the
+  bucket says 0; the #211 default is unchanged without it. The record then
+  carries `verify_exit`, `verify_rounds`, `verify_reason` and `verify_tail`
+  (`[verify] record_detail = true` adds them without the exit). `gnomon doctor
+  verify` runs the declared (or detected) check once on the tree as it is and
+  flags a check that cannot run, exits 0 having run no test, exits 4 or 5, or is
+  red on the clean tree. Nothing changes unless asked. CONTRACTS §53.
+
+- **`[verify] protects` and the `passed_unverified` verdict** (#234). A check
+  runs code the agent can edit in the same turn (`package.json` scripts,
+  `conftest.py`, pytest `addopts`, a `scripts/verify.sh`, `.septacore.json`).
+  `protects = ["@detected", ...]` names the files; a turn that changes one, by
+  `write`, `edit` or the shell, cannot come out `passed`: a green run is
+  `passed_unverified`, the answer is handed back once naming the file, and the
+  `verify` audit record carries `protects_changed`. `gnomon check` reads the
+  list from the base commit and reports a change to it as a `fail`. Opt-in:
+  nothing is snapshotted unless declared. CONTRACTS §53.
+
+- **A four-outcome `[verify]` verdict: `contract`, `[verify.exit_map]`,
+  `regressed_hand_back`** (#232). `passed`, `failed`, `unrunnable` and the new
+  `regressed`. `contract = "septacore"` or `"pytest"` and `[verify.exit_map]`
+  (exit code = verdict) say what a tool's other codes mean: pytest 2/4/5 and
+  SeptaCore 2 are `unrunnable`, so a check that never measured anything no
+  longer makes the model rewrite correct code. `regressed` is recorded and not
+  handed back unless `regressed_hand_back = true`. `gnomon task` and `gnomon
+  check` now read a run through one function, so they cannot drift. Nothing
+  makes a non-zero exit pass. With none declared the table is the old one.
+  CONTRACTS §53, `conformance/verify_contract.json`.
+
+- **`[verify] timeout_seconds`, `setup`, `setup_network`, `setup_timeout_seconds`**
+  (#233). The declared check no longer has to fit the bash tool's 120 s, and a
+  fresh worktree can install its dependencies first. `timeout_seconds` is the
+  check's own budget (a timeout reads as `unrunnable`); `setup` runs once per
+  worktree from the hashed surface, with the network shut unless
+  `setup_network = "registry"` opens it for that command alone, and is a
+  `verify` audit record with `phase: "setup"`. `gnomon check` runs it in the
+  temporary worktree it makes for a head that is not checked out. All opt-in:
+  with none declared the check runs as before. CONTRACTS §53,
+  `conformance/verify_contract.json`.
 
 ## [0.6.5] — 2026-11-21
 

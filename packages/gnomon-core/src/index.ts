@@ -37,6 +37,8 @@ export * from "./mediators.js";
 // The completion gate (`[verify] completion_gate`): checklist, required check
 // and read-only reviewer at the end of a turn (docs/CONTRACTS.md §30).
 export * from "./completion_gate.js";
+export * from "./verify_outcome.js";
+export * from "./verify_probe.js";
 // The finish gate (`[verify] finish_gate = "v2"`): task verbatim, caveat
 // audit, claims against evidence, targeted checks. CONTRACTS.md §33.
 export * from "./finish_gate.js";

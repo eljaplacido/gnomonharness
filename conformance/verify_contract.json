@@ -1,0 +1,560 @@
+{
+  "version": 1,
+  "_comment": [
+    "The opt-in keys of [verify] and what they resolve to (docs/CONTRACTS.md section 52).",
+    "Each case is a policy.toml [verify] block (after `command = \"x\"`) and `resolves`: the fields the",
+    "resolved block must carry. `absent` lists fields it must not carry, because a key nobody declared",
+    "adds nothing to what runs. Asserted by packages/gnomon-core/src/verify_setup.test.ts.",
+    "Since #232: the verdict table (`verdicts`, `contracts`) and `exit_cases`: one run of the check with an exit, read by the loop (`gnomon task`) and by `gnomon check` through the same table. `check_status` is the `verify` entry's status in a `gnomon check` verdict (regressed is a fail there: a judge of someone else's change has no model to hand it to).",
+    "Since #234: `protects` (docs/CONTRACTS.md section 52). `detected` is what the token `@detected` names besides the files the command itself runs (`command_files`); `digest_cases` say what counts as a change to a protected file, by file. A turn that changes one cannot come out `passed`: `passed_unverified`. Asserted by packages/gnomon-core/src/verify_protects.test.ts.",
+    "Since #235: `task_exit` is the exit `gnomon task --require-verify` (or [verify] exit_on_fail) gives a task whose bucket says 0 (a refusal or apparatus failure keeps its own exit); `flag_exit: null` leaves it 0. Without the flag every row is 0 (#211). `doctor_verify` is `gnomon doctor verify`: its schema, exits, finding kinds, and the cases the probe is tested on. Asserted by packages/gnomon-core/src/verify_exit_detail.test.ts."
+  ],
+  "setup_network": [
+    "none",
+    "registry"
+  ],
+  "setup_audit": {
+    "kind": "verify",
+    "phase": "setup",
+    "network": [
+      "none",
+      "registry"
+    ]
+  },
+  "cases": [
+    {
+      "name": "nothing declared",
+      "verify": {},
+      "resolves": {},
+      "absent": [
+        "timeout_seconds",
+        "setup",
+        "setup_network",
+        "setup_timeout_seconds"
+      ]
+    },
+    {
+      "name": "a timeout of the check's own",
+      "verify": {
+        "timeout_seconds": 900
+      },
+      "resolves": {
+        "timeout_seconds": 900
+      },
+      "absent": [
+        "setup"
+      ]
+    },
+    {
+      "name": "a setup, network shut by default",
+      "verify": {
+        "setup": "uv sync --frozen"
+      },
+      "resolves": {
+        "setup": "uv sync --frozen",
+        "setup_network": "none"
+      },
+      "absent": [
+        "timeout_seconds"
+      ]
+    },
+    {
+      "name": "a setup with the registry open",
+      "verify": {
+        "setup": "pnpm install --frozen-lockfile",
+        "setup_network": "registry",
+        "setup_timeout_seconds": 1200
+      },
+      "resolves": {
+        "setup_network": "registry",
+        "setup_timeout_seconds": 1200
+      },
+      "absent": []
+    },
+    {
+      "name": "an unreadable timeout is ignored",
+      "verify": {
+        "timeout_seconds": -5
+      },
+      "resolves": {},
+      "absent": [
+        "timeout_seconds"
+      ]
+    },
+    {
+      "name": "an unknown setup_network is read as none",
+      "verify": {
+        "setup": "make deps",
+        "setup_network": "anywhere"
+      },
+      "resolves": {
+        "setup_network": "none"
+      },
+      "absent": []
+    }
+  ],
+  "verdicts": [
+    "passed",
+    "failed",
+    "unrunnable",
+    "regressed"
+  ],
+  "contracts": {
+    "septacore": {
+      "0": "passed",
+      "1": "failed",
+      "2": "unrunnable",
+      "3": "regressed"
+    },
+    "pytest": {
+      "0": "passed",
+      "1": "failed",
+      "2": "unrunnable",
+      "4": "unrunnable",
+      "5": "unrunnable"
+    }
+  },
+  "exit_map_values": [
+    "failed",
+    "unrunnable",
+    "regressed"
+  ],
+  "exit_cases": [
+    {
+      "name": "no table: exit 0",
+      "verify": {},
+      "exit": 0,
+      "verdict": "passed",
+      "handed_back": false,
+      "check_status": "pass"
+    },
+    {
+      "name": "no table: exit 1",
+      "verify": {},
+      "exit": 1,
+      "verdict": "failed",
+      "handed_back": true,
+      "check_status": "fail"
+    },
+    {
+      "name": "no table: exit 5 is a failure as before",
+      "verify": {},
+      "exit": 5,
+      "verdict": "failed",
+      "handed_back": true,
+      "check_status": "fail"
+    },
+    {
+      "name": "no table: exit 127",
+      "verify": {},
+      "exit": 127,
+      "verdict": "unrunnable",
+      "handed_back": false,
+      "check_status": "error"
+    },
+    {
+      "name": "pytest: collection error",
+      "verify": {
+        "contract": "pytest"
+      },
+      "exit": 2,
+      "verdict": "unrunnable",
+      "handed_back": false,
+      "check_status": "error"
+    },
+    {
+      "name": "pytest: usage error",
+      "verify": {
+        "contract": "pytest"
+      },
+      "exit": 4,
+      "verdict": "unrunnable",
+      "handed_back": false,
+      "check_status": "error"
+    },
+    {
+      "name": "pytest: no tests collected",
+      "verify": {
+        "contract": "pytest"
+      },
+      "exit": 5,
+      "verdict": "unrunnable",
+      "handed_back": false,
+      "check_status": "error"
+    },
+    {
+      "name": "pytest: a failing test",
+      "verify": {
+        "contract": "pytest"
+      },
+      "exit": 1,
+      "verdict": "failed",
+      "handed_back": true,
+      "check_status": "fail"
+    },
+    {
+      "name": "septacore: could not measure",
+      "verify": {
+        "contract": "septacore"
+      },
+      "exit": 2,
+      "verdict": "unrunnable",
+      "handed_back": false,
+      "check_status": "error"
+    },
+    {
+      "name": "septacore: regressed is recorded, not handed back",
+      "verify": {
+        "contract": "septacore"
+      },
+      "exit": 3,
+      "verdict": "regressed",
+      "handed_back": false,
+      "check_status": "fail"
+    },
+    {
+      "name": "septacore: regressed handed back on request",
+      "verify": {
+        "contract": "septacore",
+        "regressed_hand_back": true
+      },
+      "exit": 3,
+      "verdict": "regressed",
+      "handed_back": true,
+      "check_status": "fail"
+    },
+    {
+      "name": "exit_map: a project script's NOT RUN",
+      "verify": {
+        "exit_map": {
+          "4": "unrunnable"
+        }
+      },
+      "exit": 4,
+      "verdict": "unrunnable",
+      "handed_back": false,
+      "check_status": "error"
+    },
+    {
+      "name": "exit_map over a preset",
+      "verify": {
+        "contract": "pytest",
+        "exit_map": {
+          "5": "failed"
+        }
+      },
+      "exit": 5,
+      "verdict": "failed",
+      "handed_back": true,
+      "check_status": "fail"
+    },
+    {
+      "name": "exit_map cannot make a non-zero exit pass",
+      "verify": {
+        "exit_map": {
+          "3": "passed"
+        }
+      },
+      "exit": 3,
+      "verdict": "failed",
+      "handed_back": true,
+      "check_status": "fail"
+    },
+    {
+      "name": "exit_map cannot touch exit 0",
+      "verify": {
+        "exit_map": {
+          "0": "failed"
+        }
+      },
+      "exit": 0,
+      "verdict": "passed",
+      "handed_back": false,
+      "check_status": "pass"
+    },
+    {
+      "name": "an unknown preset is no preset",
+      "verify": {
+        "contract": "jest"
+      },
+      "exit": 2,
+      "verdict": "failed",
+      "handed_back": true,
+      "check_status": "fail"
+    }
+  ],
+  "verdicts_task": [
+    "passed",
+    "passed_unverified",
+    "failed",
+    "unrunnable",
+    "regressed",
+    "declined",
+    "skipped"
+  ],
+  "protects": {
+    "token": "@detected",
+    "detected": [
+      "**/conftest.py",
+      "pytest.ini",
+      "pyproject.toml",
+      "package.json",
+      ".septacore.json",
+      "**/vitest.config.*",
+      "**/jest.config.*",
+      "tox.ini",
+      "setup.cfg",
+      "noxfile.py",
+      ".coveragerc"
+    ],
+    "command_files": [
+      {
+        "command": "bash scripts/verify.sh",
+        "files": [
+          "scripts/verify.sh"
+        ]
+      },
+      {
+        "command": "./run_tests.sh --fast",
+        "files": [
+          "run_tests.sh"
+        ]
+      },
+      {
+        "command": "pytest -q tests/",
+        "files": [
+          "tests/"
+        ]
+      },
+      {
+        "command": "pnpm test",
+        "files": []
+      },
+      {
+        "command": "make test",
+        "files": [
+          "Makefile",
+          "makefile",
+          "GNUmakefile"
+        ]
+      }
+    ],
+    "digest_cases": [
+      {
+        "name": "a conftest.py edit",
+        "file": "conftest.py",
+        "before": "a",
+        "after": "b",
+        "changed": true
+      },
+      {
+        "name": "a conftest.py left alone",
+        "file": "tests/conftest.py",
+        "before": "a",
+        "after": "a",
+        "changed": false
+      },
+      {
+        "name": "a file created",
+        "file": "pytest.ini",
+        "before": null,
+        "after": "[pytest]\n",
+        "changed": true
+      },
+      {
+        "name": "a file deleted",
+        "file": ".septacore.json",
+        "before": "{}",
+        "after": null,
+        "changed": true
+      },
+      {
+        "name": "package.json: a script",
+        "file": "package.json",
+        "before": "{\"scripts\":{\"test\":\"a\"}}",
+        "after": "{\"scripts\":{\"test\":\"b\"}}",
+        "changed": true
+      },
+      {
+        "name": "package.json: a dependency is not a change",
+        "file": "package.json",
+        "before": "{\"scripts\":{\"test\":\"a\"}}",
+        "after": "{\"scripts\":{\"test\":\"a\"},\"dependencies\":{\"x\":\"1\"}}",
+        "changed": false
+      },
+      {
+        "name": "pyproject.toml: addopts",
+        "file": "pyproject.toml",
+        "before": "[tool.pytest.ini_options]\naddopts = \"-q\"\n",
+        "after": "[tool.pytest.ini_options]\naddopts = \"-k nothing\"\n",
+        "changed": true
+      },
+      {
+        "name": "pyproject.toml: another table is not a change",
+        "file": "pyproject.toml",
+        "before": "[project]\nname = \"a\"\n[tool.pytest.ini_options]\naddopts = \"-q\"\n",
+        "after": "[project]\nname = \"b\"\n[tool.pytest.ini_options]\naddopts = \"-q\"\n",
+        "changed": false
+      },
+      {
+        "name": "package.json: the jest key",
+        "file": "package.json",
+        "before": "{\"jest\":{\"bail\":1}}",
+        "after": "{\"jest\":{\"bail\":0,\"testPathIgnorePatterns\":[\"x\"]}}",
+        "changed": true
+      },
+      {
+        "name": "setup.cfg: [tool:pytest]",
+        "file": "setup.cfg",
+        "before": "[tool:pytest]\naddopts = -q\n",
+        "after": "[tool:pytest]\naddopts = -k nothing\n",
+        "changed": true
+      },
+      {
+        "name": "setup.cfg: another section is not a change",
+        "file": "setup.cfg",
+        "before": "[metadata]\nname = a\n[tool:pytest]\naddopts = -q\n",
+        "after": "[metadata]\nname = b\n[tool:pytest]\naddopts = -q\n",
+        "changed": false
+      },
+      {
+        "name": "a vitest config",
+        "file": "vitest.config.ts",
+        "before": "a",
+        "after": "b",
+        "changed": true
+      },
+      {
+        "name": "a nested jest config",
+        "file": "packages/x/jest.config.js",
+        "before": "a",
+        "after": "b",
+        "changed": true
+      },
+      {
+        "name": "a Makefile under make",
+        "file": "Makefile",
+        "before": "a",
+        "after": "b",
+        "changed": true,
+        "command": "make test"
+      }
+    ]
+  },
+  "task_exit": [
+    {
+      "verdict": "passed",
+      "flag_exit": null
+    },
+    {
+      "verdict": "failed",
+      "flag_exit": 1
+    },
+    {
+      "verdict": "regressed",
+      "flag_exit": 1
+    },
+    {
+      "verdict": "passed_unverified",
+      "flag_exit": 1
+    },
+    {
+      "verdict": "unrunnable",
+      "flag_exit": 4
+    },
+    {
+      "verdict": "declined",
+      "flag_exit": null
+    },
+    {
+      "verdict": "skipped",
+      "flag_exit": null
+    }
+  ],
+  "task_record_detail": {
+    "keys": [
+      "verify_exit",
+      "verify_rounds",
+      "verify_reason",
+      "verify_tail"
+    ],
+    "present_when": [
+      "--require-verify",
+      "[verify] exit_on_fail = true",
+      "[verify] record_detail = true"
+    ]
+  },
+  "doctor_verify": {
+    "schema": "gnomon.doctor_verify/1",
+    "exits": {
+      "clear": 0,
+      "attention": 1,
+      "couldNotRun": 10
+    },
+    "kinds": [
+      "not_declared",
+      "unrunnable",
+      "no_tests",
+      "ambiguous_exit",
+      "red_baseline",
+      "dirty_tree",
+      "setup_not_run"
+    ],
+    "cases": [
+      {
+        "name": "passes",
+        "exit_code": 0,
+        "verdict": "passed",
+        "kinds": []
+      },
+      {
+        "name": "not found",
+        "exit_code": 1,
+        "verdict": "unrunnable",
+        "kinds": [
+          "unrunnable"
+        ]
+      },
+      {
+        "name": "pytest's no tests collected",
+        "exit_code": 1,
+        "verdict": "failed",
+        "kinds": [
+          "ambiguous_exit"
+        ]
+      },
+      {
+        "name": "a usage error",
+        "exit_code": 1,
+        "verdict": "failed",
+        "kinds": [
+          "ambiguous_exit"
+        ]
+      },
+      {
+        "name": "a failing check",
+        "exit_code": 1,
+        "verdict": "failed",
+        "kinds": [
+          "red_baseline"
+        ]
+      },
+      {
+        "name": "exits 0 and ran nothing",
+        "exit_code": 1,
+        "verdict": "passed",
+        "kinds": [
+          "no_tests"
+        ]
+      },
+      {
+        "name": "an exit named in the table",
+        "exit_code": 1,
+        "verdict": "unrunnable",
+        "kinds": [
+          "unrunnable"
+        ]
+      }
+    ]
+  }
+}

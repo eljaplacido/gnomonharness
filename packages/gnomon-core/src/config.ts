@@ -21,6 +21,8 @@ import { loadSkills } from "./skills.js";
 import { harnessBuild } from "./build.js";
 import { AUTO_WINDOW, rememberedWindow, type ContextSource } from "./context_window.js";
 import { COMPLETION_GATE_MODES, auditCompletionGate } from "./completion_gate.js";
+import { auditVerifyKeys } from "./verify_run.js";
+import { resolveExitMap, type ExitMap, type VerifyContract } from "./verify_outcome.js";
 import { auditSoftShell } from "./soft_shell.js";
 import { auditSandboxProfile } from "./sandbox_profile.js";
 import { auditDeliverableFirst } from "./deliverable_first.js";
@@ -466,6 +468,42 @@ export interface Policy {
      * check that can never pass cannot spend the budget in a circle.
      */
     max_rounds?: number;
+    /**
+     * Seconds the declared check may run, apart from the bash tool timeout
+     * (verify_run.ts). A timeout reads as `unrunnable`. Absent: the tool's.
+     */
+    timeout_seconds?: number;
+    /**
+     * A command run once per fresh worktree before the first check, e.g.
+     * `uv sync --frozen`. From the hashed surface, never the model's.
+     */
+    setup?: string;
+    /** "none" (default) or "registry": the network is open for `setup` alone. */
+    setup_network?: string;
+    /** Seconds `setup` may run. Absent: timeout_seconds, else the tool's. */
+    setup_timeout_seconds?: number;
+    /**
+     * A preset exit-code table (verify_outcome.ts): "septacore" or "pytest".
+     * `[verify.exit_map]` entries (exit code = verdict) are read over it.
+     */
+    contract?: string;
+    exit_map?: Record<string, string>;
+    /** true: a `regressed` verdict is handed back to the model like `failed`. */
+    regressed_hand_back?: boolean;
+    /**
+     * Globs for the files the check executes (verify_protects.ts); `"@detected"`
+     * stands for the known test runners' config and the command's own script.
+     * A turn that changes one cannot come out `passed`: `passed_unverified`.
+     */
+    protects?: string[];
+    /**
+     * true: `gnomon task` exits 1 for a `failed` / `regressed` / `passed_unverified`
+     * check and 4 for an `unrunnable` one, where the bucket would say 0 (#235).
+     * `--require-verify` is the same for one run. Also turns on `record_detail`.
+     */
+    exit_on_fail?: boolean;
+    /** true: the task record carries `verify_exit`, `verify_rounds`, `verify_reason`, `verify_tail`. */
+    record_detail?: boolean;
     /** The completion gate (completion_gate.ts): "off", "checklist", "review" or "review_only". */
     completion_gate?: string;
     completion_rounds?: number;
@@ -2825,6 +2863,10 @@ const ENUM_KEYS: EnumSpec[] = [
     refuses: "bash refuses every command until it is fixed (it does not fall back to running unsandboxed)",
   },
   { block: "verify", key: "after", values: ["write", "change", "always"], falls_back_to: "write" },
+  // resolveVerify: anything but "registry" is "none" (the network stays shut for setup).
+  { block: "verify", key: "setup_network", values: ["none", "registry"], falls_back_to: "none" },
+  // resolveExitMap: an unknown preset is no preset, so the default table applies.
+  { block: "verify", key: "contract", values: ["septacore", "pytest"], falls_back_to: "no preset (the default exit table)" },
   // resolveCompletionGate (completion_gate.ts): anything else is "off", so a
   // misspelt "reveiw" would silently turn the gate off.
   { block: "verify", key: "completion_gate", values: COMPLETION_GATE_MODES, falls_back_to: "off" },
@@ -3012,6 +3054,16 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "max_rounds",
       "test_must_fail_first",
       "test_paths",
+      "timeout_seconds",
+      "setup",
+      "setup_network",
+      "setup_timeout_seconds",
+      "contract",
+      "exit_map",
+      "regressed_hand_back",
+      "protects",
+      "exit_on_fail",
+      "record_detail",
       "completion_gate",
       "completion_rounds",
       "completion_min_remaining",
@@ -3623,6 +3675,7 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
 // The completion gate: a review naming no role cannot run (fatal); a
 // reviewer role declaring tools the review withholds reads as more than it is.
 problems.push(...auditCompletionGate(config));
+problems.push(...auditVerifyKeys(config));
 problems.push(...auditFinishGate(config));
 // The sweep knobs (sweep_knobs.ts): each opt-in, none fatal.
 problems.push(...auditSweepKnobs(config, (ep) => endpointKind(ep)));
@@ -6334,6 +6387,31 @@ export interface ResolvedVerify {
   test_must_fail_first: boolean;
   /** Which paths count as tests. Globs, matched against the repo-relative path. */
   test_paths: string[];
+  /** `[verify] timeout_seconds`, when declared and valid (verify_run.ts). */
+  timeout_seconds?: number;
+  /** `[verify] setup`: once per fresh worktree, before the first check. */
+  setup?: string;
+  /** Whether the network is open for `setup`: "registry", else "none". */
+  setup_network?: "none" | "registry";
+  /** `[verify] setup_timeout_seconds`, when declared and valid. */
+  setup_timeout_seconds?: number;
+  /** The effective exit-code table (preset, then `[verify.exit_map]`), when declared. */
+  exit_map?: ExitMap;
+  /** The preset named by `[verify] contract`, when valid. */
+  contract?: VerifyContract;
+  /** `[verify] regressed_hand_back = true`. */
+  regressed_hand_back?: true;
+  /** `[verify] protects`, the non-empty strings of it, when any (verify_protects.ts). */
+  protects?: string[];
+  /** `[verify] exit_on_fail = true` (#235). */
+  exit_on_fail?: true;
+  /** `[verify] record_detail = true` (#235); `exit_on_fail` implies it. */
+  record_detail?: true;
+}
+
+/** A positive, finite number of seconds, or undefined. */
+function positiveSeconds(v: unknown): number | undefined {
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : undefined;
 }
 
 /**
@@ -6360,6 +6438,25 @@ export function resolveVerify(config: GnomonConfig): ResolvedVerify | null {
       Array.isArray(v?.test_paths) && v.test_paths.length > 0
         ? (v.test_paths as string[])
         : ["**/test_*.py", "**/*_test.py", "**/*.test.ts", "**/*.test.js", "**/tests/**"],
+    // Opt-in keys are present only when declared, so a surface without them
+    // resolves to exactly the object it always did.
+    ...(positiveSeconds(v?.timeout_seconds) !== undefined ? { timeout_seconds: positiveSeconds(v?.timeout_seconds) } : {}),
+    ...(typeof v?.setup === "string" && v.setup.trim()
+      ? { setup: v.setup.trim(), setup_network: v.setup_network === "registry" ? ("registry" as const) : ("none" as const) }
+      : {}),
+    ...(positiveSeconds(v?.setup_timeout_seconds) !== undefined
+      ? { setup_timeout_seconds: positiveSeconds(v?.setup_timeout_seconds) }
+      : {}),
+    ...(() => {
+      const r = resolveExitMap({ exit_map: v?.exit_map, contract: v?.contract });
+      return r ? { exit_map: r.map, ...(r.contract ? { contract: r.contract } : {}) } : {};
+    })(),
+    ...(v?.regressed_hand_back === true ? { regressed_hand_back: true as const } : {}),
+    ...(v?.exit_on_fail === true ? { exit_on_fail: true as const } : {}),
+    ...(v?.record_detail === true || v?.exit_on_fail === true ? { record_detail: true as const } : {}),
+    ...(Array.isArray(v?.protects) && v.protects.some((g) => typeof g === "string" && g.trim())
+      ? { protects: (v.protects as unknown[]).filter((g): g is string => typeof g === "string" && g.trim() !== "").map((g) => g.trim()) }
+      : {}),
   };
 }
 
