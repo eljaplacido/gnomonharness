@@ -1317,7 +1317,23 @@ read a name, not the file. `cp .env.example .env` is refused at `prevent`,
 because it writes a secret file; ask the person to create it, or set
 `secrets = "advise"`. Like every shell rule, this reads the command's text: a
 script that opens `.env` itself is not refused by it (containment is
-`[sandbox] exec`).
+`[sandbox] exec`): `python3 -c "print(open('.env'+'.x').read())"` names no
+secret in its text. So, at `prevent` (the secrets family), containment acts on
+the files the `secrets` list names inside the repository: under `exec =
+"docker"` an empty read-only file is mounted over each, so nothing in the
+container reads it; under `exec = "os"` (which grants the whole root) the
+session refuses to start while one is there, naming the files, and the fix is
+to move them out of the repository. To accept the risk, say so:
+
+```toml
+# .gnomon/policy.toml
+[governance]
+level = "prevent"
+secrets_in_root = "allow"   # recorded in session_start.resolved.secrets_in_root
+```
+
+Below `prevent`, and with `exec = "off"`, nothing changes; `gnomon security`
+lists in-tree secrets as `secrets_in_tree`.
 
 **Writes outside the project.** Under the same declaration a shell command
 that writes or removes something outside the repository root is refused as

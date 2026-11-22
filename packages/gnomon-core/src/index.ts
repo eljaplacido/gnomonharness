@@ -17,6 +17,7 @@
  */
 
 export * from "./config.js";
+export * from "./secrets_in_root.js";
 export * from "./git_safe.js";
 export * from "./root_fs.js";
 // Whether a relative path leaves its base: `..` as a component, not a name
@@ -105,11 +106,13 @@ export * from "./trust.js";
 // Governance levels per role, read by `gnomon security` (the posture report),
 // and where they fall short of prevent (governance_off, `gnomon guard status`).
 export {
+  DEFAULT_SECRET_PATHS,
   GOVERNANCE_FIX,
   UNDECLARED_OFF,
   governanceGapLine,
   governanceGaps,
   resolveLevels,
+  resolveProtectedPaths,
   type GovernanceGaps,
   type GovernanceLevels,
 } from "./governance.js";

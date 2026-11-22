@@ -3025,7 +3025,7 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
   // (auditGovernance); an unknown key is warned here like any other.
   // `paths` is the `[governance.paths]` sub-table (secret / CI path lists),
   // whose own keys auditGovernance checks.
-  ["policy.toml", "governance", [...GOVERNANCE_KEYS, "paths"]],
+  ["policy.toml", "governance", [...GOVERNANCE_KEYS, "paths", "secrets_in_root"]],
   // resolveResidency. An entry that is not a non-empty string is fatal
   // (auditResidency): a rule that silently admitted less, or more, than it
   // says is the inert-control failure this audit exists for.

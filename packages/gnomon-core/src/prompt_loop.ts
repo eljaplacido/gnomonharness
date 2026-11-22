@@ -115,6 +115,7 @@ import { pinCredentials, holdCredentials, heldNotice, type CredentialPin } from 
 import { StallSignals, STALL_SIGNAL_PATTERNS, normalizeCommand, type StallSignalCounters } from "./stall_signals.js";
 import { JobTable, scratchDirs, statSnapshot, statChangedPaths } from "./tools.js";
 import { resolveSandboxProfile, sandboxProfileRecord } from "./sandbox_profile.js";
+import { auditSecretsInRoot, secretsInRootRecord } from "./secrets_in_root.js";
 import { JOB_TOOL, resolveSoftTimeout } from "./soft_shell.js";
 import {
   resolveCompletionGate,
@@ -5663,6 +5664,8 @@ export function resolvedSessionRecord(config: GnomonConfig, roles: string[]): Re
     // `[turn] max_reasoning_tokens_without_action` (think_cap.ts, CONTRACTS §52).
     // Absent unless declared.
     ...(thinkCapRecord(config) ? { think_cap: thinkCapRecord(config) } : {}),
+    // `[governance] secrets_in_root = "allow"` taken with a declared secret in an exec = "os" root (issue #227).
+    ...(secretsInRootRecord(config) ? { secrets_in_root: secretsInRootRecord(config) } : {}),
   };
 }
 
@@ -10111,7 +10114,7 @@ export async function runTask(
   // an interpreter, saw nothing at all. A record is where a measured fact
   // belongs, and these are measured facts about the surface that produced the
   // record.
-  const surfaceFindings = auditSurface(config);
+  const surfaceFindings = [...auditSurface(config), ...auditSecretsInRoot(config)];
   // A `role_profile` the surface names and does not ship is a routing change
   // that did not happen. The interactive loop discloses it -- "✗ profile "x"
   // is not in .gnomon/profiles/ ... running the base roles unchanged" -- and
@@ -13141,7 +13144,7 @@ export async function runPromptLoop(
   // every one of these used to surface as a 401 or a model error somewhere in
   // the middle of a task, with nothing on screen connecting it to the line
   // that caused it.
-  if (!reportSurfaceProblems(auditSurface(config), uiOf(state))) {
+  if (!reportSurfaceProblems([...auditSurface(config), ...auditSecretsInRoot(config)], uiOf(state))) {
     process.exit(1);
   }
   const ungoverned = governanceStartupLine(config);
