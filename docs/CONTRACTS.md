@@ -583,8 +583,30 @@ change was judged by), `checks`, `exit`; optionally `audit` (`trail`, `seq`,
 `hash`, `surface_audit_enabled`), `error`, `recovered`, `rules_rev` (the
 commit `--base` resolved to, whose `.gnomon/` the rules were read from), `exec`
 (`mode`, `image`, `network`: where `[verify]` ran, after this machine's exec
-floor), `warnings` (strings). Each check: `id`,
-`status`; optionally `findings`, `reason`, `inspected`.
+floor), `warnings` (strings), `policy_lint` (see below; present only when
+there are findings). Each check: `id`, `status`; optionally `findings`,
+`reason`, `inspected`.
+
+**Policy lint** (since 0.6.7; schema `gnomon.policy_lint/1`). `gnomon check`
+also lints the rules of the surface in `--dir`: `policy_lint` is
+`{schema, count, by_kind, findings}`, and each finding is `{kind, where, rule,
+message}` plus `role` and `pattern` when there is one. `kind` is one of
+`contradiction` (the same pattern allowed and denied, or an allow entry a deny
+refuses: deny wins), `shadowed` (a duplicate, or a broader pattern already
+decides), `never_matches` (an invalid regular expression, an anchor that
+cannot hold, a glob that cannot match a root-relative file path, a `task_allow`
+or `mcp__` name nothing declares), `unreachable` (a rule for a tool the role
+does not hold), `always_denied` (a granted tool the policy then always
+refuses: a deny that matches every command, `webfetch` under
+`network = false`, a disabled tool, `task_allow = []`) and `uncovered` (no
+`[governance]`, `network = true` or `level = "off"` with nothing covering it,
+bash with no rule, MCP tools offered to a role with no tools list). The linter
+uses the matchers the loop and `gnomon guard` use (`bashPolicy`,
+`globToRegExp`, `new RegExp`), never its own. Findings are warnings: the exit
+is unchanged. `--strict-policy` makes any finding exit **2** (a check failed);
+it never turns a 2 into anything else. `gnomon check --policy-lint` lints
+alone, with no `--base`, and prints `policy_lint`'s document (exit 0, or 2
+under `--strict-policy`). Fixture: `conformance/policy_lint.json`.
 
 **Fixture**: `conformance/check_verdict.json`. `packages/gnomon-cli/src/check.test.ts`
 asserts the code's check ids and statuses, this table, and the fixture are the
@@ -4546,7 +4568,21 @@ command arm),
 `wall_ms`, with the candidate's fields null in `single` mode and a command
 arm's tokens and requests null),
 `mde` (null in `single`), `thresholds`, `budget`, `trust` (`base`,
-`candidate`), `leftovers`, `status`, `meets_thresholds`, `reasons`.
+`candidate`), `leftovers`, `status`, `meets_thresholds`, `reasons`. `harness_signature`
+(since 0.6.7; after `arms`) holds `base` and `candidate`, each a harness
+signature or null (a command arm).
+
+**Harness signature** (schema `gnomon.harness_signature/1`): what the report
+states about the harness, mapped to the survey's Table 3 (Agent Harness
+Engineering, 2026, p.32). Keys, in order: `schema`, `build` (`id`, `version`,
+`revision`, `dirty`), `surface_hash`, `role`, `model` (`model`, `endpoint`,
+`provider`, `host`, `local`, `temperature`, `top_p`), `fallback`,
+`environment`, `tools`, `context`, `control`, `observability`, `validation`,
+`governance`, `not_reported`. It carries no credential, no URL userinfo, no
+command or prompt text (sha256s) and no path. The mapping from Table 3's rows
+to fields, and the rows gnomon cannot fill, is the table in GUIDE.md; the
+shape and the mapping are pinned by `conformance/harness_signature.json`,
+which `harness_signature.test.ts` asserts against a real signature.
 
 **Output.** The run writes `.gnomon-trials/_eval/<utc>-<suffix>/report.json`
 and `cells.jsonl`. These sit under the trials directory, so the guard and the
@@ -4822,6 +4858,7 @@ inside the project's `.gnomon/`. The directory holds:
 - `surface/manifest.json`;
 - `compliance`, `security`, `security_test`, `dataflow` and `metrics`, each
   as `.json` (the command's `--json` document) and `.txt`;
+- `signature.json`: the default role's harness signature (§47), part `signature`;
 - `audit/verify.json`: per trail in the `[audit] dir`, its `records`, `ok`,
   `sealed`, `sha256` and `problem`?;
 - `audit/trails/*.jsonl`, only with `--with-trails`;
@@ -4832,8 +4869,8 @@ inside the project's `.gnomon/`. The directory holds:
 `harness`, `catalog` (`as_of`, `stale`), `exits` (each report's own exit),
 `audit` (`trails`, `verified`, `broken`, `copied`), `evals`, `disclaimer`,
 `files` (`path`, `part`, `sha256`, `bytes`). `part` is one of `surface`,
-`compliance`, `security`, `security_test`, `dataflow`, `metrics`, `audit`,
-`evals` or `readme`. The command prints `pack.json`'s own sha256, for
+`compliance`, `security`, `security_test`, `dataflow`, `metrics`, `signature`,
+`audit`, `evals` or `readme`. The command prints `pack.json`'s own sha256, for
 anchoring.
 
 `--verify <dir>` re-hashes every listed file. A path that resolves outside the
