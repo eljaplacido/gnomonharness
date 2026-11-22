@@ -20,6 +20,8 @@
  *               or data[id].top_provider.context_length
  *   vllm        GET <base>/models, data[id].max_model_len         (vLLM)
  *   llamacpp    GET <root>/props, default_generation_settings.n_ctx  (llama.cpp server)
+ *   anthropic   GET <base>/models/<id>, max_input_tokens           (Anthropic Models API, also in each
+ *               GET <base>/models entry; asked first on api.anthropic.com)
  *   ollama      POST <root>/api/show, the num_ctx parameter, else model_info.<arch>.context_length
  *
  * Nothing found is not an error. The turn runs on `[defaults]
@@ -34,12 +36,13 @@
  */
 
 import type { EndpointKind } from "./config.js";
+import { knownHostedWindow } from "./known_windows.js";
 
 /** The value of `[endpoints.<name>] max_context_tokens` that asks the endpoint. */
 export const AUTO_WINDOW = "auto";
 
 /** The listings a window is read from. A shape names the fields, not the vendor. */
-export const LISTING_SHAPES = ["opencode", "openrouter", "vllm", "llamacpp", "ollama"] as const;
+export const LISTING_SHAPES = ["opencode", "openrouter", "vllm", "llamacpp", "ollama", "anthropic"] as const;
 export type ListingShape = (typeof LISTING_SHAPES)[number];
 
 /**
@@ -48,17 +51,20 @@ export type ListingShape = (typeof LISTING_SHAPES)[number];
  *
  *   declared          `[endpoints.<name>] max_context_tokens = <n>`
  *   listing:<shape>   `"auto"`, read from the endpoint's listing
- *   default           `"auto"`, nothing found: `[defaults] max_context_tokens`
+ *   catalog           the listing gave none; the model is in gnomon's dated table of
+ *                     known hosted windows (known_windows.ts)
+ *   default           nothing found: `[defaults] max_context_tokens`
  *
  * An endpoint that declares nothing records neither key, as before the key
  * existed.
  */
-export type ContextSource = "declared" | `listing:${ListingShape}` | "default";
+export type ContextSource = "declared" | `listing:${ListingShape}` | "catalog" | "default";
 
 /** Every value `max_context_tokens_source` takes, in a stable order. */
 export const CONTEXT_SOURCES: readonly ContextSource[] = [
   "declared",
   ...LISTING_SHAPES.map((s) => `listing:${s}` as const),
+  "catalog",
   "default",
 ];
 
@@ -122,6 +128,7 @@ const MODEL_FIELDS: Array<[ListingShape, string, (e: Entry) => unknown]> = [
   ["openrouter", "context_length", (e) => e.context_length],
   ["openrouter", "top_provider.context_length", (e) => obj(e.top_provider)?.context_length],
   ["vllm", "max_model_len", (e) => e.max_model_len],
+  ["anthropic", "max_input_tokens", (e) => e.max_input_tokens],
 ];
 
 /** The window for `model` in an OpenAI-shaped `/models` listing body. */
@@ -135,6 +142,14 @@ export function windowFromModelList(body: unknown, model: string): WindowHit | W
     if (tokens) return { tokens, shape, field };
   }
   return { miss: `${model} is listed without a window` };
+}
+
+/** The window of one model from the Anthropic Models API (`GET /v1/models/<id>`): `max_input_tokens`. */
+export function windowFromAnthropicModel(body: unknown, model: string): WindowHit | WindowMiss {
+  const b = obj(body);
+  if (b?.id !== undefined && b.id !== model) return { miss: `answered for ${String(b.id)}, not ${model}` };
+  const tokens = tokensOf(b?.max_input_tokens);
+  return tokens ? { tokens, shape: "anthropic", field: "max_input_tokens" } : { miss: "no max_input_tokens" };
 }
 
 /** The window a llama.cpp server runs each slot with, from `/props`. */
@@ -196,6 +211,8 @@ export interface WindowProbe {
   url: string;
   body?: string;
   read: (json: unknown) => WindowHit | WindowMiss;
+  /** Extra request headers (the Anthropic API reads its key from `x-api-key`) */
+  headers?: (apiKey: string | undefined) => Record<string, string>;
   /** More the same body says, merged into the hit (Ollama's trained length) */
   extras?: (json: unknown) => { trained?: number; modelfile?: true };
 }
@@ -236,6 +253,22 @@ export function windowProbes(target: { url: string; kind?: EndpointKind; model: 
   const probes: WindowProbe[] = [];
   if (/\/chat\/completions\/?$/.test(url)) {
     const base = url.replace(/\/chat\/completions\/?$/, "");
+    if (originOf(url) === "https://api.anthropic.com") {
+      // The Models API states the window per model; the single-model route is
+      // asked first because the list is paginated.
+      const anthropicHeaders = (key: string | undefined): Record<string, string> => ({
+        "anthropic-version": "2023-06-01",
+        ...(key ? { "x-api-key": key } : {}),
+      });
+      probes.push({
+        method: "GET",
+        url: `${base}/models/${encodeURIComponent(target.model)}`,
+        read: (j) => windowFromAnthropicModel(j, target.model),
+        headers: anthropicHeaders,
+      });
+      probes.push({ method: "GET", url: `${base}/models`, read: (j) => windowFromModelList(j, target.model), headers: anthropicHeaders });
+      return probes;
+    }
     probes.push({ method: "GET", url: `${base}/models`, read: (j) => windowFromModelList(j, target.model) });
     probes.push({ method: "GET", url: `${base.replace(/\/v1$/, "")}/props`, read: windowFromLlamaProps });
   }
@@ -262,6 +295,7 @@ async function runProbe(
       method: probe.method,
       headers: {
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
+        ...(probe.headers?.(apiKey) ?? {}),
         ...(probe.body ? { "content-type": "application/json" } : {}),
       },
       ...(probe.body ? { body: probe.body } : {}),
@@ -302,9 +336,10 @@ export async function probeContextWindow(
   // not into a note.
   const apiKey = target.apiKeyEnv ? process.env[target.apiKeyEnv] : undefined;
   const misses: string[] = [];
-  const probes = windowProbes(target);
+  // The test suite's switch (vitest.setup.ts) turns the network probes off; the table needs none.
+  const probes = process.env.GNOMON_WINDOW_LOOKUP === "off" ? [] : windowProbes(target);
   if (probes.length === 0) {
-    return { source: "default", misses: [`no listing route can be derived from ${bare(target.url)}`] };
+    misses.push(`no listing route can be derived from ${bare(target.url)}`);
   }
   for (const probe of probes) {
     const r = await runProbe(probe, apiKey, timeoutMs);
@@ -318,6 +353,17 @@ export async function probeContextWindow(
       from: `${probe.method} ${probe.url} → ${r.field}`,
       ...(r.trained ? { trained: r.trained } : {}),
       ...(r.modelfile ? { modelfile: true as const } : {}),
+      misses,
+    };
+  }
+  // The listing said nothing: a model gnomon's table knows is better than the
+  // local-sized `[defaults]` guess. A listing, when it answers, has won above.
+  const known = knownHostedWindow(target);
+  if (known) {
+    return {
+      tokens: known.tokens,
+      source: "catalog",
+      from: `gnomon's table of known hosted windows (${known.model}, ${known.as_of}; ${known.source})`,
       misses,
     };
   }

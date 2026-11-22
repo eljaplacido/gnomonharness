@@ -305,3 +305,27 @@ describe("shellWriteTargets: mode changes only when asked", () => {
     expect(shellWriteTargets("chmod 644 a").targets).toEqual([]);
   });
 });
+
+describe("outside_root: the refusal says how a second root is granted", () => {
+  const says = (text: string) => {
+    expect(text).toContain("[sandbox] extra_roots");
+    expect(text).toContain(".gnomon/policy.toml");
+    expect(text).toContain("restart gnomon");
+    expect(text).toContain("/sandbox off");
+    expect(text).toMatch(/safest/);
+  };
+
+  it("the shell refusal carries the grant, the session switch and the safe fallback", () => {
+    const p = bashPrecheck({ command: "echo x > ../ESCAPED.txt" }, ctxFor({ level: "prevent" }));
+    expect(p?.rule).toBe("outside_root");
+    says(p!.content);
+  });
+
+  it("the write and edit tools' sandbox refusal says the same", () => {
+    for (const tool of ["write", "edit"] as const) {
+      const w = writePrecheck(tool, { path: "../ESCAPED.txt", content: "x", old_string: "a", new_string: "b" }, ctxFor({ level: "prevent" }));
+      expect("refusal" in w && w.refusal.rule).toBe("sandbox");
+      says((w as any).refusal.content);
+    }
+  });
+});

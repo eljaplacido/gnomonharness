@@ -859,6 +859,7 @@ export async function runAcpServer(opts: AcpServerOptions): Promise<void> {
       const compacted = await compactSession(s.state, done.systemPrompt, (line) =>
         notice(s, `[context] ${line}`)
       );
+      if (compacted.notice) notice(s, `[context] ${compacted.notice}`);
       if (compacted.problem) {
         notice(s, `[context] ${compacted.problem}`);
       } else if (compacted.folded > 0) {

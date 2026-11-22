@@ -462,12 +462,12 @@ describe("the README outcome table matches the tool result codes", () => {
     const guide = readFileSync(join(root, "docs/GUIDE.md"), "utf-8");
     expect(guide).toContain(`max_context_tokens = "${AUTO_WINDOW}"`);
     expect(guide).toContain("`max_context_tokens_source`");
-    for (const source of ["declared", "listing:<shape>", "default"]) expect(guide).toContain(`\`${source}\``);
+    for (const source of ["declared", "listing:<shape>", "catalog", "default"]) expect(guide).toContain(`\`${source}\``);
     for (const field of ["limit.context", "context_length", "top_provider.context_length", "max_model_len", "default_generation_settings.n_ctx", "num_ctx", "/api/show"]) {
       expect(guide).toContain(field);
     }
     expect(guide).toContain("`context_window_unresolved`");
-    expect(CONTEXT_SOURCES).toEqual(["declared", ...LISTING_SHAPES.map((s) => `listing:${s}`), "default"]);
+    expect(CONTEXT_SOURCES).toEqual(["declared", ...LISTING_SHAPES.map((s) => `listing:${s}`), "catalog", "default"]);
 
     const scaffoldText = readFileSync(join(root, "packages/gnomon-cli/src/init.ts"), "utf-8");
     expect(scaffoldText.match(/^# max_context_tokens = "auto"$/gm)).toHaveLength(2);

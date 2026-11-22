@@ -81,7 +81,7 @@ import {
 } from "./config.js";
 import { thinkCapNote, thinkCapRecord, resolveThinkCap, type ThinkCapCounters } from "./think_cap.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence,
-  safeForPrompt, traceLines, isToolTagStub, isEmptyReasoning, terminalWidth, summaryResult, fitRow, metaText,
+  safeForPrompt, traceLines, isToolTagStub, isEmptyReasoning, terminalWidth, summaryResult, fitRow, metaText, wordWrap,
 } from "./render.js";
 import {
   boxedActive, boxCtx, startupCard, statusRule, promptGlyph, turnHeader, turnFooter,
@@ -242,6 +242,9 @@ import {
   roleSkills,
   applySkills,
   skillBlock,
+  skillInjected,
+  isStubbed,
+  inlineMaxTokens,
   skillId as skillIdOf,
   SKILLS_DIR,
   withWorkingContext,
@@ -343,6 +346,11 @@ export type { Todo, RunNote };
 
 export interface PromptState {
   config: GnomonConfig;
+  /**
+   * Compaction since the last turn record (`summary_style = "structured"`).
+   * The next turn stamps it on `counters.compaction` and clears it.
+   */
+  compaction?: CompactionCounters;
   exchanges: PromptExchange[];
   currentRole: string;
   /**
@@ -3228,7 +3236,7 @@ export async function settleContextWindows<R extends { target: RouteTarget; fall
     if (fresh && resolution.tokens) {
       hooks.say(
         paint(hooks.ui, "gray",
-          `  [context] ${where}: window ${resolution.tokens} tokens, read from the endpoint (${resolution.from})`)
+          `  [context] ${where}: window ${resolution.tokens} tokens, ${resolution.source === "catalog" ? "from the catalog" : "read from the endpoint"} (${resolution.from})`)
       );
     } else if (fresh && !(t.contextImplicit && defaultsDeclared)) {
       // Silent for an endpoint that declared nothing under a `[defaults]` number:
@@ -3923,6 +3931,20 @@ export function printEndpoints(
   );
 }
 
+/**
+ * The once-per-session "0 cached prompt tokens" notice as rows that fit
+ * `columns`: wrapped at spaces, continuation rows hanging under the text
+ * after "[endpoint] ", never a word split unless one is wider than the row.
+ */
+export function cacheMissNotice(model: string, reusable: number, columns: number): string[] {
+  const lead = "  [endpoint] ";
+  const text =
+    `${model} reported 0 cached prompt tokens on a request that only appended to the one before ` +
+    `(${reusable} tokens were there to reuse) — a prefix-cache miss, so the whole prompt was ` +
+    `prefilled again. Said once this session; counters.prefix_cache_misses counts every one.`;
+  return wordWrap(text, Math.max(8, columns - lead.length - 1)).map((r, i) => (i === 0 ? lead : " ".repeat(lead.length)) + r);
+}
+
 /** Print a styled exchange through the configurable renderer */
 function printExchange(exchange: PromptExchange, ui: ResolvedUi): void {
   for (const line of renderExchange(exchange, ui)) {
@@ -3936,7 +3958,7 @@ function printExchangeBoxed(exchange: PromptExchange, ui: ResolvedUi, box: BoxCt
   // Close the frame first, then the answer below it with no prefix at all, so
   // code copied from the answer never carries a rail. The spinner was stopped
   // (and its row erased) when the turn ended, before this runs.
-  const m = metaText(exchange, ui, thinkTokens);
+  const m = metaText(exchange, ui, thinkTokens, Math.max(8, box.columns - 6 - 2));
   console.log(turnFooter(box, m ? { glyph: m.glyph, glyphRole: m.color, text: m.text } : { text: "" }));
   for (const line of renderExchange(exchange, { ...ui, meta: [] })) console.log(line);
 }
@@ -4198,7 +4220,9 @@ export function skillsRow(
   input: string,
   columns: number = terminalWidth(),
   /** Skills this role may use, loaded or not: what `none matched · N available` counts. */
-  available: number = active.length
+  available: number = active.length,
+  /** `[skills] inline_max_tokens`, so the row shows what is actually injected */
+  inlineLimit?: number
 ): string | null {
   if (active.length === 0) {
     // Only where the operator asked to see the work: at brief and tools the
@@ -4215,7 +4239,7 @@ export function skillsRow(
       return "matched";
     }
   };
-  const cost = active.map(skillTokens);
+  const cost = active.map((sk) => skillTokens(sk, inlineLimit));
   return fitRow(
     paint(ui, "magenta", "  ◆ skills") + "  " +
       active.map((sk, i) => `${safeForPrompt(sk.name)} ${paint(ui, "gray", `(${why(sk)}) ~${cost[i]} tok`)}`).join(", ") +
@@ -4275,14 +4299,14 @@ export function skillUsageLines(sk: Skill, exchanges: PromptExchange[], past: Sk
 }
 
 /** What a loaded skill costs the prompt: the estimate of the block applySkills adds. */
-export function skillTokens(sk: Skill): number {
-  return estimateTokens(skillBlock(sk));
+export function skillTokens(sk: Skill, limit?: number): number {
+  return estimateTokens(skillInjected(sk, limit));
 }
 
 /** The `◆ skills` row for `role` and `input`, read from the surface. */
 function skillsRowFor(ui: ResolvedUi, config: GnomonConfig, role: string, input: string): string | null {
   const all = loadSkills(config);
-  return skillsRow(ui, selectSkills(all, role, input), input, terminalWidth(), roleSkills(all, role).length);
+  return skillsRow(ui, selectSkills(all, role, input), input, terminalWidth(), roleSkills(all, role).length, inlineMaxTokens(config));
 }
 
 /**
@@ -5248,6 +5272,12 @@ const COUNT_LINES_MAX_BYTES = 16 * 1024 * 1024;
 
 export interface TurnCounters {
   /**
+   * Compaction passes that ran between the previous turn and this one, and
+   * which wrote each record: the summary role or the harness's own fallback.
+   * Present only under `[context] summary_style = "structured"`.
+   */
+  compaction?: CompactionCounters;
+  /**
    * What the turn did with skills: loaded (with context cost), opened,
    * named in its reasoning, proposed. Derived, never asked of the model
    * (skill_use.ts, CONTRACTS section 54). Absent when no skill was involved.
@@ -5893,7 +5923,8 @@ export function buildSystemPrompt(
       applyPromptProfile(state.config.system.content ?? "", profile).text,
       active,
       dormant,
-      `${basename(state.config.gnomonDir)}/${SKILLS_DIR}`
+      `${basename(state.config.gnomonDir)}/${SKILLS_DIR}`,
+      inlineMaxTokens(state.config)
     ) + runNotesBlock(state)
   ) + platformBlock() + `\n\n${sessionModeBlock(state.interactive === true && !opts.delegated)}` +
     promptProfileBlock(profile) +
@@ -6077,9 +6108,13 @@ async function agenticTurn(
   const skillUse = (held.skills = (() => {
     const input = [...messages].reverse().find((m) => m.role === "user")?.content;
     const fired = selectSkills(loadSkills(config), role, typeof input === "string" ? input : "");
+    const limit = inlineMaxTokens(config);
     return new SkillUse(
-      fired.map((sk) => ({ id: sk.id, tokens: skillTokens(sk) })),
+      fired.map((sk) => ({ id: sk.id, tokens: skillTokens(sk, limit) })),
+      fired,
       fired
+        .filter((sk) => isStubbed(sk, limit))
+        .map((sk) => ({ id: sk.id, saved: estimateTokens(skillBlock(sk)) - skillTokens(sk, limit) }))
     );
   })());
   // `gnomon task --deadline`'s stopping clock, when the caller set one. A
@@ -6796,6 +6831,10 @@ async function agenticTurn(
     });
   const observe = ledger.observer({ depth, leg: () => leg });
   if (depth === 0) counters.model_calls = ledger.sent;
+  if (depth === 0 && state.compaction) {
+    counters.compaction = state.compaction;
+    state.compaction = undefined;
+  }
   const measured = (): ModelCallsMeasured | undefined => (depth === 0 ? ledger.measured() : undefined);
   // The estimate every context decision uses (message_tokens.ts): content, tool-call
   // arguments and, where the target is sent them, replayed reasoning.
@@ -7869,15 +7908,7 @@ async function agenticTurn(
       if (!saidCacheMiss && !told.includes(usedModel)) {
         saidCacheMiss = true;
         told.push(usedModel);
-        warn(
-          paint(
-            deps.ui,
-            "yellow",
-            `  [endpoint] ${usedModel} reported 0 cached prompt tokens on a request that only appended to the one before ` +
-              `(${misses.last.reusable} tokens were there to reuse) — a prefix-cache miss, so the whole prompt was ` +
-              `prefilled again. Said once this session; counters.prefix_cache_misses counts every one.`
-          )
-        );
+        for (const row of cacheMissNotice(usedModel, misses.last.reusable, terminalWidth())) warn(paint(deps.ui, "yellow", row));
       }
     }
     // The reply to a late-system hand-back is the answer that was handed
@@ -10051,6 +10082,34 @@ export interface CompactionResult {
   reclaimed: number;
   /** Set when compaction was needed but could not run */
   problem?: string;
+  /**
+   * How the fold was written: "model" (the summary role answered) or
+   * "fallback" (`summary_style = "structured"` only: the call failed or came
+   * back empty and the harness built the record itself). Absent when nothing
+   * was folded.
+   */
+  via?: "model" | "fallback";
+  /** Said when the fold happened but not the way it was asked to (the fallback ran) */
+  notice?: string;
+}
+
+/**
+ * What compaction did since the last turn, stamped on the next turn's
+ * `counters.compaction` (docs/CONTRACTS.md section 56). Present only under
+ * `[context] summary_style = "structured"`, so a surface without the key
+ * writes the records it always did.
+ */
+export interface CompactionCounters {
+  v: 1;
+  style: "structured";
+  /** Fold passes since the previous turn record */
+  passes: number;
+  /** Passes written by the summary role */
+  model: number;
+  /** Passes the harness wrote itself because the summary call failed or was empty */
+  fallback: number;
+  folded: number;
+  reclaimed: number;
 }
 
 const SUMMARY_INSTRUCTION =
@@ -10061,6 +10120,77 @@ const SUMMARY_INSTRUCTION =
   "Drop: pleasantries, restated questions, and reasoning that led nowhere.\n\n" +
   "Write plain prose or terse bullets. Do not address the user. Do not offer " +
   "to help. Output only the record.";
+
+/**
+ * `[context] summary_style = "structured"`: the same job, a fixed shape. The
+ * section that matters most is UNVERIFIED. A record that states a belief as a
+ * fact is inherited as one: a model that takes over from another (a hybrid
+ * hand-off, a resumed session) read the earlier model's own self-check as
+ * ground truth and built on it.
+ */
+export const STRUCTURED_SUMMARY_INSTRUCTION =
+  "You are compacting a coding session's history. Rewrite the material below " +
+  "as a record for an agent that will continue this work. Use exactly these " +
+  "headed sections, in this order, and write `none` under one with nothing to say:\n\n" +
+  "## Goal\nWhat the user asked for, in one or two sentences.\n" +
+  "## Constraints\nRequirements the user stated, quoted verbatim from the task. Do not paraphrase.\n" +
+  "## Decisions\nChoices made and the reason for each.\n" +
+  "## Files touched\nOne path per line, with what changed.\n" +
+  "## Verified\nOnly what an external check confirmed, each with the command or " +
+  "evidence that confirmed it (a test run, a compiler, a file read).\n" +
+  "## UNVERIFIED\nEvery claim the agent believes but has not checked against " +
+  "something outside its own reasoning, one per line, as `UNVERIFIED: claim - basis`. " +
+  "A self-check the agent wrote and ran itself is not external evidence. When " +
+  "unsure whether something was verified, list it here.\n\n" +
+  "Do not address the user. Do not offer to help. Output only the record.";
+
+const FALLBACK_ACTIONS = 8;
+
+/**
+ * The record the harness writes when the summary call fails or comes back
+ * empty (`summary_style = "structured"`). No model: the task text, the files
+ * the turns changed, the last actions with how each ended, and the failing
+ * check if the last verification failed. Everything it says came from the
+ * turn records, and nothing in it is marked Verified.
+ */
+export function fallbackSummary(pending: PromptExchange[]): string {
+  const clip1 = (t: string, n: number): string => {
+    const one = t.replace(/\s+/g, " ").trim();
+    return one.length > n ? `${one.slice(0, n - 1)}…` : one;
+  };
+  const task = pending.find((e) => e.input.trim())?.input ?? "";
+  const files = new Set<string>();
+  const actions: string[] = [];
+  let failing = "";
+  for (const e of pending) {
+    for (const line of e.tool_log ?? []) {
+      const m = /^(?:write|edit)\s+(\S+)/.exec(line);
+      if (m && !/(?:denied|refused|failed)/.test(line)) files.add(m[1]!);
+      actions.push(line);
+      const v = /^verify — (.*)$/.exec(line);
+      if (v) failing = /\b(fail|exit [1-9]|error)/i.test(v[1]!) ? v[1]! : "";
+    }
+  }
+  const lines = [
+    "## Goal",
+    clip1(task, 400) || "none",
+    "## Constraints",
+    "none recorded (built without a model; see the Goal for the task text)",
+    "## Decisions",
+    "none recorded",
+    "## Files touched",
+    ...(files.size ? [...files].sort().map((f) => `- ${f}`) : ["none"]),
+    "## Verified",
+    "none (this record was built by the harness without a model)",
+    "## UNVERIFIED",
+    "UNVERIFIED: the outcome of every action below - the summary call failed, so none was reviewed",
+    `## Last actions (${Math.min(actions.length, FALLBACK_ACTIONS)} of ${actions.length})`,
+    ...(actions.length ? actions.slice(-FALLBACK_ACTIONS).map((a) => `- ${clip1(a, 160)}`) : ["none"]),
+    "## Failing check",
+    failing ? clip1(failing, 240) : "none seen",
+  ];
+  return lines.join("\n");
+}
 
 /**
  * Fold turns that no longer fit the window into a running summary.
@@ -10133,11 +10263,12 @@ export async function compactSession(
       : `compacting ${pending.length} turn(s) via ${role}…`
   );
 
+  const structured = ctx.summary_style === "structured";
   const route = routeRole(state.config, role);
   const result = await callEndpoint(
     adaptOutputLimit(state, route.target),
     [
-      { role: "system", content: SUMMARY_INSTRUCTION },
+      { role: "system", content: structured ? STRUCTURED_SUMMARY_INSTRUCTION : SUMMARY_INSTRUCTION },
       { role: "user", content: `${priorSummary}${transcript}` },
     ],
     [],
@@ -10150,19 +10281,29 @@ export async function compactSession(
     state.sessionId
   );
 
-  if (result.code !== 0) {
-    // Leaving them unfolded means they are simply dropped this turn and
-    // retried next — losing them silently would be worse than a slow retry.
-    return {
-      folded: 0,
-      reclaimed: 0,
-      problem: `compaction failed (${result.content.slice(0, 80)}); turns left unfolded`,
-    };
-  }
-
-  const folded_text = splitThinking(result.content).answer.trim();
+  let folded_text = result.code === 0 ? splitThinking(result.content).answer.trim() : "";
+  let via: "model" | "fallback" = "model";
+  let note: string | undefined;
   if (!folded_text) {
-    return { folded: 0, reclaimed: 0, problem: "compaction produced nothing" };
+    if (!structured) {
+      if (result.code !== 0) {
+        // Leaving them unfolded means they are simply dropped this turn and
+        // retried next — losing them silently would be worse than a slow retry.
+        return {
+          folded: 0,
+          reclaimed: 0,
+          problem: `compaction failed (${result.content.slice(0, 80)}); turns left unfolded`,
+        };
+      }
+      return { folded: 0, reclaimed: 0, problem: "compaction produced nothing" };
+    }
+    // Structured: the harness writes the record, so the turns fold anyway.
+    folded_text = fallbackSummary(pending);
+    via = "fallback";
+    note =
+      result.code !== 0
+        ? `summary call failed (${result.content.slice(0, 80)}); folded with a harness-built record`
+        : "summary call produced nothing; folded with a harness-built record";
   }
   // Append unless this pass re-folded everything.
   const summary =
@@ -10177,7 +10318,28 @@ export async function compactSession(
   state.summary = summary;
   for (const e of pending) e.folded = true;
 
-  return { folded: pending.length, reclaimed: Math.max(0, before - after) };
+  const reclaimed = Math.max(0, before - after);
+  if (structured) {
+    const c = (state.compaction ??= {
+      v: 1,
+      style: "structured",
+      passes: 0,
+      model: 0,
+      fallback: 0,
+      folded: 0,
+      reclaimed: 0,
+    });
+    c.passes += 1;
+    c[via] += 1;
+    c.folded += pending.length;
+    c.reclaimed += reclaimed;
+  }
+  return {
+    folded: pending.length,
+    reclaimed,
+    ...(structured ? { via } : {}),
+    ...(note ? { notice: note } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -15020,6 +15182,7 @@ export async function runPromptLoop(
       const compacted = await compactSession(state, systemPrompt, (line) =>
         console.log(paint(ui, "gray", `  [context] ${line}`))
       );
+      if (compacted.notice) console.log(paint(ui, "yellow", `  [context] ${compacted.notice}`));
       if (compacted.problem) {
         console.log(paint(ui, "yellow", `  [context] ${compacted.problem}`));
       } else if (compacted.folded > 0) {

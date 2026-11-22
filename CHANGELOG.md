@@ -26,6 +26,46 @@
 
 ## [Unreleased]
 
+### Fixed — two trace rows wrapped at 80 columns
+
+- The once-per-session "0 cached prompt tokens" notice now wraps to the terminal width with a hanging indent under
+  `[endpoint]`, and the turn meta line (classic rule or compact, and the boxed footer) fits it too: the long
+  `refusal (answered anyway)` wording shortens first, then whole low-priority fields drop (think, ctx, turn, role,
+  tools, model, then tokens, duration, bucket). No row is ever cut mid-word. Tests at 60, 80 and 120 columns.
+### Fixed — a refusal outside the project root says how to grant a second root
+
+- The `outside_root` refusal (shell) and the `sandbox` refusal (`read`, `write`, `edit`, `glob`, `grep`) now carry the
+  same operator instruction: `[sandbox] extra_roots = ["../other-repo"]` in `.gnomon/policy.toml` plus a restart
+  (a running session cannot loosen its own sandbox), or `/sandbox off` for this session only; without a grant the safest
+  route is running gnomon from the other repository or leaving a patch inside this project. The agent is told not to
+  edit `policy.toml` itself. Before, only the shell refusal named `extra_roots`, and the file tools said nothing.
+### Added — `[context] summary_style = "structured"` (opt-in), CONTRACTS §56
+
+- A compaction summary with headed sections: Goal, Constraints (verbatim), Decisions, Files touched, Verified
+  (with the evidence) and `UNVERIFIED: claim - basis` for beliefs not checked outside the agent's own
+  reasoning, so a model inheriting a record, as in a hybrid hand-off, does not take another model's self-check as
+  fact. When the summary call fails or is empty the harness folds the turns with a record it builds without a
+  model (task, files changed, last actions, failing check). `counters.compaction` on the next turn record says
+  how many passes ran and whether the summary role or the fallback wrote them. Absent key: the original prose
+  summary, byte-identical request. Adopted from a reverse-engineering study of Hermes Agent's compressor.
+### Added — `[skills] inline_max_tokens` (opt-in), progressive skills, CONTRACTS §54
+
+- With `inline_max_tokens = N` in `policy.toml`, a matched skill larger than N tokens is injected as its name, a
+  one-line description and its path; the model reads the file when it needs it (shown as `◆ skill`, counted in
+  `read`). Small skills stay inline. `counters.skills.stubbed` and the `skill_use` record's optional `stubbed`
+  field (`[{name, tokens_saved}]`) count the savings; `conformance/audit_record_schema.json` and
+  `conformance/skill_use.json` list it. Absent key: the prompt and records are unchanged. No new write path.
+  Adopted from a reverse-engineering study of Hermes Agent's skill disclosure, without its mandatory-load wording.
+### Fixed — hosted models with no published window no longer trim at ~39k: the live listing, then a dated catalog
+
+- A Claude run trimmed at ~39k real tokens (the `[defaults]` 65,536 fallback) against a 1,000,000-token window, earlier
+  than 0.6.5. On `api.anthropic.com` gnomon now asks the Models API (`GET /v1/models/<id>`, `max_input_tokens`,
+  `x-api-key`): `max_context_tokens_source: "listing:anthropic"`. When that is unreachable (a metering relay) a
+  dated, data-only table of known hosted windows applies (Claude 5.x and 4.6 to 4.8: 1,000,000, `claude-haiku-4-5`:
+  200,000, `deepseek-v4.1-flash`: 1,000,000), recorded as `"catalog"`. Order: declared number, listing, catalog,
+  `[defaults]`; a loopback endpoint never matches the catalog and an unknown model falls to `[defaults]`. CONTRACTS §24,
+  GUIDE and `conformance/endpoint_window.json` (sources, anthropic shape, table, precedence cases) move with it.
+
 ### Added — the audit record schema, and the skill enumerations (#113), CONTRACTS §55
 
 - `conformance/audit_record_schema.json` (`gnomon.audit_record/1`): for every audit kind, its required and

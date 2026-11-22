@@ -111,8 +111,8 @@ does not. Behaviour is readable because something is holding still.
   <img src="docs/img/gnomon-sundial.jpg" alt="A sundial: the gnomon is the fixed blade whose shadow marks the hour" width="440">
 </p>
 
-> **Status: working, pre-1.0.** 4718 TypeScript tests (4022 core, 671 cli, 18
-> natives, 7 tui) and 120 Rust tests — **4838 total**, the number `.gnomon/ci.sh`
+> **Status: working, pre-1.0.** 4739 TypeScript tests (4043 core, 671 cli, 18
+> natives, 7 tui) and 120 Rust tests — **4859 total**, the number `.gnomon/ci.sh`
 > reads back out of the runners on every run rather than a total asserted here
 > — and now compares against this line, so it cannot drift again unnoticed.
 > (This line said 954 and 46, counted 2026-09-02 with `vitest list`. That method
@@ -972,6 +972,7 @@ summary_role = "smol"             # who folds evicted turns
 | `compaction = "discard"` | Evicted turns are dropped, and the drop is stated in-band. |
 | `compaction = "truncate"` | Evicted turns are replaced by a list of their prompts. |
 | `compaction = "summary"` | Evicted turns are folded into a running summary by `summary_role`. |
+| `summary_style = "structured"` | Opt-in. The summary has headed sections (Goal, Constraints, Decisions, Files touched, Verified, UNVERIFIED), and a failed summary call folds with a record the harness builds instead of leaving turns unfolded. Absent: the free-prose record, unchanged. |
 | `reserve_output` | Tokens held back for the model's *reply*. Defaults to 15% of the budget — at least 1024, never more than 40%. |
 
 Four rules the window keeps:

@@ -691,8 +691,14 @@ answers with a window (a metering relay in front of a provider often returns
 trim an endpoint that declares nothing gets. gnomon says so on stderr and
 records a `context_window_unresolved` degradation. The turn record's `wire`
 gives the window as `max_context_tokens` and its origin as
-`max_context_tokens_source`: `declared`, `listing:<shape>` or `default`
-([CONTRACTS.md](CONTRACTS.md)). `"auto"` is answered at run time, so one surface hash can trim to different windows if
+`max_context_tokens_source`: `declared`, `listing:<shape>`, `catalog` or `default`
+([CONTRACTS.md](CONTRACTS.md)). On `api.anthropic.com` the listing is the
+Models API's `max_input_tokens` (`listing:anthropic`, `GET /v1/models/<id>`,
+read with `x-api-key`). `catalog` is gnomon's own dated table of known hosted
+windows (the Claude models: 1,000,000, `claude-haiku-4-5` 200,000), the fallback
+when that listing is unreachable, such as behind a metering relay; it comes after
+the listing and before `[defaults]`. Declare `max_context_tokens` on the
+endpoint to pin the number. `"auto"` is answered at run time, so one surface hash can trim to different windows if
 the provider changes its listing. Declare the number where the window must
 stay fixed, as in a benchmark arm.
 
@@ -1477,7 +1483,9 @@ allowed. To let the agent write a neighbouring directory, grant it:
 extra_roots = ["../shared-fixtures"]
 ```
 
-or name it in the role's `write_allow` (`"../shared-fixtures/**"`). To watch
+or name it in the role's `write_allow` (`"../shared-fixtures/**"`; shell writes only). A refused call says this itself: the
+refusal text the model and you see names `extra_roots`, the restart it needs, `/sandbox off` (this session only) and the
+safest fallback. To watch
 before refusing, level the family: `[governance] write = "advise"`.
 
 `guard` stops only what a hook shows it; a harness without one is judged after
@@ -2134,6 +2142,26 @@ declared at their defaults, a turn sends the same request bytes as before.
 - `[turn] todo_gate = true`: an answer given while this turn's checklist has
   open items is handed back once, naming them; skipped when less than
   `completion_min_remaining` of the budget is left.
+- `[context] summary_style = "structured"`: with `compaction = "summary"`, the
+  folded record has fixed sections: Goal, Constraints (the user's own words),
+  Decisions, Files touched, Verified (each item with the command that confirmed
+  it) and `UNVERIFIED: claim - basis` for what the agent believes but has not
+  checked outside its own reasoning. So a model that takes over after a
+  hand-off does not inherit another model's self-check as a fact. If the summary
+  call fails or returns nothing, the harness folds the turns anyway with a record
+  it builds without a model (task text, files changed, last actions and how
+  they ended, the failing check), marked as unreviewed. The next turn's
+  `counters.compaction` says how many passes ran and which kind. Absent or
+  `"prose"`: the original free-prose summary, and a failed call leaves the turns
+  to be retried.
+- `[skills] inline_max_tokens = N` in `policy.toml`: a matched skill larger
+  than N tokens goes into the prompt as its name, one-line description and path
+  instead of its whole body, and the model opens it with `read` when the task
+  needs it. Skills at or under N stay inline. Absent: every matched skill in
+  full, as before. The turn's `counters.skills.stubbed` lists what was left
+  out and the tokens saved; the read counts as the skill being used. The
+  trade-off is that the model may not open the note; compare a `gnomon skill
+  trial` pair before turning it on for a skill that matters.
 - `variant = "compat"` on the `edit` tool: `old_string`/`new_string`, and an
   edit that does not match exactly is matched with whitespace, then
   indentation, ignored, always uniquely.
@@ -2151,6 +2179,7 @@ sampling = "provider"
 
 [context]
 env_snapshot = true
+summary_style = "structured"
 
 [turn]
 todo_gate = true

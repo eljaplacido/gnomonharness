@@ -2301,8 +2301,31 @@ from such a surface is the record it was before the key existed:
 | `listing:openrouter` | `data[id].context_length`, else `data[id].top_provider.context_length`, from `GET <base>/models` |
 | `listing:vllm` | `data[id].max_model_len` from `GET <base>/models` |
 | `listing:llamacpp` | `default_generation_settings.n_ctx` from `GET <root>/props` |
+| `listing:anthropic` | `max_input_tokens` from `GET <base>/models/<id>` (or that field of the `GET <base>/models` entry); asked first, with `x-api-key` and `anthropic-version`, on `https://api.anthropic.com` |
 | `listing:ollama` | the `num_ctx` line of `parameters`, else `model_info.<arch>.context_length`, from `POST <root>/api/show` |
-| `default` | `[defaults] max_context_tokens`: `"auto"` found nothing |
+| `catalog` | the window gnomon's dated table of known hosted models gives (`packages/gnomon-core/src/known_windows.ts`), because the listing gave none |
+| `default` | `[defaults] max_context_tokens`: nothing found |
+
+**Catalog source (2026-11-22).** An endpoint that publishes no window used to
+fall back to `[defaults] max_context_tokens`, sized for a local model, and with
+the honest token estimate a Claude run trimmed at ~39k real tokens against a
+1,000,000-token window. The resolution order is now: a number on the endpoint
+(`declared`), then the endpoint's listing (`listing:<shape>`; on
+`api.anthropic.com` the Models API's `max_input_tokens`, `listing:anthropic`),
+then the catalog (`catalog`), then `[defaults]` (`default`). A listing that
+answers beats the catalog; a number on the endpoint beats both. The catalog is
+the fallback for a listing that is unreachable (a metering relay, a 404). It is
+data, not surface: a table of model id, window, source and `as_of` date
+(Claude 5.x and 4.6 to 4.8: 1,000,000; `claude-haiku-4-5`: 200,000; the source
+is the Claude API reference's models table, https://platform.claude.com/docs/en/about-claude/models/overview,
+cached 2026-11-03), updated with releases and never fetched. A model matches by
+id, whole and case-insensitively, after dropping a leading `anthropic/`, with an
+optional `-YYYYMMDD` or `-latest` snapshot suffix; an endpoint on this machine
+(loopback) never matches, and a model not in the table is not guessed. A
+catalog window is a resolved window (the pre-call trim applies to it) and
+raises no warning and no `context_window_unresolved` degradation; the
+`[context]` line says it came from the catalog. The table is pinned entry for
+entry in the fixture.
 
 **What the hash no longer fixes.** A number is part of the surface hash;
 `"auto"` is not a number but a question asked at run time. Two runs under one
@@ -2321,7 +2344,9 @@ length the model was trained to and not the one the server runs.
 
 **Fixture**: `conformance/endpoint_window.json` — one listing body per shape
 and field, the bodies that must give no window, the probe URLs derived from four
-chat URLs, the sources and the degradation id.
+chat URLs, the sources, the catalog table and the degradation id; its
+`precedence` table runs each case (declared, listing, catalog, default) through
+`settleContextWindows`, including hosted-URL cases for the catalog.
 `packages/gnomon-core/src/context_window.test.ts` reads every body through the
 parsers and asserts that this section names the same sources and fields.
 
@@ -5002,6 +5027,20 @@ the `skill` tool). A delegated sub-turn's data is merged into its parent's.
 present (once per chain stage), with `turn`, `role` and the same four fields.
 It is hash-chained like any record.
 
+**Progressive skills — `[skills] inline_max_tokens = N`** (`policy.toml`, a
+positive whole number). Absent, zero, negative or not a number: a matched skill
+is injected in full, as before, and the prompt is unchanged. When set, a
+matched skill whose block (`### name`, description, body) is estimated at more
+than N tokens enters the system prompt as its name, a one-line description
+(the declared one, else the body's first line) and its path
+`.gnomon/skills/<id>.md`; the model opens it with `read` when it needs it. That
+read is the skill's use: it shows as `◆ skill` and counts in `read`. A skill at
+or under N stays inline. `fired[].tokens` is then the stub's estimate, and the
+optional `stubbed` field (`[{name, tokens_saved}]`, on `counters.skills` and on
+`skill_use`; `identifier` class) lists the stubbed skills with the estimated
+tokens each saved. Absent when none was stubbed. No write path changes: the
+`skill` tool still only proposes.
+
 `gnomon skill mine` reads these records and returns, besides candidates,
 `skill_signals`: `fires_never_cited` (at least 5 firings, never cited) and
 `cited_often` (at least 3 citations and at least half of firings). They are
@@ -5091,3 +5130,36 @@ reveals nothing. It does not validate values beyond type (enumerated words are
 **Fixture**: `conformance/audit_record_schema.json`;
 `packages/gnomon-core/src/audit_schema.test.ts` (kinds equal `AUDIT_KINDS`,
 every record real sessions write validates), `packages/gnomon-cli/src/audit_schema_cmd.test.ts`.
+
+## 56. Structured compaction summary — `[context] summary_style`, `counters.compaction`, `v: 1`
+
+`[context] summary_style` is `"prose"` or `"structured"`. Absent, or any other
+value, is `"prose"`: the summary role gets the instruction it always got and
+the request is byte-identical. It only matters with `compaction = "summary"`
+(or `policy = "summary"`); it is read from `[context]`.
+
+**`"structured"`** replaces the instruction with one that asks for these
+headings, in order: `## Goal`, `## Constraints` (requirements quoted from the
+task), `## Decisions`, `## Files touched`, `## Verified` (only what an external
+check confirmed, with the command or evidence) and `## UNVERIFIED` (one
+`UNVERIFIED: claim - basis` line for each belief not checked against anything
+outside the agent's own reasoning). A section with nothing to say reads `none`.
+
+**Fallback.** When the summary call returns a non-zero code or an empty answer,
+the harness builds the record without a model and folds the turns: `## Goal`
+(the first task text, clipped), `## Files touched` (successful write/edit
+lines of the turns' `tool_log`), the last eight actions as logged, and the last
+`verify` line if it reported a failure under `## Failing check`. Its
+`## Verified` is `none` and its `## UNVERIFIED` says no action was reviewed.
+Under `"prose"` a failed call leaves the turns unfolded, as before.
+
+**`counters.compaction`** is stamped on the first turn record after a fold, then
+cleared, and is absent under `"prose"`: `v` (1), `style` (`"structured"`),
+`passes`, `model` (passes the summary role wrote), `fallback` (passes the
+harness wrote), `folded` (turns), `reclaimed` (estimated tokens). `counters` is
+one `metadata` object in `conformance/audit_record_schema.json`; no audit kind
+or field was added.
+
+**Fixture**: `packages/gnomon-core/src/summary_style.test.ts` (absent key
+sends the same bytes, the sections are asked for, the fallback folds when the
+call fails).
