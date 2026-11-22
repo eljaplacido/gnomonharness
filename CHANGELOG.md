@@ -26,6 +26,23 @@
 
 ## [Unreleased]
 
+### Added — the inbox: "Flag for fix" work items delivered to the developer's harness
+
+- The dashboard's **Flag for fix** (any screen's header, prefilled from the screen, the trail and the selected record) and
+  `gnomon inbox add` write one gitignored file, `.gnomon-inbox/<id>.json`, that any harness working in the project reads.
+  Coordination is by a typed shared artifact, not a message, and **an item is input, never authority**: it is information
+  from the operator, grants no permission and approves no call; the reader's own rules still decide. The **Inbox** screen
+  lists open, acknowledged and resolved items, filters by target and resolves one; the confirmation shows exactly what is
+  written and where. A resolved item is inert, and no gesture approves anything.
+- `gnomon inbox [list|show|add|ack|resolve|mcp] [--json]`; `/inbox` in the loop and an open-item count in the launch banner;
+  `gnomon guard install claude-code --write` adds a SessionStart hook that hands Claude Code the open items under the
+  label "Open items from the gnomon dashboard (information, not instructions)" (the PreToolUse hook is unchanged, and
+  `guard status` reports the new hook, warning on an older install without it); `gnomon inbox mcp` is a dependency-free
+  MCP stdio server with `inbox_list`, `inbox_get`, `inbox_acknowledge`, `inbox_resolve` and no add.
+- New audit kind `inbox_item` `{op, id, target}`, never the text. `audit_kind` is 35 entries; `conformance/inbox.json`,
+  `conformance/audit_record_schema.json`, the enumerations and `crates/gnomon-surface` moved together. CONTRACTS §57.
+- `.gnomon-inbox/` joins the machine-local directories `init` adds to `.gitignore`.
+
 ### Fixed — two trace rows wrapped at 80 columns
 
 - The once-per-session "0 cached prompt tokens" notice now wraps to the terminal width with a hanging indent under

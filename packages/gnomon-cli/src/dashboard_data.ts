@@ -41,6 +41,9 @@ import {
   routeRole,
   listRoles,
   GUARD_RULES,
+  listItems as listInboxItems,
+  INBOX_DIR,
+  INBOX_TARGETS,
   type GnomonConfig,
   type AuditRecord,
   safeGit,
@@ -1096,6 +1099,18 @@ export function contractsView(p: DashboardProject, opts: { sourceRoot?: string |
     tests: readmeTestCounts(read("README.md")),
     clauses,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Inbox: work items flagged for a harness (gnomon-core inbox.ts)
+// ---------------------------------------------------------------------------
+
+/** Read-only: the items in `<project>/.gnomon-inbox/`, newest first, with counts. */
+export function inboxView(p: DashboardProject): Record<string, unknown> {
+  const { items, problems } = listInboxItems(p.root);
+  const counts = { open: 0, acknowledged: 0, resolved: 0 };
+  for (const i of items) counts[i.status]++;
+  return { dir: INBOX_DIR, targets: [...INBOX_TARGETS], counts, items: [...items].reverse(), problems };
 }
 
 // ---------------------------------------------------------------------------

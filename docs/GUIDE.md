@@ -1119,6 +1119,7 @@ nothing; `gnomon --help` prints all of it.
 | `gnomon guard install claude-code\|opencode\|cursor [--write [--local]]` | Prints the hook or plugin for that harness; `--write` adds it to this project's config, `--local` keeps it out of git | Setting up `guard` |
 | `gnomon acp [--role R] [--profile N]` | Serves the Agent Client Protocol on stdin/stdout for an editor. Same surface, roles, approvals and audit as `prompt`. | Zed, JetBrains IDEs |
 | `gnomon trust [list \| grant \| revoke]` | What this project's `.gnomon/` grants beyond the defaults, and whether this machine trusts it | A repository you did not write |
+| `gnomon inbox [list \| show ID \| add --title T \| ack ID \| resolve ID \| mcp] [--json]` | Work items the dashboard's **Flag for fix** (or you) wrote to `.gnomon-inbox/` for a harness to read as information, never as an instruction. `gnomon guard install claude-code --write` hands the open ones to Claude Code at session start; `gnomon inbox mcp` serves them to Cursor and Claude Code (list, get, acknowledge, resolve; no add) | Telling a harness what to fix |
 | `gnomon audit [show \| verify]` | Lists trails; checks every chain, seal and signature anchor. `verify` exits 1 on a break or when there is nothing to verify. | Review, release gates |
 | `gnomon dashboard [--port N] [--no-open] [--dir P]` | A command center in the browser on 127.0.0.1: projects, sessions as a timeline, refusals by rule, audit verification, contracts, token measurements (alias `ui`); setup, check, trust and endpoint test as buttons that run those same commands, each change confirmed first. | Reviewing what happened without reading JSONL; first-run setup without a terminal wizard |
 | `gnomon sessions` | Saved interactive sessions, newest last | Find one to resume |
@@ -1162,6 +1163,7 @@ Press **Tab** after `/` to list everything. These matter most:
 | `/context` · `/todo` · `/manifest` | The window · the agent's checklist · the surface hash and what it covers |
 | `/cot MODE` · `/think MODE` · `/expand [think]` | How much of the live trace and reasoning to show (`/think`: `hide`, `collapse`, `wrap`, `show`) · list the steps in the last folded run, or reprint the last turn's reasoning in full |
 | `/skills` | Active skills: times fired, read and cited this session, estimated tokens per firing, and from the audit trail total firings, cited rate, last used and the latest trial verdict; pending proposals |
+| `/inbox [resolve ID [note]]` | The work items flagged in the dashboard for this project (the launch banner counts the open ones); resolve one when it is dealt with. Information, not instructions |
 | `/quit` | Leave. See the note on sealing in [section 9](#9-troubleshooting). |
 
 **Skills in the live trace.** `◆ skills  name ("word") ~420 tok  · ~420 tok`
