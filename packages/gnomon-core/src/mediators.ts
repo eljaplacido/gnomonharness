@@ -59,8 +59,18 @@ export interface TrimRecord {
   after: number;
   /** What it was trimmed to, in the estimate's units */
   budget: number;
-  /** The calibrated ratio the budget was divided by; only under "calibrated" */
+  /**
+   * The ratio (real tokens per estimated token) the budget was divided by: under
+   * "calibrated", and against a KNOWN window under any mode (see knownTrim).
+   */
   ratio?: number;
+  /**
+   * Which estimate drove a trim against a known window: "measured" (the
+   * provider's own prompt counts for this endpoint+model) or "safety" (none seen
+   * yet, so PRE_CALL_SAFETY). Absent against an unresolved window, where nothing
+   * is scaled, and under "calibrated" before a first report.
+   */
+  basis?: "measured" | "safety";
 }
 
 /**
@@ -265,6 +275,17 @@ export const MAX_CALL_ENTRIES = 512;
 export const RATIO_MIN = 0.5;
 export const RATIO_MAX = 4;
 
+/**
+ * Against a KNOWN window (declared, listing:*, catalog), the pre-call check
+ * multiplies gnomon's estimate by this until a response with usage has been
+ * seen for the endpoint+model. chars/4 runs ~1.42x low against real tokenizers
+ * (median in the R66 benchmark, max 1.65); 1.5 covers the median with margin
+ * without trimming a 1M-token hosted window early. Once measured, the measured
+ * ratio replaces it, never going below 1 (an over-counting estimate is not
+ * trusted to loosen a trim).
+ */
+export const PRE_CALL_SAFETY = 1.5;
+
 /** Provider prompt tokens against gnomon's estimate, per endpoint+model, for a session. */
 export type TokenCalibration = Map<string, { prompt: number; est: number; calls: number }>;
 
@@ -278,6 +299,11 @@ export interface CallLedgerOptions {
   mode: TokenEstimate;
   /** The session's running ratios. Read and updated only under "calibrated". */
   calibration?: TokenCalibration;
+  /**
+   * The session's measured ratios, kept under every mode: what trims against a
+   * known window read. Never written to a record except as a trim's `ratio`.
+   */
+  measured?: TokenCalibration;
   /** Writes one `model_call` audit record. Absent when there is no trail. */
   audit?: (fields: Record<string, unknown>) => void;
   /** Stamped on each `model_call` record */
@@ -308,8 +334,10 @@ export class CallLedger {
   /** Prefix-cache misses not yet taken by the loop (takeCacheMisses) */
   private missesPending = 0;
   private lastMiss?: PrefixCacheMiss;
+  private readonly seen: TokenCalibration;
 
   constructor(private readonly opts: CallLedgerOptions) {
+    this.seen = opts.measured ?? new Map();
     this.cap = opts.cap ?? MAX_CALL_ENTRIES;
     const window = opts.windowOf(opts.target);
     this.sent = {
@@ -353,6 +381,28 @@ export class CallLedger {
     const ratio = this.ratioFor(target);
     if (ratio === undefined) return { budget };
     return { budget: Math.max(1, Math.floor(budget / ratio)), ratio };
+  }
+
+  /**
+   * The budget and ratio of a trim against a KNOWN window, under any mode.
+   * `atCall` is the pre-call check, which before the first usage report uses
+   * PRE_CALL_SAFETY; the checkpoint leaves the budget as given until a report.
+   * Under "chars4" the ratio is at least 1, so this only ever trims harder than
+   * the plain budget; under "calibrated" it is the existing measured ratio.
+   */
+  knownTrim(budget: number, target: RouteTarget, atCall: boolean): { budget: number; ratio?: number; basis?: "measured" | "safety" } {
+    const raw = this.measuredRatio(target);
+    const calibrated = this.opts.mode === "calibrated";
+    const ratio = raw === undefined ? (atCall ? PRE_CALL_SAFETY : undefined) : calibrated ? raw : Math.max(1, raw);
+    if (ratio === undefined) return { budget };
+    return { budget: Math.max(1, Math.floor(budget / ratio)), ratio, basis: raw === undefined ? "safety" : "measured" };
+  }
+
+  /** The measured ratio for a target, bounded, whatever the mode; undefined before any metered request. */
+  measuredRatio(target: RouteTarget): number | undefined {
+    const c = this.seen.get(calibrationKey(target));
+    if (!c || c.calls === 0 || c.est <= 0) return undefined;
+    return round3(Math.min(RATIO_MAX, Math.max(RATIO_MIN, c.prompt / c.est)));
   }
 
   /** The session's running ratio for a target, bounded; undefined before any metered request. */
@@ -486,6 +536,11 @@ export class CallLedger {
         this.promptSum += prompt;
         this.estSum += est;
         r.ratio = round3(this.promptSum / this.estSum);
+        {
+          const key = calibrationKey(o.target);
+          const c = this.seen.get(key) ?? { prompt: 0, est: 0, calls: 0 };
+          this.seen.set(key, { prompt: c.prompt + prompt, est: c.est + est, calls: c.calls + 1 });
+        }
         if (this.opts.mode === "calibrated" && this.opts.calibration) {
           const key = calibrationKey(o.target);
           const c = this.opts.calibration.get(key) ?? { prompt: 0, est: 0, calls: 0 };

@@ -749,8 +749,8 @@ as too long (code 13: llama.cpp, vLLM, OpenAI, Anthropic's "prompt is too
 long", Gemini's token count, LiteLLM's `ContextWindowExceededError` and HTTP
 413 all count), to 50%, then one resend; and, only against a window gnomon
 knows, before the request goes out when its estimate exceeds that window
-(`pre_call`, to 60%). A window is known when the endpoint declares
-`max_context_tokens = <n>` or `"auto"` read it from the listing. When
+(`pre_call`, to 60%). Against a known window the estimate is scaled first, because chars/4 runs about 1.4x low against real tokenizers (median 1.42, max 1.65 on local Qwen3.6): by 1.5 until a response with usage has been seen for that endpoint and model, then by the measured ratio, never below 1, and the leg checkpoint divides its budget by the measured ratio the same way. A trim's record says which drove it (`basis`: `measured` or `safety`). A window is known when the endpoint declares
+`max_context_tokens = <n>`, `"auto"` read it from the listing, or the model is in gnomon's catalog. When
 `max_context_tokens_source` is `default`, the `[defaults]` figure is a guess:
 no pre-call trim happens, and the checkpoint and the overflow retry are the only
 decision points. A trim drops whole units: an assistant message and every
