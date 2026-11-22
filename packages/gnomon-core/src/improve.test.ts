@@ -4,7 +4,7 @@
  * policy that may accept, and the budget. The model is a script behind
  * `globalThis.fetch`; every probe cell is gnomon's own loop in its own clone.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -32,6 +32,12 @@ import { mineAll, withNote, matchFor, NOTES_HEADING } from "./improve_mine.js";
 import { AUTO_ACCEPT_RULE, IMPROVE_DEFAULTS, autoAcceptVerdict, declaredImprove, effectiveMinPassDelta, policyPathProblem } from "./improve_policy.js";
 import { listItems } from "./inbox.js";
 import { acceptProposal, listProposals, readProposal, rejectProposal, renderDiff, sha256Hex, writeProposal, ProposalRefusal, type Proposal } from "./proposals.js";
+
+// Every eval cell clones a git repository and spawns the harness; on a hosted
+// Windows runner beside the rest of the suite that is 10-20 s a test, and
+// contention pushed different ones past 30 s on each run (train 5, 2026-11-22).
+// Linux keeps the config default, so a test that is genuinely slow still fails.
+if (process.platform === "win32") vi.setConfig({ testTimeout: 120_000 });
 
 const MARKER = "Before answering, write the file fixed.txt";
 const CHECK = `node -e "process.exit(require('fs').existsSync('fixed.txt') ? 0 : 1)"`;

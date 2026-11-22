@@ -5,7 +5,7 @@
  * loop in its own private clone, judged by a check command reading the clone.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +29,12 @@ import {
   type EvalReport,
 } from "./eval.js";
 import { TRIAL_VERDICTS, TRIAL_STATUSES, CELL_WITHHELD, cellSurfaceHash } from "./skill_trial.js";
+
+// Every eval cell clones a git repository and spawns the harness; on a hosted
+// Windows runner beside the rest of the suite that is 10-20 s a test, and
+// contention pushed different ones past 30 s on each run (train 5, 2026-11-22).
+// Linux keeps the config default, so a test that is genuinely slow still fails.
+if (process.platform === "win32") vi.setConfig({ testTimeout: 120_000 });
 
 const MARKER = "Before answering, write the file fixed.txt";
 const CHECK = `node -e "process.exit(require('fs').existsSync('fixed.txt') ? 0 : 1)"`;
