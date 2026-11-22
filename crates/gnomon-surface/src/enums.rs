@@ -77,6 +77,7 @@ impl Enumerations {
                 "deliverable_first".into(),
                 "first_token_stall".into(),
                 "checkpoint".into(),
+                "think_cap".into(),
                 "finish_gate".into(),
                 "model_call".into(),
                 "escalation".into(),
