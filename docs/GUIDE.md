@@ -1160,6 +1160,51 @@ erase them. `/expand think` reprints the last turn's reasoning in full.
 
 **Esc** cancels the turn in progress. Anything you type during a turn is queued.
 
+#### The look: style, themes, colour depth, spinner
+
+```toml
+[ui]
+style = "auto"      # auto | boxed | classic
+spinner = "sundial" # sundial | clock | braille | ascii | false
+theme = "dark"      # dark dim light high-contrast mono tokyonight catppuccin gruvbox nord
+```
+
+`style = "boxed"` frames the interactive terminal: a startup card (role, model,
+local or cloud, surface hash, governance level, audit, repo and branch), a
+status rule above each prompt (`╭─ role · model ──── ctx 12% · branch ─`, only
+the values the loop has), and a rail `│` down the left of every turn between a
+`╭─ ◆ role · model` header and a `╰─` footer that carries the meta line. A
+delegated turn keeps its `┊` gutter inside the rail. The rail takes the place of
+the two-space indent, so no row gets wider; nothing is drawn to the right of or
+below the input line, because readline redraws that line and would erase it.
+
+`auto` (the default) is boxed only when stdout is a TTY at least 60 columns
+wide with colour allowed. `classic` is the plain output, byte for byte, and is
+what `gnomon task`, `--json`, pipes and `NO_COLOR` always get.
+
+Every theme has an accent, a rail colour, a border set (rounded `╭╮╰╯`, sharp
+`┌┐└┘`, heavy `┏┓┗┛`, double `╔╗╚╝`, or ascii `+-|`) and a header chip. `dark` is
+brass on a warm grey rail, `dim` a slate sharp-cornered one, `light` deep blue,
+`high-contrast` bright with heavy borders and an inverse chip, `mono` no colour
+with the box kept, `gruvbox` warm and `nord` cool and sharp. `/theme` with no
+argument prints each theme with a swatch; `/theme nord` applies it for the
+session.
+
+Colour depth follows the terminal: truecolor when `COLORTERM` is `truecolor` or
+`24bit`, 256 colours when `TERM` names `256color`, otherwise the 16 ANSI
+colours; each theme is defined at all three. Borders fall back to ASCII when
+`TERM=dumb`, when the locale (`LC_ALL`, `LC_CTYPE`, `LANG`) is not UTF-8, and in
+the legacy Windows console (no `WT_SESSION` and no VT-capable terminal); Windows
+Terminal draws the box characters.
+
+`spinner` sets what animates while the model works: `sundial` (the default) is
+`◐ ◓ ◑ ◒`, the shaded half turning clockwise like the shadow on the mark in the
+startup card, 150 ms a frame, in the theme's accent; `clock` is `🕛 🕐 … 🕚`
+(two columns wide); `braille` is the old dots; `ascii` is `| / - \`. The legacy
+Windows console always gets ascii, and the line stays one row:
+`◐ thinking · 12s · esc cancels`. `spinner = false` turns it off, and nothing is
+drawn when output is not a TTY.
+
 ---
 
 ## 7. Use-case patterns

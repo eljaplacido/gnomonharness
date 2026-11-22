@@ -249,7 +249,9 @@ export interface UiConfig {
   meta_style?: MetaStyle;
   think?: ThinkMode;
   cot?: CotMode;
-  spinner?: boolean;
+  /** true/false, or the style: "sundial" | "clock" | "braille" | "ascii" */
+  spinner?: boolean | SpinnerStyle;
+  style?: UiStyle;
   color?: boolean;
   markdown?: boolean;
 }
@@ -2050,7 +2052,18 @@ export interface ResolvedUi {
    * want when the answer *is* the markdown you are about to paste elsewhere.
    */
   markdown: boolean;
+  /** `[ui] style`: the boxed look, or the classic one. Absent reads as "auto". */
+  style?: UiStyle;
+  /** `[ui] spinner` named a style; `spinner = false` is `spinner: false`. Absent reads as "sundial". */
+  spinner_style?: SpinnerStyle;
+  /** Runtime: is the boxed look in force this session? Set by the loop. */
+  boxed?: boolean;
 }
+
+export type UiStyle = "auto" | "boxed" | "classic";
+export const UI_STYLES: UiStyle[] = ["auto", "boxed", "classic"];
+export type SpinnerStyle = "sundial" | "clock" | "braille" | "ascii";
+export const SPINNER_STYLES: SpinnerStyle[] = ["sundial", "clock", "braille", "ascii"];
 
 export const META_FIELDS: MetaField[] = [
   "turn",
@@ -2116,6 +2129,8 @@ export function resolveUi(config: GnomonConfig): ResolvedUi {
     // write it, so this default reaches an existing surface too.
     cot: pickEnum(ui.cot, COT_MODES, "work"),
     spinner: typeof ui.spinner === "boolean" ? ui.spinner : true,
+    style: pickEnum(ui.style, UI_STYLES, "auto"),
+    spinner_style: pickEnum(ui.spinner, SPINNER_STYLES, "sundial"),
     color: typeof ui.color === "boolean" ? ui.color : true,
     markdown: typeof ui.markdown === "boolean" ? ui.markdown : true,
   };

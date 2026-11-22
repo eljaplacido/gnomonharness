@@ -81,8 +81,12 @@ import {
 } from "./config.js";
 import { thinkCapNote, thinkCapRecord, resolveThinkCap, type ThinkCapCounters } from "./think_cap.js";
 import { Progress, renderExchange, splitThinking, paint, THEMES, terminalThemeSequence,
-  safeForPrompt, traceLines, isEmptyReasoning, terminalWidth, summaryResult, fitRow,
+  safeForPrompt, traceLines, isEmptyReasoning, terminalWidth, summaryResult, fitRow, metaText,
 } from "./render.js";
+import {
+  boxedActive, boxCtx, startupCard, statusRule, promptGlyph, turnHeader, turnFooter,
+  railLine, swatch, type BoxCtx,
+} from "./boxed.js";
 export { isLocalEndpoint } from "./config.js";
 import {
   Todo,
@@ -3492,6 +3496,24 @@ function modelTimeoutMs(config?: GnomonConfig): number {
 // Terminal helpers
 // ---------------------------------------------------------------------------
 
+/** The git branch, read from .git/HEAD: no process is spawned for a status line. */
+function branchOf(root: string): string | undefined {
+  try {
+    const head = readFileSync(resolve(root, ".git", "HEAD"), "utf-8").trim();
+    const m = /^ref: refs\/heads\/(.+)$/.exec(head);
+    return m ? m[1] : head.slice(0, 7);
+  } catch {
+    return undefined;
+  }
+}
+
+/** The boxed context, or null when the classic look is in force. */
+function boxOf(state: PromptState): BoxCtx | null {
+  const ui = uiOf(state);
+  ui.boxed = boxedActive(ui);
+  return ui.boxed ? boxCtx(ui) : null;
+}
+
 /** Print a styled header */
 function printBanner(): void {
   console.log("\n");
@@ -3844,6 +3866,15 @@ function printExchange(exchange: PromptExchange, ui: ResolvedUi): void {
   for (const line of renderExchange(exchange, ui)) {
     console.log(line);
   }
+}
+
+/** The boxed form: the answer, then the meta line as the turn's footer. */
+function printExchangeBoxed(exchange: PromptExchange, ui: ResolvedUi, box: BoxCtx): void {
+  const thinkTokens = Math.ceil(splitThinking(exchange.output).think.length / 4);
+  for (const line of renderExchange(exchange, { ...ui, meta: [] })) console.log(line);
+  const m = metaText(exchange, ui, thinkTokens);
+  console.log(turnFooter(box, m ? { glyph: m.glyph, glyphRole: m.color, text: m.text } : { text: "" }));
+  console.log("");
 }
 
 // ---------------------------------------------------------------------------
@@ -11540,7 +11571,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/think", arg: "[mode]", help: "Chain-of-thought: hide | collapse | show" },
   { name: "/cot", arg: "[mode]", help: "Live trace while it works: off | brief | tools | think | work | full" },
   { name: "/expand", help: "List the steps inside the last folded run" },
-  { name: "/theme", arg: "[name]", help: "Colour theme — dark, dim, light, high-contrast, mono, tokyonight, catppuccin (the last two recolour the whole terminal)" },
+  { name: "/theme", arg: "[name]", help: "Colour theme — dark, dim, light, high-contrast, mono, tokyonight, catppuccin, gruvbox, nord (the last four recolour the whole terminal)" },
   { name: "/explain", arg: "[topic]", help: "What a feature is, how this repo has it set, and what to do with it" },
   { name: "/reflect", arg: "[topic]", help: "Alias for /explain" },
   { name: "/models", help: "Pick a model for a role (arrows, type to filter)" },
@@ -12614,6 +12645,7 @@ export function processCommand(cmd: string, state: PromptState): boolean {
           const warn = paint({ ...ui, theme: t.name }, "yellow", "attention");
           console.log(`  ${t.name.padEnd(14)} ${sample}  ${accent}  ${warn}  ${mark}`);
           console.log(`  ${" ".repeat(14)} ${t.description}`);
+          if (ui.boxed) console.log(`  ${" ".repeat(14)} ${swatch(boxCtx({ ...ui, theme: t.name }))}`);
         }
         console.log(`\nSet with: /theme <name>`);
         return true;
@@ -12628,6 +12660,7 @@ export function processCommand(cmd: string, state: PromptState): boolean {
 
       ui.theme = wanted;
       applyTerminalTheme(ui);
+      if (ui.boxed) console.log(`\n${swatch(boxCtx(ui))}`);
       console.log(`\nTheme: ${wanted} — ${THEMES[wanted].description}`);
       console.log(paint(ui, "gray", "  secondary text looks like this"));
       console.log(
@@ -13655,7 +13688,27 @@ export async function runPromptLoop(
     }
   };
 
-  printBanner();
+  const box0 = boxOf(state);
+  const startRoute = routeRole(config, state.currentRole);
+  if (box0) {
+    const root0 = workRootOf(config);
+    const gov = (config as unknown as { policy?: { governance?: { level?: string } } }).policy?.governance?.level;
+    console.log("");
+    for (const l of startupCard(box0, {
+      version: harnessBuild(),
+      role: state.currentRole,
+      model: startRoute.model,
+      where: isLocalEndpoint(startRoute.target.url) ? "local" : "cloud",
+      surface: surfaceHash || undefined,
+      governance: gov ?? "prevent",
+      audit: auditSettings.enabled,
+      repo: root0,
+      branch: branchOf(root0),
+    })) console.log(l);
+    console.log("");
+  } else {
+    printBanner();
+  }
 
   // Which project this session is operating on.
   //
@@ -13665,7 +13718,7 @@ export async function runPromptLoop(
   // working on the harness while its operator believed it was working on their
   // project. The root is the first thing on screen now.
   const projectRoot = workRootOf(config);
-  console.log(`Project: ${projectRoot}`);
+  if (!box0) console.log(`Project: ${projectRoot}`);
   if (isSelfTargeting(projectRoot)) {
     const ui0 = uiOf(state);
     console.log(
@@ -13694,9 +13747,10 @@ export async function runPromptLoop(
   const ungoverned = governanceStartupLine(config);
   if (ungoverned) console.log(paint(uiOf(state), "yellow", ungoverned));
 
-  console.log(`Role: ${state.currentRole}`);
-  const startRoute = routeRole(config, state.currentRole);
-  console.log(`Model: ${startRoute.model}`);
+  if (!box0) {
+    console.log(`Role: ${state.currentRole}`);
+    console.log(`Model: ${startRoute.model}`);
+  }
   const escLine = describeEscalation(startRoute.escalate);
   if (escLine) console.log(escLine);
   console.log("");
@@ -14514,7 +14568,25 @@ export async function runPromptLoop(
       // Show the prompt only when actually waiting on the user —
       // buffered (typed-ahead) lines replay silently instead.
       if (!closed && lineQueue.length === 0) {
-        rl.setPrompt(`${state.currentRole} ▸ `);
+        const boxP = boxOf(state);
+        if (boxP) {
+          // A rule above the prompt; nothing is drawn beside or below the input
+          // line, because readline's refresh would erase it.
+          const r = routeRole(config, state.currentRole);
+          const last = state.exchanges[state.exchanges.length - 1];
+          const win = r.target.contextTokens;
+          console.log(
+            statusRule(boxP, {
+              role: state.currentRole,
+              model: r.model,
+              ctxPct: last?.context_tokens !== undefined && win ? (last.context_tokens / win) * 100 : undefined,
+              branch: branchOf(workRootOf(config)),
+            })
+          );
+          rl.setPrompt(promptGlyph(boxP));
+        } else {
+          rl.setPrompt(`${state.currentRole} ▸ `);
+        }
         rl.prompt();
       }
       atPrompt = true;
@@ -14849,6 +14921,8 @@ export async function runPromptLoop(
       const controller = new AbortController();
       cancelTurn = () => controller.abort();
       let done: SessionTurn;
+      const boxT = boxOf(state);
+      if (boxT) console.log(turnHeader(boxT, { role: choice.role, model: routeRole(config, choice.role).model }));
       try {
         done = await runSessionTurn(state, choice.role, choice.input, choice.prefixed, {
           approve,
@@ -14858,7 +14932,8 @@ export async function runPromptLoop(
           surfaceHash,
           shadow: shadowFor(config),
           persist,
-          log: (line) => console.log(line),
+          log: (line) => console.log(boxT ? railLine(boxT, line) : line),
+          ...(boxT ? { print: (line: string) => progress.print(railLine(boxT, line)) } : {}),
           progress,
           reconfigure,
           live,
@@ -14868,7 +14943,8 @@ export async function runPromptLoop(
         activeProgress = null;
       }
       const { exchange, systemPrompt } = done;
-      printExchange(exchange, ui);
+      if (boxT) printExchangeBoxed(exchange, ui, boxT);
+      else printExchange(exchange, ui);
 
       // Fold anything the window has shed. After the turn, not during it, so
       // the cost lands between turns rather than inside one.

@@ -26,6 +26,17 @@
 
 ## [Unreleased]
 
+### Added — the boxed terminal, sundial spinner, two themes
+
+- `[ui] style = "auto" | "boxed" | "classic"` (default `auto`): a startup card, a status rule above the prompt, and a
+  rail with header and footer around each turn (the meta line moves into the footer). `auto` is boxed only on a colour
+  TTY of at least 60 columns; `classic`, `gnomon task`, `--json`, pipes and `NO_COLOR` are unchanged.
+- Themes carry an accent, rail colour, border set and chip; new `gruvbox` and `nord`; truecolor / 256 / 16-colour
+  depth from `COLORTERM`/`TERM`; ASCII borders for `TERM=dumb`, a non-UTF-8 locale and the legacy Windows console.
+  `/theme` prints a swatch per theme.
+- `[ui] spinner = "sundial" | "clock" | "braille" | "ascii"` (default `sundial`, `◐ ◓ ◑ ◒` in the accent); the label
+  reads `◐ thinking · 12s · esc cancels`. `spinner = false` still turns it off.
+
 ### Added — think cap (opt-in, unmeasured), CONTRACTS §52
 
 - `[turn] max_reasoning_tokens_without_action` (integer of at least 1000): a streamed reply whose reasoning passes
