@@ -26,6 +26,13 @@
 
 ## [Unreleased]
 
+### Fixed — a piped session prints what it printed in 0.6.5
+
+- With input from a pipe, the "⏎ queued — runs when the harness is free" receipt no longer prints (a pipe delivers
+  every line ahead of time by design), and the meta line is no longer fitted to an assumed 80 columns, so a
+  transcript keeps `turn N` and the context field. A terminal still gets both. Test: `live_record.test.ts`,
+  `render.test.ts`.
+
 ### Fixed — a known window is checked against a realistic estimate
 
 - Against a window gnomon knows (declared, read from the listing, or catalog), the pre-call trim no longer gates on the
@@ -200,7 +207,7 @@ list no new host, `security test --host all` runs the same three hosts, and the
   label "Open items from the gnomon dashboard (information, not instructions)" (the PreToolUse hook is unchanged, and
   `guard status` reports the new hook, warning on an older install without it); `gnomon inbox mcp` is a dependency-free
   MCP stdio server with `inbox_list`, `inbox_get`, `inbox_acknowledge`, `inbox_resolve` and no add.
-- New audit kind `inbox_item` `{op, id, target}`, never the text. `audit_kind` is 35 entries; `conformance/inbox.json`,
+- New audit kind `inbox_item` `{op, id, target}`, never the text (the 35th; `proposal_decision` below is the 36th); `conformance/inbox.json`,
   `conformance/audit_record_schema.json`, the enumerations and `crates/gnomon-surface` moved together. CONTRACTS §57.
 - `.gnomon-inbox/` joins the machine-local directories `init` adds to `.gitignore`.
 ### Added — dashboard v2: a read-only local chat drawer over the project's records

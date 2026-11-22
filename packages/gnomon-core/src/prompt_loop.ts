@@ -14230,7 +14230,9 @@ export async function runPromptLoop(
     // is busy. Acknowledging only when a *cancellable turn* was running left
     // input typed during compaction with no echo, no prompt and no receipt,
     // which is the very symptom the queue was added to remove.
-    if (trimmed) {
+    // TTY only: a pipe delivers every line ahead of time by design, so the
+    // receipt would only add a line the transcript did not have before.
+    if (trimmed && process.stdin.isTTY) {
       const ui0 = uiOf(state);
       console.log(
         paint(

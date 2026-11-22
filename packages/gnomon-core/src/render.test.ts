@@ -127,6 +127,30 @@ describe("renderMeta", () => {
     expect(renderMeta(e, { ...u, meta_style: "compact" }, 40, 60).join()).not.toContain("think ~");
   });
 
+  it("piped output is not fitted: a transcript keeps every meta field, as before the fit", () => {
+    const e = exchange({
+      model: "qwen3.6:35b-a3b-instruct", usage: { input: 12345, output: 678 }, duration_ms: 4200,
+      tool_steps: 7, context_dropped: 4, bucket: "refusal", stop_reason: "answered",
+    });
+    const u = ui({ meta: [...META_FIELDS], color: false, think: "hide" });
+    const wasTty = process.stdout.isTTY;
+    const wasCols = process.stdout.columns;
+    try {
+      Object.defineProperty(process.stdout, "isTTY", { value: undefined, configurable: true });
+      const piped = renderExchange(e, u).join("\n");
+      expect(piped).toContain("−4");
+      expect(piped).toContain("qwen3.6:35b-a3b-instruct");
+      Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+      Object.defineProperty(process.stdout, "columns", { value: 60, configurable: true });
+      const tty = renderExchange(e, u);
+      const metaRows = tty.filter((r) => r.includes("4.2s"));
+      for (const r of metaRows) expect(visibleWidth(r)).toBeLessThanOrEqual(60);
+    } finally {
+      Object.defineProperty(process.stdout, "isTTY", { value: wasTty, configurable: true });
+      Object.defineProperty(process.stdout, "columns", { value: wasCols, configurable: true });
+    }
+  });
+
   it("an unbounded width leaves every field in, as before", () => {
     expect(renderMeta(exchange(), ui({ meta: [...META_FIELDS] }), 40).join()).toContain("think ~");
   });
