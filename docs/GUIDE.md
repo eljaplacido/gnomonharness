@@ -1120,7 +1120,7 @@ nothing; `gnomon --help` prints all of it.
 | `gnomon acp [--role R] [--profile N]` | Serves the Agent Client Protocol on stdin/stdout for an editor. Same surface, roles, approvals and audit as `prompt`. | Zed, JetBrains IDEs |
 | `gnomon trust [list \| grant \| revoke]` | What this project's `.gnomon/` grants beyond the defaults, and whether this machine trusts it | A repository you did not write |
 | `gnomon audit [show \| verify]` | Lists trails; checks every chain, seal and signature anchor. `verify` exits 1 on a break or when there is nothing to verify. | Review, release gates |
-| `gnomon dashboard [--port N] [--no-open] [--dir P]` | A command center in the browser on 127.0.0.1: projects, sessions as a timeline, refusals by rule, audit verification, contracts, token measurements (alias `ui`); setup, check, trust and endpoint test as buttons that run those same commands, each change confirmed first. | Reviewing what happened without reading JSONL; first-run setup without a terminal wizard |
+| `gnomon dashboard [--port N] [--no-open] [--dir P]` | A command center in the browser on 127.0.0.1: projects, sessions as a timeline, refusals by rule, audit verification, contracts, token measurements (alias `ui`); a one-click local quick start, `init`, `guard install`, setup, check, trust and endpoint test as buttons that run those same commands, each change confirmed first; a Ctrl/Cmd+K palette and a light theme. | Reviewing what happened without reading JSONL; first-run setup without a terminal wizard |
 | `gnomon sessions` | Saved interactive sessions, newest last | Find one to resume |
 | `gnomon skill [list \| accept ID \| reject ID \| mine]` | Active skills and the proposals the agent made; `mine` also reports skills that fire but are never cited, skills worth trialling, and context cost per firing | Reviewing what it learned |
 | `gnomon loop [list \| status \| dry-run N \| run N \| install N \| uninstall N \| reset N \| kill]` | Cron-scheduled guard/act loops declared in `.gnomon/loops/` (alias `loops`) | Unattended supervision |
@@ -1595,6 +1595,41 @@ sign-in link; press Enter for another. On a machine without a display, forward
 the same port (`ssh -L 4890:127.0.0.1:4890 host`) and start it with
 `--no-open --port 4890`. The projects it lists are this one plus those this
 machine trusts (`gnomon trust grant`); it keeps no list of its own.
+
+**First run in the dashboard.** With no governed project yet, the dashboard
+opens on **Setup**, and Setup opens on a **quick start**: it scans the machine
+(`gnomon doctor --json`, then `gnomon setup --json`, nothing written), shows the
+hardware (a GB10's unified memory is named as such), and offers **one** model
+from the dated catalog with a fit pill (`fits`, `tight`, `over`; the reason is
+on hover and in the page text for a screen reader). Speed appears on the pill
+only if the speed check has measured it here; the catalog's own figures are
+labelled "not measured by gnomon" unless gnomon measured them. **Set up** runs a
+rail of three stages through the same confirmed actions as the wizard: the
+engine must answer on 127.0.0.1, the model is downloaded if it is not installed
+(`setup.pull`, its size shown first), and **Finish** writes the diff the server
+shows you (`setup.apply`, the `--expect-proposal` digest). Any failure ends in
+the same three ways out, in order: **Retry**, **Fall back** (the next model that
+fits on an engine that answers), **Go back**; the raw output is folded under
+**Details**. **Let me choose** opens the full seven-step wizard
+(`#/setup/<project>/step-N`). Under the hero are a compact cloud quick-add
+(provider, then the key through `gnomon key set` on stdin, then the endpoint
+and one test token), **Add a project** (`gnomon init --dir <directory>`, which
+refuses where a `.gnomon/` exists and never passes `--force`) and, for a
+project with a surface, **Govern other coding agents here**: it detects Claude
+Code (`.claude/`), opencode (`opencode.json` or `.opencode/`) and Cursor
+(`.cursor/`) and runs `gnomon guard install <harness> --write`, after naming the
+file it will write.
+
+**Keyboard, theme, notices.** `Ctrl+K` (`Cmd+K` on a Mac) or `/` opens a
+palette over screens, projects, actions and recent sessions; an action that
+writes opens the same confirmation as its button. `?` lists the shortcuts
+(`g` then `1` to `9` for the nth screen, `r` to read the records again, `Esc`
+to close). The theme follows the system (`prefers-color-scheme`) and the
+toggle in the side rail overrides it; so does the opt-in **Toasts** switch,
+which shows a small notice when a job finishes and never takes focus. Both
+are stored in this browser's localStorage and nowhere else. Every screen state
+is in the address bar: `#/session/<project>/<trail>`,
+`#/setup/<project>/step-3`, `#/setup/<project>/init`.
 
 ### 7.6 Containment: what it is, and what it is not
 

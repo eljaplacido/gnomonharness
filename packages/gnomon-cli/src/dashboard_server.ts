@@ -34,6 +34,7 @@ import { fileURLToPath } from "node:url";
 import { harnessBuild, loadTrust, trustPath as defaultTrustPath } from "gnomon-core";
 import {
   contractsView,
+  ensureProject,
   governanceView,
   measurementsView,
   projectOverview,
@@ -53,10 +54,14 @@ import {
   Jobs,
   actionNamed,
   argvFor,
+  dirProblem,
   catalogInfo,
   cloudPresets,
   commandText,
   declaredEndpointNames,
+  detectHarnesses,
+  GUARD_TARGETS,
+  type GuardHarness,
   endpointFacts,
   jsonOf,
   keyStorePath,
@@ -136,7 +141,7 @@ const SECURITY_HEADERS: Record<string, string> = {
 const SETUP_COMMANDS = ["doctor", "setup", "key", "endpoint", "trust", "check", "launch"] as const;
 
 /** Actions a project without a `.gnomon/` may run: setup is how it gets one. */
-const WITHOUT_SURFACE = new Set(["doctor.scan", "setup.plan", "setup.pull", "setup.speed_check", "setup.apply", "key.set"]);
+const WITHOUT_SURFACE = new Set(["doctor.scan", "setup.plan", "setup.pull", "setup.speed_check", "setup.apply", "key.set", "init"]);
 
 export function defaultAssetsDir(): string {
   return fileURLToPath(new URL("../dashboard/", import.meta.url));
@@ -307,6 +312,8 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
     };
     // The Setup screen reads doctor's report as `doctor`.
     if (action.name === "doctor.scan") Object.assign(out, { available: true, doctor: doc });
+    // The page selects the project init just made.
+    if (action.name === "init") out.project = p.id;
     if (action.name === "trust.grant" && pending?.surfaceHash) {
       // Read back what the command recorded: the surface that was confirmed,
       // and no other, is now trusted here.
@@ -396,6 +403,27 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
           f.local ? "It runs on this machine: nothing is billed." : "It is a cloud endpoint: the token is billed, a fraction of a cent.",
         ]);
       }
+      case "init": {
+        if (p.hasSurface) return fail(res, 409, `${p.root} already has a .gnomon/: init refuses to overwrite it (gnomon init --force is for a terminal)`, { action: action.name });
+        const git = existsSync(join(p.root, ".git"));
+        return ask({ dir: p.root, git }, [
+          `Creates ${join(p.root, ".gnomon")}/ (config, roles, tools, policy, rules, skills): a content-hashed surface, with audit on. Nothing existing is overwritten; init refuses where a .gnomon/ exists.`,
+          `Models are the ones found on this machine's 127.0.0.1 servers, or the catalog's pick for this hardware. Nothing is downloaded.`,
+          git
+            ? "Adds .gitattributes and .gitignore lines in this repository (machine-local state is gitignored). Nothing is committed."
+            : "This directory is not a git repository: init still scaffolds .gnomon/ here. Nothing is committed.",
+        ]);
+      }
+      case "guard.install": {
+        const h = params.harness as GuardHarness;
+        const row = detectHarnesses(p.root).find((x) => x.harness === h)!;
+        return ask({ ...row }, [
+          `Writes the guard hook into ${join(p.root, GUARD_TARGETS[h].writes)}${row.present ? " (it exists: gnomon's entry is merged, the rest is kept)" : " (it does not exist yet: it is created)"}.`,
+          "The hook names this machine's gnomon by absolute path and asks gnomon to decide every tool call that harness makes, under this project's rules.",
+          row.detected ? `${h} was detected in this project.` : `${h} was not detected in this project: the file is created anyway; it does nothing until that harness runs here.`,
+          "Nothing is committed. Add --local in a terminal to keep the hook out of git.",
+        ]);
+      }
       default:
         return fail(res, 409, `${action.name} has no confirmation in this build`);
     }
@@ -418,6 +446,16 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
       return fail(res, 400, err instanceof Error ? err.message : "bad body");
     }
     if (action.state !== "enabled") return fail(res, 409, `${action.name} is planned, not in this build`);
+    // `init` may name a directory that is not on the list: the one path the
+    // browser sends. It is validated, stated back in the confirmation, and
+    // only then does the directory join the list (for this run of the server).
+    if (action.name === "init" && typeof body.dir === "string" && body.dir !== "") {
+      const bad = dirProblem(body.dir);
+      if (bad) return fail(res, 400, bad);
+      if (body.project === undefined || body.project === null) body = { ...body, project: ensureProject(projects, body.dir).id };
+      else if (projectById(String(body.project))?.root !== ensureProject(projects, body.dir).root) return fail(res, 400, '"dir" is not the project named');
+      delete body.dir;
+    }
     const p = projectById(typeof body.project === "string" ? body.project : "");
     if (!p || !p.exists) return fail(res, 404, "no such project");
     if (!p.hasSurface && !WITHOUT_SURFACE.has(action.name)) return fail(res, 404, "this project has no .gnomon/");
@@ -485,6 +523,7 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
         project: p?.id ?? null,
         has_surface: p?.hasSurface ?? false,
         endpoints: p ? declaredEndpointNames(p) : [],
+        harnesses: p ? detectHarnesses(p.root) : [],
         catalog: catalogInfo(),
         cloud_presets: cloudPresets(),
         key_store: keyStorePath(),

@@ -332,3 +332,134 @@ dialog.confirm::backdrop { background: rgba(10, 9, 8, 0.72); }
 @media (prefers-reduced-motion: no-preference) {
   .seg, .rulebtn, .steprow, .btn { transition: filter 120ms ease; }
 }
+
+/* ── v2: onboarding + shell ── */
+/* Light theme: the same tokens, redefined. The OS preference decides unless the
+   page set data-theme (the toggle; stored in localStorage only). The two light
+   blocks are identical: dashboard_a11y.test.ts holds them to each other and
+   checks every text pairing in both themes. */
+:root[data-theme="light"] {
+  --ground: #F7F4EC;
+  --panel: #FFFFFF;
+  --side: #EFEBE0;
+  --well: #ECE7DA;
+  --sunk: #F2EFE6;
+  --hover: #E8E2D3;
+  --chip: #E2DCCB;
+  --line: #D8D1BF;
+  --line-2: #C4BCA7;
+  --line-3: #9C927C;
+  --grid: #DDD7C7;
+  --ink: #1D1B16;
+  --muted: #4A453A;
+  --dim: #5A5446;
+  --clay: #A93F13;
+  --local: #1C5E94;
+  --hybrid: #4D483C;
+  --refused: #8A2A10;
+  --refused-bg: #F6DCD2;
+  --allowed: #2A6419;
+  --allowed-bg: #DBEDD1;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --ground: #F7F4EC;
+    --panel: #FFFFFF;
+    --side: #EFEBE0;
+    --well: #ECE7DA;
+    --sunk: #F2EFE6;
+    --hover: #E8E2D3;
+    --chip: #E2DCCB;
+    --line: #D8D1BF;
+    --line-2: #C4BCA7;
+    --line-3: #9C927C;
+    --grid: #DDD7C7;
+    --ink: #1D1B16;
+    --muted: #4A453A;
+    --dim: #5A5446;
+    --clay: #A93F13;
+    --local: #1C5E94;
+    --hybrid: #4D483C;
+    --refused: #8A2A10;
+    --refused-bg: #F6DCD2;
+    --allowed: #2A6419;
+    --allowed-bg: #DBEDD1;
+    color-scheme: light;
+  }
+}
+:root[data-theme="dark"] { color-scheme: dark; }
+dialog.confirm::backdrop, dialog.palette::backdrop { background: rgba(10, 9, 8, 0.6); }
+
+/* quick start */
+.panel.hero { border-color: var(--line-3); gap: 18px; }
+.hw { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border-radius: 10px; background: var(--sunk); border: 1px solid var(--grid); }
+.hwrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; font-size: 14px; }
+.hwrow .k { flex: 0 0 210px; color: var(--muted); font-size: 13px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; }
+.pick { display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--sunk); }
+.pickhead { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.pickhead > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.pill.fit { gap: 8px; cursor: help; }
+.fitdot { width: 10px; height: 10px; border-radius: 50%; flex: none; border: 2px solid currentColor; }
+.pill.fit-fits { background: var(--allowed-bg); color: var(--allowed); }
+.pill.fit-fits .fitdot { background: currentColor; }
+.pill.fit-tight { color: var(--ink); border: 1px solid var(--clay); }
+.pill.fit-tight .fitdot { border-style: dashed; border-color: var(--clay); }
+.pill.fit-over { background: var(--refused-bg); color: var(--refused); }
+.pill.fit-over .fitdot { border-radius: 2px; }
+.pill.fit-unknown { color: var(--ink); border: 1px dashed var(--dim); }
+ol.rail { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 8px; align-items: stretch; }
+ol.rail li { flex: 1 1 140px; display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 6px 12px; border-radius: 10px; border: 1px solid var(--line-2); color: var(--muted); }
+ol.rail .num { width: 26px; height: 26px; flex: none; border-radius: 50%; border: 1px solid currentColor; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; }
+ol.rail .rail-active { border-color: var(--clay); color: var(--ink); background: var(--hover); }
+ol.rail .rail-done { color: var(--ink); }
+ol.rail .rail-done .num { background: var(--allowed-bg); color: var(--allowed); border-color: var(--allowed); }
+ol.rail .rail-failed { border-color: var(--refused); color: var(--refused); background: var(--refused-bg); }
+.fail { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: 12px; border: 1px solid var(--refused); background: var(--refused-bg); color: var(--ink); }
+.fail h3 { color: var(--refused); }
+.done { display: flex; flex-direction: column; gap: 10px; }
+details.details > summary { cursor: pointer; color: var(--muted); font-size: 13px; min-height: 32px; display: flex; align-items: center; }
+details.details[open] > summary { margin-bottom: 6px; }
+ul.harnesses { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+ul.harnesses li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--grid); background: var(--sunk); }
+ul.harnesses .hname { flex: 1 1 240px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+ul.harnesses .mono { flex: 1 1 220px; overflow-wrap: anywhere; }
+
+/* shell: palette, shortcuts, toasts, preferences */
+.shellbar { display: flex; flex-direction: column; gap: 6px; }
+.shellbar .btn { min-height: 40px; justify-content: space-between; font-size: 14px; }
+.shellbar .btn[aria-pressed="true"] { background: var(--chip); border-color: var(--line-3); }
+kbd { font-family: var(--mono); font-size: 12px; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--line-3); background: var(--chip); color: var(--ink); white-space: nowrap; }
+dialog.palette {
+  width: min(640px, calc(100vw - 32px)); max-height: min(560px, calc(100vh - 64px)); margin: 12vh auto 0; padding: 0;
+  border: 1px solid var(--line-3); border-radius: 16px; background: var(--panel); color: var(--ink); overflow: hidden;
+  display: flex; flex-direction: column;
+}
+dialog.palette:not([open]) { display: none; }
+dialog.palette .pin-input { margin: 0; padding: 14px 16px; border-bottom: 1px solid var(--line); display: block; }
+dialog.palette input { width: 100%; min-height: 44px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line-2); background: var(--sunk); color: var(--ink); font: inherit; }
+dialog.palette ul.results { margin: 0; padding: 6px; list-style: none; overflow: auto; flex: 1 1 auto; }
+dialog.palette li.group { padding: 10px 12px 4px; color: var(--muted); font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+dialog.palette li.opt { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 12px; border-radius: 8px; cursor: pointer; }
+dialog.palette li.opt[aria-selected="true"] { background: var(--hover); outline: 2px solid var(--clay); outline-offset: -2px; }
+dialog.palette li.opt .lbl { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+dialog.palette li.opt .hint { flex: none; color: var(--muted); font-size: 12px; }
+dialog.palette .none { padding: 18px; color: var(--muted); }
+dialog.palette .foot { padding: 8px 16px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; display: flex; gap: 12px; flex-wrap: wrap; }
+table.keys { border-collapse: collapse; width: 100%; font-size: 14px; }
+table.keys th { text-align: left; font-weight: 500; padding: 6px 12px 6px 0; width: 45%; }
+table.keys td { padding: 6px 0; color: var(--muted); }
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 30; display: flex; flex-direction: column; gap: 8px; max-width: min(380px, calc(100vw - 32px)); }
+.toast { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--line-3); background: var(--panel); color: var(--ink); display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.toast.bad { border-color: var(--refused); }
+.toast.good { border-color: var(--allowed); }
+.toast code { font-size: 12px; overflow-wrap: anywhere; color: var(--muted); }
+@media (prefers-reduced-motion: no-preference) {
+  .toast { animation: toast-in 160ms ease-out; }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+}
+@media (max-width: 720px) {
+  .hwrow .k { flex-basis: 100%; }
+  dialog.palette { margin-top: 6vh; }
+}

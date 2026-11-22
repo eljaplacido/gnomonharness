@@ -419,3 +419,145 @@ describe("the Start step: the exact command for the project, quoted for its shel
     expect(panel).toContain("navigator.clipboard");
   });
 });
+
+// ── dashboard v2: light theme, quick start, palette ─────────────────────────
+
+const PALETTE_JS = readFileSync(join(HERE, "..", "dashboard", "palette.js"), "utf-8");
+
+/** The `--token: #hex` pairs of the block that opens at `open`. */
+function tokensAt(open: string): Record<string, string> {
+  const at = APP_CSS.indexOf(open);
+  expect(at, open).toBeGreaterThanOrEqual(0);
+  const body = APP_CSS.slice(at, APP_CSS.indexOf("}", at));
+  return Object.fromEntries([...body.matchAll(/--([a-z0-9-]+):\s*(#[0-9A-Fa-f]{6})\b/g)].map((m) => [m[1]!, m[2]!]));
+}
+/** A top-level `function name(...) {...}` from any dashboard module's source. */
+function fnIn(src: string, name: string): string {
+  const start = src.indexOf(`function ${name}(`);
+  expect(start, `function ${name}`).toBeGreaterThanOrEqual(0);
+  const params = src.indexOf("(", start);
+  const body = src.indexOf("{", matchClose(src, params));
+  return src.slice(start, matchClose(src, body) + 1);
+}
+
+describe("the light theme: the same pairings, at least 4.5:1", () => {
+  const dark = tokens;
+  const light = tokensAt(':root[data-theme="light"] {');
+  const media = tokensAt(':root:not([data-theme="dark"]) {');
+  const SURFACES = ["ground", "panel", "side", "well", "sunk", "hover", "chip"];
+  const TEXT = ["ink", "muted", "dim", "clay", "allowed", "refused"];
+  const ON_FILL: Array<[string, string]> = [["ground", "clay"], ["ground", "local"], ["ground", "hybrid"], ["ground", "ink"], ["refused", "refused-bg"], ["allowed", "allowed-bg"]];
+
+  it("defines every token the dark theme does, and the OS-preference block says the same", () => {
+    expect(Object.keys(light).sort()).toEqual(Object.keys(dark).sort());
+    expect(media).toEqual(light);
+  });
+  it.each(TEXT)("--%s on every surface, light", (t) => {
+    for (const sf of SURFACES) expect(contrast(light[t]!, light[sf]!), `--${t} on --${sf}`).toBeGreaterThanOrEqual(4.5);
+  });
+  it.each(ON_FILL)("--%s text on --%s, light", (fg, bg) => {
+    expect(contrast(light[fg]!, light[bg]!)).toBeGreaterThanOrEqual(4.5);
+  });
+  it("the quick start's fit pills say their state in words, with the reason in the DOM, not only on hover", () => {
+    for (const fit of ["fits", "tight", "over", "unknown"]) expect(APP_CSS, fit).toContain(`.pill.fit-${fit}`);
+    expect(APP_JS).toMatch(/FIT_TEXT = \{ fits: "fits", tight: "tight", over: "over"/);
+    expect(fn("fitPill")).toMatch(/sr-only/);
+  });
+  it("palette.js and the page's own marks hold no colour literal: the theme tokens decide", () => {
+    expect(PALETTE_JS).not.toMatch(/#[0-9A-Fa-f]{6}\b/);
+    expect(fn("sundial")).not.toMatch(/#[0-9A-Fa-f]{6}/);
+  });
+});
+
+describe("the quick start: ordered recovery, nothing new that writes", () => {
+  it("a failure offers Retry, then Fall back, then Go back, and the raw output sits folded under Details", () => {
+    const panel = fn("quickPanel");
+    const order = ['text: "Retry"', '"Fall back"', 'text: "Go back"', 'h("summary", { text: "Details" })'].map((x) => panel.indexOf(x));
+    expect(order.every((i) => i >= 0), String(order)).toBe(true);
+    expect([...order]).toEqual([...order].sort((a, b) => a - b));
+    expect(panel).toContain('role: "alert"');
+  });
+  it("runs only actions the server confirms: pull and apply through perform(), never a raw call", () => {
+    const run = fn("qsRun");
+    expect(run).toContain('perform("setup.pull"');
+    expect(run).toContain('perform("setup.apply"');
+    expect(run).not.toMatch(/\bcall\(|fetch\(/);
+    expect(fn("qsScan")).not.toMatch(/setup\.pull|setup\.apply|\bcall\(|fetch\(/);
+  });
+  it("has a Let me choose escape to the full wizard, and a rail of engine, model, finish", () => {
+    expect(fn("quickPanel")).toContain('"Let me choose"');
+    expect(APP_JS).toContain('const QS_STAGES = ["Engine", "Model", "Finish"]');
+  });
+  it("the fall-back is the next model that is not over and not tried, on an engine that answers", () => {
+    const fall = new Function("setupState", "qs", "doctorOf", `${fn("qsFallbacks")}\nreturn qsFallbacks;`);
+    const rec = {
+      options: [
+        { tag: "big:1", fit: "fits", installed: false, runtime: "ollama" },
+        { tag: "mid:1", fit: "tight", installed: false, runtime: "ollama" },
+        { tag: "huge:1", fit: "over", installed: false, runtime: "ollama" },
+        { tag: "lm:1", fit: "fits", installed: true, runtime: "lmstudio" },
+        { tag: "vl:1", fit: "fits", installed: false, runtime: "vllm" },
+      ],
+    };
+    const q = { rec, pick: "big:1", tried: [] as string[] };
+    const u = { doctor: { doctor: { runtimes: [{ id: "ollama", state: "serving" }] } } };
+    const f = fall(() => u, () => q, (r: { doctor: unknown }) => r.doctor) as () => Array<{ tag: string }>;
+    expect(f().map((o) => o.tag)).toEqual(["mid:1", "lm:1"]);
+    q.tried.push("mid:1");
+    expect(f().map((o) => o.tag)).toEqual(["lm:1"]);
+    u.doctor.doctor.runtimes = [];
+    expect(f().map((o) => o.tag)).toEqual(["lm:1"]); // installed on its own server needs no engine start
+  });
+});
+
+describe("the palette and the shell (palette.js)", () => {
+  it("is a combobox over a listbox, named, with the active option announced", () => {
+    for (const x of ['role: "combobox"', '"aria-controls": "pal-list"', 'role: "listbox"', 'role: "option"', "aria-activedescendant", '"aria-selected"', '"aria-label": "Search screens']) {
+      expect(PALETTE_JS, x).toContain(x);
+    }
+  });
+  it("every form control in palette.js is labelled", () => {
+    const controls = [...PALETTE_JS.matchAll(/(?<![\w$])h\("(input|select|textarea)"/g)];
+    expect(controls.length).toBeGreaterThanOrEqual(1);
+    for (const m of controls) {
+      const own = PALETTE_JS.slice(m.index! + 1, matchClose(PALETTE_JS, m.index! + 1) + 1);
+      expect(own, own.slice(0, 60)).toMatch(/"aria-label(ledby)?":/);
+    }
+  });
+  it("Esc closes it and runs nothing, and focus returns to what opened it", () => {
+    const open = fnIn(PALETTE_JS, "openPalette");
+    expect(open).toContain('addEventListener("cancel"');
+    expect(open).toContain("opener.focus()");
+    // A chosen entry runs after the palette is gone, so an action's confirmation opens on its own.
+    expect(open).toMatch(/close\(\);[\s\S]*setTimeout/);
+  });
+  it("an action in the palette is perform(): the confirmation is the server's, not the palette's", () => {
+    expect(fnIn(PALETTE_JS, "buildItems")).toContain("perform(name, params)");
+    expect(PALETTE_JS).not.toMatch(/\/api\/actions|call\(/);
+  });
+  it("filters by every word, best prefix first", () => {
+    const filter = new Function(`${fnIn(PALETTE_JS, "filter")}\nreturn filter;`)() as (items: unknown[], q: string) => Array<{ label: string }>;
+    const items = [
+      { label: "Go to Governance", keys: "governance", hint: "screen" },
+      { label: "Run a check against HEAD~1", keys: "check.run", hint: "asks first" },
+      { label: "Trust this surface…", keys: "trust.grant", hint: "asks first" },
+    ];
+    expect(filter(items, "").length).toBe(3);
+    expect(filter(items, "check head").map((i) => i.label)).toEqual(["Run a check against HEAD~1"]);
+    expect(filter(items, "asks").length).toBe(2);
+    expect(filter(items, "zzz")).toEqual([]);
+  });
+  it("preferences live in localStorage only, behind try/catch; toasts are opt-in and never take focus", () => {
+    expect(PALETTE_JS).toMatch(/try \{ return localStorage\.getItem/);
+    expect(PALETTE_JS).not.toMatch(/sessionStorage|document\.cookie/);
+    expect(fnIn(PALETTE_JS, "toast")).not.toMatch(/\.focus\(/);
+    expect(PALETTE_JS).toContain('const toastsOn = () => store.get(TOAST_KEY) === "1"');
+    expect(PALETTE_JS).toMatch(/if \(!toastsOn\(\)/);
+  });
+  it("neither module parses markup or runs a string: the CSP stays untouched", () => {
+    for (const src of [APP_JS, PALETTE_JS]) {
+      expect(src).not.toMatch(/innerHTML|outerHTML|insertAdjacentHTML|document\.write|\beval\(|new Function\(/);
+      expect(src).not.toMatch(/setAttribute\("style"|setAttribute\('style'/);
+    }
+  });
+});
