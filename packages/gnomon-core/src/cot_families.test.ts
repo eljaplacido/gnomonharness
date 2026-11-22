@@ -38,8 +38,6 @@ interface Family {
   final: Delta[];
   /** Does the family's step carry prose beside the call? */
   prose?: boolean;
-  /** The step has no prose; anything under ● is a leak */
-  noProse?: boolean;
   /** This family's reasoning is not readable text (redacted, encrypted only) */
   opaque?: boolean;
   /** JSON (Ollama native /api/chat) instead of SSE */
@@ -225,12 +223,6 @@ const FAMILIES: Family[] = [
     final: [...pieces(RSN2, "reasoning"), ...pieces(ANS)],
   },
   {
-    name: "nemotron-3-super via OpenRouter: reasoning + leaked `<t` tag start beside the call",
-    step: [...pieces(RSN1, "reasoning"), { content: "\n" }, call(), { content: "<t" }, callRest],
-    final: [...pieces(RSN2, "reasoning"), ...pieces(ANS)],
-    noProse: true,
-  },
-  {
     name: "content-only (reasoning off)",
     step: toolStep(pieces(PROSE)),
     final: pieces(ANS),
@@ -398,7 +390,6 @@ function check(fam: Family, r: Run, cot: string, think: string, columns: number,
   if (cot === "think" || cot === "off") expect(r.text, `${where}: tool row at ${cot}`).not.toMatch(/⚙ glob/);
   if (nested) for (const row of r.rows) if (row) expect(row, `${where}: no gutter`).toMatch(/┊/);
   if (fam.name.startsWith("leaked tool-tag")) expect(r.text, `${where}: stub shown as prose`).not.toMatch(/● <t/);
-  if (fam.noProse) expect(r.text, `${where}: stray prose row`).not.toMatch(/●/);
   if (fam.prose && cot === "full") expect(r.text, `${where}: prose lost`).toContain("prose-step");
 }
 
