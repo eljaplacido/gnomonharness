@@ -120,6 +120,41 @@
   `/skills` shows firings, reads, citations, cost and the latest trial verdict;
   `gnomon skill mine` adds `fires_never_cited` and `cited_often`. All derived
   from what the loop sees: no new prompt text and no model-reported outcome.
+### Fixed
+
+- **The token estimate counts what a request carries.** Every context decision
+  (the leg and overflow trims, observation masking's fill, the per-call record)
+  measured `content` alone, so an assistant message that called `write` cost
+  nothing and a 60k-token working set estimated at 12 tokens and was never
+  trimmed. One `messageTokens` now counts content, tool-call arguments and,
+  where the target is sent it, replayed reasoning. This moves the request bytes
+  of a long tool-heavy turn (it trims where its real size puts it); the pinned
+  digests in `mediator_record.test.ts` and `context_hygiene.test.ts` are re-taken.
+- **A trim no longer orphans tool results or reorders history.** It evicts whole
+  units (an assistant message with all its parallel tool results), keeps the
+  current request in its chronological place, and counts its own ledger in the
+  budget.
+- **A second trim keeps the first one's ledger**, so "do not repeat a listed
+  step" survives the trim that matters most; the count in it is steps, not messages.
+- **Context overflows in Anthropic, Gemini, LiteLLM and HTTP 413 wordings are
+  recognised** (code 13, trim and retry) instead of ending the turn as code 10;
+  a timeout mentioned in an error body no longer outranks a real overflow.
+- **Foreground `bash` output is bounded in memory.** A flood (`yes`, a multi-GB
+  `cat`) used to grow an unbounded string until the process died. Output beyond
+  twice the limit keeps its start and end, with the rest in a file capped at
+  64 MB that the result names. Output that fits is byte for byte unchanged.
+
+### Added
+
+- **A pre-call trim, against a known window only.** When the estimate of the
+  next request exceeds a window the endpoint declared or `auto` read from its
+  listing, the context is trimmed to the leg budget before sending, rather than
+  after a refusal. Against the unresolved `[defaults]` fallback nothing changes.
+  Recorded as `trims.pre_call` and a `pre_call` trim in `counters.model_calls`
+  (CONTRACTS §29, `conformance/mediator_record.json`).
+- A model-free context-stack suite (`context_stack.test.ts`): a scripted
+  write-heavy model against an endpoint with a hard context limit and a
+  request-body validator.
 
 ## [0.6.5] — 2026-11-21
 

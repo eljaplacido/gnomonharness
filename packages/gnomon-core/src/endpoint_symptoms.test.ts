@@ -101,7 +101,7 @@ describe("prefixCacheMiss: a re-prefill by the endpoint's own count, and nothing
 
 describe("CallLedger hands the loop each miss once, and records nothing new", () => {
   const ledger = () =>
-    new CallLedger({ estimate: (t) => Math.ceil(t.length / 4), windowOf: () => 65536, target: local, mode: "chars4" });
+    new CallLedger({ estimate: (m) => Math.ceil(m.content.length / 4), windowOf: () => 65536, target: local, mode: "chars4" });
   const m = (...pairs: Array<[string, string]>) => pairs.map(([role, content]) => ({ role, content }));
   const obs = (messages: ReturnType<typeof m>, cached: number | undefined, code = 0) => ({
     target: local,

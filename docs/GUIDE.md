@@ -707,6 +707,29 @@ api_key_env = "OPENCODE_API_KEY"
 max_context_tokens = "auto"   # 1000000 for deepseek-v4.1-flash, from /models
 ```
 
+**What a turn's context is measured by, and when it is trimmed.** One estimate
+decides every trim, masking batch and the per-request record: ~4 characters a
+token over a message's content, its tool-call name and arguments (a `write`
+body costs what it weighs) and, where the endpoint it goes to is sent
+replayed reasoning, that reasoning. Tool schemas are not in it. A turn's
+working context is trimmed at three points: at a leg checkpoint (every
+`max_steps` calls, to 60% of the window); when the provider refuses a request
+as too long (code 13: llama.cpp, vLLM, OpenAI, Anthropic's "prompt is too
+long", Gemini's token count, LiteLLM's `ContextWindowExceededError` and HTTP
+413 all count), to 50%, then one resend; and, only against a window gnomon
+knows, before the request goes out when its estimate exceeds that window
+(`pre_call`, to 60%). A window is known when the endpoint declares
+`max_context_tokens = <n>` or `"auto"` read it from the listing. When
+`max_context_tokens_source` is `default`, the `[defaults]` figure is a guess:
+no pre-call trim happens, and the checkpoint and the overflow retry are the only
+decision points. A trim drops whole units: an assistant message and every
+tool result that answers it, so a request never carries a result without its
+call. The newest request stays where it was, ahead of the work it started, and
+the note that says what was dropped lists each step: a second trim keeps the
+first one's lines. Foreground `bash` output is bounded in memory the same way
+background jobs already were: past twice the output limit a stream keeps its
+start and end, and the rest goes to a file (capped at 64 MB) the result names.
+
 **What each request carried.** The turn record lists every model request in
 `counters.model_calls`: gnomon's estimate of it, the reasoning it replayed,
 the steering it carried (nudge, convergence push, other) and in which role,

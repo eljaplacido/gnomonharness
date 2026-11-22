@@ -182,6 +182,7 @@ import {
   type TokenCalibration,
   type UsageDetail,
 } from "./mediators.js";
+import { estimateTokens, messageTokens, messagesTokens, type MessageTokenOptions } from "./message_tokens.js";
 import { writeTamperRecord, compareWithCheckpoint, writeCheckpoint } from "./record_tamper.js";
 import {
   promptCacheOn,
@@ -663,11 +664,10 @@ export interface BuiltContext {
  * would have to be installed and resolved per machine — exactly the
  * machine-scoped dependency Rule 1 forbids. This is pure, deterministic, and
  * has no dependencies: the same string always yields the same number, so the
- * window slides identically on every machine.
+ * window slides identically on every machine. Defined in message_tokens.ts,
+ * beside `messageTokens`, which is what a context decision should call.
  */
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
-}
+export { estimateTokens, messageTokens, messagesTokens };
 
 /**
  * Whether a turn with this exit code is replayed into the next context.
@@ -1276,6 +1276,18 @@ export function addUsage(
 }
 
 /**
+ * Provider wordings for "the prompt did not fit". llama.cpp, vLLM and OpenAI
+ * (context length, maximum context, exceed_context_size, exceeds the available
+ * context); Anthropic ("prompt is too long", "input length and `max_tokens`
+ * exceed context limit"); Gemini ("input token count ... exceeds the maximum
+ * number of tokens allowed"); LiteLLM (ContextWindowExceededError, "input is
+ * too long"). HTTP 413 is classified by status. An output-limit refusal
+ * ("max_tokens is too large") is not one.
+ */
+const CONTEXT_OVERFLOW =
+  /context length|maximum context|too many tokens|context_length|exceed_context_size|exceeds the available context|prompt is too long|input is too long|exceeds? (?:the )?context (?:limit|window)|context ?window ?exceeded|input token count.{0,40}exceeds|too large for the (?:model|context)/i;
+
+/**
  * Which apparatus failure this is.
  *
  * Both failure sites used to return 10 for everything, so a 400 "no such
@@ -1298,14 +1310,15 @@ export function classifyFailure(opts: {
   message?: string;
 }): number {
   const { status, errName, message = "" } = opts;
-  if (errName === "TimeoutError" || /timed? ?out/i.test(message)) return 11;
+  // The timeout-in-prose test comes AFTER the overflow test: an error body that
+  // mentions a timeout must not hide a real overflow.
+  if (errName === "TimeoutError") return 11;
   // llama.cpp says "request (107910 tokens) exceeds the available context size
   // (98304 tokens)", type exceed_context_size_error. Read as 10 (a bad request),
   // that overflow ended the turn instead of reaching the trim-and-retry below
   // (R1, 2026-11-02, r1-k1-bc-fix-code-vulnerability).
-  if (/context length|maximum context|too many tokens|context_length|exceed_context_size|exceeds the available context/i.test(message)) {
-    return 13;
-  }
+  if (status === 413 || CONTEXT_OVERFLOW.test(message)) return 13;
+  if (/timed? ?out/i.test(message)) return 11;
   if (status === undefined) {
     // A transport error with no HTTP status: refused, DNS, socket hangup.
     return /ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ECONNRESET|EPIPE|fetch failed|socket hang up|network/i
@@ -5391,12 +5404,21 @@ function callSignature(call: ToolCall): string {
  * The instructions and the original request are kept whole — losing the task
  * halfway through a task is the one unrecoverable outcome. The oldest tool
  * traffic gives way, and what was dropped is stated rather than vanishing.
+ *
+ * Sizes are `messageTokens`: content, tool-call arguments and, when `opts` says
+ * the target replays it, reasoning. Eviction is by UNIT, an assistant message
+ * with every tool result that answers it (parallel calls included): a unit is
+ * kept whole or dropped whole, so no request ever carries a tool result without
+ * its call, or a call without its results. Survivors keep their original order,
+ * the pinned request included. A second trim carries the first one's ledger
+ * forward rather than erasing it.
  */
 export function trimWorking(
   working: ChatMessage[],
-  budgetTokens: number
+  budgetTokens: number,
+  opts: MessageTokenOptions = {}
 ): { messages: ChatMessage[]; dropped: number } {
-  const cost = (m: ChatMessage) => estimateTokens(m.content);
+  const cost = (m: ChatMessage) => messageTokens(m, opts);
   const total = working.reduce((n, m) => n + cost(m), 0);
   if (total <= budgetTokens) return { messages: working, dropped: 0 };
 
@@ -5417,57 +5439,134 @@ export function trimWorking(
   // halfway through" outcome this function's own comment calls unrecoverable.
   //
   // Pin the LAST user message too. It is the only message whose loss cannot be
-  // compensated by anything else in the window.
+  // compensated by anything else in the window. It stays where it was: older
+  // exchanges before it are evicted like any other, but never moved behind it.
   const lastUser = working.map((m) => m.role).lastIndexOf("user");
   const pinnedIdx = lastUser > firstUser ? lastUser : -1;
   const pinned = pinnedIdx === -1 ? null : working[pinnedIdx]!;
 
-  const tail =
-    firstUser === -1
-      ? []
-      : working.slice(firstUser + 1).filter((_, k) => firstUser + 1 + k !== pinnedIdx);
+  if (firstUser === -1) return { messages: working, dropped: 0 };
+
+  // The tail, in order, as units. An earlier trim's ledger is not a unit: it is
+  // read for what it carries and replaced.
+  interface Unit {
+    msgs: ChatMessage[];
+    cost: number;
+    orphan: boolean;
+  }
+  const units: Unit[] = [];
+  let priorLedger: ParsedLedger | null = null;
+  for (let i = firstUser + 1; i < working.length; i++) {
+    const m = working[i]!;
+    if (i === pinnedIdx) {
+      units.push({ msgs: [m], cost: cost(m), orphan: false });
+      continue;
+    }
+    if (m.role === "system" && isTrimLedger(m)) {
+      priorLedger = parseTrimLedger(m.content);
+      continue;
+    }
+    if (m.role === "assistant") {
+      const msgs = [m];
+      let j = i + 1;
+      while (j < working.length && j !== pinnedIdx && working[j]!.role === "tool") msgs.push(working[j++]!);
+      units.push({ msgs, cost: msgs.reduce((n, x) => n + cost(x), 0), orphan: false });
+      i = j - 1;
+      continue;
+    }
+    // A tool result no assistant message in the tail answers, or anything else.
+    units.push({ msgs: [m], cost: cost(m), orphan: m.role === "tool" });
+  }
 
   const headCost = head.reduce((n, m) => n + cost(m), 0);
-  const kept: ChatMessage[] = [];
-  let used = headCost + (pinned ? cost(pinned) : 0);
+  const pinnedUnit = pinned ? units.find((u) => u.msgs[0] === pinned) : undefined;
+  const evictable = units.filter((u) => u !== pinnedUnit);
+  const keptUnits = new Set<Unit>(pinnedUnit ? [pinnedUnit] : []);
+  let used = headCost + (pinnedUnit?.cost ?? 0);
 
   // Newest first: recent tool results are what the next call reasons from.
-  for (let i = tail.length - 1; i >= 0; i--) {
-    const c = cost(tail[i]);
-    if (used + c > budgetTokens) break;
-    used += c;
-    kept.unshift(tail[i]);
+  for (let i = evictable.length - 1; i >= 0; i--) {
+    const u = evictable[i]!;
+    if (u.orphan) continue;
+    if (used + u.cost > budgetTokens) break;
+    used += u.cost;
+    keptUnits.add(u);
   }
-  // Back in front of the traffic it produced, where it reads as the request.
-  if (pinned) kept.unshift(pinned);
 
-  const dropped = tail.length - (kept.length - (pinned ? 1 : 0));
-  if (dropped === 0) return { messages: working, dropped: 0 };
-
-  // A tool result must not be the first thing after the head: some backends
-  // reject a tool message that answers no visible call.
-  while (kept.length > 0 && kept[0].role === "tool") kept.shift();
-
-  const keptSet = new Set(kept);
-  const ledger = droppedLedger(tail.filter((m) => !keptSet.has(m)));
-
-  return {
-    messages: [
-      ...head,
-      {
-        role: "system",
-        content:
-          `[gnomon context] ${dropped} earlier step(s) in this turn were dropped ` +
-          `to stay inside the context window. Their full output is gone, but ` +
-          `what they were and how they ended is not:\n${ledger}\n` +
-          `Do not repeat a step listed here to learn its outcome again — the ` +
-          `outcome is above. Re-run one only if something it depends on has ` +
-          `changed since.`,
-      },
-      ...kept,
-    ],
-    dropped,
+  const build = (): { messages: ChatMessage[]; dropped: number } | null => {
+    const droppedMsgs: ChatMessage[] = [];
+    const kept: ChatMessage[] = [];
+    for (const u of units) {
+      if (keptUnits.has(u)) kept.push(...u.msgs);
+      else droppedMsgs.push(...u.msgs);
+    }
+    if (droppedMsgs.length === 0) return null;
+    const steps = droppedMsgs.filter((m) => m.role === "tool").length || droppedMsgs.length;
+    const ledger = droppedLedger(droppedMsgs, 40, priorLedger ?? undefined);
+    const earlier = (priorLedger?.steps ?? 0) + steps;
+    return {
+      messages: [
+        ...head,
+        {
+          role: "system",
+          content:
+            `[gnomon context] ${earlier} earlier step(s) in this turn were dropped ` +
+            `to stay inside the context window. Their full output is gone, but ` +
+            `what they were and how they ended is not:\n${ledger}\n` +
+            `Do not repeat a step listed here to learn its outcome again — the ` +
+            `outcome is above. Re-run one only if something it depends on has ` +
+            `changed since.`,
+        },
+        ...kept,
+      ],
+      dropped: droppedMsgs.length,
+    };
   };
+
+  let out = build();
+  if (!out) return { messages: working, dropped: 0 };
+  // The ledger message costs tokens too: when it tips the result over, the
+  // oldest survivor gives way (never the head or the pinned request).
+  const oldestFirst = evictable.filter((u) => keptUnits.has(u));
+  while (oldestFirst.length > 0 && out && out.messages.reduce((n, m) => n + cost(m), 0) > budgetTokens) {
+    keptUnits.delete(oldestFirst.shift()!);
+    out = build();
+  }
+  return out ?? { messages: working, dropped: 0 };
+}
+
+/** The ledger message a trim inserts, as opposed to any other `[gnomon context]` notice. */
+function isTrimLedger(m: ChatMessage): boolean {
+  return m.role === "system" && m.content.startsWith("[gnomon context]") && m.content.includes("earlier step(s) in this turn were dropped");
+}
+
+/** What an earlier trim's ledger said: how many steps, and its lines. */
+export interface ParsedLedger {
+  steps: number;
+  /** Lines before the repeat-collapsing, oldest first */
+  entries: { text: string; n: number }[];
+  /** Lines the earlier trim itself cut for length */
+  cut: number;
+}
+
+function parseTrimLedger(content: string): ParsedLedger {
+  const steps = Number(/^\[gnomon context\] (\d+) earlier step/.exec(content)?.[1] ?? 0);
+  const start = content.indexOf("is not:\n");
+  const end = content.lastIndexOf("\nDo not repeat a step");
+  const body = start === -1 ? "" : content.slice(start + "is not:\n".length, end === -1 ? undefined : end);
+  const entries: { text: string; n: number }[] = [];
+  let cut = 0;
+  for (const raw of body.split("\n")) {
+    if (!raw.startsWith("- ")) continue;
+    const gone = /^- … (\d+) older line\(s\) not shown$/.exec(raw);
+    if (gone) {
+      cut += Number(gone[1]);
+      continue;
+    }
+    const rep = /^(.*?)(?: ×(\d+))?$/.exec(raw)!;
+    entries.push({ text: rep[1]!, n: Number(rep[2] ?? 1) });
+  }
+  return { steps, entries, cut };
 }
 
 /**
@@ -5478,8 +5577,11 @@ export function trimWorking(
  * session: after two trims it re-ran `pnpm run verify` twelve times, each time
  * because the previous run's exit status had been dropped with its output. The
  * outcome costs one line; the output is what the window cannot hold.
+ *
+ * `prior` is an earlier trim's ledger: its lines come first, so a second trim
+ * does not forget what the first one recorded.
  */
-export function droppedLedger(dropped: ChatMessage[], maxLines = 40): string {
+export function droppedLedger(dropped: ChatMessage[], maxLines = 40, prior?: ParsedLedger): string {
   const calls = new Map<string, { name: string; args: Record<string, unknown> }>();
   for (const m of dropped) {
     if (m.role !== "assistant" || !Array.isArray(m.tool_calls)) continue;
@@ -5496,7 +5598,13 @@ export function droppedLedger(dropped: ChatMessage[], maxLines = 40): string {
       });
     }
   }
-  const lines: string[] = [];
+  const lines: { text: string; n: number }[] = [];
+  const add = (text: string, n = 1) => {
+    const prev = lines[lines.length - 1];
+    if (prev && prev.text === text) prev.n += n;
+    else lines.push({ text, n });
+  };
+  for (const e of prior?.entries ?? []) add(e.text, e.n);
   for (const m of dropped) {
     if (m.role !== "tool") continue;
     const call = m.tool_call_id ? calls.get(m.tool_call_id) : undefined;
@@ -5509,15 +5617,13 @@ export function droppedLedger(dropped: ChatMessage[], maxLines = 40): string {
       name === "bash" || /^(Refused|Error|Could not|Cancelled|Command timed out)/.test(first)
         ? first.slice(0, 100)
         : "ok";
-    const line = `- ${name}${what ? ` ${what}` : ""} → ${how}`;
-    const prev = lines[lines.length - 1];
-    const rep = prev ? /^(.*?)(?: ×(\d+))?$/.exec(prev) : null;
-    if (rep && rep[1] === line) lines[lines.length - 1] = `${line} ×${Number(rep[2] ?? 1) + 1}`;
-    else lines.push(line);
+    add(`- ${name}${what ? ` ${what}` : ""} → ${how}`);
   }
-  if (lines.length === 0) return "- (no tool calls among them)";
-  const cut = lines.length - maxLines;
-  return (cut > 0 ? [`- … ${cut} older line(s) not shown`, ...lines.slice(cut)] : lines).join("\n");
+  if (lines.length === 0 && !prior?.cut) return "- (no tool calls among them)";
+  const rendered = lines.map((l) => (l.n > 1 ? `${l.text} ×${l.n}` : l.text));
+  const cut = rendered.length - maxLines + (prior?.cut ?? 0);
+  const shown = rendered.length > maxLines ? rendered.slice(rendered.length - maxLines) : rendered;
+  return (cut > 0 ? [`- … ${cut} older line(s) not shown`, ...shown] : shown).join("\n");
 }
 
 /** Severity order, so the worst outcome in a turn is the one reported. */
@@ -6547,7 +6653,7 @@ async function agenticTurn(
   const ledger =
     parentLedger ??
     new CallLedger({
-      estimate: estimateTokens,
+      estimate: messageTokens,
       windowOf: (t) => resolveContext(config, t).max_context_tokens,
       target: route.target,
       mode: estimateMode,
@@ -6558,7 +6664,12 @@ async function agenticTurn(
   const observe = ledger.observer({ depth, leg: () => leg });
   if (depth === 0) counters.model_calls = ledger.sent;
   const measured = (): ModelCallsMeasured | undefined => (depth === 0 ? ledger.measured() : undefined);
-  const estOf = (ms: ChatMessage[]): number => ms.reduce((n, m) => n + estimateTokens(m.content), 0);
+  // The estimate every context decision uses (message_tokens.ts): content, tool-call
+  // arguments and, where the target is sent them, replayed reasoning.
+  const tokOptsFor = (t: RouteTarget): MessageTokenOptions => ({
+    reasoning: adaptTarget(state, t).replayReasoning === true,
+  });
+  const estOf = (ms: ChatMessage[], t: RouteTarget = route.target): number => messagesTokens(ms, tokOptsFor(t));
 
   // What the worktree looked like BEFORE this turn. Without it, `tree_delta`
   // reports the whole dirty tree as the turn's doing -- including for a
@@ -7439,7 +7550,7 @@ async function agenticTurn(
     if (mask) {
       const next = escalation ? active : onFallback && route.fallback ? route.fallback : route.target;
       const window = resolveContext(config, next).max_context_tokens;
-      const batch = maskObservations(working, observations, mask, window, lastChangeSeq);
+      const batch = maskObservations(working, observations, mask, window, lastChangeSeq, tokOptsFor(next));
       if (batch) {
         const m = counters.masking!;
         m.batches++;
@@ -7464,6 +7575,47 @@ async function agenticTurn(
           window,
           first_index: batch.first_index,
         });
+      }
+    }
+
+    // Before the request goes out: when the estimate of what is about to be sent
+    // exceeds the window, trim first rather than wait for the provider to refuse
+    // it (and a request, a retry and a trim later, send it again). Only against
+    // a window that is KNOWN: declared, or read from the endpoint by "auto".
+    // `max_context_tokens_source = "default"` is a guess, often a local-sized
+    // 65536 under a model with hundreds of thousands, and trimming a hosted run
+    // harder on a guess is exactly what the per-endpoint window exists to stop;
+    // there the checkpoint and the overflow retry stay the only decision points.
+    {
+      const next = escalation ? active : onFallback && route.fallback ? route.fallback : route.target;
+      if (next.contextTokens && next.contextSource !== undefined && next.contextSource !== "default") {
+        const window = resolveContext(config, next).max_context_tokens;
+        const ratio = ledger.ratioFor(next) ?? 1;
+        const est = estOf(working, next);
+        if (est * ratio > window) {
+          const { budget, ratio: used } = ledger.trimBudget(legBudget(window), next);
+          const trimmed = trimWorking(working, budget, tokOptsFor(next));
+          if (trimmed.dropped > 0) {
+            working.length = 0;
+            working.push(...trimmed.messages);
+            ledger.trimmed(working, {
+              why: "pre_call",
+              dropped: trimmed.dropped,
+              before: est,
+              after: estOf(working, next),
+              budget,
+              ...(used !== undefined ? { ratio: used } : {}),
+            });
+            say(
+              paint(
+                deps.ui,
+                "gray",
+                `  [context] the next request (~${est} tok) was over the ${window}-token window — ` +
+                  `dropped ${trimmed.dropped} older message(s) before sending it`
+              )
+            );
+          }
+        }
       }
     }
 
@@ -7932,16 +8084,16 @@ async function agenticTurn(
         overflowBudget(resolveContext(config, usedTarget).max_context_tokens),
         usedTarget
       );
-      const trimmed = trimWorking(working, budget);
+      const trimmed = trimWorking(working, budget, tokOptsFor(usedTarget));
       if (trimmed.dropped > 0) {
-        const estBefore = estOf(working);
+        const estBefore = estOf(working, usedTarget);
         working.length = 0;
         working.push(...trimmed.messages);
         ledger.trimmed(working, {
           why: "overflow",
           dropped: trimmed.dropped,
           before: estBefore,
-          after: estOf(working),
+          after: estOf(working, usedTarget),
           budget,
           ...(ratio !== undefined ? { ratio } : {}),
         });
@@ -9029,16 +9181,16 @@ async function agenticTurn(
         usedTarget
       );
       const before = working.length;
-      const trimmed = trimWorking(working, budget);
+      const trimmed = trimWorking(working, budget, tokOptsFor(usedTarget));
       if (trimmed.dropped > 0) {
-        const estBefore = estOf(working);
+        const estBefore = estOf(working, usedTarget);
         working.length = 0;
         working.push(...trimmed.messages);
         ledger.trimmed(working, {
           why: "leg",
           dropped: trimmed.dropped,
           before: estBefore,
-          after: estOf(working),
+          after: estOf(working, usedTarget),
           budget,
           ...(ratio !== undefined ? { ratio } : {}),
         });
@@ -10019,7 +10171,7 @@ export function contextFields(counters: TurnCounters | undefined): Record<string
     context_window: mc.window,
     context_budget: mc.budget,
     context_estimate: mc.estimate,
-    context_trims: mc.trims.leg + mc.trims.overflow,
+    context_trims: mc.trims.leg + mc.trims.overflow + (mc.trims.pre_call ?? 0),
     context_trimmed: mc.trims.dropped,
   };
 }
