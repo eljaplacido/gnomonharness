@@ -108,6 +108,18 @@
   temporary worktree it makes for a head that is not checked out. All opt-in:
   with none declared the check runs as before. CONTRACTS §53,
   `conformance/verify_contract.json`.
+### Added
+
+- **Skill visibility and attribution** in the live trace, the audit trail and
+  `/skills`. The `◆ skills` row carries each skill's estimated context cost and
+  the total, and `none matched · N available` at `/cot work|full`; reasoning
+  that names a loaded skill ends in `·uses <skill>`; the `skill` tool's
+  proposals get a `◆ skill  propose: name` row; a turn with skill activity ends
+  in `◆ skills used: ...` (a delegated turn's rides on its `↲` line). New audit
+  kind `skill_use` and `counters.skills` (CONTRACTS §54, `conformance/skill_use.json`).
+  `/skills` shows firings, reads, citations, cost and the latest trial verdict;
+  `gnomon skill mine` adds `fires_never_cited` and `cited_often`. All derived
+  from what the loop sees: no new prompt text and no model-reported outcome.
 
 ## [0.6.5] — 2026-11-21
 

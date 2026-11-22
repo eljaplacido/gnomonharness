@@ -46,7 +46,7 @@ export const PROTECTS_DETECTED = "@detected";
 /**
  * What `@detected` names, besides the files the declared command itself runs
  * (`bash scripts/verify.sh`, `./verify.sh`, `sh run_tests.sh`): the config of
- * the test runners gnomon knows. A published list (CONTRACTS section 52,
+ * the test runners gnomon knows. A published list (CONTRACTS section 53,
  * conformance/verify_contract.json).
  */
 export const PROTECTS_DEFAULTS = [

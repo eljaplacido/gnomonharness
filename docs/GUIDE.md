@@ -1068,7 +1068,7 @@ nothing; `gnomon --help` prints all of it.
 | `gnomon audit [show \| verify]` | Lists trails; checks every chain, seal and signature anchor. `verify` exits 1 on a break or when there is nothing to verify. | Review, release gates |
 | `gnomon dashboard [--port N] [--no-open] [--dir P]` | A command center in the browser on 127.0.0.1: projects, sessions as a timeline, refusals by rule, audit verification, contracts, token measurements (alias `ui`); setup, check, trust and endpoint test as buttons that run those same commands, each change confirmed first. | Reviewing what happened without reading JSONL; first-run setup without a terminal wizard |
 | `gnomon sessions` | Saved interactive sessions, newest last | Find one to resume |
-| `gnomon skill [list \| accept ID \| reject ID]` | Active skills and the proposals the agent made | Reviewing what it learned |
+| `gnomon skill [list \| accept ID \| reject ID \| mine]` | Active skills and the proposals the agent made; `mine` also reports skills that fire but are never cited, skills worth trialling, and context cost per firing | Reviewing what it learned |
 | `gnomon loop [list \| status \| dry-run N \| run N \| install N \| uninstall N \| reset N \| kill]` | Cron-scheduled guard/act loops declared in `.gnomon/loops/` (alias `loops`) | Unattended supervision |
 | `gnomon surface [hash \| manifest \| paths]` | The surface hash, the manifest, the hashed paths | Pinning, drift, bug reports |
 | `gnomon enumerations` | The published legal values (alias `enums`) | Contract checks |
@@ -1107,7 +1107,24 @@ Press **Tab** after `/` to list everything. These matter most:
 | `/session [id]` · `/new` | Switch sessions · start a fresh one (the old one stays resumable) |
 | `/context` · `/todo` · `/manifest` | The window · the agent's checklist · the surface hash and what it covers |
 | `/cot MODE` · `/think MODE` · `/expand` | How much of the live trace and reasoning to show · list the steps in the last folded run |
+| `/skills` | Active skills: times fired, read and cited this session, estimated tokens per firing, and from the audit trail total firings, cited rate, last used and the latest trial verdict; pending proposals |
 | `/quit` | Leave. See the note on sealing in [section 9](#9-troubleshooting). |
+
+**Skills in the live trace.** `◆ skills  name ("word") ~420 tok  · ~420 tok`
+lists the skills a turn loaded, the word that fired each and what each costs the
+prompt (an estimate); at `/cot work` and `full`, `◆ skills  none matched · N
+available` says skills exist and none fired. `◆ skill  name` is a skill file the
+model opened, `◆ skill  propose: name` one it proposed. A reasoning line that
+names a loaded skill ends in `·uses name` (whole-word match on the id or name;
+names under four characters and generic words such as `testing` never match).
+At the end of a turn with any skill activity, `◆ skills used: name (loaded ~420
+tok, read 1×, cited) · proposed: x`; a skill that fired and was never named has
+no `cited`. Each such turn writes a `skill_use` audit record and a
+`counters.skills` object. Nothing is asked of the model: the record is derived,
+so a skill the model ignores simply shows as loaded and uncited. `gnomon skill
+mine` turns those records into signals: a skill loaded five or more times and
+never cited (tighten its `match`, or prune it), one cited in at least half its
+firings (a candidate for `gnomon skill trial`), and its context cost per firing.
 
 **Esc** cancels the turn in progress. Anything you type during a turn is queued.
 

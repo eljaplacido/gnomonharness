@@ -39,7 +39,7 @@ export type ExitMap = Record<number, ExitMapVerdict>;
 
 /**
  * Presets: `[verify] contract = "<name>"`. A published enumeration
- * (CONTRACTS.md section 52, conformance/verify_contract.json).
+ * (CONTRACTS.md section 53, conformance/verify_contract.json).
  *
  *   septacore  0 passed, 1 failed, 2 unrunnable, 3 regressed
  *   pytest     0 passed, 1 failed, 2 / 4 / 5 unrunnable (collection or usage

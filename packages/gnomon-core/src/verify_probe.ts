@@ -40,7 +40,7 @@ export const VERIFY_PROBE_SCHEMA = "gnomon.doctor_verify/1";
 /** `gnomon doctor verify` exits: 0 ran and held up, 1 something to look at, 10 could not run. */
 export const VERIFY_PROBE_EXIT = { clear: 0, attention: 1, couldNotRun: 10 } as const;
 
-/** What a finding is about. A published enumeration (CONTRACTS section 52). */
+/** What a finding is about. A published enumeration (CONTRACTS section 53). */
 export const VERIFY_PROBE_KINDS = ["not_declared", "unrunnable", "no_tests", "ambiguous_exit", "red_baseline", "dirty_tree", "setup_not_run"] as const;
 export type VerifyProbeKind = (typeof VERIFY_PROBE_KINDS)[number];
 

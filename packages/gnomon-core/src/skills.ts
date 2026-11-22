@@ -242,6 +242,11 @@ export function withWorkingContext(systemPrompt: string): string {
   return `${systemPrompt}\n\n${WORKING_CONTEXT}`;
 }
 
+/** One skill as it enters the system prompt; its length is the context it costs. */
+export function skillBlock(s: Skill): string {
+  return `### ${s.name}\n${s.description ? `${s.description}\n\n` : ""}${s.body}`;
+}
+
 export function applySkills(
   systemPrompt: string,
   skills: Skill[],
@@ -262,9 +267,7 @@ export function applySkills(
 ): string {
   let out = systemPrompt;
   if (skills.length > 0) {
-    const blocks = skills.map(
-      (s) => `### ${s.name}\n${s.description ? `${s.description}\n\n` : ""}${s.body}`
-    );
+    const blocks = skills.map(skillBlock);
     out +=
       `\n\n## Learned skills for this repository\n\n` +
       `These are notes accepted into .gnomon/skills/. They inform how you work ` +
