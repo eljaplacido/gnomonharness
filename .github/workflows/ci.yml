@@ -121,6 +121,16 @@ jobs:
         timeout-minutes: 15
         run: node scripts/property_suites.mjs
 
+      # THE MODEL-DRIVEN JOURNEY on this OS (scripts/e2e_smoke.mjs): init, eval
+      # --against on the scaffolded trial spec, improve (dry and --run), check,
+      # against a scripted loopback model. 0.6.6 and 0.6.7 each nearly shipped a
+      # Windows-only defect here (trial setup/check ran under cmd.exe, so every
+      # cell was invalid): no model-free unit test could see it. It fails on
+      # that behaviour (verified by making the trial shell fail on Linux).
+      - name: End to end with a scripted model (init, eval, improve, check)
+        timeout-minutes: 15
+        run: node scripts/e2e_smoke.mjs
+
       - name: The launcher starts from a path with a space
         shell: pwsh
         run: |
@@ -274,6 +284,89 @@ jobs:
         # A list of names that must be kept in step with package.json is a list
         # that will go stale. `-r` cannot.
         run: pnpm -r run test
+
+  # The same model-driven journey as on Windows, on Linux, with the native
+  # binaries built (eval and improve spawn them).
+  e2e-smoke:
+    name: End to end with a scripted model (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-10-16
+        with:
+          toolchain: stable
+
+      - name: Build native binaries
+        run: cargo build --workspace --bins
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (type-check)
+        run: pnpm run build
+
+      - name: End to end with a scripted model (init, eval, improve, check)
+        timeout-minutes: 15
+        run: node scripts/e2e_smoke.mjs
+
+  # THE PERF GATE (docs/RELEASING.md, "Release gates"). Head against the
+  # previous npm release, interleaved on this one runner, model-free: fails when
+  # head's paired median is worse by more than 15% AND 30 ms on wall or CPU.
+  # 0.6.6-rc's blocking window lookup (+0.3 to +10 s) was caught only by a manual
+  # overhead check; this is that check, run on every change. Linux only. Runner
+  # noise can still produce a one-off red: rerun once, and a second red is real.
+  perf-gate:
+    name: Perf gate (head vs previous release, ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm -r run build
+
+      # Both arms are installed the way a user gets them (compiled dist/ run by
+      # bin/gnomon.mjs, no checkout, no native binaries), so the comparison is
+      # installed against installed, not a checkout against a package.
+      - name: Install head (packed) and the previous release (npm)
+        run: |
+          set -euo pipefail
+          T="$RUNNER_TEMP/perf"
+          mkdir -p "$T/tgz" "$T/head" "$T/prev"
+          for p in gnomon-natives gnomon-core gnomon-tui gnomon-cli; do
+            ( cd "packages/$p" && pnpm pack --pack-destination "$T/tgz" >/dev/null )
+          done
+          npm install -g --prefix "$T/head" "$T"/tgz/*.tgz >/dev/null
+          npm install -g --prefix "$T/prev" gnomon-harness@latest >/dev/null
+          echo "head:     $("$T/head/bin/gnomon" --version)"
+          echo "previous: $("$T/prev/bin/gnomon" --version)"
+          echo "PERF_DIR=$T" >> "$GITHUB_ENV"
+
+      - name: Interleaved comparison (n=15)
+        timeout-minutes: 30
+        run: node scripts/perf_gate.mjs --head "$PERF_DIR/head/bin/gnomon" --prev "$PERF_DIR/prev/bin/gnomon" --n 15
 
   ci-script:
     name: Full CI pipeline (.gnomon/ci.sh)
