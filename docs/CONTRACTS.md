@@ -610,7 +610,7 @@ refuses: a deny that matches every command, `webfetch` under
 bash with no rule, MCP tools offered to a role with no tools list). The linter
 uses the matchers the loop and `gnomon guard` use (`bashPolicy`,
 `globToRegExp`, `new RegExp`), never its own. Findings are warnings: the exit
-is unchanged. `--strict-policy` makes any finding exit **2** (a check failed);
+is unchanged. The lint reads the surface in the working directory (`--dir`), not the `--base` revision's. `--strict-policy` makes any finding exit **2** (a check failed);
 it never turns a 2 into anything else. `gnomon check --policy-lint` lints
 alone, with no `--base`, and prints `policy_lint`'s document (exit 0, or 2
 under `--strict-policy`). Fixture: `conformance/policy_lint.json`.

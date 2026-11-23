@@ -41,11 +41,14 @@
   surface hash, role model/endpoint/provider, resolved window and its source,
   edit format, tool-set hash, sandbox and exec mode, approval gate, verify gate,
   context policy, budgets and attempts, mapped to the survey's Table 3 with the
-  unfillable rows marked (GUIDE, CONTRACTS section 47). No secret, no path.
+  unfillable rows marked (GUIDE, CONTRACTS section 47). No secret, no path. `harness_signature`
+  is optional in `gnomon.eval/3` (older reports omit it).
 - **Policy lint:** `gnomon check` (and `--json`, as `policy_lint`) reports
   contradictory, shadowed, never-matching, unreachable, always-denied and
   uncovered rules, using the real matchers; `gnomon check --policy-lint` lints
-  alone. Warnings; `--strict-policy` exits 2. Sessions are byte-identical.
+  alone. Warnings; `--strict-policy` exits 2. Sessions are byte-identical. The `gnomon check`
+  verdict JSON gains `policy_lint` and a `warnings` line when findings exist (exit unchanged); the
+  lint reads the working-directory surface, not the `--base` revision's.
 - **Failure attribution (CONTRACTS section 60.1).** A failed turn or cell is given one primary
   cause and its harness layer (ETCLOVG), deterministically, from signals gnomon already records
   (stop reason, exit code, tool log, counters, verify, trail records); no model call. `gnomon eval`

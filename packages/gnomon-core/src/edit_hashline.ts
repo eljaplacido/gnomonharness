@@ -14,6 +14,12 @@
  *  - hash(line) = FNV-1a 32 over the UTF-8 bytes of the text (no "\r"),
  *    xor-folded to 8 bits, written as two lowercase hex digits. A tag is
  *    `${lineNumber}:${hash}`. Two identical lines differ by their number.
+ *  - Line endings: a new line takes the ending of the line it replaces, or of its
+ *    neighbour (the anchor line for insert_before and insert_after). A file with no
+ *    final newline has no ending on its last line, "\r" included.
+ *  - The hash is 8 bits, so about 1 in 256 single-line changes leaves a line's hash
+ *    unchanged. An anchor is accepted only when BOTH the line number and the hash
+ *    match: a guard against drift, not a checksum.
  *  - Every anchor in one call is checked against the file as it stands, before
  *    anything is applied. One stale anchor refuses the whole call.
  *
@@ -54,7 +60,7 @@ export interface AnchorFile {
   lines: AnchorLine[];
   /** The file ends with a newline. */
   finalNewline: boolean;
-  /** Any line ends in "\r\n": new lines are written that way. */
+  /** Any line ends in "\r\n". Informational: new lines take their ending from a neighbour, not from this. */
   crlf: boolean;
 }
 
@@ -72,7 +78,9 @@ export function splitAnchorLines(raw: string): AnchorFile {
 
 export function joinAnchorLines(f: AnchorFile): string {
   if (f.lines.length === 0) return "";
-  return f.lines.map((l) => l.text + (l.cr ? "\r" : "")).join("\n") + (f.finalNewline ? "\n" : "");
+  const last = f.lines.length - 1;
+  // With no final newline the last line has no ending at all: never a "\r".
+  return f.lines.map((l, i) => l.text + (l.cr && (i < last || f.finalNewline) ? "\r" : "")).join("\n") + (f.finalNewline ? "\n" : "");
 }
 
 /** The tagged lines `read` shows: `12:a3|text`. */
@@ -98,6 +106,8 @@ interface Splice {
   del: number;
   add: string[];
   order: number;
+  /** insert_after: the neighbour is the line before the insertion point. */
+  after?: boolean;
 }
 
 const brief = (t: string) => (t.length > 80 ? `${t.slice(0, 80)}…` : t);
@@ -161,7 +171,7 @@ export function applyHashlineEdits(raw: string, edits: unknown, path: string): H
     }
     if (op === "replace" || op === "delete") splices.push({ at: start.line - 1, del: last - start.line + 1, add, order: i });
     else if (op === "insert_before") splices.push({ at: start.line - 1, del: 0, add, order: i });
-    else splices.push({ at: start.line, del: 0, add, order: i });
+    else splices.push({ at: start.line, del: 0, add, order: i, after: true });
   }
 
   // Edits are all against the file as read, so two may not touch the same line.
@@ -183,14 +193,24 @@ export function applyHashlineEdits(raw: string, edits: unknown, path: string): H
     }
   }
 
-  const out = file.lines.slice();
-  const newLine = (t: string): AnchorLine => ({ text: t, cr: file.crlf });
+  // The ending of each line as the file has it. The last line of a file with no
+  // final newline has none, so it lends its previous line's: when something is
+  // added after it, it is no longer last and needs one.
+  const eol = file.lines.map((l, i) => (i === n - 1 && !file.finalNewline ? (n > 1 ? file.lines[n - 2].cr : false) : l.cr));
+  const out = file.lines.map((l, i) => ({ ...l, cr: eol[i] }));
+  // New lines take the ending of the line they replace, or of their neighbour
+  // (the anchor line for insert_before and insert_after). Never a whole-file flag:
+  // a mostly-LF file with one CRLF line stays that way.
+  const crOf = (s: Splice): boolean => (s.after ? eol[s.at - 1] : eol[s.at]);
   // Bottom to top, so earlier indexes stay valid. At one point a removal goes first,
   // so an insert there is not removed with it; same-point inserts keep call order.
   const ordered = splices
     .slice()
     .sort((p, q) => q.at - p.at || (p.del > 0 ? 0 : 1) - (q.del > 0 ? 0 : 1) || q.order - p.order);
-  for (const s of ordered) out.splice(s.at, s.del, ...s.add.map(newLine));
+  for (const s of ordered) {
+    const cr = crOf(s);
+    out.splice(s.at, s.del, ...s.add.map((t): AnchorLine => ({ text: t, cr })));
+  }
   // A new last line in a file with no final newline carries no "\r" of its own.
   return { ok: true, after: joinAnchorLines({ lines: out, finalNewline: file.finalNewline, crlf: file.crlf }) };
 }

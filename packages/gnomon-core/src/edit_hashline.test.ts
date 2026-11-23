@@ -17,6 +17,7 @@ import {
   resolveEditMode,
 } from "./edit_hashline.js";
 import { auditSurface, loadConfig } from "./config.js";
+import { redact } from "./audit.js";
 import { buildToolSet, executeTool, TOOL_FAILED, TOOL_OK, type ToolContext } from "./tools.js";
 
 const REPO = join(__dirname, "../../..");
@@ -223,5 +224,42 @@ describe("the surface", () => {
       );
     expect(audit("hashline")).toBeUndefined();
     expect(audit("ast")?.problem).toContain("NOT implemented");
+  });
+});
+
+describe("governance sees a hashline edit as it sees str_replace", () => {
+  const SECRET = "AKIAABCDEFGHIJKLMNOP";
+  const pattern = "AKIA[0-9A-Z]{16}";
+
+  it("the approval preview shows the new text of a hashline edit, as it does for str_replace", async () => {
+    writeFileSync(join(root, "c.txt"), "alpha\nbeta\n");
+    const seen: string[][] = [];
+    const approve = async (r: { preview?: string[] }) => (seen.push(r.preview ?? []), false);
+    await executeTool("edit", { path: "c.txt", old_text: "beta", new_text: `key=${SECRET}` }, ctx({ editVariant: undefined, gate: "always", approve }), offered);
+    await executeTool("edit", { path: "c.txt", edits: [{ op: "replace", anchor: anchorOf(2, "beta"), text: `key=${SECRET}` }] }, ctx({ gate: "always", approve }), offered);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toEqual(seen[0]);
+    expect(seen[1].join("\n")).toContain(SECRET);
+  });
+
+  it("a path outside the sandbox is refused for a hashline edit exactly as for str_replace", async () => {
+    const out = join(tmpdir(), `gnomon-hl-out-${process.pid}.txt`);
+    writeFileSync(out, "A=1\n");
+    try {
+      const a = await executeTool("edit", { path: out, old_text: "A=1", new_text: "A=2" }, ctx({ editVariant: undefined }), offered);
+      const b = await executeTool("edit", { path: out, edits: [{ op: "replace", anchor: anchorOf(1, "A=1"), text: "A=2" }] }, ctx(), offered);
+      expect(a.code).not.toBe(TOOL_OK);
+      expect(b.code).toBe(a.code);
+      expect(readFileSync(out, "utf-8")).toBe("A=1\n");
+    } finally {
+      rmSync(out, { force: true });
+    }
+  });
+
+  it("audit redaction catches a secret inside edits[] the way it does inside new_text", () => {
+    const hash = JSON.stringify({ path: "c.txt", edits: [{ op: "insert_after", anchor: "1:00", text: `k=${SECRET}` }] });
+    const plain = JSON.stringify({ path: "c.txt", old_text: "x", new_text: `k=${SECRET}` });
+    expect(redact(hash, [pattern])).not.toContain(SECRET);
+    expect(redact(plain, [pattern])).not.toContain(SECRET);
   });
 });

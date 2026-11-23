@@ -1363,7 +1363,8 @@ and the policy then always refuses (`always_denied`), and a category nothing
 covers (`uncovered`: no `[governance]`, MCP tools offered to a role with no
 `tools` list, bash with no rule). Findings are warnings and the exit is
 unchanged; `--strict-policy` makes any finding exit 2. `--json` carries them as
-`policy_lint`.
+`policy_lint`, and the verdict gains a warnings line when findings exist. The lint
+reads the surface in the working directory, not the `--base` revision's.
 
 ---
 

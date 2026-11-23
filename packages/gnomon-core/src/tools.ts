@@ -8140,9 +8140,12 @@ async function editTool(
   // copies what it was shown -- so every multi-line edit on such a checkout
   // came back "not found". Match in the file's own line ending, and write the
   // replacement in it too, so the edit does not leave the file mixed.
+  // Under hashline there is no old_text to match, so none of this applies.
+  const hashline = ctx.editVariant === "hashline";
   let oldText = oldTextRaw;
   let newText = newTextRaw;
   if (
+    !hashline &&
     before.includes("\r\n") &&
     !oldText.includes("\r") &&
     oldText.includes("\n") &&
@@ -8153,7 +8156,6 @@ async function editTool(
   }
   // `edit_format = "hashline"`: the edits name anchors, and nothing below
   // matches text (edit_hashline.ts). A stale anchor refuses the whole call.
-  const hashline = ctx.editVariant === "hashline";
   let anchored: string | undefined;
   if (hashline) {
     const r = applyHashlineEdits(before, args.edits, path);
