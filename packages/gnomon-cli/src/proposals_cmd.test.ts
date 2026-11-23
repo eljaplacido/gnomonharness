@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig, proposeHarness, proposeMemory, listProposals, readProposal, recomputeManifest, sha256Hex, PROPOSALS_DIR } from "gnomon-core";
+import { loadConfig, writeProposal, TRIAL_JUDGE_WARNING, proposeHarness, proposeMemory, listProposals, readProposal, recomputeManifest, sha256Hex, PROPOSALS_DIR } from "gnomon-core";
 import { setDecisionContextProbe } from "../../gnomon-core/src/agent_context.js";
 import { initSurface } from "./init.js";
 import { runProposals, runMemory, PROPOSALS_CLI_SCHEMA, MEMORY_CLI_SCHEMA } from "./proposals_cmd.js";
@@ -234,6 +234,25 @@ describe("the dashboard: proposal.accept and proposal.reject through a real serv
     expect((await post("proposal.accept", { id: "20260101T000000000Z-abcd", argv: ["--dir", "/"] })).status).toBe(400);
     expect((await post("proposal.accept", { id: "20260101T000000000Z-abcd", note: "x" })).status).toBe(400);
     expect((await post("proposal.accept", { id: "20260101T000000000Z-abcd" })).status).toBe(404);
+  });
+
+  it("accepting a trial spec says it changes what judges future runs, in the dashboard and in the CLI", async () => {
+    const config = loadConfig(root);
+    const spec = '[trial]\nattempts = 1\n\n[[task]]\nid = "x"\nprompt = "p"\ncheck = "true"\n';
+    const tp = writeProposal(config, { kind: "harness", title: "Regression trial", source: "mine", diff: [{ path: "trials/incident-verify-abcdef12.toml", after: spec }] });
+    try {
+      const ask = await post("proposal.accept", { id: tp.id });
+      expect(ask.status).toBe(428);
+      expect(ask.json.confirm.effect).toContain(TRIAL_JUDGE_WARNING);
+      expect(TRIAL_JUDGE_WARNING).toMatch(/changes what judges future runs/);
+      expect(runP(root, "show", [tp.id]).out).toContain(TRIAL_JUDGE_WARNING);
+      // A proposal that touches no trial carries no such line.
+      const [mem] = listProposals(config, { status: "pending", kind: "memory" }).proposals;
+      const plain = await post("proposal.accept", { id: mem!.id });
+      expect(plain.json.confirm.effect).not.toContain(TRIAL_JUDGE_WARNING);
+    } finally {
+      rmSync(join(root, PROPOSALS_DIR, `${tp.id}.json`), { force: true });
+    }
   });
 
   it("accept: the first request writes nothing and states the diff and the paths; the nonce is bound to them; only the confirmation writes", async () => {

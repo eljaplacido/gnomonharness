@@ -32,7 +32,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { harnessBuild, loadTrust, trustPath as defaultTrustPath, getItem as getInboxItem, INBOX_DIR } from "gnomon-core";
-import { acceptProposal, rejectProposal, readProposal, renderDiff, proposalPaths, sha256Hex, SkillRefusal } from "gnomon-core";
+import { touchesTrials, TRIAL_JUDGE_WARNING, acceptProposal, rejectProposal, readProposal, renderDiff, proposalPaths, sha256Hex, SkillRefusal } from "gnomon-core";
 import {
   contractsView,
   ensureProject,
@@ -512,6 +512,7 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
           accept
             ? [
                 `Writes ${shownPaths.join(", ")} exactly as the diff below shows, and nothing else. The surface hash ${hash ? hash.slice(0, 12) : ""} changes, and the change applies from the next session.`,
+                ...(touchesTrials(prop) ? [TRIAL_JUDGE_WARNING] : []),
                 "Refused, and nothing written, if any of those files has changed since this was proposed, if an agent session or no person is present, or if gnomon's records were tampered with.",
                 "Recorded as a proposal_decision record (a skill: skill_accept) with who decided, the paths and the surface hash before and after.",
               ]

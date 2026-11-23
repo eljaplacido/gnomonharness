@@ -238,6 +238,10 @@ export const INCIDENT_TRIAL_PATH = /^trials\/incident-(?:guard-hold|tamper|verif
 /** Whether a proposal touches a trial spec: the judge. */
 export const touchesTrials = (p: Pick<Proposal, "diff">): boolean => p.diff.some((d) => d.path.startsWith("trials/"));
 
+/** Said wherever a person is asked to accept, or has accepted, a proposal that touches `trials/`. */
+export const TRIAL_JUDGE_WARNING =
+  "This changes what judges future runs: a trial spec decides whether a change counts as an improvement. Read the task and its check before accepting.";
+
 function shapeProblem(p: unknown): string | null {
   if (typeof p !== "string" || !p) return "a path is required";
   if (p.length > PROPOSAL_LIMITS.path || /[\u0000-\u001f\u007f\\]/.test(p)) return `${JSON.stringify(p.slice(0, 40))} is not a path`;
