@@ -134,6 +134,42 @@ export function observationPlaceholder(m: ObservationMeta): string {
   );
 }
 
+/**
+ * Cache-aware masking floors. A batch rewrites the prompt from its first
+ * masked message to the end, so what a prompt cache loses per batch is the
+ * context after the first newly masked result: about (batch + keep_last)
+ * results. Fewer, larger batches lose less per result masked, so the trigger
+ * is at least this share of the window AND a batch needs at least this many
+ * eligible results. Measured on the CTXC apparatus (50 steps, 32k window): a
+ * lower fill makes it fire more often and the fresh tokens rise (docs/GUIDE.md).
+ */
+export const CACHE_AWARE_AT_FILL = 0.8;
+export const CACHE_AWARE_BATCH = 10;
+
+/**
+ * A tool result's lines with the bash preamble taken out: the `exit: N` line
+ * is returned apart, and the bare `stdout:` / `stderr:` headers are dropped, so
+ * "the first line" of a command's output is its own first line.
+ */
+export function resultLines(content: string): { exit?: string; lines: string[] } {
+  const all = content.split("\n").map((l) => l.trim()).filter((l) => l !== "");
+  let exit: string | undefined;
+  const lines: string[] = [];
+  for (const l of all) {
+    const m = /^exit: (-?\d+)$/.exec(l);
+    if (m && exit === undefined && lines.length === 0) exit = m[1];
+    else if (l === "stdout:" || l === "stderr:") continue;
+    else lines.push(l);
+  }
+  return { ...(exit !== undefined ? { exit } : {}), lines };
+}
+
+/** The first line of a result, for a cache-aware stub: clipped, one line, past the bash preamble. */
+export function firstLine(content: string, max = 80): string {
+  const l = resultLines(content).lines[0] ?? "";
+  return l.length > max ? `${l.slice(0, max)}…` : l;
+}
+
 /** One masking batch: what it replaced and what that saved. */
 export interface MaskBatch {
   /** Tool results replaced by placeholders in this batch. */
@@ -175,7 +211,10 @@ export function maskObservations(
 ): MaskBatch | null {
   // The same estimate as the trims (messageTokens): tool-call arguments count.
   const tokensBefore = messagesTokens(working, tokenOpts);
-  if (tokensBefore < spec.at_fill * windowTokens) return null;
+  const cacheAware = spec.cache_aware === true;
+  const minBatch = cacheAware ? Math.max(spec.batch, CACHE_AWARE_BATCH) : spec.batch;
+  const atFill = cacheAware ? Math.max(spec.at_fill, CACHE_AWARE_AT_FILL) : spec.at_fill;
+  if (tokensBefore < atFill * windowTokens) return null;
 
   const toolAt: number[] = [];
   working.forEach((m, i) => {
@@ -191,12 +230,14 @@ export function maskObservations(
     if (!info) continue;
     if (info.tool === "task") continue;
     if (info.failed && info.seq >= lastChangeSeq) continue;
-    const placeholder = observationPlaceholder(info);
+    const placeholder = cacheAware
+      ? `${observationPlaceholder(info)} First line: ${JSON.stringify(firstLine(m.content))}`
+      : observationPlaceholder(info);
     const saved = estimate(m.content) - estimate(placeholder);
     if (saved <= 0) continue;
     eligible.push({ i, placeholder, saved });
   }
-  if (eligible.length === 0 || eligible.length < spec.batch) return null;
+  if (eligible.length === 0 || eligible.length < minBatch) return null;
 
   let saved = 0;
   for (const e of eligible) {
