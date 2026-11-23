@@ -51,6 +51,7 @@ import {
 import type { SourceEntry } from "./session.js";
 import { AuditTrail, resolveAudit, type AuditRecord } from "./audit.js";
 import { harnessBuild } from "./build.js";
+import { posixShell, NO_POSIX_SHELL } from "./tools.js";
 import { PROPOSED_DIR, SKILLS_DIR, skillContentHash } from "./skills.js";
 import type { TaskRecord } from "./prompt_loop.js";
 import type { TrustOutcome } from "./trust.js";
@@ -350,8 +351,22 @@ export type CellRunner = (
   opts: { role: string; profile?: string }
 ) => Promise<TaskRecord>;
 
+/**
+ * Runs a trial's setup or check. Trial commands are POSIX shell (the scaffolded
+ * default and the drafted incident trials use `test`, `tr`, `grep`, `$(...)`),
+ * so on Windows they run under the same POSIX shell the bash tool uses, never
+ * cmd.exe, where they could not pass. Elsewhere: /bin/sh, as before.
+ */
+export function trialShellPath(): string | null {
+  return process.platform === "win32" ? posixShell() : "/bin/sh";
+}
+
 function sh(command: string, cwd: string, timeoutMs: number): { code: number | null; error?: string } {
-  const r = spawnSync(command, { cwd, shell: true, stdio: "ignore", timeout: timeoutMs, windowsHide: true });
+  const shell = trialShellPath();
+  if (shell === null) return { code: null, error: NO_POSIX_SHELL };
+  const r = process.platform === "win32"
+    ? spawnSync(shell, ["-c", command], { cwd, stdio: "ignore", timeout: timeoutMs, windowsHide: true })
+    : spawnSync(command, { cwd, shell: true, stdio: "ignore", timeout: timeoutMs, windowsHide: true });
   if (r.error) return { code: null, error: r.error.message };
   if (r.signal) return { code: null, error: `killed by ${r.signal}` };
   return { code: r.status };

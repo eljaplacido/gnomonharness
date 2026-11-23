@@ -2163,6 +2163,10 @@ becomes a note for `system.md` (an edit that did not match: read the file again 
 editing). A Context cause becomes the same kind of note, and the proposal's rationale adds a
 suggestion for you about `[context]` in `config.toml`; improve never edits config.
 
+A trial's `setup` and `check` are POSIX shell. On Windows they run under the POSIX shell the bash
+tool uses (Git Bash, or `GNOMON_SHELL`), never `cmd.exe`; with neither installed a cell is an apparatus
+failure that says so, not a failing check.
+
 `gnomon improve --incidents` drafts a trial spec per kind of incident in the trails: a boundary
 that held (a refusal by the sandbox, the network, the surface), a tamper that was caught, a
 declared check that failed and then passed, an overflow that was survived. Each is a proposal for

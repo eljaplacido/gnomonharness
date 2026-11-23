@@ -14,7 +14,7 @@ import { loadConfig, recomputeManifest, type GnomonConfig } from "./config.js";
 import { INCIDENT_KINDS, SAFE_COMMAND, INCIDENT_SCHEMA, MAX_INCIDENT_DRAFTS, draftIncidentTrials, mineIncidents } from "./incident_trials.js";
 import { autoAcceptVerdict } from "./improve_policy.js";
 import { INCIDENT_TRIAL_PATH, ProposalRefusal, acceptProposal, listProposals, pathProblem, readProposal, writeProposal } from "./proposals.js";
-import { loadTrialSpec } from "./skill_trial.js";
+import { loadTrialSpec, trialShellPath } from "./skill_trial.js";
 
 const roots: string[] = [];
 beforeEach(() => {
@@ -285,7 +285,12 @@ describe("a trial spec is the judge: only a person accepts one", () => {
 });
 
 describe("the round trip: each drafted task fails when the behaviour regresses, passes when it holds", () => {
-  const sh = (cmd: string, cwd: string): number => spawnSync(cmd, { cwd, shell: true, stdio: "ignore", timeout: 30_000 }).status ?? -1;
+  // The same shell a trial cell uses (skill_trial.ts trialShellPath): POSIX, Git Bash on Windows.
+  const sh = (cmd: string, cwd: string): number => {
+    const shell = trialShellPath();
+    if (shell === null) return -1;
+    return spawnSync(shell, ["-c", cmd], { cwd, stdio: "ignore", timeout: 30_000 }).status ?? -1;
+  };
   function taskOf(spec: string): { setup?: string; check: string; prompt: string } {
     const doc = spec.split("\n");
     const get = (k: string): string | undefined => {
@@ -295,7 +300,9 @@ describe("the round trip: each drafted task fails when the behaviour regresses, 
     return { setup: get("setup"), check: get("check")!, prompt: get("prompt")! };
   }
 
-  it("guard hold (sandbox): holds while the probe file is absent, fails once something creates it", () => {
+  // The probe path is a POSIX /tmp path inside the trial shell; Node on Windows writes "/tmp/..." to
+  // C:\\tmp, which Git Bash's /tmp is not, so this round trip is checked where both agree.
+  it.skipIf(process.platform === "win32")("guard hold (sandbox): holds while the probe file is absent, fails once something creates it", () => {
     const { config } = project();
     incidentTrails(config);
     const spec = draftIncidentTrials(config).incidents.find((i) => i.key === "sandbox")!.spec!;

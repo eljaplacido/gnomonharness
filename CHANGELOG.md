@@ -26,6 +26,14 @@
 
 ## [Unreleased]
 
+### Fixed — trial commands run under a POSIX shell on Windows
+
+- A trial's `setup` and `check` (the scaffolded `trials/default.toml`, the drafted incident trials, `gnomon eval`
+  cells and `gnomon improve` probes) ran through `cmd.exe` on Windows, where their POSIX commands (`test`, `tr`,
+  `grep`, `$(...)`) could not pass. They now run under the same POSIX shell the bash tool uses (Git Bash, or
+  `GNOMON_SHELL`), and a machine without one gets a clear apparatus error instead of a silent failing check.
+  Linux and macOS are unchanged (`/bin/sh`).
+
 ### Added
 
 - **`edit_format = "hashline"` is implemented (opt-in).** `read` tags each line
