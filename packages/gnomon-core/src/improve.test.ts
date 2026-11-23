@@ -144,6 +144,10 @@ function buildProject(o: ProjectOpts): string {
   put("README.md", "fixture\n");
   put(".gitattributes", ".gnomon/** text eol=lf\n");
   git("init", "-q");
+  // No background git: an auto gc/maintenance detached after a commit can pack and delete
+  // loose objects while cpSync copies the template (ENOENT .git/objects on macOS CI).
+  git("config", "gc.auto", "0");
+  git("config", "maintenance.auto", "false");
   git("add", "-A");
   git("commit", "-q", "-m", "fixture");
   return root;
