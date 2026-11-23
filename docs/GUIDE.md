@@ -2668,8 +2668,12 @@ or `insert_after`, `anchor` is a tag copied from `read`, and `end` makes a
 replace or delete cover a range. The model copies two short tokens instead of
 reproducing the old text. Every anchor in a call is checked against the file as
 it is; one that no longer matches (the file changed since the read, or the tag
-was mistyped) refuses the whole call, writes nothing, and tells the model to
-read again. Edits in one call may not overlap. CRLF files keep their line
+was mistyped) refuses the whole call, writes nothing, and shows the current
+`LINE:HASH|text` anchors for the lines it targeted (3 lines of context, merged,
+at most 60 lines), so a retry needs no full read. A successful edit returns the
+refreshed anchors for the changed regions the same way, and says anchors below a
+change have moved: a model that reused its earlier read's anchors for a second
+edit got stale-anchor refusals in the R69 pilot. Edits in one call may not overlap. CRLF files keep their line
 endings (a new line takes the ending of the line it replaces or sits beside, not
 a whole-file setting) and a missing final newline stays missing, with no stray
 carriage return on the last line. The 2-hex hash is a drift guard, not a
