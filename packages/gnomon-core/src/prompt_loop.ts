@@ -28,6 +28,8 @@ import {
   listProfiles,
   resolveContext,
   resolveMasking,
+  resolveDigest,
+  OLLAMA_NUM_CTX_DEFAULT,
   resolveBootstrap,
   defaultContextWindow,
   resolveVerify,
@@ -267,6 +269,7 @@ import {
 import { recordDegradation, type DegradationSink } from "./degradation.js";
 import {
   maskObservations,
+  resultLines,
   observationMeta,
   bootstrapSnapshot,
   bootstrapBlock,
@@ -2220,7 +2223,7 @@ async function callEndpointOnce(
       // B2: Ollama's native route takes the context it runs the model with here,
       // and truncates silently from the front when it is smaller than the prompt.
       // Only ever set on an Ollama target; see RouteTarget.ollamaCtx.
-      ...(target.ollamaCtx ? { num_ctx: target.ollamaCtx } : {}),
+      ...(ollamaNumCtxOf(target) ? { num_ctx: ollamaNumCtxOf(target) } : {}),
     };
   } else {
     payload.temperature = target.temperature;
@@ -3164,13 +3167,21 @@ export function wireOf(target: RouteTarget): WireRecord {
   };
 }
 
+/** What an Ollama request carries as `options.num_ctx`, or undefined: the endpoint's `num_ctx` (0 = none), else what was resolved. */
+function ollamaNumCtxOf(t: RouteTarget): number | undefined {
+  if (t.ollamaNumCtx === 0) return undefined;
+  return t.ollamaNumCtx ?? t.ollamaCtx;
+}
+
 /**
  * B2: the `num_ctx` an Ollama request carries, bounded by what the model was
  * trained for. A number the surface declared (or a Modelfile's `num_ctx`)
  * goes out as it is, clamped to the trained length when /api/show states it.
- * A window that is only the trained length is NOT sent: that can be hundreds
- * of thousands of tokens of KV cache the user never asked Ollama to allocate.
- * It is said once instead, with the two settings that do carry it.
+ * A window that is only the trained length used to be NOT sent (it can be
+ * hundreds of thousands of tokens of KV cache) and Ollama then ran its own
+ * default and silently truncated. Now the budgeted window capped at
+ * OLLAMA_NUM_CTX_DEFAULT is sent, and gnomon budgets to what it sends;
+ * `[endpoints.<n>] num_ctx` changes the cap and `0` opts out.
  */
 function settleOllamaCtx(
   t: RouteTarget,
@@ -3179,7 +3190,8 @@ function settleOllamaCtx(
   probed: boolean
 ): RouteTarget {
   const where = `${t.endpoint ?? "endpoint"} · ${t.model}`;
-  let want = t.ollamaCtx ?? (res.modelfile ? res.tokens : undefined);
+  const optedOut = t.ollamaNumCtx === 0;
+  let want = optedOut ? undefined : (t.ollamaNumCtx ?? t.ollamaCtx ?? (res.modelfile ? res.tokens : undefined));
   if (want && res.trained && want > res.trained) {
     if (probed) {
       hooks.say(
@@ -3189,16 +3201,33 @@ function settleOllamaCtx(
     }
     want = res.trained;
   }
-  if (!want && res.tokens && res.source === "listing:ollama" && !res.modelfile && probed) {
+  // The window is only the model's trained length: Ollama would run its own
+  // default and drop the start of a longer prompt without an error. Send the
+  // budgeted window capped at OLLAMA_NUM_CTX_DEFAULT, and budget to what is
+  // sent, so gnomon trims where Ollama would have truncated.
+  let budgeted = t;
+  if (!want && !optedOut && res.tokens && res.source === "listing:ollama" && !res.modelfile) {
+    want = Math.min(res.tokens, OLLAMA_NUM_CTX_DEFAULT);
+    if (probed) {
+      hooks.say(
+        paint(hooks.ui, "gray",
+          `  [context] ${where}: sending num_ctx ${want}` +
+            (want < res.tokens ? ` (the model's trained length is ${res.tokens}; budgeting ${want})` : "") +
+            `. Set num_ctx in [endpoints.${t.endpoint ?? "<name>"}] to change it, 0 to send none.`)
+      );
+    }
+  }
+  if (want && !res.modelfile && res.source === "listing:ollama" && res.tokens && want < res.tokens) {
+    budgeted = { ...t, contextTokens: want };
+  }
+  if (!want && optedOut && res.tokens && res.source === "listing:ollama" && !res.modelfile && probed) {
     hooks.warn(
       paint(hooks.ui, "yellow",
-        `  [context] ${where}: gnomon budgets ${res.tokens} tokens (the model's trained length) but sends no ` +
-          `num_ctx, so Ollama runs its own default and drops the start of a longer prompt without an error. ` +
-          `Set OLLAMA_CONTEXT_LENGTH=<n> for the server, a Modelfile "PARAMETER num_ctx <n>", or declare ` +
-          `max_context_tokens = <n> in [endpoints.${t.endpoint ?? "<name>"}] and gnomon sends it.`)
+        `  [context] ${where}: num_ctx = 0, so gnomon budgets ${res.tokens} tokens but Ollama runs its own ` +
+          `default context and may drop the start of a longer prompt without an error.`)
     );
   }
-  return want === t.ollamaCtx ? t : { ...t, ...(want ? { ollamaCtx: want } : {}) };
+  return want === budgeted.ollamaCtx ? budgeted : { ...budgeted, ...(want ? { ollamaCtx: want } : {}) };
 }
 
 /**
@@ -5560,6 +5589,13 @@ export interface TurnCounters {
    */
   masking?: { batches: number; observations: number; tokens_saved: number };
   /**
+   * The dropped-step digest this turn (`[context] digest = true`): trims that
+   * wrote one, the steps they digested, and the characters written (~4 per
+   * token). Present on every turn of a surface that declares it, zeros
+   * included; absent otherwise. docs/CONTRACTS.md section 19.
+   */
+  digest?: { trims: number; steps: number; chars: number };
+  /**
    * The environment bootstrap, on the turn that ran it (the first of the
    * session; `[context] bootstrap`). `outcome` is a published enumeration
    * (context_hygiene.ts BOOTSTRAP_OUTCOMES). `bytes` is the command's output
@@ -5649,8 +5685,10 @@ function callSignature(call: ToolCall): string {
 export function trimWorking(
   working: ChatMessage[],
   budgetTokens: number,
-  opts: MessageTokenOptions = {}
-): { messages: ChatMessage[]; dropped: number } {
+  opts: MessageTokenOptions = {},
+  /** `[context] digest = true`: see DIGEST_LINE_CHARS. Absent: the outcome-only ledger, byte for byte. */
+  digest = false
+): { messages: ChatMessage[]; dropped: number; digest?: { steps: number; chars: number } } {
   const cost = (m: ChatMessage) => messageTokens(m, opts);
   const total = working.reduce((n, m) => n + cost(m), 0);
   if (total <= budgetTokens) return { messages: working, dropped: 0 };
@@ -5689,10 +5727,16 @@ export function trimWorking(
   }
   const units: Unit[] = [];
   let priorLedger: ParsedLedger | null = null;
+  const priorDigests: ChatMessage[] = [];
   for (let i = firstUser + 1; i < working.length; i++) {
     const m = working[i]!;
     if (i === pinnedIdx) {
       units.push({ msgs: [m], cost: cost(m), orphan: false });
+      continue;
+    }
+    if (digest && m.role === "system" && isTrimDigest(m)) {
+      // Written once, kept verbatim: a later trim adds a message after it.
+      priorDigests.push(m);
       continue;
     }
     if (m.role === "system" && isTrimLedger(m)) {
@@ -5726,7 +5770,7 @@ export function trimWorking(
     keptUnits.add(u);
   }
 
-  const build = (): { messages: ChatMessage[]; dropped: number } | null => {
+  const build = (): { messages: ChatMessage[]; dropped: number; digest?: { steps: number; chars: number } } | null => {
     const droppedMsgs: ChatMessage[] = [];
     const kept: ChatMessage[] = [];
     for (const u of units) {
@@ -5735,6 +5779,14 @@ export function trimWorking(
     }
     if (droppedMsgs.length === 0) return null;
     const steps = droppedMsgs.filter((m) => m.role === "tool").length || droppedMsgs.length;
+    if (digest) {
+      const d = droppedDigest(droppedMsgs, steps, priorDigests);
+      return {
+        messages: [...head, ...priorDigests, { role: "system", content: d.text }, ...kept],
+        dropped: droppedMsgs.length,
+        digest: { steps, chars: d.text.length },
+      };
+    }
     const ledger = droppedLedger(droppedMsgs, 40, priorLedger ?? undefined);
     const earlier = (priorLedger?.steps ?? 0) + steps;
     return {
@@ -5766,6 +5818,108 @@ export function trimWorking(
     out = build();
   }
   return out ?? { messages: working, dropped: 0 };
+}
+
+const DIGEST_PREFIX = "[gnomon context digest]";
+
+/** A digest message an earlier trim wrote (droppedDigest). */
+function isTrimDigest(m: ChatMessage): boolean {
+  return m.role === "system" && m.content.startsWith(DIGEST_PREFIX);
+}
+
+/** Per-step cap of a digest line, in characters. */
+export const DIGEST_LINE_CHARS = 160;
+/** Cap of all digest messages together, in characters (~4k tokens at 4 chars a token). */
+export const DIGEST_TOTAL_CHARS = 16_000;
+
+/**
+ * The facts a dropped tool result carries, for a digest line: its first
+ * non-empty line, then up to three distinct `key: value` / `key=value` lines.
+ * Pure: the same result gives the same text on every machine.
+ */
+export function resultFacts(content: string): string[] {
+  // A result an earlier masking batch already replaced: its status and, under
+  // cache_aware, the first line it kept are all that is left to digest.
+  if (content.startsWith("[gnomon masked]")) {
+    const status = /→ (.+?) · \d+ bytes/.exec(content)?.[1];
+    const kept = /First line: ("(?:[^"\\]|\\.)*")$/.exec(content)?.[1];
+    let first = "";
+    try {
+      first = kept ? (JSON.parse(kept) as string) : "";
+    } catch {
+      /* a stub is gnomon's own text; an unparsable tail adds nothing */
+    }
+    return [...(status ? [status] : []), ...(first ? [first.length > 70 ? `${first.slice(0, 70)}…` : first] : [])];
+  }
+  const { exit, lines } = resultLines(content);
+  const clip = (l: string) => (l.length > 70 ? `${l.slice(0, 70)}…` : l);
+  const facts: string[] = exit !== undefined ? [`exit ${exit}`] : [];
+  if (lines.length === 0) return facts;
+  facts.push(clip(lines[0]!));
+  const kv = /^[A-Za-z_][\w.\-]{0,40}\s*[:=]\s*\S/;
+  let more = 0;
+  for (const l of lines.slice(1)) {
+    if (more >= 3) break;
+    if (kv.test(l) && !facts.includes(clip(l))) {
+      facts.push(clip(l));
+      more++;
+    }
+  }
+  return facts;
+}
+
+/**
+ * The digest of the steps a trim just dropped (`[context] digest = true`): one
+ * line per dropped tool call, at most DIGEST_LINE_CHARS each, and every digest
+ * message of the turn together at most DIGEST_TOTAL_CHARS. It is written ONCE,
+ * at the trim point, and never rewritten: a later trim leaves earlier digest
+ * messages where they are and adds its own after them, so the prompt prefix
+ * before the new message stays byte-stable for the provider's cache. When the
+ * total is spent the OLDEST lines of the new message give way. No model call.
+ */
+export function droppedDigest(
+  dropped: ChatMessage[],
+  steps: number,
+  prior: ChatMessage[] = []
+): { text: string; lines: number } {
+  const calls = new Map<string, { name: string; args: Record<string, unknown> }>();
+  for (const m of dropped) {
+    if (m.role !== "assistant" || !Array.isArray(m.tool_calls)) continue;
+    for (const c of m.tool_calls as {
+      id?: string;
+      name?: string;
+      arguments?: unknown;
+      function?: { name?: string; arguments?: unknown };
+    }[]) {
+      if (!c?.id) continue;
+      calls.set(c.id, { name: c.function?.name ?? c.name ?? "", args: parseToolArgs(c.function?.arguments ?? c.arguments) });
+    }
+  }
+  const lines: string[] = [];
+  for (const m of dropped) {
+    if (m.role !== "tool") continue;
+    const call = m.tool_call_id ? calls.get(m.tool_call_id) : undefined;
+    const name = call?.name || m.tool_name || "tool";
+    const what = call ? describeCall({ name, args: call.args }) : "";
+    const subject = what.length > 50 ? `${what.slice(0, 50)}…` : what;
+    const head = `- ${name}${subject ? ` ${subject}` : ""} →`;
+    let line = `${head} ${resultFacts(m.content).join("; ") || "(empty)"}`;
+    if (line.length > DIGEST_LINE_CHARS) line = `${line.slice(0, DIGEST_LINE_CHARS - 1)}…`;
+    lines.push(line);
+  }
+  const intro = `${DIGEST_PREFIX} ${steps} earlier step(s) in this turn were dropped to stay inside the context window. Their output is gone; what each one showed is below (first line and key: value lines), oldest first:\n`;
+  const outro = `\nDo not repeat a step listed here to learn its outcome again; re-run one only if something it depends on has changed.`;
+  const spent = prior.reduce((n, m) => n + m.content.length, 0);
+  let room = Math.max(0, DIGEST_TOTAL_CHARS - spent - intro.length - outro.length - 40);
+  const kept: string[] = [];
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (lines[i]!.length + 1 > room) break;
+    room -= lines[i]!.length + 1;
+    kept.unshift(lines[i]!);
+  }
+  const cut = lines.length - kept.length;
+  const body = (cut > 0 ? [`- … ${cut} older line(s) not shown`, ...kept] : kept).join("\n") || "- (no tool calls among them)";
+  return { text: intro + body + outro, lines: kept.length };
 }
 
 /** The ledger message a trim inserts, as opposed to any other `[gnomon context]` notice. */
@@ -7448,6 +7602,15 @@ async function agenticTurn(
   let observationSeq = 0;
   let lastChangeSeq = 0;
   if (mask) counters.masking = { batches: 0, observations: 0, tokens_saved: 0 };
+  // Dropped-step digest (`[context] digest = true`): the counter exists only when armed.
+  const digestOn = resolveDigest(config);
+  if (digestOn) counters.digest = { trims: 0, steps: 0, chars: 0 };
+  const noteDigest = (t: { digest?: { steps: number; chars: number } }): void => {
+    if (!t.digest || !counters.digest) return;
+    counters.digest.trims++;
+    counters.digest.steps += t.digest.steps;
+    counters.digest.chars += t.digest.chars;
+  };
 
   // The environment bootstrap: once per session, on its first top-level turn
   // (a delegated sub-turn inherits the snapshot through buildSystemPrompt).
@@ -7873,10 +8036,11 @@ async function agenticTurn(
         const { budget, ratio, basis } = ledger.knownTrim(legBudget(window), next, true);
         const est = estOf(working, next);
         if (est * (ratio ?? 1) > window) {
-          const trimmed = trimWorking(working, budget, tokOptsFor(next));
+          const trimmed = trimWorking(working, budget, tokOptsFor(next), digestOn);
           if (trimmed.dropped > 0) {
             working.length = 0;
             working.push(...trimmed.messages);
+            noteDigest(trimmed);
             ledger.trimmed(working, {
               why: "pre_call",
               dropped: trimmed.dropped,
@@ -8383,11 +8547,12 @@ async function agenticTurn(
         overflowBudget(resolveContext(config, usedTarget).max_context_tokens),
         usedTarget
       );
-      const trimmed = trimWorking(working, budget, tokOptsFor(usedTarget));
+      const trimmed = trimWorking(working, budget, tokOptsFor(usedTarget), digestOn);
       if (trimmed.dropped > 0) {
         const estBefore = estOf(working, usedTarget);
         working.length = 0;
         working.push(...trimmed.messages);
+            noteDigest(trimmed);
         ledger.trimmed(working, {
           why: "overflow",
           dropped: trimmed.dropped,
@@ -9484,11 +9649,12 @@ async function agenticTurn(
         ? ledger.knownTrim(legB, usedTarget, false)
         : { ...ledger.trimBudget(legB, usedTarget), basis: undefined };
       const before = working.length;
-      const trimmed = trimWorking(working, budget, tokOptsFor(usedTarget));
+      const trimmed = trimWorking(working, budget, tokOptsFor(usedTarget), digestOn);
       if (trimmed.dropped > 0) {
         const estBefore = estOf(working, usedTarget);
         working.length = 0;
         working.push(...trimmed.messages);
+            noteDigest(trimmed);
         ledger.trimmed(working, {
           why: "leg",
           dropped: trimmed.dropped,

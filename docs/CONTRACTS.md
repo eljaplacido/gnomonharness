@@ -1968,6 +1968,18 @@ carries `role`, `batch`, `step`, `masked`, `tokens_saved`, `tokens_before`,
 `tokens_after`, `window` and `first_index` (the first message rewritten,
 which is where a cached prompt prefix stops being valid).
 
+**`counters.digest`** is on every `TaskRecord` and `turn` record of a surface
+that sets `[context] digest = true`, zeros included, and on no other. Its fields
+are exactly `trims` (trims this turn that wrote a digest message), `steps`
+(dropped tool steps those digests cover) and `chars` (characters the digest
+messages added, ~4 per token). The digest replaces the outcome-only ledger of a
+mid-turn trim with one line per dropped step (first line and up to three
+`key: value` lines of its result; at most 160 characters a line, 16,000 in all),
+written once and never rewritten. `[context.mask_observations] cache_aware =
+true` (absent is off) masks at a trigger of at least 0.8 of the window with at
+least 10 eligible results and keeps each result's first line in its stub; it
+adds no record field. The keys-absent wire is unchanged.
+
 **`counters.bootstrap`** is on the turn that ran the bootstrap, the first
 top-level turn of a session, and on no other. Always: `id`, `platform`,
 `outcome`, `bytes` (the command's output before the cap), `tokens` (the
