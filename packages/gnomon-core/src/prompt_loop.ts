@@ -2599,7 +2599,12 @@ async function callEndpointOnce(
       json.response ??
       (raw.length > 0 || (typeof reasoning === "string" && isEmptyReasoning(reasoning)) ? "" : reasoning) ??
       "";
-    const finishReason = json.choices?.[0]?.finish_reason ?? json.done_reason;
+    // A provider's refusal arrives as finish_reason "content_filter" on an
+    // OpenAI-shaped body, and as stop_reason "refusal" on an Anthropic-shaped one.
+    const finishReason =
+      json.choices?.[0]?.finish_reason ??
+      json.done_reason ??
+      (json.stop_reason === "refusal" ? "content_filter" : undefined);
 
     const toolCalls = normaliseToolCalls(raw);
     // The reasoning stood in for a null content (and no `response`).
@@ -4797,6 +4802,11 @@ function gitChangedPaths(root: string): string[] | null {
  * publishing them here would put values in a Rule 6 enumeration that nothing
  * can emit.
  */
+/** A finish the provider reports when it declined to answer, on either wire shape. */
+export function isProviderRefusal(finish: string | undefined): boolean {
+  return finish === "content_filter" || finish === "refusal";
+}
+
 /**
  * Consecutive blank completions tolerated before a turn is called finished.
  *
@@ -4952,6 +4962,12 @@ export type StopReason =
   // one of them with no tool step at all, so a reader counting stop reasons
   // counted provider outages as answers.
   | "endpoint_error"
+  // The provider declined to answer, twice in a row: finish_reason
+  // "content_filter" or stop_reason "refusal", with no tool call. The first
+  // is asked again with a plain continuation, the second ends the turn here.
+  // It is the provider's refusal, not gnomon's policy refusal, so the bucket
+  // is apparatus_failure (code 12): the endpoint did not serve the turn.
+  | "provider_refusal"
   // The two below are written by the live record (live_record.ts), never
   // returned by a turn. They are here because they appear on the records a
   // consumer switches on -- `gnomon task --json`, the `turn` audit record and
@@ -5430,6 +5446,12 @@ export interface TurnCounters {
    * prompt.
    */
   text_tool_calls?: number;
+  /**
+   * Replies the provider refused to complete (finish_reason "content_filter"
+   * or stop_reason "refusal", no tool call). Only present when above zero, so
+   * a turn the provider never refused records exactly what it did before.
+   */
+  provider_refusals?: number;
   /**
    * Replies that offered no usable tool call: every call malformed, markup in
    * place of a call, or a call the endpoint itself could not parse. Each one
@@ -6652,6 +6674,9 @@ async function agenticTurn(
   // were the entire residual gap against the peer harness.
   let consecutiveEmpty = 0;
   let truncationRetried = false;
+  // Provider refusals in a row, and whether the turn ends on one.
+  let consecutiveRefusals = 0;
+  let providerRefused = false;
   // Replies in a row whose tool call the output limit cut off. See cutCalls.
   let consecutiveCut = 0;
   let cutOut = false;
@@ -8039,6 +8064,33 @@ async function agenticTurn(
     // retry, then let it stand rather than looping.
     lastFinishReason = result.finishReason;
 
+    // The provider refused to complete the reply (Anthropic stop_reason
+    // "refusal", an OpenAI-shaped finish_reason "content_filter"). It is not an
+    // empty completion: "Answer now: say what you did" made a model that had
+    // been refused write a status summary, and the turn ended "answered" with no
+    // work done (R65, 2026-11). Ask once more, plainly, as if nothing had
+    // happened; a second refusal in a row ends the turn honestly.
+    if (result.code === 0 && result.toolCalls.length === 0 && isProviderRefusal(result.finishReason)) {
+      counters.provider_refusals = (counters.provider_refusals ?? 0) + 1;
+      consecutiveRefusals++;
+      if (consecutiveRefusals <= 1 && steps < maxTotal) {
+        warn(paint(deps.ui, "yellow", `  [loop] provider refused (${result.finishReason}) — retrying once`));
+        working.push({ role: "user", content: "Continue with the task." });
+        continue;
+      }
+      providerRefused = true;
+      warn(paint(deps.ui, "yellow", `  [loop] provider refused again (${result.finishReason}) — stopping`));
+      result = {
+        ...result,
+        code: 12,
+        content:
+          `The provider refused to complete this request (finish: ${result.finishReason}) twice in a row, ` +
+          `so the turn stopped without an answer.`,
+      };
+    } else if (result.code === 0) {
+      consecutiveRefusals = 0;
+    }
+
     // `[turn] max_reasoning_tokens_without_action` (think_cap.ts): the reply
     // was stopped mid-stream for thinking past the cap with nothing to show.
     // Its reasoning is not echoed (it is the problem); one short note asks for
@@ -9218,7 +9270,9 @@ async function agenticTurn(
         // RIGHT to stop is the bucket's business, not this field's. Unless the
         // reply never came: a request that failed at the apparatus tier ends
         // the turn here too, and that is the endpoint's stop, not the model's.
-        stop_reason: mapBucket(result.code) === "apparatus_failure"
+        stop_reason: providerRefused
+          ? "provider_refusal"
+          : mapBucket(result.code) === "apparatus_failure"
           ? "endpoint_error"
           : emptyTerminus
             ? "empty"

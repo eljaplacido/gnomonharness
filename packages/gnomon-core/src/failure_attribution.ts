@@ -39,6 +39,7 @@ export const FAILURE_TAGS = [
   { tag: "launch_failure", layer: "lifecycle" },
   { tag: "context_overflow", layer: "context" },
   { tag: "endpoint_error", layer: "execution" },
+  { tag: "provider_refusal", layer: "execution" },
   { tag: "budget_exhausted", layer: "lifecycle" },
   { tag: "tool_call_malformed", layer: "tools" },
   { tag: "output_truncated", layer: "context" },
@@ -89,6 +90,7 @@ export interface AttributionTurn {
     writes?: number;
     worktree_moves?: number;
     malformed_tool_calls?: number;
+    provider_refusals?: number;
     stall_signals?: { limit_cycle?: { count?: number }; no_progress?: { count?: number }; novelty_cusum?: { count?: number } };
     model_calls?: { trims?: { leg?: number; overflow?: number; dropped?: number } };
   } | null;
@@ -202,11 +204,16 @@ function evaluate(input: AttributionInput): { hits: Hit[]; failed: boolean; evid
   else if ([10, 11, 12].includes(lastModelCode)) add("endpoint_error", `the last model_call code ${lastModelCode}`);
   else if (modelErrors.length > 0) add("endpoint_error", `${modelErrors.length} model_call(s) failed`, true);
 
-  // 5 budget_exhausted: the clock or the step cap ended the run
+  // 5 provider_refusal: the provider declined to answer (finish_reason content_filter,
+  // stop_reason refusal) and the retry was refused too; one refusal that was recovered is advisory
+  if (stop === "provider_refusal") add("provider_refusal", "stop_reason provider_refusal");
+  else if (num(cn.provider_refusals) > 0) add("provider_refusal", `${num(cn.provider_refusals)} provider refusal(s)`, true);
+
+  // 6 budget_exhausted: the clock or the step cap ended the run
   if (stop === "deadline" || stop === "step_wall" || stop === "killed") add("budget_exhausted", `stop_reason ${stop}`);
   else if (log.some((l) => l.deadline)) add("budget_exhausted", "a tool call was cut by the deadline");
 
-  // 6 tool_call_malformed: calls the loop could not run
+  // 7 tool_call_malformed: calls the loop could not run
   const malformedLines = log.filter((l) => /— command is not a string|— malformed|— invalid arguments/.test(l.raw)).length;
   const malformedCount = Math.max(num(cn.malformed_tool_calls), malformedLines);
   if (stop === "malformed") add("tool_call_malformed", "stop_reason malformed");
@@ -214,16 +221,16 @@ function evaluate(input: AttributionInput): { hits: Hit[]; failed: boolean; evid
   else if (malformedCount >= ATTRIBUTION_THRESHOLDS.malformed_calls) add("tool_call_malformed", `${malformedCount} malformed tool call(s)`);
   else if (malformedCount > 0) add("tool_call_malformed", `${malformedCount} malformed tool call(s)`, true);
 
-  // 7 output_truncated: a reply cut at the output limit with no tool call to blame
+  // 8 output_truncated: a reply cut at the output limit with no tool call to blame
   if (stop === "truncated" && !(num(t.stop_detail?.repeats) > 0)) add("output_truncated", "stop_reason truncated");
 
-  // 8 loop_stall
+  // 9 loop_stall
   const ss = cn.stall_signals ?? {};
   const stalled = num(ss.limit_cycle?.count) + num(ss.no_progress?.count) + num(ss.novelty_cusum?.count);
   if (stop === "stall") add("loop_stall", "stop_reason stall");
   else if (stalled > 0) add("loop_stall", `${stalled} stall signal(s)`, true);
 
-  // 9 policy_refusal: a boundary the run could not cross
+  // 10 policy_refusal: a boundary the run could not cross
   // A refused write into the OS temp directory is scratch the agent re-routes, not a blocked deliverable.
   const scratch = (l: Tool): boolean => /^\/(?:var\/)?tmp\//.test(l.path);
   const pathRefusals = log.filter((l) => l.refused && !scratch(l) && /refused \((?:outside the root|outside sandbox|surface is read-only)\)/.test(l.raw));
@@ -234,7 +241,7 @@ function evaluate(input: AttributionInput): { hits: Hit[]; failed: boolean; evid
     add("policy_refusal", `${log.filter((l) => l.refused).length} refused call(s)`, true);
   }
 
-  // 10 edit_failed
+  // 11 edit_failed
   const writes = log.filter((l) => (l.tool === "write" || l.tool === "edit") && !l.refused);
   const editFails = writes.filter((l) => l.failed);
   const lastWrite = writes.length ? writes[writes.length - 1]! : null;
@@ -242,33 +249,33 @@ function evaluate(input: AttributionInput): { hits: Hit[]; failed: boolean; evid
     add("edit_failed", `${editFails.length} edit/write call(s) failed (${editFails.some((l) => l.nomatch) ? "no match" : "failed"})`);
   } else if (editFails.length > 0) add("edit_failed", `${editFails.length} edit/write call(s) failed`, true);
 
-  // 11 tool_timeout
+  // 12 tool_timeout
   const timeouts = log.filter((l) => l.timeout);
   const acting = log.filter((l) => l.tool !== "todo" && l.tool !== "note");
   if (timeouts.length > 0 && ((acting.length > 0 && acting[acting.length - 1]!.timeout) || timeouts.length >= ATTRIBUTION_THRESHOLDS.tool_timeouts)) {
     add("tool_timeout", `${timeouts.length} bash timeout(s)`);
   } else if (timeouts.length > 0) add("tool_timeout", `${timeouts.length} bash timeout(s)`, true);
 
-  // 12 tool_error: a tool that kept failing for reasons other than edits and timeouts
+  // 13 tool_error: a tool that kept failing for reasons other than edits and timeouts
   const toolErrors = log.filter((l) => (l.tool === "compute" || l.tool === "glob" || l.tool === "grep" || l.tool === "read") && /— (?:unknown name|unexpected|the exponent|failed|error)/.test(l.raw));
   if (toolErrors.length >= ATTRIBUTION_THRESHOLDS.tool_errors) add("tool_error", `${toolErrors.length} tool error(s)`);
   else if (toolErrors.length > 0) add("tool_error", `${toolErrors.length} tool error(s)`, true);
 
-  // 13 verify_misled / 14 verify_failed: the declared check, against the external one
+  // 14 verify_misled / 15 verify_failed: the declared check, against the external one
   const verifyState = t.verify ?? (lastVerifyRecord && lastVerifyRecord.declined !== true ? (lastVerifyRecord.passed === true || lastVerifyRecord.ok === true ? "passed" : lastVerifyRecord.unrunnable === true ? "unrunnable" : "failed") : null);
   const externalFailed = input.check?.passed === false;
   if (verifyState === "passed" && externalFailed) add("verify_misled", "the declared [verify] check passed and the external check failed");
   if (verifyState === "failed") add("verify_failed", "the declared [verify] check failed at the end");
 
-  // 15 wrong_thing_verified: a failing check was edited until it passed
+  // 16 wrong_thing_verified: a failing check was edited until it passed
   const twv = wrongThingVerified(log);
   if (twv) add("wrong_thing_verified", twv);
 
-  // 16 context_loss: the provider refused a request as too long and gnomon dropped half the context
+  // 17 context_loss: the provider refused a request as too long and gnomon dropped half the context
   const trims = cn.model_calls?.trims ?? {};
   if (num(trims.overflow) > 0) add("context_loss", `${num(trims.overflow)} overflow trim(s), ${num(trims.dropped)} message(s) dropped`);
 
-  // 17 no_deliverable / 18 unverified_finish / 19 wrong_result: finished normally, failed anyway
+  // 18 no_deliverable / 19 unverified_finish / 20 wrong_result: finished normally, failed anyway
   const finished = stop === "answered" || stop === "empty";
   const realWrites = writes.filter((l) => !l.failed && !DOCISH.test(l.path) && !SCRATCH.test(l.path));
   if (finished && num(cn.writes) === 0 && num(cn.worktree_moves) === 0 && writes.length === 0) add("no_deliverable", "answered with no write, no edit and no change to the tree");

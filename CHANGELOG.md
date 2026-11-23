@@ -26,6 +26,8 @@
 
 ## [Unreleased]
 
+- **Provider refusals are no longer empty answers.** A reply the provider refused to complete (Anthropic `stop_reason: "refusal"`, OpenAI-shaped `finish_reason: "content_filter"`, no tool call) was handled as an empty completion: the model was told "Answer now: say what you did", wrote a status summary, and the turn ended `answered` with no work done (R65, one Haiku cell, reward 0). Now gnomon asks once more with `Continue with the task.`, shows `[loop] provider refused (...) — retrying once`, and a second refusal in a row ends the turn with the new `stop_reason: "provider_refusal"` (code 12, bucket `apparatus_failure`: the provider's refusal is not gnomon's policy refusal). `counters.provider_refusals` counts refused replies, and failure attribution (CONTRACTS 60.1, rank 5) tags such a cell `provider_refusal`, not `wrong_result`. A turn the provider never refused is byte-identical.
+
 ## [0.6.7] — 2026-11-23
 
 The survey release. Eight ideas from "Agent Harness Engineering: A Survey" (CMU, Stanford, Amazon and others; 2026), each opt-in or report-only, plus a Windows fix for trials. With no new key set, a session's prompt, tools and requests are byte-identical to 0.6.6. One warm turn, model-free, against 0.6.6 built from source with the same native binaries: +10 ms wall and +0.8 MB RSS, at the timer's 10 ms resolution.

@@ -33,7 +33,11 @@
     "`deadline` was added 2026-11-05 (TB1, P2G41): `gnomon task --deadline` stops the",
     "turn itself before an external time cap, with a final record and a sealed trail;",
     "Harbor never signals the process it runs, so 29 of 29 capped cells left only a",
-    "partial record."
+    "partial record.",
+    "",
+    "`provider_refusal` was added 2026-11-23 (R65 diagnosis): a provider refusal (Anthropic",
+    "stop_reason refusal, OpenAI-shaped finish_reason content_filter) was handled as an empty",
+    "completion, so the model was told to answer now and the turn ended `answered` with no work."
   ],
   "stop_reason": {
     "answered": "the model stopped calling tools of its own accord",
@@ -45,11 +49,12 @@
     "apparatus": "the run never reached the model — the surface itself could not be used",
     "malformed": "replies in a row offered no usable tool call, past [turn] max_consecutive_malformed repair turns",
     "endpoint_error": "the turn's last model request failed and the turn ended on it: no key (10), no reply in time (11), the provider unreachable or erroring past the transport grace (12), or the context could not be fitted (13); the code says which, and the bucket is apparatus_failure",
+    "provider_refusal": "the provider declined to answer twice in a row (finish_reason content_filter, or Anthropic stop_reason refusal, with no tool call) after one plain re-ask; the code is 12 and the bucket is apparatus_failure, because it is the provider's refusal, not gnomon's policy refusal",
     "tamper": "a tool call, or something between calls, changed gnomon's own records and gnomon did not make the change; the turn stops with a refusal (3) and a record_tamper record",
     "in_progress": "the turn had not ended when the record was written; only on a partial record (record_state: partial), which is what a SIGKILL leaves",
     "killed": "SIGINT, SIGTERM or SIGHUP ended the process mid-turn and the record was flushed first; stop_detail.signal names the signal, and the record is apparatus_failure (11)",
     "deadline": "gnomon task --deadline (or GNOMON_DEADLINE) was given and the turn reached the deadline less its margin, so it stopped itself: the call in flight aborted, the record final, the trail sealed; on the refusal floor a step_wall lands on (exit 2), with stop_detail.deadline, budget_ms and margin_ms"
   },
-  "expected_count": 13,
+  "expected_count": 14,
   "not_a_bucket": "stop_reason is a separate axis from the outcome bucket. The bucket says WHAT happened; this says why the loop stopped. Nothing here maps to result/refusal/apparatus_failure, and a reader combining them is producing a composite verdict this project refuses to publish."
 }
