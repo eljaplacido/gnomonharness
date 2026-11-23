@@ -26,6 +26,121 @@
 
 ## [Unreleased]
 
+### Fixed — trial commands run under a POSIX shell on Windows
+
+- A trial's `setup` and `check` (the scaffolded `trials/default.toml`, the drafted incident trials, `gnomon eval`
+  cells and `gnomon improve` probes) ran through `cmd.exe` on Windows, where their POSIX commands (`test`, `tr`,
+  `grep`, `$(...)`) could not pass. They now run under the same POSIX shell the bash tool uses (Git Bash, or
+  `GNOMON_SHELL`), and a machine without one gets a clear apparatus error instead of a silent failing check.
+  Linux and macOS are unchanged (`/bin/sh`).
+
+### Added
+
+- **`edit_format = "hashline"` is implemented (opt-in).** `read` tags each line
+  `LINE:HASH|text` and `edit` takes `{op, anchor, end?, text?}` edits
+  (replace, delete, insert_before, insert_after) addressed by those tags, after
+  Can Bölük's "The Harness Problem" (2026). A stale anchor refuses the whole
+  call and says to read again; nothing is half-applied. Default `str_replace`
+  is byte-identical (tool schemas, descriptions, read output). The surface
+  audit no longer calls hashline inert (`ast` still is); the spec is pinned by
+  `conformance/edit_hashline.json`. Line endings are per line: a new line takes
+  the ending of the line it replaces or of its neighbour, and a file with no
+  final newline gets none on its last line (never a stray `\r`); the 2-hex hash
+  is a drift guard (about 1 in 256 changed lines collide), not a checksum.
+  Review fixes in the same train: sandbox probes bind the LAN listener for one
+  probe only, scope the substituted HOME to one probe, clean up root-owned
+  leftovers (or report the path), and say the docker-socket probe only
+  connects; trajectory-scan evidence masks `--password X`, `-p X`, secret-named
+  `NAME=value` and `scheme://user:pw@host`, and orders by code point; incident
+  trials refuse `NAME=value` check commands, require the expected artefact
+  (`report.txt`) so doing nothing is not a pass, and mark `vacuous_risk`;
+  accepting a trial spec (CLI and dashboard) says it changes what judges future
+  runs; `eval --ablate` refuses inline-table, dotted-key and multi-line shapes
+  and states that the approval arm is the one scoped exception.
+- **Harness signature:** `gnomon eval` reports carry `harness_signature` (per
+  gnomon arm) and `gnomon compliance pack` writes `signature.json`: build,
+  surface hash, role model/endpoint/provider, resolved window and its source,
+  edit format, tool-set hash, sandbox and exec mode, approval gate, verify gate,
+  context policy, budgets and attempts, mapped to the survey's Table 3 with the
+  unfillable rows marked (GUIDE, CONTRACTS section 47). No secret, no path. `harness_signature`
+  is optional in `gnomon.eval/3` (older reports omit it).
+- **Policy lint:** `gnomon check` (and `--json`, as `policy_lint`) reports
+  contradictory, shadowed, never-matching, unreachable, always-denied and
+  uncovered rules, using the real matchers; `gnomon check --policy-lint` lints
+  alone. Warnings; `--strict-policy` exits 2. Sessions are byte-identical. The `gnomon check`
+  verdict JSON gains `policy_lint` and a `warnings` line when findings exist (exit unchanged); the
+  lint reads the working-directory surface, not the `--base` revision's.
+- **Failure attribution (CONTRACTS section 60.1).** A failed turn or cell is given one primary
+  cause and its harness layer (ETCLOVG), deterministically, from signals gnomon already records
+  (stop reason, exit code, tool log, counters, verify, trail records); no model call. `gnomon eval`
+  cells carry `attribution` and the report an optional per-arm `attribution` histogram;
+  `gnomon audit attribute [<trail>] [--last n] [--json]` summarises verified trails;
+  `gnomon improve` mines the attributed cause into a note (Tools, Verification) or a note with a
+  `[context]` suggestion in the rationale only (Context; config stays unreachable). Precedence is
+  pinned by `conformance/failure_attribution.json`. On 72 hand-labelled failed cells from three
+  internal benchmark ledgers (gnomon cells only) it agreed on 70 (63 before one rule fix; stratified, so agreement, not
+  prevalence). Nothing in a session changes.
+- **Regression trials from incidents (CONTRACTS section 60.2).** `gnomon improve --incidents [--run]`
+  drafts a trial spec per kind of incident in the verified trails (a guard hold, a caught tamper,
+  a check that failed then passed, an overflow survived) as a `harness` proposal for
+  `trials/incident-<kind>-<hash>.toml`, with the trail and seq as evidence. Dry by default,
+  deterministic, nothing copied from a record but the incident kind. A trial spec is the judge, so
+  only a person accepts one: `[improve] auto_accept` never covers `trials/` and an agent-sourced
+  proposal for it is refused.
+- `gnomon eval --ablate [components] [--families a,b] [--run] [--propose]`: a
+  load-bearing analysis of the project's own surface. One arm per component
+  (system.md sections, skills, `[verify]`, approval mode in the eval clone only,
+  masking, the think cap, the structured summary, each non-essential tool, the
+  memory index), each the surface with exactly one thing removed or neutralised,
+  measured against the base on the trial spec with the eval's paired machinery,
+  optionally per declared model family. Reports pass, steps, tokens and refusals
+  with Wilson and McNemar, and a verdict per component (load_bearing, neutral,
+  harmful, inconclusive), never applied. Governance (deny rules, sandbox, guard,
+  audit) is never ablated. Dry by default; `--run` refuses as `improve --run`
+  does; `--propose` writes retirement proposals for neutral-and-cheaper skills
+  and sections. Without `--ablate`, `gnomon eval` is unchanged
+  (CONTRACTS.md section 61, `conformance/eval_ablate.json`).
+### Security: trajectory scan and sandbox-escape probes
+
+Two additions from the 2026-11 harness survey (ideas #7 and #8). Both are opt-in
+commands or flags; with neither, every session, every record, the prompt, the tool
+definitions and `gnomon security test` itself are byte-identical to 0.6.6.
+
+- **`gnomon audit scan [<trail|dir>] [--min-severity ...] [--json]`**
+  ([CONTRACTS §62](docs/CONTRACTS.md)): an offline, deterministic, advisory reader that finds
+  multi-step patterns a per-call guard cannot see. Six rules: `slow_exfiltration` (a credential
+  read, later network, a write outside the project or an encoding step), `staged_payload` (write,
+  `chmod +x`, run), `privilege_creep` (refusals with variations), `credential_probing` (several
+  credential locations across tools), `injection_followed_by_action` (an instruction-like marker
+  in recorded tool output, then a risky action; needs `record = "full"`), `guard_evasion` (a `cd`
+  out of the root, a symlink out then a write through it, a refusal retried through another tool).
+  It reads gnomon trails and the cross-harness guard feed (Claude Code, opencode, Cursor, Codex...);
+  a metadata-only trail is enough for every rule but the marker one, which is reported as not run,
+  never as clean. Findings carry the trail, the evidence seqs and a severity; it blocks nothing.
+  `conformance/audit_scan.json` holds synthetic trails and the findings each must produce, with
+  eleven cases that must stay silent. **Measured false-positive rate** on 10,325 unique benign
+  benchmark sessions (204,640 steps, read in place): 2.07% of sessions at the default `low`, 0.69% at
+  `medium`, 0.01% at `high`; on the 676 sessions of the daily-dev shape 0.3%. There is no labelled
+  attack set in those trails, so this is an alert rate on benign traffic and the rules were tuned on
+  the same data; recall rests on the synthetic cases only.
+- **`gnomon security test --sandbox [--image REF]`** ([CONTRACTS §63](docs/CONTRACTS.md)):
+  non-destructive sandbox-escape probes. They run no exploit and attempt no breakout, need no root
+  and touch only a temp directory they create: a canary outside the project root read and written
+  through the tools and through `bash`, a symlink out of the root, a fake credential in a
+  substituted HOME, egress with `network = false`, the docker socket, `no_new_privs`, capabilities
+  (privileged, CAP_SYS_ADMIN), host PID and network namespaces, writable host mounts, `/proc/sys`
+  and cgroup. Each runs for the tool paths at each `[sandbox] level` and for `bash` under
+  `exec = off`, `os`, `os` with `reads = scoped` and `docker`, and reports pass, FAIL (a claimed
+  containment that did not hold: exit 2), open (a documented limit) or skipped with why. Where
+  docker or Landlock is missing the tests skip with the reason. On gx10 every claimed containment
+  held; the probes also confirm, as `open`, what the docs say: `exec = os` leaves loopback and
+  reads (under `reads = all`) open, and `exec = off` contains nothing.
+- **docs/THREAT-MODEL.md** gains the sandbox level x threat matrix (file escape, network, process,
+  credential, container breakout; covered / partially / not covered), the survey's two-strategy
+  framing (an OS permission boundary for a mistaken or injected model, a microVM or gVisor for
+  hostile code, plain docker as the shrinking middle), and a plain statement that gnomon has no
+  microVM or gVisor backend. A test holds the table equal to the one the probes report.
+
 ## [0.6.6] — 2026-11-22
 
 The daily-runtime release, audited against v0.6.5 before it was cut. With no new

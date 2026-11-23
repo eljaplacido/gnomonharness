@@ -19,6 +19,9 @@ import {
   loadConfig,
   paint,
   TRANSCRIPT_FORMATS,
+  lintPolicy,
+  policyLintSummary,
+  type PolicyLintFinding,
   type CheckOptions,
   type CheckVerdict,
   type CheckEntry,
@@ -38,9 +41,10 @@ export interface CheckCliArgs {
 export const CHECK_USAGE =
   "Usage: gnomon check --base <rev> [--head <rev>] [--role <role> | --agent <name>]\n" +
   "                    [--transcript <file> --format <format>] [--session <id>] [--require-guard]\n" +
-  "                    [--json] [--dir <path>]\n" +
+  "                    [--strict-policy] [--json] [--dir <path>]\n" +
   `                    <format>: ${TRANSCRIPT_FORMATS.join(" | ")}\n` +
   "       gnomon check --scorecard [--session <id>] [--transcript <claude-code.jsonl>] [--require-guard] [--json] [--dir <path>]\n" +
+  "       gnomon check --policy-lint [--strict-policy] [--json] [--dir <path>]\n" +
   "       gnomon check --install-hook claude-code\n" +
   "       gnomon check --hook session-start|stop   (reads Claude Code hook JSON on stdin)";
 
@@ -82,6 +86,8 @@ export async function cmdCheck(
     return card.exit;
   }
 
+  if (args.flags["policy-lint"] === "true" && !flagOf(args, "base")) return policyLintOnly(args, out);
+
   const base = flagOf(args, "base");
   if (!base) {
     // 10, not 1: the contract is 0 / 2 / 10, and a caller gating on it must not
@@ -101,9 +107,56 @@ export async function cmdCheck(
     transcript: transcriptOption(flagOf(args, "transcript"), flagOf(args, "format")),
   });
   const gap = guardLiveness(args, verdict);
+  const lint = attachPolicyLint(args, verdict);
   emit(verdict, args, out);
   // --require-guard: a session the guard never saw is a failure, beside the checks.
-  return gap && args.flags["require-guard"] === "true" ? 2 : verdict.exit;
+  if (gap && args.flags["require-guard"] === "true") return 2;
+  // --strict-policy: a lint finding is a failure (2: a check failed), never a
+  // way to turn a failure into something else, and never a 10 over a 2.
+  if (args.flags["strict-policy"] === "true" && lint.length > 0) return 2;
+  return verdict.exit;
+}
+
+/** Lint the surface in the working directory; [] when it cannot be loaded (check judges that elsewhere). */
+function lintSurface(args: CheckCliArgs): PolicyLintFinding[] {
+  try {
+    return lintPolicy(loadConfig(args.dir));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Policy lint as warnings on the verdict (CONTRACTS.md §6): a `policy_lint`
+ * key and one line in `warnings`, present only when there are findings, so a
+ * surface that lints clean prints the verdict it always did.
+ */
+function attachPolicyLint(args: CheckCliArgs, verdict: CheckVerdict): PolicyLintFinding[] {
+  const findings = lintSurface(args);
+  if (findings.length === 0) return findings;
+  verdict.policy_lint = policyLintSummary(findings);
+  const strict = args.flags["strict-policy"] === "true";
+  (verdict.warnings ??= []).push(
+    `policy lint: ${findings.length} finding(s) in the surface's rules${strict ? " (--strict-policy: failing)" : ""}; run \`gnomon check --policy-lint\` to read them`
+  );
+  return findings;
+}
+
+/** `gnomon check --policy-lint`: the lint alone, no revision needed. */
+function policyLintOnly(args: CheckCliArgs, out: (s: string) => void): number {
+  const findings = lintSurface(args);
+  if (args.json) {
+    out(JSON.stringify(policyLintSummary(findings), null, 2));
+  } else if (findings.length === 0) {
+    out("policy lint: no findings");
+  } else {
+    out(`policy lint: ${findings.length} finding(s)`);
+    for (const f of findings) {
+      out(`  ${f.kind.padEnd(13)} ${f.where}  ${f.rule}${f.pattern !== undefined ? ` ${JSON.stringify(f.pattern)}` : ""}`);
+      out(`      ${f.message}`);
+    }
+  }
+  return args.flags["strict-policy"] === "true" && findings.length > 0 ? 2 : 0;
 }
 
 /**

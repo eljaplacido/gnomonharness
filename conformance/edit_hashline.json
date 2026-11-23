@@ -1,0 +1,396 @@
+{
+  "version": "1",
+  "_comment": [
+    "The hashline edit format (edit_format = \"hashline\"; docs/CONTRACTS.md section 3, docs/GUIDE.md).",
+    "hash = FNV-1a 32 over the UTF-8 bytes of the line text (no trailing CR), xor-folded to 8 bits ((h ^ h>>8 ^ h>>16 ^ h>>24) & 0xff), two lowercase hex digits. A tag is LINE:HASH, LINE 1-based.",
+    "Lines split on LF; a trailing CR is a line ending, not text; the empty piece after a final LF is not a line.",
+    "Every anchor in a call is checked against the file as it is; one stale anchor refuses the whole call and writes nothing.",
+    "packages/gnomon-core/src/edit_hashline.test.ts runs every vector through the implementation. Idea: Can Boluk, The Harness Problem, 2026-02-12."
+  ],
+  "ops": [
+    "replace",
+    "delete",
+    "insert_before",
+    "insert_after"
+  ],
+  "hash_vectors": [
+    {
+      "text": "",
+      "hash": "c5"
+    },
+    {
+      "text": "}",
+      "hash": "14"
+    },
+    {
+      "text": "function hello() {",
+      "hash": "77"
+    },
+    {
+      "text": "  return \"world\";",
+      "hash": "03"
+    },
+    {
+      "text": "    ",
+      "hash": "7a"
+    },
+    {
+      "text": "café ☕",
+      "hash": "a9"
+    },
+    {
+      "text": "a\tb",
+      "hash": "76"
+    }
+  ],
+  "edit_vectors": [
+    {
+      "name": "replace one line",
+      "before": "alpha\nbeta\ngamma\n",
+      "edits": [
+        {
+          "op": "replace",
+          "anchor": "2:0d",
+          "text": "BETA"
+        }
+      ],
+      "after": "alpha\nBETA\ngamma\n"
+    },
+    {
+      "name": "replace a range with fewer lines",
+      "before": "alpha\nbeta\ngamma\n",
+      "edits": [
+        {
+          "op": "replace",
+          "anchor": "1:10",
+          "end": "2:0d",
+          "text": "ab"
+        }
+      ],
+      "after": "ab\ngamma\n"
+    },
+    {
+      "name": "delete a range",
+      "before": "alpha\nbeta\ngamma\n",
+      "edits": [
+        {
+          "op": "delete",
+          "anchor": "2:0d",
+          "end": "3:e7"
+        }
+      ],
+      "after": "alpha\n"
+    },
+    {
+      "name": "insert before the first and after the last",
+      "before": "alpha\nbeta\ngamma\n",
+      "edits": [
+        {
+          "op": "insert_before",
+          "anchor": "1:10",
+          "text": "top"
+        },
+        {
+          "op": "insert_after",
+          "anchor": "3:e7",
+          "text": "x\ny\n"
+        }
+      ],
+      "after": "top\nalpha\nbeta\ngamma\nx\ny\n"
+    },
+    {
+      "name": "several edits in one call, in any order",
+      "before": "alpha\nbeta\ngamma\n",
+      "edits": [
+        {
+          "op": "replace",
+          "anchor": "3:e7",
+          "text": "G"
+        },
+        {
+          "op": "delete",
+          "anchor": "1:10"
+        }
+      ],
+      "after": "beta\nG\n"
+    },
+    {
+      "name": "an insert and a replace at one point",
+      "before": "alpha\nbeta\ngamma\n",
+      "edits": [
+        {
+          "op": "replace",
+          "anchor": "2:0d",
+          "text": "B"
+        },
+        {
+          "op": "insert_after",
+          "anchor": "1:10",
+          "text": "new"
+        }
+      ],
+      "after": "alpha\nnew\nB\ngamma\n"
+    },
+    {
+      "name": "CRLF is kept, new lines get CRLF",
+      "before": "alpha\r\nbeta\r\ngamma\r\n",
+      "edits": [
+        {
+          "op": "replace",
+          "anchor": "2:0d",
+          "text": "b1\nb2"
+        }
+      ],
+      "after": "alpha\r\nb1\r\nb2\r\ngamma\r\n"
+    },
+    {
+      "name": "no final newline stays absent",
+      "before": "alpha\nbeta",
+      "edits": [
+        {
+          "op": "replace",
+          "anchor": "2:0d",
+          "text": "B"
+        }
+      ],
+      "after": "alpha\nB"
+    },
+    {
+      "name": "duplicate lines are told apart by number",
+      "before": "x\nx\nx\n",
+      "edits": [
+        {
+          "op": "replace",
+          "anchor": "2:26",
+          "text": "y"
+        }
+      ],
+      "after": "x\ny\nx\n"
+    },
+    {
+      "name": "a pasted tag with its text still parses",
+      "before": "alpha\nbeta\ngamma\n",
+      "edits": [
+        {
+          "op": "replace",
+          "anchor": "2:0d|beta",
+          "text": "B"
+        }
+      ],
+      "after": "alpha\nB\ngamma\n"
+    },
+    {
+      "name": "stale hash",
+      "before": "alpha\nbeta\ngamma\n",
+      "edits": [
+        {
+          "op": "replace",
+          "anchor": "2:00",
+          "text": "B"
+        }
+      ],
+      "error_starts": "Stale anchor 2:"
+    },
+    {
+      "name": "line past the end",
+      "before": "alpha\nbeta\ngamma\n",
+      "edits": [
+        {
+          "op": "delete",
+          "anchor": "9:aa"
+        }
+      ],
+      "error_starts": "Stale anchor 9:aa"
+    },
+    {
+      "name": "overlapping edits",
+      "before": "alpha\nbeta\ngamma\n",
+      "edits": [
+        {
+          "op": "replace",
+          "anchor": "1:10",
+          "end": "2:0d",
+          "text": "x"
+        },
+        {
+          "op": "replace",
+          "anchor": "2:0d",
+          "text": "y"
+        }
+      ],
+      "error_starts": "edits 1 and 2 overlap"
+    },
+    {
+      "name": "an empty file has no anchors",
+      "before": "",
+      "edits": [
+        {
+          "op": "insert_after",
+          "anchor": "1:00",
+          "text": "x"
+        }
+      ],
+      "error_starts": "empty"
+    },
+    {
+      "name": "CRLF no final newline: replace last",
+      "before": "a\r\nb\r\nc",
+      "edits": [
+        {
+          "op": "replace",
+          "anchor": "3:94",
+          "text": "C"
+        }
+      ],
+      "after": "a\r\nb\r\nC"
+    },
+    {
+      "name": "CRLF no final newline: insert_after last",
+      "before": "a\r\nb\r\nc",
+      "edits": [
+        {
+          "op": "insert_after",
+          "anchor": "3:94",
+          "text": "d"
+        }
+      ],
+      "after": "a\r\nb\r\nc\r\nd"
+    },
+    {
+      "name": "CRLF no final newline: insert_before first",
+      "before": "a\r\nb\r\nc",
+      "edits": [
+        {
+          "op": "insert_before",
+          "anchor": "1:ed",
+          "text": "z"
+        }
+      ],
+      "after": "z\r\na\r\nb\r\nc"
+    },
+    {
+      "name": "CRLF no final newline: delete last",
+      "before": "a\r\nb\r\nc",
+      "edits": [
+        {
+          "op": "delete",
+          "anchor": "3:94"
+        }
+      ],
+      "after": "a\r\nb"
+    },
+    {
+      "name": "mixed endings: new line takes its neighbour's",
+      "before": "a\nb\r\nc\n",
+      "edits": [
+        {
+          "op": "insert_after",
+          "anchor": "1:ed",
+          "text": "x"
+        },
+        {
+          "op": "insert_after",
+          "anchor": "2:23",
+          "text": "y"
+        }
+      ],
+      "after": "a\nx\nb\r\ny\r\nc\n"
+    },
+    {
+      "name": "mixed endings: replace keeps the replaced line's ending",
+      "before": "a\nb\r\nc\n",
+      "edits": [
+        {
+          "op": "replace",
+          "anchor": "2:23",
+          "text": "B1\nB2"
+        }
+      ],
+      "after": "a\nB1\r\nB2\r\nc\n"
+    },
+    {
+      "name": "LF no final newline: insert_after last",
+      "before": "a\nb",
+      "edits": [
+        {
+          "op": "insert_after",
+          "anchor": "2:23",
+          "text": "c"
+        }
+      ],
+      "after": "a\nb\nc"
+    },
+    {
+      "name": "LF no final newline: replace last",
+      "before": "a\nb",
+      "edits": [
+        {
+          "op": "replace",
+          "anchor": "2:23",
+          "text": "B"
+        }
+      ],
+      "after": "a\nB"
+    },
+    {
+      "name": "single-line file, no newline",
+      "before": "only",
+      "edits": [
+        {
+          "op": "replace",
+          "anchor": "1:7d",
+          "text": "ONLY"
+        }
+      ],
+      "after": "ONLY"
+    },
+    {
+      "name": "single-line file, insert_after",
+      "before": "only",
+      "edits": [
+        {
+          "op": "insert_after",
+          "anchor": "1:7d",
+          "text": "two"
+        }
+      ],
+      "after": "only\ntwo"
+    },
+    {
+      "name": "single-line CRLF file",
+      "before": "only\r\n",
+      "edits": [
+        {
+          "op": "insert_after",
+          "anchor": "1:7d",
+          "text": "two"
+        }
+      ],
+      "after": "only\r\ntwo\r\n"
+    },
+    {
+      "name": "very long line",
+      "before": "a\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nz\n",
+      "edits": [
+        {
+          "op": "replace",
+          "anchor": "2:d1",
+          "text": "short"
+        }
+      ],
+      "after": "a\nshort\nz\n"
+    },
+    {
+      "name": "non-ASCII and surrogate-pair line",
+      "before": "a\nnaïve 😀 𝒳 — ☕\nz",
+      "edits": [
+        {
+          "op": "replace",
+          "anchor": "2:50",
+          "text": "naïve 😀 𝒳 — ☕!"
+        }
+      ],
+      "after": "a\nnaïve 😀 𝒳 — ☕!\nz"
+    }
+  ]
+}

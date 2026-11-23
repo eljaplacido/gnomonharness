@@ -1013,3 +1013,39 @@ describe("review fixes: a probe that can reach a billed role (2)", () => {
     await expect(runImprove(c, { run: true, k: 1, yesSpend: true, runCell: cell })).resolves.toBeTruthy();
   });
 });
+
+describe("gnomon improve: the attributed cause chooses the candidate (CONTRACTS section 60)", () => {
+  const failing = (extra: Record<string, unknown>) => ({ kind: "turn", role: "implement", stop_reason: "answered", bucket: "refusal", code: 2, tool_log: [] as string[], ...extra });
+
+  it("a Tools cause (edits that did not match) is mined into a system note, tagged with its layer", () => {
+    const c = project();
+    for (let s = 1; s <= 3; s++) trail(`edit${s}`, [{ kind: "session_start", mode: "task" }, failing({ tool_log: ["edit a.py — no match", "edit a.py — no match", "edit a.py — no match"] })]);
+    const cand = mineAll(c).candidates.find((x) => x.signal === "edit_failed");
+    expect(cand).toMatchObject({ family: "harness", counts: { sessions: 3, class: "edit_failed", layer: "tools" } });
+    expect(cand!.facts).toContain("failure layer: tools");
+    expect(cand!.note).toMatch(/Read the file again/);
+    expect(cand!.evidence.length).toBeGreaterThan(0);
+  });
+
+  it("a Context cause carries a [context] suggestion in the rationale only, and the proposal touches only system.md", async () => {
+    const c = project();
+    for (let s = 1; s <= 3; s++) trail(`ctx${s}`, [{ kind: "session_start", mode: "task" }, failing({ stop_reason: "endpoint_error", bucket: "apparatus_failure", code: 13 })]);
+    const cand = mineAll(c).candidates.find((x) => x.signal === "context_overflow");
+    expect(cand).toMatchObject({ family: "harness", counts: { layer: "context" } });
+    expect(cand!.facts.join(" ")).toMatch(/\[context\] in config\.toml/);
+    await runImprove(c, { run: true, k: 1, yesSpend: true, runCell: async () => { throw new Error("no cell expected"); } }).catch(() => null);
+    const props = listProposals(c, { status: "pending" }).proposals.filter((p) => p.title.includes("context too long"));
+    expect(props.length).toBeGreaterThan(0);
+    for (const p of props) {
+      expect(p.diff.map((d) => d.path)).toEqual(["system.md"]);
+      expect(p.rationale).toMatch(/\[context\]/);
+      expect(p.diff[0]!.after).not.toMatch(/\[context\]/);
+    }
+  });
+
+  it("one failure is one class: a stall stop stays the existing `stall` candidate, not a second one", () => {
+    const c = project();
+    for (let s = 1; s <= 3; s++) trail(`stall${s}`, [{ kind: "session_start", mode: "task" }, failing({ stop_reason: "stall", code: 4 })]);
+    expect(mineAll(c).candidates.map((x) => x.signal)).toEqual(["stall"]);
+  });
+});

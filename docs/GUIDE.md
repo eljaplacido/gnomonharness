@@ -1132,16 +1132,19 @@ nothing; `gnomon --help` prints all of it.
 | `gnomon endpoint [list \| test NAME \| add …]` | Lists endpoints and keys and cross-checks model ids; runs one token; declares an endpoint end to end | Model setup, diagnosis |
 | `gnomon key [set \| list \| unset] NAME` | The machine-local credential store | Keys |
 | `gnomon check --base REV [--head REV] [--role R \| --agent N] [--transcript F --format FMT] [--json]` | Judges a change by this surface's rules as they stood at `REV`. Exit 0 held, 2 failed, 10 no verdict. `FMT`: `claude-code`, `opencode`, `goose`, `qwen-code`, `mini-swe-agent` or `gnomon` (its own chained, sealed audit trail). | CI, hooks, other harnesses |
+| `gnomon check --policy-lint [--strict-policy] [--json]` | Lints the surface's own rules: contradictory, shadowed, never-matching, uncovered and granted-but-always-denied. Warnings; `--strict-policy` exits 2 on any finding. The same findings ride `check --base`'s verdict as `policy_lint`. | Reviewing a surface; CI |
 | `gnomon check --install-hook claude-code` | Prints the Claude Code hooks JSON and writes nothing | Governing Claude Code |
 | `gnomon guard --tool T --input JSON [--role R \| --agent N]`, or `--from claude-code\|opencode\|cursor\|generic` with the call on stdin | Decides one tool call another harness is about to make, by the committed rules: exit 0 allow, 2 deny, 3 ask, 10 no decision (answered as ask) | Governing another agent at run time |
 | `gnomon guard install claude-code\|opencode\|cursor [--write [--local]]` | Prints the hook or plugin for that harness; `--write` adds it to this project's config, `--local` keeps it out of git. For Cursor, `--write` merges into an existing `.cursor/hooks.json` (your other hooks stay) and brings an older gnomon install up to date | Setting up `guard` |
 | `gnomon acp [--role R] [--profile N]` | Serves the Agent Client Protocol on stdin/stdout for an editor. Same surface, roles, approvals and audit as `prompt`. | Zed, JetBrains IDEs |
 | `gnomon trust [list \| grant \| revoke]` | What this project's `.gnomon/` grants beyond the defaults, and whether this machine trusts it | A repository you did not write |
 | `gnomon proposals [list \| show ID \| accept ID \| reject ID [--note N]] [--json]` | The pending proposals to change `.gnomon/` (a skill, a memory entry, an edit to `system.md`): `show` prints the exact diff, `accept` applies it (the surface hash moves; from the next session) and refuses if the files changed since, `reject` changes nothing. A person's decision: it refuses inside an agent session and without a terminal (exit 3). See 7.10 | Letting the harness learn without it editing itself |
-| `gnomon improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--max-requests N] [--allow-host-probes] [--schedule nightly\|weekly] [--json]` | Mines the audit trails for what keeps recurring (a refused rule, an unused skill, a build command, a failure class), drafts, lints and probes each against the current surface on `.gnomon/trials/`, composes the ones that helped, and writes proposals. A dry run by default; nothing reaches `.gnomon/` until you accept, or a policy you declared (`[improve] auto_accept`) does. See 7.11 | Letting the harness find its own improvements, measured, under your rules |
+| `gnomon improve [--dry-run] [--run] [--k N] [--budget-usd X] [--role R] [--max-requests N] [--allow-host-probes] [--schedule nightly\|weekly] [--incidents] [--json]` | Mines the audit trails for what keeps recurring (a refused rule, an unused skill, a build command, a failure class), drafts, lints and probes each against the current surface on `.gnomon/trials/`, composes the ones that helped, and writes proposals. A dry run by default; nothing reaches `.gnomon/` until you accept, or a policy you declared (`[improve] auto_accept`) does. See 7.11 | Letting the harness find its own improvements, measured, under your rules |
 | `gnomon memory [list \| show NAME] [--json]` | The notes a person accepted into `.gnomon/memory/` | Seeing what the harness remembers about this repository |
 | `gnomon inbox [list \| show ID \| add --title T \| ack ID \| resolve ID \| mcp] [--json]` | Work items the dashboard's **Flag for fix** (or you) wrote to `.gnomon-inbox/` for a harness to read as information, never as an instruction. `gnomon guard install claude-code --write` (and `install cursor --write`, via Cursor's `sessionStart` hook) hands the open ones to the harness at session start; `gnomon inbox mcp` serves them to Cursor and Claude Code (list, get, acknowledge, resolve; no add) | Telling a harness what to fix |
 | `gnomon audit [show \| verify]` | Lists trails; checks every chain, seal and signature anchor. `verify` exits 1 on a break or when there is nothing to verify. | Review, release gates |
+| `gnomon audit scan [TRAIL \| DIR] [--min-severity low\|medium\|high] [--json]` | Offline, advisory: finds multi-step patterns a per-call guard cannot see (a credential read then network, a write outside the project or an encoding step; write, chmod, run; repeated refusals with variations; credential locations probed across tools; an instruction-like marker in tool output then a risky action; a `cd` out of the root, a symlink out then a write through it, a refusal retried through another tool). Reads gnomon trails and other harnesses' guard feeds; a metadata-only trail works for every rule but the marker one. Exit 0 none, 2 a finding, 10 could not run. | After a long autonomous run; reviewing a Claude Code or Cursor session governed by `gnomon guard` |
+| `gnomon security test --sandbox [--image REF]` | Adds the sandbox-escape probes to the attack corpus: non-destructive configuration and containment checks of every place a command runs (tool paths per `[sandbox] level`; `bash` under `exec = off`, `os`, `os` with `reads = scoped`, `docker`), each reported pass, FAIL (a claimed containment that did not hold, exit 2), open (a documented limit) or skipped with why. No exploit code, no root, nothing outside a temp directory it creates. The matrix of level against threat is in [THREAT-MODEL.md](THREAT-MODEL.md). | Before trusting a sandbox level on a new machine or image |
 | `gnomon dashboard [--port N] [--no-open] [--dir P]` | A command center in the browser on 127.0.0.1: projects, sessions as a timeline, refusals by rule, audit verification, contracts, token measurements (alias `ui`); a one-click local quick start, `init`, `guard install`, setup, check, trust and endpoint test as buttons that run those same commands, each change confirmed first; a Ctrl/Cmd+K palette and a light theme. | Reviewing what happened without reading JSONL; first-run setup without a terminal wizard |
 | `gnomon sessions` | Saved interactive sessions, newest last | Find one to resume |
 | `gnomon skill [list \| accept ID \| reject ID \| mine]` | Active skills and the proposals the agent made; `mine` also reports skills that fire but are never cited, skills worth trialling, and context cost per firing | Reviewing what it learned |
@@ -1279,6 +1282,89 @@ frames, above; `clock`, `braille` and `ascii` override the theme); `clock` is `�
 Windows console always gets ascii, and the line stays one row:
 `◐ thinking · 12s · esc cancels`. `spinner = false` turns it off, and nothing is
 drawn when output is not a TTY.
+
+### The harness signature
+
+A score is a property of a model and a harness together, so an evaluation
+report should say which harness. The survey *Agent Harness Engineering* (2026,
+Table 3, p.32) lists, per layer (E execution, T tools, C context, L loop
+control, O observability, V verification, G governance), the minimum
+configuration to report. gnomon already holds and hashes every fact it can
+report, and assembles them into one block, `harness_signature`
+(`gnomon.harness_signature/1`):
+
+- every `gnomon eval` report carries `harness_signature.base` and `.candidate`
+  (null for a command arm: another harness is not gnomon's to describe);
+- `gnomon compliance pack` writes it as `signature.json`;
+- it holds the build (version and revision), the surface hash, the role's model,
+  endpoint name, provider and host, the resolved context window and where the
+  number came from, the edit format, a hash over the offered tool schemas, the
+  sandbox level and exec mode, the approval gate, the verify gate, the context
+  policy, compaction, masking and think cap, the skills inline cap, the step
+  budgets, and the attempts `k`.
+
+It never holds a credential, a URL's userinfo, a command or the system prompt
+(each is a sha256), or a path. Two runs with equal signatures were run under
+the same harness. Adding it changes nothing in a session: it is read from the
+loaded surface, never sent to a model.
+
+| Layer | Table 3 row | Signature field | Note |
+|---|---|---|---|
+| E Execution | Execution image | `environment.exec` | mode and, under docker, the image name; a digest is not recorded |
+| E Execution | Dependencies | **not reported** | the project's own; a [verify] setup is named by hash under validation.verify |
+| E Execution | Reset policy | `environment.reset` | a fresh clone per eval cell; a live session has none |
+| E Execution | Resource limits | `environment.tool_timeout_seconds` | the bash timeout; no CPU or memory limit is set by gnomon |
+| E Execution | Isolation boundary | `environment.sandbox` | level, network, exec mode, reads scope, profile |
+| T Tools | Tool names | `tools.names` | the tools offered to the reporting role |
+| T Tools | Schemas | `tools.hash` | sha256 over the offered definitions (tools_hash.ts) |
+| T Tools | Versions | `build.version` | tools are versioned with the build; there is no per-tool version |
+| T Tools | Routing or discovery policy | `tools.mcp_servers` | gnomon offers a role's list; MCP servers are named, never discovered |
+| T Tools | Session semantics | `tools.edit_format` | edit variant; every other tool is stateless per call |
+| C Context | System prompt | `context.system_prompt_sha256` | hash, never the text |
+| C Context | Retrieval source | **not reported** | gnomon has no retrieval layer |
+| C Context | Memory policy | **not reported** | gnomon keeps no cross-session memory the model reads |
+| C Context | Compaction rule | `context.compaction` | policy, compaction, retain_after, reserve, masking, think cap, skills inline cap |
+| C Context | Model-visible state | `context.window` | the resolved window and where the number came from |
+| L Loop control | Control graph | `control.task_allow` | which roles may delegate to which |
+| L Loop control | Retry and stopping rules | `control.max_steps_total` | step budgets, verify rounds, attempts |
+| L Loop control | Checkpoints | `control.max_steps` | a leg's checkpoint; sessions resume from the record |
+| L Loop control | Handoffs | `control.task_allow` | task delegation and escalation declared in the role |
+| L Loop control | Durable task state | **not reported** | the session record is the state; it is not part of the signature |
+| O Observability | Trace schema | `observability.record_schemas` | the schemas the run's records carry |
+| O Observability | Identifiers | **not reported** | session and trail ids are per run, so not a configuration |
+| O Observability | Sampling policy | **not reported** | gnomon records every turn; there is no sampling |
+| O Observability | Cost and latency fields | `observability.record_schemas` | tokens, requests and wall time are in every record |
+| O Observability | Retention window | **not reported** | the project's; gnomon never deletes a trail |
+| V Verification | Task version | `validation.task_spec_sha256` | the trial spec's hash (an eval), else null |
+| V Verification | Environment checks | `validation.verify` | the [verify] gate: hash of the command, when, rounds |
+| V Verification | Grader or judge version | `validation.verify.command_sha256` | the declared check; gnomon has no model judge |
+| V Verification | Repeats | `validation.attempts` | k per task (an eval), else null |
+| V Verification | Aggregation rule | `validation.aggregation` | how an eval aggregates; null outside one |
+| G Governance | Principal identity | **not reported** | gnomon records the OS user's session, not a principal |
+| G Governance | Permission scope | `governance.rules` | bash_allow/bash_deny/write_allow counts and the surface hash |
+| G Governance | Approval policy | `governance.approval` | the gate |
+| G Governance | Audit fields | `observability.record_schemas` | the hash-chained audit trail's kinds are published |
+| G Governance | Escalation path | `control.escalate` | declared escalation, when the role has one |
+
+The `not_reported` list in the signature names the rows above that gnomon
+cannot fill, so an absent row is never mistaken for a clean one.
+`conformance/harness_signature.json` pins the shape and this mapping.
+
+### Policy lint
+
+`gnomon check` lints the surface's own rules, and `gnomon check --policy-lint`
+does only that (no `--base`). It reasons with the matchers the loop and
+`gnomon guard` use, never its own, and reports, per role: the same pattern
+allowed and denied (`contradiction`), a pattern a broader one already covers
+(`shadowed`), a pattern that cannot match (`never_matches`: an invalid regular
+expression, an impossible anchor, a glob such as `src/` or `{a,b}/*.ts`), a rule
+for a tool the role does not hold (`unreachable`), a tool the role is granted
+and the policy then always refuses (`always_denied`), and a category nothing
+covers (`uncovered`: no `[governance]`, MCP tools offered to a role with no
+`tools` list, bash with no rule). Findings are warnings and the exit is
+unchanged; `--strict-policy` makes any finding exit 2. `--json` carries them as
+`policy_lint`, and the verdict gains a warnings line when findings exist. The lint
+reads the surface in the working directory, not the `--base` revision's.
 
 ---
 
@@ -2048,6 +2134,84 @@ declared, it also refuses unless you pass `--max-requests <n>`, a ceiling on mod
 inside an agent session, even `--scheduled`, it refuses; a cron `gnomon loop run improve` does not.
 Contract: [CONTRACTS.md §59](CONTRACTS.md).
 
+### 7.12 Why a run failed, and a regression test for what you learned
+
+A failed benchmark cell says it failed, not which part of the harness to look at.
+Two read-side commands give you that, and neither calls a model or changes a session.
+
+```bash
+gnomon audit attribute                 # the newest 20 session trails: one primary cause per failure
+gnomon audit attribute <trail> --json  # one trail
+gnomon eval --against profile:smart    # a failed cell carries its cause; the report a per-arm histogram
+gnomon improve --incidents             # dry run: the regression trials it would draft from incidents
+gnomon improve --incidents --run       # write them as proposals
+```
+
+Each cause is a tag and one of the ETCLOVG layers (execution, tools, context,
+lifecycle, verification, governance), for example `tools / tool_call_malformed` (a tool
+call cut off at the output limit), `context / context_overflow` (the context could not be
+fitted), `lifecycle / budget_exhausted`, `governance / policy_refusal` (a write to the
+location the task needed was refused), `verification / verify_misled` (your `[verify]`
+check passed and the real check failed). The first rule that matches is primary and the
+others are listed; the order is in [CONTRACTS.md §60](CONTRACTS.md). `wrong_result` is the
+floor: the run finished, changed something and ran commands, and the check still failed.
+It says the harness cannot tell, not that the model was wrong. A trail does not know the
+task's own check, so a trail with no failure signal is not a success.
+
+`gnomon improve` uses the cause to choose what to propose. A Tools or Verification cause
+becomes a note for `system.md` (an edit that did not match: read the file again before
+editing). A Context cause becomes the same kind of note, and the proposal's rationale adds a
+suggestion for you about `[context]` in `config.toml`; improve never edits config.
+
+A trial's `setup` and `check` are POSIX shell. On Windows they run under the POSIX shell the bash
+tool uses (Git Bash, or `GNOMON_SHELL`), never `cmd.exe`; with neither installed a cell is an apparatus
+failure that says so, not a failing check.
+
+`gnomon improve --incidents` drafts a trial spec per kind of incident in the trails: a boundary
+that held (a refusal by the sandbox, the network, the surface), a tamper that was caught, a
+declared check that failed and then passed, an overflow that was survived. Each is a proposal for
+`trials/incident-<kind>-<hash>.toml`. A trial spec decides what counts as better, so **only you
+accept one**: policy `auto_accept` never covers it and the agent cannot propose it. A draft is
+built from the kind of incident and the trail and sequence number it came from, never from file
+contents; a task is a generic probe of the same boundary. A draft from a failed check cannot
+recreate the failing state, so it says so in its head and asks you to add a `setup`. After you
+accept one, run it on later builds with `gnomon eval --spec <name>`.
+Contract: [CONTRACTS.md §60](CONTRACTS.md).
+
+### 7.13 What still earns its keep: `gnomon eval --ablate`
+
+A skill, a system.md section or a gate that helped a weaker model can be dead weight on a
+stronger one. `gnomon eval --ablate` measures that on your own tasks. It builds one arm per
+component, each your surface with exactly one thing removed or neutralised (a `##` section of
+system.md, a skill, `[verify]`, approval mode in the eval clone only, observation masking, the
+think cap, the structured summary, each non-essential tool, the memory index), runs each against
+the base on `.gnomon/trials/` with the eval's paired machinery, and prints per component the
+change in pass rate, steps, tokens and refusals, with the eval's Wilson intervals and McNemar p.
+
+```
+gnomon eval --ablate                          # the plan: arms, estimated cells. No model call, no write.
+gnomon eval --ablate skills,tools --run       # measure those arms
+gnomon eval --ablate --families qwen,claude --run --max-requests 400
+gnomon eval --ablate skills --run --propose   # also write retirement proposals
+```
+
+Each verdict is one of `load_bearing` (removing it cost passes the eval can see),
+`neutral` (nothing it can see changed: a candidate for removal, especially when it is also
+cheaper), `harmful` (removing it helped) or `inconclusive` (too few pairs, a partial run, or a
+drop within noise). Nothing is applied. With `--propose`, a neutral-and-cheaper skill or system.md
+section becomes a proposal you accept in `gnomon proposals`.
+
+Governance is never ablated: the policy's deny rules, the sandbox, the guard and the audit trail
+are not components, and asking for one is refused. The one deliberate, scoped exception is the
+approval arm, which sets the gate to `never` inside the eval clone only (a cell has no person to
+ask); your working tree and real policy are untouched. A policy or config shape the editor cannot
+change whole (an inline table, dotted keys, a multi-line value) is refused, never half-edited. `--run` refuses as `gnomon improve --run` does:
+inside an agent session, without a confined `[sandbox]` (or `--allow-host-probes`), and for a role
+that can reach a billed endpoint without declared `[improve]` rates or `--max-requests`. With
+`--families`, each family runs as the declared role of that family. Contract:
+[CONTRACTS.md §61](CONTRACTS.md).
+
+
 ---
 
 ## 8. Configuration essentials
@@ -2490,6 +2654,38 @@ variant = "compat"
 [sandbox]
 network = false
 allow_package_index = ["pypi.org", "files.pythonhosted.org", "registry.npmjs.org"]
+```
+
+**Opt-in: the hashline edit format (`[defaults] edit_format = "hashline"`).**
+Off unless declared; `str_replace` stays the default, with the same tool
+schemas, descriptions and wire as before. With it, `read` shows each line as
+`LINE:HASH|text` (`12:a3|  return x;`, the hash two hex digits of the line's
+text) and `edit` takes `path` and `edits`, a list of
+`{op, anchor, end?, text?}` where `op` is `replace`, `delete`, `insert_before`
+or `insert_after`, `anchor` is a tag copied from `read`, and `end` makes a
+replace or delete cover a range. The model copies two short tokens instead of
+reproducing the old text. Every anchor in a call is checked against the file as
+it is; one that no longer matches (the file changed since the read, or the tag
+was mistyped) refuses the whole call, writes nothing, and tells the model to
+read again. Edits in one call may not overlap. CRLF files keep their line
+endings (a new line takes the ending of the line it replaces or sits beside, not
+a whole-file setting) and a missing final newline stays missing, with no stray
+carriage return on the last line. The 2-hex hash is a drift guard, not a
+checksum: about 1 in 256 changed lines still match, and an anchor is accepted
+only when the line number and the hash both match. The edit and `read`
+descriptions in the schema are replaced by short ones that say so; the format
+overrides a `variant = "compat"` on `edit`. The idea is Can Bölük's
+[The Harness Problem](https://blog.can.ac/2026/02/12/the-harness-problem/)
+(2026-02-12), which reports gains on many models from this change alone; an
+independent test (nwyin's edit-bench) found it neutral to negative on Python,
+so compare a pair on your own tasks before relying on it. `ast` is still
+published and not implemented. The spec is pinned in
+`conformance/edit_hashline.json`.
+
+```toml
+# config.toml
+[defaults]
+edit_format = "hashline"
 ```
 
 **Opt-in: the think cap (`[turn] max_reasoning_tokens_without_action`).** Off

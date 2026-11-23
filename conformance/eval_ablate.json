@@ -1,0 +1,138 @@
+{
+  "schema": "gnomon.ablate/1",
+  "section": "CONTRACTS.md section 61",
+  "exit_codes": {
+    "ok": 0,
+    "usage": 1,
+    "refused": 3,
+    "could_not_run": 10
+  },
+  "component_kinds": [
+    "system_section",
+    "skill",
+    "verify",
+    "approval",
+    "masking",
+    "think_cap",
+    "structured_summary",
+    "tool",
+    "memory_index"
+  ],
+  "verdicts": [
+    "load_bearing",
+    "neutral",
+    "harmful",
+    "inconclusive"
+  ],
+  "never_ablated": [
+    "policy deny rules",
+    "sandbox",
+    "guard",
+    "audit"
+  ],
+  "essential_tools": [
+    "read",
+    "bash",
+    "edit",
+    "write"
+  ],
+  "groups": {
+    "system": "system_section",
+    "skills": "skill",
+    "verify": "verify",
+    "approval": "approval",
+    "masking": "masking",
+    "think_cap": "think_cap",
+    "summary": "structured_summary",
+    "tools": "tool",
+    "memory": "memory_index"
+  },
+  "runs_dir": ".gnomon-trials/_ablate",
+  "report_keys": [
+    "schema",
+    "mode",
+    "run",
+    "spec",
+    "families",
+    "never_ablated",
+    "plan",
+    "rows",
+    "components",
+    "proposals",
+    "budget",
+    "problems"
+  ],
+  "plan_keys": [
+    "arms",
+    "cells_per_arm_family",
+    "cells",
+    "billed"
+  ],
+  "row_keys": [
+    "component",
+    "family",
+    "role",
+    "status",
+    "reason",
+    "pairs",
+    "eval_status",
+    "base",
+    "ablated",
+    "delta",
+    "mcnemar_p",
+    "alpha",
+    "mde",
+    "verdict",
+    "cheaper",
+    "differ",
+    "report",
+    "report_sha256"
+  ],
+  "delta_keys": [
+    "pass",
+    "steps",
+    "tokens",
+    "cost_usd",
+    "refusals"
+  ],
+  "component_keys": [
+    "component",
+    "kind",
+    "label",
+    "files",
+    "verdict",
+    "neutral_and_cheaper",
+    "by_family"
+  ],
+  "verdict_rules": {
+    "harmful": "pass_delta > 0 and McNemar p < alpha",
+    "load_bearing": "pass_delta < 0 and McNemar p < alpha, or refusals rose with pass_delta <= 0",
+    "inconclusive": "not probed, eval not complete, or pass_delta < 0 the sample cannot separate from noise",
+    "neutral": "otherwise",
+    "component": "load_bearing in any family, else harmful, else inconclusive; neutral only when every family is"
+  },
+  "propose": {
+    "kinds": [
+      "skill",
+      "system_section"
+    ],
+    "candidate": {
+      "skill": "retire",
+      "system_section": "harness"
+    },
+    "signal": "ablate_neutral",
+    "signature_prefix": "ablate:"
+  },
+  "refusals": [
+    "governance component named",
+    "run inside an agent session",
+    "no trial spec",
+    "billed role without rates and without --max-requests",
+    "unconfined sandbox without --allow-host-probes"
+  ],
+  "unsupported_shapes": [
+    "inline table: name = { ... }",
+    "dotted keys: name.key = value",
+    "multi-line string or array value for an edited key"
+  ]
+}

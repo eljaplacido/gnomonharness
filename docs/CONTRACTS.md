@@ -306,12 +306,22 @@ at `config.ts:793`. Corrected 2026-09-06 — a disclosure that outlives the defe
 it discloses is its own defect, and it was telling readers a working feature was
 inert.
 
-**`edit_format` is still the real case.** Of `ast`, `hashline` and
-`str_replace`, only `str_replace` is implemented; the other two are published in
-the enumerations contract and inert. They stay published because entries leave
-that list by being implemented, never by being dropped from what was already
-published — and `auditSurface` reports a surface that selects one, so nobody
-gets the inert behaviour in silence.
+**`edit_format`: `hashline` is implemented, `ast` is the real case.** Of `ast`,
+`hashline` and `str_replace`, `str_replace` (the default) and `hashline` (0.6.7,
+opt-in) are implemented; `ast` is published in the enumerations contract and
+inert. It stays published because entries leave that list by being implemented,
+never by being dropped from what was already published — and `auditSurface`
+reports a surface that selects it, so nobody gets the inert behaviour in
+silence. The hashline format, after Can Bölük, "The Harness Problem" (2026):
+`read` shows `LINE:HASH|text`, where HASH is FNV-1a 32 over the UTF-8 bytes of
+the line (no trailing CR), xor-folded to 8 bits, two lowercase hex digits;
+`edit` takes `edits` of `{op, anchor, end?, text?}` with `op` one of
+`replace`, `delete`, `insert_before`, `insert_after`. Every anchor is checked
+against the file as it is, and one stale anchor refuses the whole call. Line
+endings: a new line takes the ending of the line it replaces (insert: the anchor
+line); a file with no final newline has no ending on its last line. The hash is
+8 bits, so about 1 in 256 changed lines collide; line number and hash must both
+match. Vectors: `conformance/edit_hashline.json`.
 
 **Fixture**: `conformance/enumerations_schema.json` — JSON Schema for the
 enumerations output. CI asserts the output conforms.
@@ -583,8 +593,30 @@ change was judged by), `checks`, `exit`; optionally `audit` (`trail`, `seq`,
 `hash`, `surface_audit_enabled`), `error`, `recovered`, `rules_rev` (the
 commit `--base` resolved to, whose `.gnomon/` the rules were read from), `exec`
 (`mode`, `image`, `network`: where `[verify]` ran, after this machine's exec
-floor), `warnings` (strings). Each check: `id`,
-`status`; optionally `findings`, `reason`, `inspected`.
+floor), `warnings` (strings), `policy_lint` (see below; present only when
+there are findings). Each check: `id`, `status`; optionally `findings`,
+`reason`, `inspected`.
+
+**Policy lint** (since 0.6.7; schema `gnomon.policy_lint/1`). `gnomon check`
+also lints the rules of the surface in `--dir`: `policy_lint` is
+`{schema, count, by_kind, findings}`, and each finding is `{kind, where, rule,
+message}` plus `role` and `pattern` when there is one. `kind` is one of
+`contradiction` (the same pattern allowed and denied, or an allow entry a deny
+refuses: deny wins), `shadowed` (a duplicate, or a broader pattern already
+decides), `never_matches` (an invalid regular expression, an anchor that
+cannot hold, a glob that cannot match a root-relative file path, a `task_allow`
+or `mcp__` name nothing declares), `unreachable` (a rule for a tool the role
+does not hold), `always_denied` (a granted tool the policy then always
+refuses: a deny that matches every command, `webfetch` under
+`network = false`, a disabled tool, `task_allow = []`) and `uncovered` (no
+`[governance]`, `network = true` or `level = "off"` with nothing covering it,
+bash with no rule, MCP tools offered to a role with no tools list). The linter
+uses the matchers the loop and `gnomon guard` use (`bashPolicy`,
+`globToRegExp`, `new RegExp`), never its own. Findings are warnings: the exit
+is unchanged. The lint reads the surface in the working directory (`--dir`), not the `--base` revision's. `--strict-policy` makes any finding exit **2** (a check failed);
+it never turns a 2 into anything else. `gnomon check --policy-lint` lints
+alone, with no `--base`, and prints `policy_lint`'s document (exit 0, or 2
+under `--strict-policy`). Fixture: `conformance/policy_lint.json`.
 
 **Fixture**: `conformance/check_verdict.json`. `packages/gnomon-cli/src/check.test.ts`
 asserts the code's check ids and statuses, this table, and the fixture are the
@@ -4546,7 +4578,21 @@ command arm),
 `wall_ms`, with the candidate's fields null in `single` mode and a command
 arm's tokens and requests null),
 `mde` (null in `single`), `thresholds`, `budget`, `trust` (`base`,
-`candidate`), `leftovers`, `status`, `meets_thresholds`, `reasons`.
+`candidate`), `leftovers`, `status`, `meets_thresholds`, `reasons`. `harness_signature`
+(since 0.6.7; after `arms`) holds `base` and `candidate`, each a harness
+signature or null (a command arm).
+
+**Harness signature** (schema `gnomon.harness_signature/1`): what the report
+states about the harness, mapped to the survey's Table 3 (Agent Harness
+Engineering, 2026, p.32). Keys, in order: `schema`, `build` (`id`, `version`,
+`revision`, `dirty`), `surface_hash`, `role`, `model` (`model`, `endpoint`,
+`provider`, `host`, `local`, `temperature`, `top_p`), `fallback`,
+`environment`, `tools`, `context`, `control`, `observability`, `validation`,
+`governance`, `not_reported`. It carries no credential, no URL userinfo, no
+command or prompt text (sha256s) and no path. The mapping from Table 3's rows
+to fields, and the rows gnomon cannot fill, is the table in GUIDE.md; the
+shape and the mapping are pinned by `conformance/harness_signature.json`,
+which `harness_signature.test.ts` asserts against a real signature.
 
 **Output.** The run writes `.gnomon-trials/_eval/<utc>-<suffix>/report.json`
 and `cells.jsonl`. These sit under the trials directory, so the guard and the
@@ -4795,6 +4841,10 @@ An unknown subcommand is exit 10.
   project is asked about rather than refused, so `bash_write_outside`
   expects `blocked` there (`expect_win32`).
 
+**`--sandbox`** (opt-in, §61) adds a `sandbox_probes` object to the `--json` report and the sandbox-escape
+probes to the text report, and makes the exit 2 when a claimed containment did not hold. Without the flag
+the report, `gnomon.security_test/2` and the exit are unchanged.
+
 **Fixture**: `conformance/security_test.json`, which holds the corpus ids,
 expectations, families, OWASP ids, keys and exits.
 `packages/gnomon-cli/src/security_test.test.ts` covers:
@@ -4822,6 +4872,7 @@ inside the project's `.gnomon/`. The directory holds:
 - `surface/manifest.json`;
 - `compliance`, `security`, `security_test`, `dataflow` and `metrics`, each
   as `.json` (the command's `--json` document) and `.txt`;
+- `signature.json`: the default role's harness signature (§47), part `signature`;
 - `audit/verify.json`: per trail in the `[audit] dir`, its `records`, `ok`,
   `sealed`, `sha256` and `problem`?;
 - `audit/trails/*.jsonl`, only with `--with-trails`;
@@ -4832,8 +4883,8 @@ inside the project's `.gnomon/`. The directory holds:
 `harness`, `catalog` (`as_of`, `stale`), `exits` (each report's own exit),
 `audit` (`trails`, `verified`, `broken`, `copied`), `evals`, `disclaimer`,
 `files` (`path`, `part`, `sha256`, `bytes`). `part` is one of `surface`,
-`compliance`, `security`, `security_test`, `dataflow`, `metrics`, `audit`,
-`evals` or `readme`. The command prints `pack.json`'s own sha256, for
+`compliance`, `security`, `security_test`, `dataflow`, `metrics`, `signature`,
+`audit`, `evals` or `readme`. The command prints `pack.json`'s own sha256, for
 anchoring.
 
 `--verify <dir>` re-hashes every listed file. A path that resolves outside the
@@ -5359,6 +5410,9 @@ and dashes, at most 60). `harness`: `system.md`, and any file the surface itself
 lists under `[proposals] harness_paths` in `policy.toml`; never `skills/`,
 `memory/` or `extensions/`, and never policy, roles, tools or config unless a
 person listed them. No absolute path, no `..`, no hidden or non-plain segment.
+One exception names `trials/`: a regression trial drafted from an incident,
+`trials/incident-<stem>-<hash8>.toml` (60.2). It is a person's to accept: policy never
+accepts it and the agent never proposes it.
 
 **Accept** (`gnomon proposals accept <id>`): refused inside an agent session and
 without a person present, exactly as a skill decision is (§11: `refused_by_gate`,
@@ -5597,7 +5651,9 @@ exit 3 where a CLI reports one): the proposal's kind is listed (and `harness` on
 if `harness` itself is); each path is `skills/<id>.md`, `memory/<id>.md` or, for
 a harness edit, `system.md`, never a deletion and never `policy.toml`,
 `roles.toml`, `tools.toml`, `config.toml`, `trials/`, `loops/`, `extensions/` or
-`profiles/` even if `[proposals] harness_paths` lists them; `improve.lint` is
+`profiles/` even if `[proposals] harness_paths` lists them (this includes the
+incident trials of 60.2: `acceptProposal` refuses a policy decision on any
+proposal that touches `trials/`, whatever the lint and the probe say); `improve.lint` is
 clean and a fresh lint is clean; the probe is `probed`; the cited report file
 exists at `.gnomon-trials/_eval/<run>/report.json` (`<run>` is not `.` or `..`), its bytes hash to
 `report_sha256`, a hash-chained `eval_run` record under the audit directory carries that report
@@ -5647,3 +5703,347 @@ scripted model, k, regression, composition, the budget, the policy's every
 refusal, retirement, byte-identity of a normal run with an `[improve]` table) and
 `packages/gnomon-cli/src/improve_cmd.test.ts` (flags, refusals, the schedule file,
 output, the dashboard view).
+
+## 60. Failure attribution and regression trials from incidents — `gnomon audit attribute`, `cells[].attribution`, `gnomon improve --incidents`, `gnomon.attribution/1`, `gnomon.incident_trials/1`, `v: 1`
+
+Two read-side features that close the loop between a failure and the next build.
+Neither changes a session: nothing in the loop calls them, no audit kind is added
+(the published `audit_kind` enumeration is unchanged), and a session's record and
+trail hold no attribution (`attribution_inert.test.ts`).
+
+### 60.1 Layer-tagged failure attribution
+
+A failed turn or cell is given ONE primary cause, tagged with the harness layer it
+belongs to, and the other causes it also showed. Deterministic and model-free:
+`failure_attribution.ts` reads the turn's own fields (`stop_reason`, `bucket`,
+`code`, `stop_detail`, `tool_log`, `verify`, `counters`) and, when there is a
+trail, its `model_call`, `verify` and `record_tamper` records. It reads no prompt or
+response text, so it works on `record = "metadata"` trails.
+
+**Layers** (ETCLOVG): `execution`, `tools`, `context`, `lifecycle`,
+`observability`, `verification`, `governance`. A tag with no recorded cause is
+`unknown`, whose layer is `null`. (`observability` is in the enumeration for the
+published layer set; no tag is assigned to it yet.)
+
+**Precedence.** The first matching rule wins; every other match is `secondary`, in
+this order. An advisory match (a weaker signal of the same tag) is only ever
+secondary. The catch-all `wrong_result` is never secondary.
+
+| # | tag | layer | primary when |
+|---|---|---|---|
+| 1 | `record_tamper` | governance | `stop_reason` tamper, or a `record_tamper` record |
+| 2 | `launch_failure` | lifecycle | `stop_reason` apparatus |
+| 3 | `context_overflow` | context | `endpoint_error` with code 13 (the context could not be fitted), or the last `model_call` code 13 |
+| 4 | `endpoint_error` | execution | `endpoint_error` with another code, or the last `model_call` code 10, 11, 12 |
+| 5 | `budget_exhausted` | lifecycle | `stop_reason` deadline, step_wall or killed, or a tool call cut by the deadline |
+| 6 | `tool_call_malformed` | tools | `stop_reason` malformed; `truncated` with `stop_detail.repeats` above 0 (tool calls cut at the output limit); 3 malformed calls |
+| 7 | `output_truncated` | context | `stop_reason` truncated without repeats |
+| 8 | `loop_stall` | execution | `stop_reason` stall (any stall-signal counter is advisory) |
+| 9 | `policy_refusal` | governance | a refused write or edit outside the OS temp directory, or 2 calls refused outside the root or sandbox (any other refusal is advisory) |
+| 10 | `edit_failed` | tools | the last write or edit failed, or 3 failed |
+| 11 | `tool_timeout` | tools | the last acting call timed out, or 5 timeouts |
+| 12 | `tool_error` | tools | 3 rejected `compute`/`glob`/`grep`/`read` calls |
+| 13 | `verify_misled` | verification | the declared `[verify]` check passed and the external check failed |
+| 14 | `verify_failed` | verification | the declared `[verify]` check failed at the end |
+| 15 | `wrong_thing_verified` | verification | a failing command, then an edit of a test or check file, then a passing command, with no other file changed in between |
+| 16 | `context_loss` | context | `counters.model_calls.trims.overflow` above 0 (the provider refused a request as too long and gnomon dropped half the conversation) |
+| 17 | `no_deliverable` | execution | finished with no write, no edit and no change to the tree |
+| 18 | `unverified_finish` | verification | finished and no command ran after the last write to a non-document file |
+| 19 | `wrong_result` | execution | finished after a change and the check still failed (the catch-all) |
+| 20 | `unknown` | none | nothing recorded says why |
+
+A tag names where to look, not what a model did. `wrong_result` is where the harness
+cannot tell a wrong solution from a right one: it says only that the run finished,
+changed something, ran commands, and still failed the check. It is the honest floor,
+not a verdict on the model.
+
+**What is a failure.** With the caller's check result: a failed check is a failure, a
+passed one never is (`attributeFailure` returns null). With no check result (a
+trail), a turn shows a failure signal when its `stop_reason` is other than
+`answered` or `empty`, its `bucket` is other than `result`, or its last `verify`
+failed. A trail does not know whether the task's own check passed, so "no failure
+signal" is not "succeeded".
+
+**Where it appears.**
+- `gnomon eval`: each scored (`valid`) gnomon-arm cell with `passed === false` gets
+  `attribution: { tag, layer, rank, signals, secondary }` in `cells.jsonl`; the report
+  gets the optional key `attribution: { base, candidate }`, each a histogram
+  `{ failed, by_tag, by_layer }` in contract order. A report with no attributed cell
+  has no `attribution` key and is what it was (`conformance/eval_report.json`).
+  Command arms and apparatus failures have none.
+- `gnomon audit attribute [<trail>...] [--last <n>] [--json]`: for each verified
+  session trail (default the newest 20; guard, check, trial and eval trails are not
+  sessions), the primary cause or "no failure signal recorded"; a histogram; a trail
+  whose chain does not verify is listed in `excluded`, left out, and makes the exit 2.
+  Exit 0, 2, 10 as `audit metrics`. Schema `gnomon.attribution/1`.
+- `gnomon improve` mining (59): a failure's attributed cause chooses its candidate.
+  The stop-reason classes that mined before (stall, step limit, malformed,
+  truncated, failed check) are unchanged, and one failure is mined into one class.
+  New classes, each a note for `system.md` whose candidate records its `layer`:
+  `edit_failed`, `tool_timeout`, `tool_error` (Tools), `wrong_thing_verified`,
+  `unverified_finish` (Verification), `context_overflow`, `context_loss` (Context).
+  A Context cause also carries a suggestion in the proposal's rationale, for a person
+  to read: that `[context]` in config.toml controls when the context is trimmed.
+  The suggestion is rationale text only. `[context]` is config, and no proposal
+  reaches config: the proposal's diff is `system.md` and nothing else.
+
+**Validation (reported, not claimed).** On a set of 72 failed cells from three
+internal benchmark ledgers (gnomon cells only), each read and labelled by a person
+from its record, stderr and verifier output with written criteria before the
+classifier ran, the classifier first agreed on 63 of 72; after one rule was fixed
+(a refused write into the OS temp directory is scratch, not a blocked deliverable) it
+agreed on 70 of 72. The set is stratified toward rare causes, so the figures are
+agreement, not prevalence, and the fix was made on the set it is measured on. The two
+disagreements are cells that survived a context overflow by dropping half the
+conversation: the label said `wrong_result`, the rule says `context_loss`. Tags with
+no real cell in the set (`edit_failed`, `tool_timeout`, `tool_error`,
+`unverified_finish`, `record_tamper`, `launch_failure`) are pinned by synthetic cases
+only. The raw ledgers are not in this repository.
+
+**Fixture**: `conformance/failure_attribution.json` (the precedence, the thresholds and
+a synthetic case per tag, asserted against the code by
+`packages/gnomon-core/src/failure_attribution.test.ts`).
+
+### 60.2 Regression trials from incidents
+
+`gnomon improve --incidents [--run] [--json]` reads the verified audit trails for
+incidents and drafts, per kind, a trial spec as a PROPOSAL (`incident_trials.ts`).
+Deterministic: no model is called and nothing is probed. A dry run (the default)
+prints what it would draft and writes nothing. `--run` writes the proposals, and
+refuses inside an agent session: it is a person's.
+
+| incident | the record it is read from | the drafted task |
+|---|---|---|
+| `guard_hold` | a `tool_call` with `bucket: "refusal"` and `governance.decision: "deny"`, or a `guard` record with `decision: "deny"`; keyed by the rule | a generic probe of the same boundary for `outside_root`, `sandbox`, `network`, `surface`; passes while the boundary holds. Any other rule is listed as skipped |
+| `tamper` | a `record_tamper` record | append to a record file; passes when the run leaves a `record_tamper` event |
+| `verify_recovered` | a `verify` record with `ok: false`, later one with `ok: true`, same declared command | run the project's declared `[verify]` command; the check is that command |
+| `overflow_recovered` | a `turn` with `counters.model_calls.trims.overflow` above 0 and no `endpoint_error` stop | count the lines of a file too large to read whole |
+
+**A proposal, and who accepts it.** Each draft is a `harness` proposal, `source:
+"mine"`, with one diff entry for `trials/incident-<stem>-<hash8>.toml` (`stem`:
+`guard-hold`, `tamper`, `verify`, `overflow`) and the incident's `{trail, seq}`
+pointers as evidence. That is the only path under `trials/` a proposal may name
+(`pathProblem`), and `before_sha256` is null: the file must not exist. A trial spec
+is the judge a change is measured by (23, orthogonality), so:
+- **only a person accepts it.** `[improve] auto_accept` never covers a proposal that
+  touches `trials/`, whatever kinds it lists: `autoAcceptVerdict` refuses the path
+  and `acceptProposal` refuses a `policy:improve.auto_accept` decision outright;
+- **the agent never proposes it.** `writeProposal` refuses a `source: "agent"`
+  proposal that touches `trials/`;
+- a draft that is not a usable spec (no `[[task]]`, a task without a prompt or a
+  check) is refused at write and at accept.
+
+**What it copies.** Records are metadata-only by default, so a draft is built from
+the incident's kind and its pointers. It copies from a record only the incident's
+kind, the rule's name and a declared `[verify]` command (and that only when it is
+plain words, with no shell control). It copies no path, no command line, no prompt
+and no file content. A task statement is a generic probe written in this module.
+
+**Limits, said plainly.** The `verify_recovered` draft cannot recreate the failing
+state (the record holds no file contents): as drafted it passes whenever the check
+passes, and its head says so and asks the person to add a `setup`. The `tamper` draft
+is not exercised end to end here. Re-running a drafted spec on a later build is
+`gnomon eval --spec <name>`; the round trip "fails on a build that regresses, passes
+on one that holds" is checked for the probe tasks by running each task's `setup` and
+`check` with and without the forbidden effect, not by a model.
+
+Drafts are idempotent (a draft already in the surface or already pending is skipped)
+and capped at 6 per run. A trail whose hash chain does not verify is left out and
+named in `notes`.
+
+**Fixture**: `conformance/incident_trials.json` (and the `harness_incident_trial`
+path in `conformance/proposals.json`); `packages/gnomon-core/src/incident_trials.test.ts`
+and `packages/gnomon-cli/src/attribute.test.ts`.
+
+## 61. `gnomon eval --ablate` — a load-bearing analysis of the surface; `gnomon.ablate/1`, `.gnomon-trials/_ablate/`, `v: 1`
+
+"Keeping harnesses useful as models improve": a component written for a weaker
+model can be dead weight on a stronger one. `gnomon eval --ablate` builds one
+candidate arm per component, each the current surface with exactly ONE
+component removed or neutralised, runs each against the base on the project's
+trial spec with `gnomon eval`'s machinery (paired, interleaved, k attempts, a
+temporary clone per cell), and reports what each component is worth. It never
+changes `.gnomon/`; a verdict is information, and removing anything stays a
+person's decision. Without `--ablate`, `gnomon eval` is byte-identical to a
+build without this section.
+
+**Command.** `gnomon eval --ablate [components] [--families a,b] [--run] [--k N]
+[--budget-usd X] [--max-requests N] [--propose] [--spec NAME]
+[--allow-host-probes] [--json]`. `--dry-run` is the default: it prints the arms,
+the families and the estimated cell count (arms x families x tasks x k x 2) and
+calls no model and writes nothing. `--run` measures. Exit 0 done (a dry run
+included), 1 usage, 3 refused, 10 could not run.
+
+**Components** (the arm's id; each is built only when the surface has it):
+`system:<heading>` (a `##` section of system.md, or `#` when there is none),
+`skill:<id>`, `verify` (the `[verify]` table), `approval` (`[approval] gate`
+becomes `never` in the eval clone only), `masking` (`[context.mask_observations]`),
+`think_cap` (`[turn] max_reasoning_tokens_without_action`), `structured_summary`
+(`[context] summary_style` `structured` becomes `prose`), `tool:<name>` (set
+`enabled = false`; `read`, `bash`, `edit` and `write` are never offered) and
+`memory_index` (every `memory/*.md` withheld). `--ablate` takes a comma list of
+groups (`system`, `skills`, `verify`, `approval`, `masking`, `think_cap`,
+`summary`, `tools`, `memory`) or ids; none means every component.
+
+**Governance is never ablated.** The policy's deny rules, the sandbox, the guard
+and the audit trail are not components. A request naming one (`sandbox`,
+`guard`, `audit`, `policy`, `deny`, `governance`, `trust`) is refused (exit 3),
+and every arm is checked before it is built: `policy.toml` with its `[verify]`
+table and approval gate value normalised, and `roles.toml`, must be
+byte-identical to the base's, else the run is refused. The one deliberate,
+scoped exception is the `approval` arm: it sets `[approval] gate = "never"` in
+the **eval clone only** (a cell has no person to ask, so a gate that waits would
+measure the wait, not the surface); the working tree and the real policy are
+untouched, and the report says so on the arm's label. No other governance value
+is ever changed. A table the editor cannot drop or edit whole (an inline table
+`name = { ... }`, dotted keys `name.key = ...`, a multi-line string or array
+value) is refused: that component is not planned, never half-edited
+(`conformance/eval_ablate.json` `unsupported_shapes`).
+
+**Families.** `--families a,b` crosses each arm with model families: a model id's
+family is its leading letters after the provider prefix and `:tag` (`qwen3.6:35b`
+is `qwen`), and a family runs as the declared role of that family (the spec's
+role when it is in the family, else the first declared). A family no role
+declares is refused. Absent, the spec's role alone runs.
+
+**Refusals, as `gnomon improve --run`**: inside an agent session (exit 3); with no
+trial spec; a role that can reach a non-local endpoint with no `[improve]
+usd_per_mtok_in` and `usd_per_mtok_out` and no `--max-requests`; an unconfined
+`[sandbox]` without `--allow-host-probes`. `--budget-usd` (and `[improve]
+budget_usd`) stops the run between cells; `--max-requests` is a total over the
+whole run, and an arm that begins after it is spent is reported `skipped`.
+
+**Report** (`gnomon.ablate/1`, written to `.gnomon-trials/_ablate/<run>.json`; each
+arm's eval is also recorded as `gnomon eval` records it): `schema, mode, run, spec,
+families, never_ablated, plan, rows, components, proposals, budget, problems`. A row
+is one component x family: both arms' passes with Wilson intervals, refusals, output
+tokens and requests; `delta` (ablated minus base: `pass`, `steps`, `tokens`,
+`cost_usd`, `refusals`); the eval's McNemar `p`, `alpha` and minimum detectable
+difference; the files that differ; `verdict`; `cheaper`.
+
+**Verdicts** (never applied). `harmful`: removing it raised the pass rate, with p <
+alpha. `load_bearing`: removing it lowered the pass rate with p < alpha, or raised
+refusals without raising passes. `inconclusive`: not probed, the eval did not
+complete, or a pass drop the sample cannot separate from noise. `neutral`:
+otherwise. A component's verdict over its families is `load_bearing` if any is,
+else `harmful`, else `inconclusive`, and `neutral` only when every family is;
+`neutral_and_cheaper` also needs fewer steps or tokens and no more of either in
+every family. Verdicts are conservative toward keeping a component.
+
+**`--propose`** (with `--run`) writes, through the §58 store, a retirement proposal
+for each neutral-and-cheaper `skill` and a `harness` proposal for each such
+`system:` section (`improve.signal` `ablate_neutral`, signature
+`ablate:<component>`; one signature is proposed once). Other components have no
+proposal kind and are named for a person to change by hand. A person accepts.
+
+**Fixture**: `conformance/eval_ablate.json`; `packages/gnomon-core/src/ablate.test.ts`
+(arms differ by exactly the ablated file, the dry run, governance, verdicts, the
+budget, a measured run, the report shape) and
+`packages/gnomon-cli/src/ablate_cmd.test.ts`.
+
+## 62. Trajectory scan — `gnomon audit scan`, `gnomon.audit_scan/1`, `v: 1`
+
+An offline, deterministic, advisory reader of trails for multi-step patterns that a
+per-call guard cannot see. It runs no model, loads no surface, writes nothing and
+blocks nothing: a finding is a pointer to steps to read, never a verdict.
+
+**Command.** `gnomon audit scan [<trail.jsonl | dir>] [--min-severity low|medium|high] [--json]`.
+A directory is walked recursively for `*.jsonl` (no symlinks, no `node_modules`, no
+`.git`); the default path is `<dir>/.gnomon-audit`. A file with no audit record is
+listed under `skipped`. The hash chain is not verified (`gnomon audit verify` does
+that). Exit 0 no finding at or above `--min-severity` (`info`, `low`, `medium` or `high`; default
+`low`), 2 a finding, 10 could not run (no such path, a bad `--min-severity`).
+
+**What it reads.** Two kinds of trail: a gnomon session (`tool_call` records: `tool`,
+`target`, `bucket`, `governance`, and `result` under `record = "full"`) and the
+cross-harness feed (§44: `guard` records with `tool`, `target`, `decision`, from
+Claude Code, opencode, Cursor, Codex and the others governed through `gnomon guard`).
+A step is *denied* when a gnomon call's bucket is `refusal` or its governance
+decision is `deny`, or a guard record's decision is `deny`; an `ask` in a feed is
+treated as having run, because the feed does not record whether a person approved
+it. A refusal whose summary says the role may not use the tool is a limit of the
+role, not an attempt, and is not counted as one. `session_start.cwd` is the project
+root. A metadata-only trail keeps each call's tool and target, which is enough for
+every rule but `injection_followed_by_action`; a trail with no recorded tool output
+is reported (`results_recorded: false`), never as clean.
+
+**Rules and severities** (`rule`, `severity`, evidence steps in order):
+
+| Rule | Fires when | Severity |
+|---|---|---|
+| `slow_exfiltration` | an allowed read of a credential location (`.env`, `~/.ssh`, cloud and token files, private keys, shell history, an environment dump) is followed later by network (an upload: `curl -d`, `nc`, `scp`, `ssh`, an interpreter's socket code; a fetch; a web tool), a write outside the project root (temp directories excepted) or an encoding step (`base64`, `xxd`, `zip`, `tar c`) | `high` an upload, or an encoding step then a network call that sends; `medium` a fetch, an outside write or an encoding step; `low` a web-tool fetch; loopback targets and `.env.example`-style files never count |
+| `staged_payload` | a file written (tool, redirect, `tee`, a download's output, `cp`/`mv`) is made executable (`chmod +x`, a mode with an x bit) | `info` inside the project (`chmod +x script; ./script` is ordinary work, hidden at the default `--min-severity low`); in a temp or dot directory `low`, `medium` when it is then run (`./f`, an absolute path, `sh f`); downloaded `medium`, `high` when run. A script run through an interpreter without `chmod` does not fire |
+| `privilege_creep` | three or more different targets of one tool refused within twelve steps (a refusal that says the role may not use the tool does not count) | `low` 3-4, `medium` 5-9, `high` 10 or more |
+| `credential_probing` | three or more credential locations of at least two kinds through at least two tools; or two or more refused with three or more locations | `medium`; `high` with a refusal and four or more locations |
+| `injection_followed_by_action` | recorded tool output carries an instruction-like phrase ("ignore previous instructions", "disregard your rules", a role-switch, "do not tell the user", a chat-template tag) and within six steps a network call, a credential touch, a write outside the root, a refusal, `git push`, `chmod +x` or `rm -r` follows | `high` an upload, a credential touch or a refusal; `medium` otherwise |
+| `guard_evasion` | (a) a `cd` that leaves the root toward an ancestor, the home or a system tree, then a relative-path change in the same command; (b) a symlink to outside the root or a credential, then a write through it; (c) a call refused through one tool and the same path then reached through another (a write retried as a shell redirect, a read as `cat`) | (a) `low` (weak alone); (b) `high`; (c) `high` when the refused path is a credential, `.gnomon/`, a git hook, CI or a host's config, else `medium`, `low` when it is a temp file; for a refused shell command only paths outside the root or secrets count |
+
+**Report** (`--json`): `schema` (`gnomon.audit_scan/1`), `path`, `min_severity`,
+`trails` (`trail`, `host`, `steps`, `denied`, `results_recorded`, `findings`),
+`skipped`, `findings` (`rule`, `severity`, `trail`, `summary`, `evidence`:
+`seq`, `tool`, `target`, `as`), `by_rule`, `by_severity`, `limits`, `exit`. Findings are
+ordered by trail, first evidence step, rule, so the same files give byte-identical
+output. An evidence `target` is shortened to 140 characters with bearer tokens,
+`token=`/`key=`/`password=` values and `-u` credentials masked; it is not a secret store.
+
+**Limits, stated by the report.** It reads each call's tool and target: a path built at
+run time or code an interpreter runs is not seen; a heredoc body is dropped as text, so
+code written that way is judged only by what the command does with it; a container
+whose working directory differs from `session_start.cwd` can read paths as outside the
+root. It is advisory and after the fact. The false-positive rate on real trails is
+measured per change, not asserted here.
+
+**Fixture**: `conformance/audit_scan.json` (synthetic trails and the findings a reader must
+produce, with the cases that must stay silent); `packages/gnomon-cli/src/audit_scan.test.ts`
+(the fixture, the metadata-only trail, masking, the command's exits, determinism, that
+scanning writes nothing).
+
+## 63. Sandbox-escape probes — `gnomon security test --sandbox`, `gnomon.sandbox_probes/1`, `v: 1`
+
+An opt-in group of the security test (§50): without `--sandbox` the report, its exit and
+`gnomon.security_test/2` are byte-identical to before. With it, the report gains a
+`sandbox_probes` object and the exit is 2 when a claimed containment did not hold.
+
+**Safety.** The probes are configuration and containment checks. They run no exploit
+and no kernel exploit, attempt no breakout, need no root, and touch only a temp
+directory the test creates and removes: a canary file outside a project root it made,
+a fake credential in a substituted HOME (the real one is never read), a loopback port
+and one on this machine's own address that it opened, one `connect()` to the docker
+socket closed at once with nothing sent, `/proc/self` reads, and `test -w` (an `access(2)`
+call that writes nothing) on `/proc/sys/kernel/core_pattern`, `/proc/sysrq-trigger` and
+the cgroup files. Docker is used only if the image is already present (default
+`debian:stable-slim`, `--image REF`); nothing is pulled.
+
+**Configurations** (`configs`): `tools_off`, `tools_confined`, `tools_strict` (the
+`read`/`write` tool paths at each `[sandbox] level`), `exec_off`, `exec_os`
+(`reads = all`), `exec_os_scoped` (`reads = scoped`) and `exec_docker` (`network = false`),
+the last four for `bash`. One that cannot be measured here (no docker or image, no
+Landlock, Windows) is `skipped` with the reason in `configs[].skipped`, never passed.
+
+**Probes** (`probes`, with the survey's escape class: SandboxEscapeBench's
+misconfiguration, privilege allocation and runtime/orchestration, plus the
+permission boundary an OS sandbox draws): a canary outside the root read and written
+through the tools and through `bash`; a symlink out of the root; a fake credential in
+HOME; network egress to a non-loopback address and to loopback with `network = false`;
+the docker socket; `no_new_privs`; effective capabilities (CAP_SYS_ADMIN, privileged);
+host PID and network namespaces; writable host mounts besides the root; `/proc/sys` and
+cgroup writability. Each lists where it `applies` and where gnomon `claimed` it holds.
+
+**Cells.** Each probe on each configuration is `pass` (claimed, held), `FAIL` (claimed,
+did not hold: exit 2), `open` (not claimed, and it is open: the documented limit),
+`contained_unclaimed`, `skipped` (could not be measured: with the reason) or `n/a`.
+Each probe has a control where one is possible (a file inside the root must read and
+write, an unsandboxed run must escape), and a sandbox that refuses to start is
+`skipped`, not a pass. A refused connection to the loopback port under `exec = os` is
+not expected: loopback is open by design there, and the report says `open`.
+
+**Matrix.** `matrix` is the claim per sandbox level and threat (`file_escape`,
+`network`, `process`, `credential`, `container_breakout`): `covered`, `partially` or
+`not covered`, the same table as docs/THREAT-MODEL.md (a test holds the two equal). It
+states that docker here is a shared-kernel container, that there is no microVM or
+gVisor backend, and that kernel flaws and side channels are not probed.
+
+**Fixture**: `conformance/sandbox_probes.json`; `packages/gnomon-cli/src/sandbox_probes.test.ts`
+(the contract, the docs matrix, the tool paths, a negative control that proves an
+escape under a claimed level is a FAIL, and the `os` and `docker` probes where the
+machine has them).

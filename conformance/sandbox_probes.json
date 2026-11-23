@@ -1,0 +1,308 @@
+{
+ "schema": "gnomon.sandbox_probes/1",
+ "$comment": "conformance for `gnomon security test --sandbox` (CONTRACTS.md section 63). The probes are configuration and containment checks only: no exploit, no breakout attempt, nothing outside a temp directory the test creates. `claimed` is where gnomon says the configuration contains the thing; a claimed probe that does not hold is a FAIL (exit 2). The matrix is the one in docs/THREAT-MODEL.md.",
+ "exit": {
+  "clean": 0,
+  "failed": 2,
+  "could_not_run": 10
+ },
+ "configs": [
+  "tools_off",
+  "tools_confined",
+  "tools_strict",
+  "exec_off",
+  "exec_os",
+  "exec_os_scoped",
+  "exec_docker"
+ ],
+ "threats": [
+  "file_escape",
+  "network",
+  "process",
+  "credential",
+  "container_breakout"
+ ],
+ "escape_classes": [
+  "permission_boundary",
+  "misconfiguration",
+  "privilege_allocation",
+  "runtime_orchestration"
+ ],
+ "cell_statuses": [
+  "pass",
+  "FAIL",
+  "open",
+  "contained_unclaimed",
+  "skipped",
+  "n/a"
+ ],
+ "coverage": [
+  "covered",
+  "partially",
+  "not covered"
+ ],
+ "report_keys": [
+  "schema",
+  "platform",
+  "harness",
+  "image",
+  "configs",
+  "probes",
+  "cells",
+  "matrix",
+  "limits",
+  "leftover",
+  "failed",
+  "exit"
+ ],
+ "cell_keys": [
+  "probe",
+  "config",
+  "status",
+  "claimed",
+  "detail"
+ ],
+ "config_keys": [
+  "id",
+  "label",
+  "skipped",
+  "pass",
+  "fail",
+  "open",
+  "contained_unclaimed",
+  "not_measured"
+ ],
+ "probes": [
+  {
+   "id": "tool_read_outside_root",
+   "threat": "file_escape",
+   "escape_class": "permission_boundary",
+   "applies": [
+    "tools_off",
+    "tools_confined",
+    "tools_strict"
+   ],
+   "claimed": [
+    "tools_confined",
+    "tools_strict"
+   ]
+  },
+  {
+   "id": "tool_write_outside_root",
+   "threat": "file_escape",
+   "escape_class": "permission_boundary",
+   "applies": [
+    "tools_off",
+    "tools_confined",
+    "tools_strict"
+   ],
+   "claimed": [
+    "tools_confined",
+    "tools_strict"
+   ]
+  },
+  {
+   "id": "tool_symlink_out_of_root",
+   "threat": "file_escape",
+   "escape_class": "permission_boundary",
+   "applies": [
+    "tools_off",
+    "tools_confined",
+    "tools_strict"
+   ],
+   "claimed": [
+    "tools_confined",
+    "tools_strict"
+   ]
+  },
+  {
+   "id": "bash_read_outside_root",
+   "threat": "file_escape",
+   "escape_class": "permission_boundary",
+   "applies": [
+    "exec_off",
+    "exec_os",
+    "exec_os_scoped",
+    "exec_docker"
+   ],
+   "claimed": [
+    "exec_os_scoped",
+    "exec_docker"
+   ]
+  },
+  {
+   "id": "bash_write_outside_root",
+   "threat": "file_escape",
+   "escape_class": "permission_boundary",
+   "applies": [
+    "exec_off",
+    "exec_os",
+    "exec_os_scoped",
+    "exec_docker"
+   ],
+   "claimed": [
+    "exec_os",
+    "exec_os_scoped",
+    "exec_docker"
+   ]
+  },
+  {
+   "id": "bash_credential_read",
+   "threat": "credential",
+   "escape_class": "permission_boundary",
+   "applies": [
+    "exec_off",
+    "exec_os",
+    "exec_os_scoped",
+    "exec_docker"
+   ],
+   "claimed": [
+    "exec_os_scoped",
+    "exec_docker"
+   ]
+  },
+  {
+   "id": "network_egress_when_off",
+   "threat": "network",
+   "escape_class": "permission_boundary",
+   "applies": [
+    "exec_off",
+    "exec_os",
+    "exec_os_scoped",
+    "exec_docker"
+   ],
+   "claimed": [
+    "exec_os",
+    "exec_os_scoped",
+    "exec_docker"
+   ]
+  },
+  {
+   "id": "network_loopback_when_off",
+   "threat": "network",
+   "escape_class": "permission_boundary",
+   "applies": [
+    "exec_off",
+    "exec_os",
+    "exec_os_scoped",
+    "exec_docker"
+   ],
+   "claimed": [
+    "exec_docker"
+   ]
+  },
+  {
+   "id": "docker_socket_reachable",
+   "threat": "container_breakout",
+   "escape_class": "misconfiguration",
+   "applies": [
+    "exec_off",
+    "exec_os",
+    "exec_os_scoped",
+    "exec_docker"
+   ],
+   "claimed": [
+    "exec_os",
+    "exec_os_scoped",
+    "exec_docker"
+   ]
+  },
+  {
+   "id": "no_new_privileges",
+   "threat": "container_breakout",
+   "escape_class": "privilege_allocation",
+   "applies": [
+    "exec_off",
+    "exec_os",
+    "exec_os_scoped",
+    "exec_docker"
+   ],
+   "claimed": [
+    "exec_os",
+    "exec_os_scoped",
+    "exec_docker"
+   ]
+  },
+  {
+   "id": "container_capabilities",
+   "threat": "container_breakout",
+   "escape_class": "privilege_allocation",
+   "applies": [
+    "exec_off",
+    "exec_os",
+    "exec_os_scoped",
+    "exec_docker"
+   ],
+   "claimed": [
+    "exec_docker"
+   ]
+  },
+  {
+   "id": "host_pid_namespace",
+   "threat": "process",
+   "escape_class": "misconfiguration",
+   "applies": [
+    "exec_off",
+    "exec_os",
+    "exec_os_scoped",
+    "exec_docker"
+   ],
+   "claimed": [
+    "exec_docker"
+   ]
+  },
+  {
+   "id": "host_net_namespace",
+   "threat": "network",
+   "escape_class": "misconfiguration",
+   "applies": [
+    "exec_off",
+    "exec_os",
+    "exec_os_scoped",
+    "exec_docker"
+   ],
+   "claimed": [
+    "exec_docker"
+   ]
+  },
+  {
+   "id": "host_mounts_writable",
+   "threat": "container_breakout",
+   "escape_class": "misconfiguration",
+   "applies": [
+    "exec_docker"
+   ],
+   "claimed": [
+    "exec_docker"
+   ]
+  },
+  {
+   "id": "proc_sys_writable",
+   "threat": "container_breakout",
+   "escape_class": "runtime_orchestration",
+   "applies": [
+    "exec_off",
+    "exec_os",
+    "exec_os_scoped",
+    "exec_docker"
+   ],
+   "claimed": [
+    "exec_docker"
+   ]
+  },
+  {
+   "id": "cgroup_writable",
+   "threat": "container_breakout",
+   "escape_class": "runtime_orchestration",
+   "applies": [
+    "exec_off",
+    "exec_os",
+    "exec_os_scoped",
+    "exec_docker"
+   ],
+   "claimed": [
+    "exec_docker"
+   ]
+  }
+ ]
+}

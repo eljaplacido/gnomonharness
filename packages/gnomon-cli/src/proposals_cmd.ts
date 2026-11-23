@@ -13,6 +13,8 @@
 
 import {
   acceptProposal,
+  touchesTrials,
+  TRIAL_JUDGE_WARNING,
   findMemory,
   listProposals,
   loadMemory,
@@ -61,6 +63,7 @@ function show(config: GnomonConfig, p: Proposal): string {
     } else out.push(`  probe: ${pr.status}${pr.reason ? ` (${pr.reason})` : ""}${pr.hint ? `; ${pr.hint}` : ""}`);
     if (im.composed_of?.length) out.push(`  combines: ${im.composed_of.join(", ")}`);
   }
+  if (touchesTrials(p)) out.push("", `  ${TRIAL_JUDGE_WARNING}`);
   out.push("", renderDiff(config, p));
   if (p.decided_at) out.push("", `  ${p.status} ${p.decided_at} by ${p.decided_by}${p.note ? `: ${p.note}` : ""}`);
   return out.join("\n");
@@ -109,6 +112,7 @@ export function runProposals(config: GnomonConfig, a: ProposalsArgs, out: (s: st
         else {
           out(sub === "accept" ? `Accepted ${d.id}: wrote ${d.paths.map((x) => `.gnomon/${x}`).join(", ")}` : `Rejected ${d.id}`);
           if (sub === "accept") out("The surface hash has changed. It applies from the next session.");
+          if (sub === "accept" && touchesTrials(p)) out(TRIAL_JUDGE_WARNING);
           if (d.trail) out(`Recorded in ${d.trail}`);
           if (!d.sealed) err("The change was made and recorded, but the trail could not be sealed; `gnomon audit verify` will report it unsealed.");
         }

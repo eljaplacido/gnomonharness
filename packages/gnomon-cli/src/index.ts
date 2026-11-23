@@ -131,6 +131,7 @@ import { setProcessTitle } from "./proc_title.js";
 import { runInbox, runInboxHook } from "./inbox_cmd.js";
 import { runProposals, runMemory } from "./proposals_cmd.js";
 import { runImproveCmd, bindDraftModel } from "./improve_cmd.js";
+import { runAblateCmd } from "./ablate_cmd.js";
 import { serveInboxMcp } from "./inbox_mcp.js";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -1492,6 +1493,25 @@ async function cmdAudit(args: CliArgs): Promise<void> {
     }
     return;
   }
+  // The trajectory scan (audit_scan.ts): offline, over trails named on the
+  // command line, so it needs no surface and loads none.
+  if (args.subcommand === "scan") {
+    const { scanPath, formatScan, AUDIT_SCAN_SCHEMA, AUDIT_SCAN_EXIT, SEVERITIES } = await import("./audit_scan.js");
+    const min = args.flags["min-severity"];
+    if (min !== undefined && !(SEVERITIES as readonly string[]).includes(min)) {
+      process.exit(commandError(args, AUDIT_SCAN_SCHEMA, `--min-severity ${min}: use one of ${SEVERITIES.join(", ")}.`, AUDIT_SCAN_EXIT.couldNotRun));
+    }
+    try {
+      const target = args.positional[0] ?? join(projectRoot(args), ".gnomon-audit");
+      const report = scanPath(target, { minSeverity: min as (typeof SEVERITIES)[number] | undefined });
+      if (args.json) console.log(JSON.stringify(report, null, 2));
+      else for (const l of formatScan(report)) console.log(l);
+      if (report.exit !== 0) process.exit(report.exit);
+    } catch (err) {
+      process.exit(commandError(args, AUDIT_SCAN_SCHEMA, `audit scan could not run: ${err instanceof Error ? err.message : String(err)}`, AUDIT_SCAN_EXIT.couldNotRun));
+    }
+    return;
+  }
   const config = loadConfig(args.dir, args.flags['profile']);
   const settings = resolveAudit(config);
   // [audit.anchor] pushes to a remote, posts to an authority or runs a
@@ -1523,6 +1543,26 @@ async function cmdAudit(args: CliArgs): Promise<void> {
       if (report.exit !== 0) process.exit(report.exit);
     } catch (err) {
       process.exit(commandError(args, METRICS_SCHEMA, `metrics could not run: ${err instanceof Error ? err.message : String(err)}`, METRICS_EXIT.couldNotRun));
+    }
+    return;
+  }
+
+  // Failure attribution (attribute.ts): why a session failed, by harness layer.
+  if (sub === "attribute") {
+    const { buildAttributeReport, formatAttribute, ATTRIBUTE_EXIT } = await import("./attribute.js");
+    const { ATTRIBUTION_SCHEMA } = await import("gnomon-core");
+    const lastFlag = args.flags.last;
+    const last = lastFlag && lastFlag !== "true" ? Number(lastFlag) : undefined;
+    if (last !== undefined && !(Number.isInteger(last) && last > 0)) {
+      process.exit(commandError(args, ATTRIBUTION_SCHEMA, `--last needs a positive whole number, not ${lastFlag}.`, ATTRIBUTE_EXIT.couldNotRun));
+    }
+    try {
+      const report = buildAttributeReport(projectRoot(args), { last, trails: args.positional });
+      if (args.json) console.log(JSON.stringify(report, null, 2));
+      else for (const l of formatAttribute(report)) console.log(l);
+      if (report.exit !== 0) process.exit(report.exit);
+    } catch (err) {
+      process.exit(commandError(args, ATTRIBUTION_SCHEMA, `attribute could not run: ${err instanceof Error ? err.message : String(err)}`, ATTRIBUTE_EXIT.couldNotRun));
     }
     return;
   }
@@ -1596,7 +1636,7 @@ async function cmdAudit(args: CliArgs): Promise<void> {
   }
 
   if (sub !== "show" && sub !== "list" && sub !== "verify") {
-    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify | anchor | tamper | metrics | schema | resolve`);
+    console.error(`Unknown audit subcommand: ${sub}. Use: show | verify | anchor | tamper | metrics | attribute | scan | schema | resolve`);
     process.exit(1);
   }
 
@@ -2622,6 +2662,20 @@ async function cmdSecurity(args: CliArgs): Promise<number> {
     try {
       const hosts = host === "all" ? SECURITY_TEST_HOSTS : ([host] as Array<(typeof named)[number]>);
       const report = runSecurityTest(dir, { role: args.role, hosts });
+      // Opt-in: the sandbox-escape probes (sandbox_probes.ts). Without the flag the
+      // report and its exit are what they always were.
+      if (args.flags.sandbox === "true") {
+        const { runSandboxProbes, formatSandboxProbes } = await import("./sandbox_probes.js");
+        const image = args.flags.image && args.flags.image !== "true" ? args.flags.image : undefined;
+        const probes = await runSandboxProbes({ image });
+        const exit = report.exit !== 0 && report.exit !== 10 ? report.exit : probes.exit !== 0 ? probes.exit : report.exit;
+        if (args.json) console.log(JSON.stringify({ ...report, exit, sandbox_probes: probes }, null, 2));
+        else {
+          for (const l of formatSecurityTest(report)) console.log(l);
+          for (const l of formatSandboxProbes(probes)) console.log(l);
+        }
+        return exit;
+      }
       if (args.json) console.log(JSON.stringify(report, null, 2));
       else for (const l of formatSecurityTest(report)) console.log(l);
       return report.exit;
@@ -2649,6 +2703,16 @@ async function cmdSecurity(args: CliArgs): Promise<number> {
  */
 async function cmdEval(args: CliArgs): Promise<number> {
   const config = loadConfig(args.dir, args.flags["profile"]);
+  if (args.flags["ablate"] !== undefined) {
+    return runAblateCmd(
+      config,
+      { flags: args.flags, json: !!args.json },
+      {
+        settleTrust: (c) => settleTrustHeadless(c, trustOptions(args)).outcome,
+        runCell: (wt, prompt, o) => runTask(loadConfig(wt, o.profile), prompt, { role: o.role, yes: args.yes, trust: o.trust }),
+      }
+    );
+  }
   const flag = (k: string) => (typeof args.flags[k] === "string" && args.flags[k] !== "true" ? (args.flags[k] as string) : undefined);
   const yesSpend = args.flags["yes-spend"] !== undefined || args.positional.includes("--yes-spend");
   let outcome: Awaited<ReturnType<typeof runEval>>;
@@ -3184,7 +3248,7 @@ Commands:
           report what came back. A model listing is not a test of a key —
           some providers serve one to no key at all.
 
-  audit [show|verify|anchor|tamper|metrics|schema|resolve <trail>:<seq> --reason <text>] [--dir <path>]
+  audit [show|verify|anchor|tamper|metrics|attribute|scan|schema|resolve <trail>:<seq> --reason <text>] [--dir <path>]
     Audit trails, when [audit] is enabled. 'verify' re-hashes each record
     and checks the chain, so a trail altered after the fact is detectable.
     With [audit.anchor] declared it also checks every sealed head against
@@ -3205,6 +3269,23 @@ Commands:
     guard's trails, other harnesses' sessions (Claude Code, opencode,
     Cursor): calls, decisions, rules and tools per host. Model-free. Exit 0,
     2 when a trail failed verification (left out), 10 could not run.
+    'attribute [<trail>...] [--last <n>] [--json]' names why a session
+    failed, by harness layer (execution, tools, context, lifecycle,
+    verification, governance): one primary cause per verified trail with
+    a failure signal, the others it also saw, and a histogram. Rules and
+    precedence: docs/CONTRACTS.md section 60. Model-free. Exit as metrics.
+    'scan [<trail.jsonl|dir>] [--min-severity info|low|medium|high] [--json]' reads
+    trails offline for multi-step patterns a per-call guard cannot see:
+    a credential read followed later by network, a write outside the
+    project or an encoding step; a file written, made executable, then run;
+    repeated refusals with variations; credential locations probed across
+    tools; an injection-like marker in tool output followed by a risky
+    action (record = "full" trails only); a cd out of the root, a symlink
+    out then a write through it, a refusal retried through another tool.
+    Works on gnomon trails and the guard feed of other harnesses; a
+    metadata-only trail is enough for every rule but the marker one.
+    Advisory and model-free; nothing is blocked. Default path:
+    .gnomon-audit/. Exit 0 no finding, 2 a finding, 10 could not run.
 
   skill [list [--candidates]|accept <id> [--evidence <report.json>]|reject <id> [--reason <text>]|mine [--json]] [--dir <path>]
     Skills the harness has learned. An agent proposes into
@@ -3332,6 +3413,10 @@ Commands:
     --require-guard fails (exit 2) a session that made calls the guard hook
     selects and that gnomon guard never decided (--session, or the
     transcript's own session; else every Claude Code session since install).
+    Policy lint: the surface's rules are linted (contradictory, shadowed,
+    never-matching, uncovered, granted-but-always-denied) and findings ride
+    the verdict as warnings and a "policy_lint" key; --strict-policy makes
+    any finding exit 2. "check --policy-lint" runs the lint alone, no --base.
   check --scorecard [--session <id>] [--transcript <file>] [--json]
     Summarise a foreign harness's run: guard decisions by family and verdict,
     tools seen vs governed, hook and session liveness, the audit trails'
@@ -3377,7 +3462,7 @@ Commands:
     surface problem); advice names a setting that would contain more. Runs
     no model and changes nothing. Exit 0 no risk, 2 a risk, 10 could not run.
 
-  security test [--host claude-code|opencode|cursor|codex|qwen-code|copilot|all] [--role <r>] [--json] [--dir <path>]
+  security test [--host claude-code|opencode|cursor|codex|qwen-code|copilot|all] [--role <r>] [--sandbox [--image <ref>]] [--json] [--dir <path>]
     A model-free attack corpus run through the real guard against a scratch
     copy of this surface (bait .env, CI workflow, a precious directory, an
     isolated HOME; all removed afterwards): destructive commands,
@@ -3386,6 +3471,17 @@ Commands:
     bypassPermissions, and controls against over-blocking. Each case is
     mapped to OWASP LLM Top 10 ids and says what it expected and got.
     Exit 0 every case held, 2 one did not, 10 could not run.
+    --sandbox adds the sandbox-escape probes: configuration and containment
+    checks (never exploits) of every place a command runs: tool paths at
+    each [sandbox] level, and bash under exec = off, os, os with reads =
+    scoped, and docker (the image must already be present; --image names
+    another). Canary files outside the project root, a fake credential in a
+    substituted HOME, network egress with network = false, the docker
+    socket, capabilities and no_new_privs, host PID/network namespaces,
+    writable host mounts, /proc/sys and cgroup. Each probe is reported per
+    level as pass, FAIL (a claimed containment that did not hold: exit 2),
+    open (not claimed, a documented limit), or skipped with why. Needs no
+    root; skips where docker or the OS sandbox is unavailable.
 
   compliance [--framework <id,...>] [--json] [--catalog <file>] [--dir <path>]
     Which controls of which frameworks this project has gnomon evidence for:
@@ -3422,6 +3518,24 @@ Commands:
   eval [--against profile:<name>|surface:<git ref>|command:<harness>]
        [--base command:<harness>] [--spec <name>] [--yes]
        [--yes-spend] [--trust] [--json] [--dir <path>]
+  eval --ablate [components] [--families <a,b>] [--run] [--k <n>]
+       [--budget-usd <x>] [--max-requests <n>] [--propose] [--allow-host-probes] [--json]
+    Which parts of this surface still earn their keep? Builds one arm per
+    component (system.md sections, skills, [verify], approval mode in the
+    eval clone only, masking, the think cap, the structured summary, each
+    non-essential tool, the memory index), each the surface with exactly
+    that one thing removed or neutralised, and measures it against the base
+    on .gnomon/trials/, optionally once per declared model family. Reports
+    pass, steps, tokens and refusals with the eval's uncertainty and a
+    verdict per component: load_bearing, neutral or harmful (inconclusive
+    when the sample cannot say). Never applied. Governance (policy deny
+    rules, sandbox, guard, audit) is never ablated. Dry by default: --run
+    measures, under the same refusals as improve (no agent session, a
+    confined [sandbox], billed roles need declared rates or --max-requests).
+    --propose (with --run) writes retirement proposals for neutral-and-cheaper
+    skills and system.md sections. Exit 0 done, 1 usage, 3 refused, 10 could not run.
+
+  eval (spec form)
     Measure on this project's own tasks (.gnomon/trials/<name>.toml, the
     skill trial's spec): alone, the surface's pass rate; with --against,
     whether another profile, the .gnomon/ of another commit with HEAD's
@@ -3435,7 +3549,7 @@ Commands:
     nothing. Exit 0 meets the spec, 2 does not, 10 no answer.
 
   improve [--dry-run] [--run] [--k <n>] [--budget-usd <x>] [--role <role>]
-          [--max-requests <n>] [--allow-host-probes] [--schedule nightly|weekly] [--json] [--dir <path>]
+          [--max-requests <n>] [--allow-host-probes] [--schedule nightly|weekly] [--incidents] [--json] [--dir <path>]
     Governed self-improvement (Harness^2's propose, probe, compose, over the
     hashed surface). Mines the audit trails for what keeps recurring: a
     refused rule (a skill), a skill that fires but is never cited (a
@@ -3451,8 +3565,15 @@ Commands:
     proposal meets its thresholds. --run refuses without a confined
     [sandbox] (or --allow-host-probes) and, for a billed probe role with no
     declared rates, without --max-requests. --schedule writes
-    .gnomon/loops/improve.toml for a person to commit and install. Exit 0
-    done, 1 usage, 3 refused, 10 could not run.
+    .gnomon/loops/improve.toml for a person to commit and install. A failure
+    is mined by its attributed cause (docs/CONTRACTS.md section 60): a Tools
+    cause is a note, a Context cause a note plus a suggestion in the
+    rationale for a person (config is never edited). --incidents drafts
+    regression trial specs from incidents in the trails (a boundary that
+    held, a tamper caught, a check that failed then passed, an overflow
+    survived), deterministic, no model, dry by default; --run writes them as
+    proposals for trials/incident-*.toml, which only a person accepts, never
+    policy. Exit 0 done, 1 usage, 3 refused, 10 could not run.
 
   chaos [--json] [--seed <n>] [--faults <id,...>] [--schedules <s,...>] [--out <file>]
     The fault-injection suite. A scripted model behind a loopback endpoint

@@ -18,7 +18,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { harnessBuild, loadConfig, recomputeManifest, resolveAudit, verifyTrail } from "gnomon-core";
+import { buildHarnessSignature, harnessBuild, loadConfig, recomputeManifest, resolveAudit, verifyTrail } from "gnomon-core";
 import type { TrustOptions } from "gnomon-core";
 import { buildComplianceReport, formatCompliance, loadControls, type ControlCatalog } from "./compliance.js";
 import { buildSecurityReport, formatSecurity } from "./security.js";
@@ -29,7 +29,7 @@ import { buildMetricsReport, formatMetrics } from "./metrics.js";
 export const PACK_SCHEMA = "gnomon.evidence_pack/1";
 export const PACK_EXIT = { ok: 0, mismatch: 2, couldNotRun: 10 } as const;
 /** The parts, in the order they are written. */
-export const PACK_PARTS = ["surface", "compliance", "security", "security_test", "dataflow", "metrics", "audit", "evals"] as const;
+export const PACK_PARTS = ["surface", "compliance", "security", "security_test", "dataflow", "metrics", "signature", "audit", "evals"] as const;
 
 export interface PackFile {
   path: string;
@@ -129,6 +129,10 @@ export function buildPack(
   const metrics = buildMetricsReport(root);
   put("metrics.json", "metrics", json(metrics));
   put("metrics.txt", "metrics", text(formatMetrics(metrics)));
+
+  // What a report should state about the harness (harness_signature.ts, the
+  // survey's Table 3): the default role's, from the surface just hashed.
+  put("signature.json", "signature", json(buildHarnessSignature(config, { surfaceHash: surface.surface_hash })));
 
   // Every trail, verified; copied only when asked (they can be large, and
   // with [audit] record = "full" they hold prompt text).

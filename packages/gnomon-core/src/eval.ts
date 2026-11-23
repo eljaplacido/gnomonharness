@@ -37,12 +37,14 @@ import { readFileSync, rmSync, statSync } from "node:fs";
 import { spawn, type ChildProcess } from "node:child_process";
 import { join, resolve } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
+import { buildHarnessSignature, type HarnessSignature } from "./harness_signature.js";
 import { GnomonConfig, loadConfig, parseToml, recomputeManifest, resolveRouting, routeRole, isLocalEndpoint } from "./config.js";
 import { AuditTrail, resolveAudit, type AuditRecord } from "./audit.js";
 import { harnessBuild } from "./build.js";
 import { appendFileIn, writeFileIn } from "./root_fs.js";
 import type { TrustOutcome } from "./trust.js";
 import type { TaskRecord } from "./prompt_loop.js";
+import { attributeFailure, attributionHistogram, type Attribution, type AttributionHistogram } from "./failure_attribution.js";
 import {
   loadTrialSpec,
   mcnemarExact,
@@ -261,6 +263,8 @@ export interface EvalCell {
   requests: number;
   tokens_out?: number;
   duration_ms: number;
+  /** Why a scored failure failed (failure_attribution.ts, CONTRACTS section 60). Only a gnomon arm's cell with passed === false has one. */
+  attribution?: Attribution;
 }
 
 interface Sign {
@@ -282,6 +286,12 @@ export interface EvalReport {
   harness: string;
   role: string;
   arms: { base: EvalArm; candidate: EvalArm | null; differ: string[] };
+  /**
+   * What the report states about the harness so results are comparable
+   * (harness_signature.ts, the survey's Table 3). One per gnomon arm; null for
+   * a command arm, which is another harness gnomon does not describe.
+   */
+  harness_signature: { base: HarnessSignature | null; candidate: HarnessSignature | null };
   pairs: { planned: number; run: number; valid: number };
   cells: { total: number; result: number; refusal: number; apparatus_failure: number };
   endpoints: {
@@ -306,6 +316,8 @@ export interface EvalReport {
   status: TrialStatus;
   meets_thresholds: TrialVerdict;
   reasons: string[];
+  /** Per arm, the failed cells by tag and ETCLOVG layer. Absent when no failed cell was attributed, so a clean report is unchanged. */
+  attribution?: { base: AttributionHistogram; candidate: AttributionHistogram | null };
 }
 
 /**
@@ -341,6 +353,8 @@ export interface EvalOptions {
    * billed-endpoint check asks whether the spec declared one.
    */
   maxRequests?: number;
+  /** The role every cell runs as, in place of the spec's (`gnomon eval --ablate --families`). */
+  role?: string;
   /** Checked before each cell: true stops the eval, `budget_exhausted`, as a spent request budget does. */
   stop?: () => boolean;
 }
@@ -411,7 +425,7 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
   }
   const gnomonBase = !cmdOf.base;
   const runCommand = opts.runCommand ?? runHarnessCommand;
-  const role = spec.role ?? resolveRouting(config).default;
+  const role = opts.role ?? spec.role ?? resolveRouting(config).default;
   const baseProfile = spec.model_profile ?? (config.profile?.overridden ? config.profile.requested : undefined);
   const baseConfig = spec.model_profile ? loadConfig(root, spec.model_profile) : config;
   if (spec.model_profile && baseConfig.profile?.problem) {
@@ -468,6 +482,16 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
     let cand: ArmSurface;
     let differ: string[];
     let candTrust: TrustOutcome | undefined;
+    // The harness signature (harness_signature.ts) of each gnomon arm, taken from
+    // the configuration its cells load, while the probe that holds it is alive.
+    const sigOpts = {
+      role,
+      task_spec_sha256: spec.sha256,
+      attempts: spec.attempts,
+      aggregation: against ? "paired: exact McNemar on pass, sign tests on tokens, requests and wall time" : "pass rate with a Wilson interval",
+    };
+    const baseSig: HarnessSignature | null = gnomonBase ? buildHarnessSignature(baseConfig, sigOpts) : null;
+    let candSig: HarnessSignature | null = null;
     try {
       install(probeCand.dir);
       const { manifest: a, ...baseArm } = armSurface(probeBase.dir);
@@ -487,6 +511,7 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
         if (candConfig.profile?.problem) {
           throw new EvalAbort(`The candidate arm's profile "${candProfile}": ${candConfig.profile.problem}.`);
         }
+        candSig = buildHarnessSignature(candConfig, sigOpts);
         candTrust = opts.settleTrust?.(candConfig);
         if (candTrust?.decision === "clamped") {
           throw new EvalAbort(
@@ -644,6 +669,10 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
                 pinned[arm] ??= { model: rec.model, endpoint: rec.endpoint };
                 cell.valid = true;
                 cell.passed = ran.code === 0;
+                if (!cell.passed) {
+                  const a = attributeFailure({ turn: rec as unknown as Parameters<typeof attributeFailure>[0]["turn"], check: { passed: false } });
+                  if (a) cell.attribution = a;
+                }
               }
             }
           } catch (err) {
@@ -699,9 +728,17 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
       harness: harnessBuild(),
       role,
       arms: { base: armOf("base"), candidate: against ? armOf("candidate") : null, differ },
+      harness_signature: {
+        base: baseSig ? { ...baseSig, surface_hash: base.surface_hash } : null,
+        candidate: candSig && !cmdOf.candidate ? { ...candSig, surface_hash: cand.surface_hash } : null,
+      },
       trust: { base: baseTrust?.decision ?? null, candidate: against ? (candTrust?.decision ?? null) : null },
       leftovers,
     };
+    if (cells.some((c) => c.attribution)) {
+      const of = (arm: EvalArmName) => attributionHistogram(cells.filter((c) => c.arm === arm).map((c) => c.attribution));
+      report.attribution = { base: of("base"), candidate: against ? of("candidate") : null };
+    }
     const ordered = orderReport(report);
     const final = trialFreeze(ordered) as EvalReport;
     const frozenCells = trialFreeze(cells) as EvalCell[];
@@ -729,14 +766,14 @@ export async function runEval(config: GnomonConfig, opts: EvalOptions): Promise<
 
 /** The published key order, so two runs' reports diff line by line. */
 const REPORT_ORDER: Array<keyof EvalReport> = [
-  "schema", "mode", "spec", "harness", "role", "arms", "pairs", "cells", "endpoints",
-  "mde", "thresholds", "budget", "trust", "leftovers", "status", "meets_thresholds", "reasons",
+  "schema", "mode", "spec", "harness", "role", "arms", "harness_signature", "pairs", "cells", "endpoints",
+  "mde", "thresholds", "budget", "trust", "leftovers", "status", "meets_thresholds", "reasons", "attribution",
 ];
 function orderReport(r: EvalReport): EvalReport {
-  return Object.fromEntries(REPORT_ORDER.map((k) => [k, r[k]])) as unknown as EvalReport;
+  return Object.fromEntries(REPORT_ORDER.filter((k) => r[k] !== undefined).map((k) => [k, r[k]])) as unknown as EvalReport;
 }
 
-type Summary = Omit<EvalReport, "harness" | "role" | "arms" | "trust" | "leftovers">;
+type Summary = Omit<EvalReport, "harness" | "role" | "arms" | "harness_signature" | "trust" | "leftovers">;
 
 function summariseEval(
   spec: TrialSpec,

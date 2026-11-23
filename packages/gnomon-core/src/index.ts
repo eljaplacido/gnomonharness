@@ -73,6 +73,8 @@ export * from "./shell.js";
 export * from "./must_fail_first.js";
 // `gnomon check`: the same rules, asked of a change another harness made.
 export * from "./check.js";
+export * from "./policy_lint.js";
+export * from "./harness_signature.js";
 // `gnomon guard`: the same rules, asked of one tool call another harness is about to make.
 export * from "./guard.js";
 export * from "./transcripts.js";
@@ -96,8 +98,11 @@ export * from "./proposals.js";
 export { agentReason, decisionContext } from "./agent_context.js";
 export * from "./improve_lint.js";
 export * from "./improve_policy.js";
+export * from "./failure_attribution.js";
+export * from "./incident_trials.js";
 export * from "./improve_mine.js";
 export * from "./improve.js";
+export * from "./ablate.js";
 export * from "./memory.js";
 // [audit.anchor]: sealed heads copied to a witness the trail's writer cannot
 // rewrite (a remote ref, an RFC 3161 authority, an operator command).

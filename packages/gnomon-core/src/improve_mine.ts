@@ -27,6 +27,7 @@ import { basename, join } from "node:path";
 import type { AuditRecord } from "./audit.js";
 import { resolveAudit } from "./audit.js";
 import type { GnomonConfig } from "./config.js";
+import { attributeTrail, layerOf, type FailureTag } from "./failure_attribution.js";
 import { loadMemory } from "./memory.js";
 import type { ProposalEvidence } from "./proposals.js";
 import { MIN_REPEATS, mineCandidates, readRecords, readSkillUsage, skillUsageSignals } from "./skill_mine.js";
@@ -89,7 +90,56 @@ function slug(text: string, max = 40): string {
   return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, max) || "x";
 }
 
-const FAILURE_CLASSES: Record<string, { name: string; description: string; note: string }> = {
+/**
+ * What an attributed failure (failure_attribution.ts) is mined into. The
+ * attribution picks the candidate kind: a Tools failure is a note the agent
+ * reads, a Verification failure is a note about the check, a Context failure
+ * is a note plus a `suggest` for a PERSON. `suggest` goes in the proposal's
+ * rationale only: `[context]` is config, and no proposal reaches config.
+ * Only tags that no stop-reason class above already covers are listed, so a
+ * run that mined before mines the same candidates now.
+ */
+const ATTRIBUTED_CLASSES: Partial<Record<FailureTag, { name: string; description: string; note: string; suggest?: string }>> = {
+  edit_failed: {
+    name: "edit that did not match",
+    description: "Turns ended after edits that did not match the file.",
+    note: "Read the file again just before editing it and copy the exact lines to replace, because an edit whose text no longer matches changes nothing.",
+  },
+  tool_timeout: {
+    name: "command timeouts",
+    description: "Turns ended after commands that hit the timeout.",
+    note: "Run a command that may take long in the background or with a narrower scope, because a command that hits the timeout returns nothing and costs a step.",
+  },
+  tool_error: {
+    name: "rejected tool calls",
+    description: "Turns ended after a tool kept rejecting its calls.",
+    note: "When a tool reports an error, read it and change the call, because repeating a call the tool rejects never succeeds.",
+  },
+  wrong_thing_verified: {
+    name: "check edited to pass",
+    description: "A check or test file was edited after it failed, and then passed with no other change.",
+    note: "Do not edit a check or test to make it pass. Change the code it checks, because a check changed to agree with the code proves nothing.",
+  },
+  unverified_finish: {
+    name: "finished without a check",
+    description: "Turns ended with a change that no command ran after.",
+    note: "Run the project's check after the last change and read its output before finishing, because a change made after the last check is untested.",
+  },
+  context_overflow: {
+    name: "context too long",
+    description: "Turns ended because the context could not be fitted.",
+    note: "Keep tool output small: read file ranges, and filter and limit command output, because a request that is too long is refused.",
+    suggest: "For a person to consider, not applied: [context] in config.toml (a smaller window estimate, or summary_style) controls when the context is trimmed. gnomon improve never edits config.",
+  },
+  context_loss: {
+    name: "context trimmed",
+    description: "Turns survived a context overflow only by dropping half of the conversation.",
+    note: "Keep tool output small: read file ranges, and filter and limit command output, because a request that is too long is refused and the conversation is cut.",
+    suggest: "For a person to consider, not applied: [context] in config.toml (a smaller window estimate, or summary_style) controls when the context is trimmed. gnomon improve never edits config.",
+  },
+};
+
+const FAILURE_CLASSES: Record<string, { name: string; description: string; note: string; suggest?: string; layer?: string }> = {
   stall: {
     name: "repeated steps",
     description: "Turns ended in a stall: the same step repeated without progress.",
@@ -116,6 +166,8 @@ const FAILURE_CLASSES: Record<string, { name: string; description: string; note:
     note: "Run the project's own check after a change and read its output before calling the work done, because the check failed after changes in several sessions.",
   },
 };
+
+for (const [tag, def] of Object.entries(ATTRIBUTED_CLASSES)) FAILURE_CLASSES[tag] = { ...def!, layer: layerOf(tag as FailureTag) ?? undefined };
 
 interface Pool {
   files: string[];
@@ -185,6 +237,13 @@ function scanTrails(config: GnomonConfig): Pool {
           pool.skillUse.set(fired.name, list);
         }
       }
+    }
+    // Layer-tagged attribution (failure_attribution.ts): a session with a failure signal whose primary cause is
+    // one of the classes above. Only a primary cause counts, so one failure is mined into one class.
+    const att = attributeTrail(records as unknown as Array<Record<string, unknown>>);
+    if (att && ATTRIBUTED_CLASSES[att.tag]) {
+      const turn = [...records].reverse().find((r) => r.kind === "turn");
+      bucket(pool.stops, att.tag, () => ({ trails: new Set(), ptrs: [] }), f, ptr(f, typeof turn?.seq === "number" ? turn.seq : 0));
     }
   }
   return pool;
@@ -338,9 +397,9 @@ export function mineAll(config: GnomonConfig, families: readonly MineFamily[] = 
         signal: cls,
         signature: `harness:${cls}`,
         title: `System note: ${def.name}`,
-        counts: { sessions: g.trails.size, class: cls },
+        counts: { sessions: g.trails.size, class: cls, ...(def.layer ? { layer: def.layer } : {}) },
         evidence: g.ptrs,
-        facts: [`${def.description} (${g.trails.size} sessions)`],
+        facts: [`${def.description} (${g.trails.size} sessions)`, ...(def.layer ? [`failure layer: ${def.layer}`] : []), ...(def.suggest ? [def.suggest] : [])],
         note: def.note,
         template: { name: def.name, description: def.description, body: def.note },
       });

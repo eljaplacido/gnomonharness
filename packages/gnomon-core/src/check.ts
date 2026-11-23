@@ -145,6 +145,13 @@ export interface CheckVerdict {
   setup?: { command_sha256: string; network: "none" | "registry"; exit: number | null; ok: boolean };
   /** Things a person should know about how this verdict was reached. */
   warnings?: string[];
+  /**
+   * Policy lint (policy_lint.ts): contradictory, shadowed, impossible or
+   * uncovered rules in the surface in the working directory. Present only when
+   * there are findings. Warnings: the exit is unchanged unless the caller
+   * passed `--strict-policy`.
+   */
+  policy_lint?: { schema: string; count: number; by_kind: Record<string, number>; findings: import("./policy_lint.js").PolicyLintFinding[] };
 }
 
 /** One shell command an agent ran, as a transcript adapter reports it. */
