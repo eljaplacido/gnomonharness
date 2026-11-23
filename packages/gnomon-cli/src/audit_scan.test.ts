@@ -10,7 +10,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { AUDIT_SCAN_EXIT, AUDIT_SCAN_SCHEMA, SCAN_RULES, SEVERITIES, formatScan, readSession, scanPath, scanSession, segments, words } from "./audit_scan.js";
+import { cmpCodePoint, redact, AUDIT_SCAN_EXIT, AUDIT_SCAN_SCHEMA, SCAN_RULES, SEVERITIES, formatScan, readSession, scanPath, scanSession, segments, words } from "./audit_scan.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(here, "../../..");
@@ -152,5 +152,29 @@ describe("gnomon audit scan: the command", () => {
     writeFileSync(p, text);
     run([p]);
     expect(readFileSync(p, "utf-8")).toBe(text);
+  });
+});
+
+describe("evidence redaction and ordering", () => {
+  it("masks a secret passed as the next word of a flag", () => {
+    expect(redact("mysql --password hunter22 -h db")).not.toContain("hunter22");
+    expect(redact("cli --token ghp_abcdef123456 run")).not.toContain("ghp_abcdef123456");
+    expect(redact("psql -p s3cr3tpw db")).not.toContain("s3cr3tpw");
+  });
+  it("masks NAME=value for secret-ish names, and leaves PATH alone", () => {
+    expect(redact("GH_PAT=abc123 git push")).not.toContain("abc123");
+    expect(redact("AWS_SECRET_ACCESS_KEY=zzz999 aws s3 ls")).not.toContain("zzz999");
+    expect(redact("DB_PWD=pw1234 run")).not.toContain("pw1234");
+    expect(redact("PATH=/usr/bin ls")).toContain("/usr/bin");
+  });
+  it("masks the password in scheme://user:pw@host", () => {
+    const r = redact("git clone https://bob:p4ssw0rd@example.com/x.git");
+    expect(r).not.toContain("p4ssw0rd");
+    expect(r).toContain("example.com");
+  });
+  it("orders by code point, not by locale", () => {
+    expect(cmpCodePoint("B", "a")).toBeLessThan(0);
+    expect(["a", "B", "_", "Z", "é"].sort(cmpCodePoint)).toEqual(["B", "Z", "_", "a", "é"]);
+    expect(cmpCodePoint("😀", "\uffff")).toBeGreaterThan(0);
   });
 });

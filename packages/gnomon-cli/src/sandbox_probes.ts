@@ -122,9 +122,13 @@ interface Env {
   token: string;
   image: string;
   hits: { n: number };
-  /** The loopback listener, and one on this machine's own non-loopback address (null: it has none). */
+  /** The loopback listener's port. */
   port: number;
-  lan: { ip: string; port: number; hits: { n: number } } | null;
+  /**
+   * Runs `fn` with a listener on this machine's own non-loopback address, open
+   * for that call alone and closed right after (null: the machine has none).
+   */
+  withLan: <T>(fn: (lan: { ip: string; port: number; hits: { n: number } } | null) => Promise<T>) => Promise<T>;
   bash: (cfg: ConfigSpec, command: string) => Promise<string>;
   tool: (cfg: ConfigSpec, name: string, args: Record<string, unknown>) => Promise<string>;
 }
@@ -225,8 +229,9 @@ const PROBES: ProbeDef[] = [
     applies: BASH,
     claimed: ["exec_os", "exec_os_scoped", "exec_docker"],
     run: async (e, cfg) => {
-      if (!e.lan) return { outcome: "inconclusive", detail: "this machine has no non-loopback IPv4 address to connect to" };
-      const r = await connectProbe(e, cfg, e.lan.ip, e.lan.port, e.lan.hits);
+      const r = await e.withLan((lan) =>
+        lan ? connectProbe(e, cfg, lan.ip, lan.port, lan.hits) : Promise.resolve<Raw>({ outcome: "inconclusive", detail: "this machine has no non-loopback IPv4 address to connect to" })
+      );
       if (r.outcome === "contained" && cfg.exec === "docker") return { outcome: "contained", detail: "own network namespace (--network none)" };
       return r;
     },
@@ -258,9 +263,9 @@ const PROBES: ProbeDef[] = [
         `python3 -c "import socket,sys;s=socket.socket(socket.AF_UNIX);s.settimeout(3)\ntry:\n s.connect(sys.argv[1]);print('REACHABLE')\nexcept Exception as x:\n print('BLOCKED')\ns.close()" "$S"; ` +
         `else echo PRESENT_UNTESTED; fi`;
       const out = await e.bash(cfg, script);
-      if (has(out, "REACHABLE")) return { outcome: "escaped", detail: "connect() to the docker socket succeeded" };
+      if (has(out, "REACHABLE")) return { outcome: "escaped", detail: "connect() to the docker socket succeeded (connect only, no bytes sent)" };
       if (has(out, "ABSENT")) return { outcome: "contained", detail: "no docker socket in this sandbox" };
-      if (has(out, "BLOCKED")) return { outcome: "contained", detail: "connect() to the docker socket was refused" };
+      if (has(out, "BLOCKED")) return { outcome: "contained", detail: "connect() to the docker socket was refused (connect only, no bytes sent)" };
       if (has(out, "PRESENT_UNTESTED")) return { outcome: "inconclusive", detail: "a socket is present and there is no python3 to test connecting" };
       return { outcome: "inconclusive", detail: first(out) };
     },
@@ -435,6 +440,8 @@ export interface SandboxProbeReport {
   cells: Cell[];
   matrix: typeof THREAT_MATRIX;
   limits: string[];
+  /** A path this run could not remove (a root-run container can leave files the caller cannot delete); null when clean. */
+  leftover: string | null;
   /** Cells that were claimed and did not hold. */
   failed: number;
   exit: number;
@@ -443,6 +450,7 @@ export interface SandboxProbeReport {
 export const SANDBOX_PROBE_LIMITS = [
   "configuration and containment checks only: no exploit code and no kernel exploit is run, so kernel flaws, runtime CVEs and side channels are NOT tested; a pass is not a proof of isolation",
   "every canary, credential and listener is created by this test in a temp directory; the real HOME and the real credentials are never read",
+  "the docker-socket probe runs only where a socket exists, and it connect()s to it and closes (no bytes are sent); it is skipped as absent otherwise",
   "docker is measured with the image named (default debian:stable-slim) and only if it is already present: nothing is pulled",
   "exec = os is measured as this process's kernel and gnomon-exec allow it: Landlock ABI, seccomp and Seatbelt differ between machines",
   "there is no microVM or gVisor backend to probe; docker here is a shared-kernel container",
@@ -493,14 +501,29 @@ export function probeCatalog(): Array<{ id: string; threat: Threat; escape_class
   return PROBES.map((p) => ({ id: p.id, threat: p.threat, escape_class: p.escape_class, applies: p.applies, claimed: p.claimed }));
 }
 
+let leftoverPath: string | null = null;
+
 export async function runSandboxProbes(
+  opts: Parameters<typeof runSandboxProbesInner>[0] = {}
+): Promise<SandboxProbeReport> {
+  leftoverPath = null;
+  const r = await runSandboxProbesInner(opts);
+  return { ...r, leftover: leftoverPath };
+}
+
+async function runSandboxProbesInner(
   opts: {
     image?: string;
     only?: readonly ProbeConfigId[];
     scratchParent?: string;
+    /** Tests: told when the non-loopback listener opens and closes (it lives for one probe). */
+    onLan?: (state: "open" | "closed") => void;
+    /** Tests: called after each cell is recorded, outside the probe's HOME window. */
+    onCell?: (cell: Cell) => void;
     /** Tests only: treat these configurations as if gnomon claimed them contained, to prove an escape is reported as a FAIL. */
     assume?: readonly ProbeConfigId[];
-  } = {}
+  } = {},
+  box: { leftover: string | null } = { leftover: null }
 ): Promise<SandboxProbeReport> {
   const image = opts.image ?? DEFAULT_SANDBOX_IMAGE;
   if (!isValidImageRef(image)) throw new Error(`--image ${JSON.stringify(image)} is not a container image reference`);
@@ -517,11 +540,6 @@ export async function runSandboxProbes(
     hits.n++;
     s.destroy();
   });
-  const lanServer = createServer((s) => {
-    lanHits.n++;
-    s.destroy();
-  });
-  const savedHome = process.env.HOME;
   try {
     for (const d of [root, outside, join(home, ".ssh")]) mkdirSync(d, { recursive: true });
     writeFileSync(join(outside, "canary.txt"), token);
@@ -534,20 +552,44 @@ export async function runSandboxProbes(
     const lanIp = Object.values(networkInterfaces())
       .flat()
       .find((i) => i && i.family === "IPv4" && !i.internal)?.address;
-    let lan: Env["lan"] = null;
-    if (lanIp) {
+    const withLan: Env["withLan"] = async (fn) => {
+      if (!lanIp) return fn(null);
+      const lanServer = createServer((c) => {
+        lanHits.n++;
+        c.destroy();
+      });
+      let lan: { ip: string; port: number; hits: { n: number } } | null = null;
       try {
         const lport = await new Promise<number>((resolveP, reject) => {
           lanServer.once("error", reject);
           lanServer.listen(0, lanIp, () => resolveP((lanServer.address() as { port: number }).port));
         });
         lan = { ip: lanIp, port: lport, hits: lanHits };
+        opts.onLan?.("open");
       } catch {
         lan = null;
       }
-    }
-    // The OS sandbox derives the credential locations it protects from HOME.
-    process.env.HOME = home;
+      try {
+        return await fn(lan);
+      } finally {
+        if (lanServer.listening) await new Promise<void>((r) => lanServer.close(() => r()));
+        if (lan) opts.onLan?.("closed");
+      }
+    };
+    // The OS sandbox derives the credential locations it protects from HOME
+    // (homedir() in-process, so a child cannot be handed it as an env alone).
+    // It is substituted for the length of ONE probe and restored right after,
+    // never for the whole run.
+    const withHome = async <T>(fn: () => Promise<T>): Promise<T> => {
+      const prev = process.env.HOME;
+      process.env.HOME = home;
+      try {
+        return await fn();
+      } finally {
+        if (prev === undefined) delete process.env.HOME;
+        else process.env.HOME = prev;
+      }
+    };
     const baseCtx = (cfg: ConfigSpec): ToolContext => ({
       root,
       sandbox: cfg.level,
@@ -581,7 +623,7 @@ export async function runSandboxProbes(
       image,
       hits,
       port,
-      lan,
+      withLan,
       bash: (cfg, command) => run(cfg, "bash", { command }),
       tool: (cfg, name, args) => run(cfg, name, args),
     };
@@ -603,13 +645,15 @@ export async function runSandboxProbes(
         }
         let raw: Raw;
         try {
-          raw = await p.run(env, cfg);
+          raw = await withHome(() => p.run(env, cfg));
         } catch (err) {
           raw = { outcome: "inconclusive", detail: `the probe could not run: ${err instanceof Error ? err.message : String(err)}` };
         }
         // A refusal from the sandbox plan is the sandbox not being there, not a verdict on it.
         const st = statusOf(raw, claimed);
-        cells.push({ probe: p.id, config: cfg.id, status: st, claimed, detail: raw.detail });
+        const cell: Cell = { probe: p.id, config: cfg.id, status: st, claimed, detail: raw.detail };
+        cells.push(cell);
+        opts.onCell?.(cell);
         if (st === "pass") rep.pass++;
         else if (st === "FAIL") rep.fail++;
         else if (st === "open") rep.open++;
@@ -628,16 +672,39 @@ export async function runSandboxProbes(
       cells,
       matrix: THREAT_MATRIX,
       limits: SANDBOX_PROBE_LIMITS,
+      leftover: null,
       failed,
       exit: failed > 0 ? SANDBOX_PROBE_EXIT.failed : SANDBOX_PROBE_EXIT.clean,
     };
   } finally {
-    if (savedHome === undefined) delete process.env.HOME;
-    else process.env.HOME = savedHome;
     await new Promise<void>((r) => server.close(() => r()));
-    if (lanServer.listening) await new Promise<void>((r) => lanServer.close(() => r()));
-    rmSync(holder, { recursive: true, force: true });
+    box.leftover = removeTree(holder, image);
   }
+}
+
+/**
+ * Remove the scratch tree. A container that ran as root can leave files the
+ * caller may not delete: the container deletes them (`docker run --rm`), and a
+ * tree that still stays is reported by path, never silently left.
+ */
+export function removeTree(dir: string, image: string): string | null {
+  const gone = (): boolean => {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* fall through */
+    }
+    return !existsSync(dir);
+  };
+  if (gone()) return null;
+  if (process.platform !== "win32") {
+    spawnSync("docker", ["run", "--rm", "--network", "none", "-v", `${dir}:/gnomon-cleanup`, image, "sh", "-c", "rm -rf /gnomon-cleanup/* /gnomon-cleanup/.[!.]* 2>/dev/null; true"], {
+      encoding: "utf-8",
+      timeout: 60_000,
+    });
+    if (gone()) return null;
+  }
+  return dir;
 }
 
 export function formatSandboxProbes(r: SandboxProbeReport): string[] {

@@ -10,7 +10,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,12 +20,14 @@ import {
   ESCAPE_CLASSES,
   PROBE_CONFIG_IDS,
   SANDBOX_PROBE_EXIT,
+  SANDBOX_PROBE_LIMITS,
   SANDBOX_PROBE_SCHEMA,
   THREATS,
   THREAT_MATRIX,
   availability,
   formatSandboxProbes,
   probeCatalog,
+  removeTree,
   runSandboxProbes,
   statusOf,
   type Cell,
@@ -211,5 +213,53 @@ describe("the flag is opt-in", () => {
     const help = spawnSync(process.execPath, [join(ROOT, "packages/gnomon-cli/gnomon.js"), "--help"], { encoding: "utf-8" });
     expect(help.stdout).toMatch(/security test \[--host [^\]]*\] \[--role <r>\] \[--sandbox \[--image <ref>\]\]/);
     expect(help.stdout).toMatch(/--sandbox adds the sandbox-escape probes/);
+  });
+});
+
+describe("probe hygiene", () => {
+  const posix = process.platform !== "win32";
+
+  it.runIf(posix)("HOME is substituted for one probe at a time, never between probes", async () => {
+    const home = process.env.HOME;
+    const seen: Array<string | undefined> = [];
+    const r = await runSandboxProbes({ only: ["exec_off"], onCell: () => seen.push(process.env.HOME) });
+    expect(seen.length).toBeGreaterThan(0);
+    for (const h of seen) expect(h).toBe(home);
+    expect(r.leftover).toBeNull();
+  });
+
+  it.runIf(posix)("the non-loopback listener lives for one probe and is closed before the next", async () => {
+    const events: string[] = [];
+    await runSandboxProbes({ only: ["exec_off"], onLan: (st) => events.push(`lan:${st}`), onCell: (c) => events.push(`cell:${c.probe}`) });
+    const opens = events.filter((e) => e === "lan:open").length;
+    expect(opens).toBeLessThanOrEqual(1);
+    events.forEach((e, i) => {
+      if (e === "lan:open") {
+        expect(events[i + 1]).toBe("lan:closed");
+        expect(events[i + 2]).toBe("cell:network_egress_when_off");
+      }
+    });
+  });
+
+  it("the report says the docker-socket probe connects, and sends nothing", () => {
+    expect(SANDBOX_PROBE_LIMITS.join("\n")).toMatch(/docker-socket probe.*connect\(\)s to it and closes \(no bytes are sent\)/);
+    expect(probeCatalog().some((p) => p.id === "docker_socket_reachable")).toBe(true);
+  });
+
+  it.runIf(posix && process.getuid?.() !== 0)("a tree that cannot be removed is reported by path, not left silently", () => {
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-stuck-"));
+    const sub = join(dir, "sub");
+    mkdirSync(sub);
+    writeFileSync(join(sub, "f"), "x");
+    chmodSync(sub, 0o500);
+    try {
+      const left = removeTree(dir, "gnomon-no-such-image:none");
+      expect(left).toBe(dir);
+      expect(existsSync(dir)).toBe(true);
+    } finally {
+      chmodSync(sub, 0o700);
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(removeTree(join(tmpdir(), "gnomon-never-made"), "x")).toBeNull();
   });
 });

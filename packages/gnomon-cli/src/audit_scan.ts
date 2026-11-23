@@ -372,11 +372,26 @@ function effectiveCwd(step: Step, cwd: string | null): string | null {
   return resolvePath(m[1]!.replace(/^["']|["']$/g, ""), cwd) ?? cwd;
 }
 
-const redact = (s: string): string =>
+/** Code-point order: the same on every machine and locale (localeCompare is neither). */
+export function cmpCodePoint(a: string, b: string): number {
+  const x = Array.from(a, (c) => c.codePointAt(0)!);
+  const y = Array.from(b, (c) => c.codePointAt(0)!);
+  for (let i = 0; i < Math.min(x.length, y.length); i++) if (x[i] !== y[i]) return x[i]! < y[i]! ? -1 : 1;
+  return x.length - y.length;
+}
+
+export const redact = (s: string): string =>
   s
     .replace(/(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 ***")
     .replace(/((?:token|key|secret|passw(?:or)?d|auth\w*)\w*\s*[=:]\s*)\S+/gi, "$1***")
     .replace(/(\s-u\s+)\S+/g, "$1***")
+    // `--password X`, `--token X`, `-p X`: a secret passed as the next word.
+    .replace(/((?:^|\s)--?(?:password|passwd|pass|pwd|token|secret|api-?key|apikey|auth\w*|credentials?)\s+)(?!-)\S+/gi, "$1***")
+    .replace(/((?:^|\s)-p\s+)(?!-)\S+/g, "$1***")
+    // `NAME=value` where the name says it holds a secret (GH_PAT, DB_PWD, ...).
+    .replace(/(\b[A-Za-z0-9_]*(?:^|_)(?:pat|pwd|pass|creds?|credentials?|dsn)(?:_[A-Za-z0-9_]*)?=)\S+/gi, "$1***")
+    // `scheme://user:pw@host`.
+    .replace(/([A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s:@/]+:)[^\s@/]+@/g, "$1***@")
     .replace(/\s+/g, " ")
     .trim();
 const shown = (s: string): string => {
@@ -633,7 +648,7 @@ export function scanSession(s: Session): Finding[] {
   credentialProbing(s, emit);
   injectionFollowed(s, emit);
   guardEvasion(s, emit);
-  return out.sort((a, b) => (a.evidence[0]?.seq ?? 0) - (b.evidence[0]?.seq ?? 0) || a.rule.localeCompare(b.rule) || a.summary.localeCompare(b.summary));
+  return out.sort((a, b) => (a.evidence[0]?.seq ?? 0) - (b.evidence[0]?.seq ?? 0) || cmpCodePoint(a.rule, b.rule) || cmpCodePoint(a.summary, b.summary));
 }
 
 // --- the command -----------------------------------------------------------
@@ -643,7 +658,7 @@ function trailFiles(path: string): string[] {
   if (st.isFile()) return [path];
   const out: string[] = [];
   const walk = (d: string): void => {
-    for (const e of readdirSync(d, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+    for (const e of readdirSync(d, { withFileTypes: true }).sort((a, b) => cmpCodePoint(a.name, b.name))) {
       if (e.isSymbolicLink()) continue;
       if (e.isDirectory()) {
         if (e.name === "node_modules" || e.name === ".git") continue;
