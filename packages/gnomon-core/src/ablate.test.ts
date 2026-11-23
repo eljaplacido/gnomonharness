@@ -169,6 +169,20 @@ describe("the text edits", () => {
     expect(editKey("[t]\nk = 1 # c\nj = 2\n", "t", "k", null)).toBe("[t]\nj = 2\n");
     expect(editKey("[t]\nk = 1 # c\n[u]\nk = 5\n", "t", "k", '"x"')).toBe('[t]\nk = "x" # c\n[u]\nk = 5\n');
   });
+  it("refuses the shapes it cannot edit whole, instead of half-editing them", () => {
+    const FX = JSON.parse(readFileSync(join(__dirname, "../../../conformance/eval_ablate.json"), "utf-8"));
+    expect(FX.unsupported_shapes.length).toBe(3);
+    // inline table and dotted keys: the table is not dropped
+    expect(dropTable('verify = { command = "x" }\n[a]\nk = 1\n', "verify")).toBeNull();
+    expect(dropTable('verify.command = "x"\n[a]\nk = 1\n', "verify")).toBeNull();
+    expect(dropTable('[context]\nmask_observations = { on = true }\n', "context.mask_observations")).toBeNull();
+    // multi-line values: the key is not replaced
+    expect(editKey('[approval]\ngate = [\n  "a",\n]\n', "approval", "gate", '"never"')).toBeNull();
+    expect(editKey('[approval]\ngate = """\non_write\n"""\n', "approval", "gate", '"never"')).toBeNull();
+    expect(editKey('[approval]\ngate = { x = 1 }\n', "approval", "gate", '"never"')).toBeNull();
+    // the ordinary shapes still work
+    expect(editKey('[approval]\ngate = "on_write" # c\n', "approval", "gate", '"never"')).toBe('[approval]\ngate = "never" # c\n');
+  });
   it("names a model's family", () => {
     expect(modelFamily("qwen3.6:35b")).toBe("qwen");
     expect(modelFamily("opencode-go/deepseek-v4")).toBe("deepseek");

@@ -128,6 +128,12 @@ export function markdownSections(text: string): Section[] {
 
 /** `text` without the table `[name]` (and its sub-tables), or null when it has none. */
 export function dropTable(text: string, name: string): string | null {
+  // Shapes the line scanner cannot drop whole: an inline table (`name = { ... }`)
+  // or dotted keys (`name.key = ...`). Refused (null), never half-dropped.
+  const last = name.split(".").pop()!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const dotted = new RegExp(`^\\s*${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.[A-Za-z0-9_-]+\\s*=`);
+  const inline = new RegExp(`^\\s*${last}\\s*=\\s*\\{`);
+  if (text.split("\n").some((l) => dotted.test(l) || inline.test(l))) return null;
   const lines = text.split("\n");
   const header = (l: string): string | null => /^\s*\[([^\[\]]+)\]\s*(#.*)?$/.exec(l)?.[1]?.trim() ?? null;
   const isArray = (l: string) => /^\s*\[\[/.test(l);
@@ -163,6 +169,8 @@ export function editKey(text: string, name: string, key: string, to: string | nu
   const r = tableRange(lines, name);
   if (!r) return null;
   for (let i = r[0] + 1; i < r[1]; i++) {
+    // A multi-line string or array, or an inline table, is not one line to replace: refused.
+    if (new RegExp(`^\\s*${key}\\s*=\\s*(\"\"\"|\'\'\'|\\[|\\{)`).test(lines[i]!)) return null;
     const m = new RegExp(`^(\\s*)${key}\\s*=\\s*("[^"]*"|'[^']*'|[^#\\s]+)(\\s*#.*)?$`).exec(lines[i]!);
     if (!m) continue;
     const out = lines.slice();

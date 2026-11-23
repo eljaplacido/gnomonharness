@@ -2198,7 +2198,10 @@ drop within noise). Nothing is applied. With `--propose`, a neutral-and-cheaper 
 section becomes a proposal you accept in `gnomon proposals`.
 
 Governance is never ablated: the policy's deny rules, the sandbox, the guard and the audit trail
-are not components, and asking for one is refused. `--run` refuses as `gnomon improve --run` does:
+are not components, and asking for one is refused. The one deliberate, scoped exception is the
+approval arm, which sets the gate to `never` inside the eval clone only (a cell has no person to
+ask); your working tree and real policy are untouched. A policy or config shape the editor cannot
+change whole (an inline table, dotted keys, a multi-line value) is refused, never half-edited. `--run` refuses as `gnomon improve --run` does:
 inside an agent session, without a confined `[sandbox]` (or `--allow-host-probes`), and for a role
 that can reach a billed endpoint without declared `[improve]` rates or `--max-requests`. With
 `--families`, each family runs as the declared role of that family. Contract:
@@ -2661,7 +2664,11 @@ reproducing the old text. Every anchor in a call is checked against the file as
 it is; one that no longer matches (the file changed since the read, or the tag
 was mistyped) refuses the whole call, writes nothing, and tells the model to
 read again. Edits in one call may not overlap. CRLF files keep their line
-endings and a missing final newline stays missing. The edit and `read`
+endings (a new line takes the ending of the line it replaces or sits beside, not
+a whole-file setting) and a missing final newline stays missing, with no stray
+carriage return on the last line. The 2-hex hash is a drift guard, not a
+checksum: about 1 in 256 changed lines still match, and an anchor is accepted
+only when the line number and the hash both match. The edit and `read`
 descriptions in the schema are replaced by short ones that say so; the format
 overrides a `variant = "compat"` on `edit`. The idea is Can Bölük's
 [The Harness Problem](https://blog.can.ac/2026/02/12/the-harness-problem/)

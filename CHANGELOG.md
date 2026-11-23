@@ -35,7 +35,20 @@
   call and says to read again; nothing is half-applied. Default `str_replace`
   is byte-identical (tool schemas, descriptions, read output). The surface
   audit no longer calls hashline inert (`ast` still is); the spec is pinned by
-  `conformance/edit_hashline.json`.
+  `conformance/edit_hashline.json`. Line endings are per line: a new line takes
+  the ending of the line it replaces or of its neighbour, and a file with no
+  final newline gets none on its last line (never a stray `\r`); the 2-hex hash
+  is a drift guard (about 1 in 256 changed lines collide), not a checksum.
+  Review fixes in the same train: sandbox probes bind the LAN listener for one
+  probe only, scope the substituted HOME to one probe, clean up root-owned
+  leftovers (or report the path), and say the docker-socket probe only
+  connects; trajectory-scan evidence masks `--password X`, `-p X`, secret-named
+  `NAME=value` and `scheme://user:pw@host`, and orders by code point; incident
+  trials refuse `NAME=value` check commands, require the expected artefact
+  (`report.txt`) so doing nothing is not a pass, and mark `vacuous_risk`;
+  accepting a trial spec (CLI and dashboard) says it changes what judges future
+  runs; `eval --ablate` refuses inline-table, dotted-key and multi-line shapes
+  and states that the approval arm is the one scoped exception.
 - **Harness signature:** `gnomon eval` reports carry `harness_signature` (per
   gnomon arm) and `gnomon compliance pack` writes `signature.json`: build,
   surface hash, role model/endpoint/provider, resolved window and its source,

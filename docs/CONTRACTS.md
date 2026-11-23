@@ -317,8 +317,11 @@ silence. The hashline format, after Can Bölük, "The Harness Problem" (2026):
 the line (no trailing CR), xor-folded to 8 bits, two lowercase hex digits;
 `edit` takes `edits` of `{op, anchor, end?, text?}` with `op` one of
 `replace`, `delete`, `insert_before`, `insert_after`. Every anchor is checked
-against the file as it is, and one stale anchor refuses the whole call.
-Vectors: `conformance/edit_hashline.json`.
+against the file as it is, and one stale anchor refuses the whole call. Line
+endings: a new line takes the ending of the line it replaces (insert: the anchor
+line); a file with no final newline has no ending on its last line. The hash is
+8 bits, so about 1 in 256 changed lines collide; line number and hash must both
+match. Vectors: `conformance/edit_hashline.json`.
 
 **Fixture**: `conformance/enumerations_schema.json` — JSON Schema for the
 enumerations output. CI asserts the output conforms.
@@ -5887,7 +5890,15 @@ and the audit trail are not components. A request naming one (`sandbox`,
 `guard`, `audit`, `policy`, `deny`, `governance`, `trust`) is refused (exit 3),
 and every arm is checked before it is built: `policy.toml` with its `[verify]`
 table and approval gate value normalised, and `roles.toml`, must be
-byte-identical to the base's, else the run is refused.
+byte-identical to the base's, else the run is refused. The one deliberate,
+scoped exception is the `approval` arm: it sets `[approval] gate = "never"` in
+the **eval clone only** (a cell has no person to ask, so a gate that waits would
+measure the wait, not the surface); the working tree and the real policy are
+untouched, and the report says so on the arm's label. No other governance value
+is ever changed. A table the editor cannot drop or edit whole (an inline table
+`name = { ... }`, dotted keys `name.key = ...`, a multi-line string or array
+value) is refused: that component is not planned, never half-edited
+(`conformance/eval_ablate.json` `unsupported_shapes`).
 
 **Families.** `--families a,b` crosses each arm with model families: a model id's
 family is its leading letters after the provider prefix and `:tag` (`qwen3.6:35b`
