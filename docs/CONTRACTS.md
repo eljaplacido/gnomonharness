@@ -69,6 +69,7 @@ every `TaskRecord`.
 | `apparatus` | the run never reached the model — the surface itself could not be used; or, in `gnomon task`, gnomon itself threw after the run started (the loop, not a tool: a tool's failure is a result the model reads), and the run ended on the record as it stood: `final`, code `10`, the steps and clock up to then, `output` a note saying what threw, never "could not start" (§28) |
 | `malformed` | replies in a row offered no usable tool call, past `[turn] max_consecutive_malformed` repair turns |
 | `endpoint_error` | the turn's last model request failed and the turn ended on it: no key (10), no reply in time (11), the provider unreachable or erroring past the transport grace (12), or the context could not be fitted (13); the code says which, and the bucket is `apparatus_failure` |
+| `provider_refusal` | the provider declined to answer twice in a row (`finish_reason: "content_filter"` on an OpenAI-shaped reply, `stop_reason: "refusal"` on an Anthropic-shaped one, no tool call) after one plain re-ask (`Continue with the task.`); the code is 12 and the bucket is `apparatus_failure`: this is the provider's refusal, not gnomon's policy refusal (Rule 4's `refusal` is gnomon declining a call), and the endpoint did not serve the turn, so a benchmark can re-run the cell and a reader never counts it as an answer. `counters.provider_refusals` counts every refused reply, present only when above 0 |
 | `tamper` | a tool call, or something between calls, changed gnomon's own records and gnomon did not make the change; the turn stops with a refusal (3) and a `record_tamper` record |
 | `in_progress` | the turn had not ended when the record was written: only on a partial record (`record_state: "partial"`), which is what a SIGKILL leaves (§28) |
 | `killed` | SIGINT, SIGTERM or SIGHUP ended the process mid-turn and the record was flushed first; `stop_detail.signal` names the signal, and the record is `apparatus_failure` (11) (§28) |
@@ -5735,22 +5736,23 @@ secondary. The catch-all `wrong_result` is never secondary.
 | 2 | `launch_failure` | lifecycle | `stop_reason` apparatus |
 | 3 | `context_overflow` | context | `endpoint_error` with code 13 (the context could not be fitted), or the last `model_call` code 13 |
 | 4 | `endpoint_error` | execution | `endpoint_error` with another code, or the last `model_call` code 10, 11, 12 |
-| 5 | `budget_exhausted` | lifecycle | `stop_reason` deadline, step_wall or killed, or a tool call cut by the deadline |
-| 6 | `tool_call_malformed` | tools | `stop_reason` malformed; `truncated` with `stop_detail.repeats` above 0 (tool calls cut at the output limit); 3 malformed calls |
-| 7 | `output_truncated` | context | `stop_reason` truncated without repeats |
-| 8 | `loop_stall` | execution | `stop_reason` stall (any stall-signal counter is advisory) |
-| 9 | `policy_refusal` | governance | a refused write or edit outside the OS temp directory, or 2 calls refused outside the root or sandbox (any other refusal is advisory) |
-| 10 | `edit_failed` | tools | the last write or edit failed, or 3 failed |
-| 11 | `tool_timeout` | tools | the last acting call timed out, or 5 timeouts |
-| 12 | `tool_error` | tools | 3 rejected `compute`/`glob`/`grep`/`read` calls |
-| 13 | `verify_misled` | verification | the declared `[verify]` check passed and the external check failed |
-| 14 | `verify_failed` | verification | the declared `[verify]` check failed at the end |
-| 15 | `wrong_thing_verified` | verification | a failing command, then an edit of a test or check file, then a passing command, with no other file changed in between |
-| 16 | `context_loss` | context | `counters.model_calls.trims.overflow` above 0 (the provider refused a request as too long and gnomon dropped half the conversation) |
-| 17 | `no_deliverable` | execution | finished with no write, no edit and no change to the tree |
-| 18 | `unverified_finish` | verification | finished and no command ran after the last write to a non-document file |
-| 19 | `wrong_result` | execution | finished after a change and the check still failed (the catch-all) |
-| 20 | `unknown` | none | nothing recorded says why |
+| 5 | `provider_refusal` | execution | `stop_reason` provider_refusal (the provider refused twice running); a refusal the one retry recovered (`counters.provider_refusals` above 0) is advisory. Execution, like `endpoint_error`: the model endpoint did not serve the turn, and no budget or launch cause is involved |
+| 6 | `budget_exhausted` | lifecycle | `stop_reason` deadline, step_wall or killed, or a tool call cut by the deadline |
+| 7 | `tool_call_malformed` | tools | `stop_reason` malformed; `truncated` with `stop_detail.repeats` above 0 (tool calls cut at the output limit); 3 malformed calls |
+| 8 | `output_truncated` | context | `stop_reason` truncated without repeats |
+| 9 | `loop_stall` | execution | `stop_reason` stall (any stall-signal counter is advisory) |
+| 10 | `policy_refusal` | governance | a refused write or edit outside the OS temp directory, or 2 calls refused outside the root or sandbox (any other refusal is advisory) |
+| 11 | `edit_failed` | tools | the last write or edit failed, or 3 failed |
+| 12 | `tool_timeout` | tools | the last acting call timed out, or 5 timeouts |
+| 13 | `tool_error` | tools | 3 rejected `compute`/`glob`/`grep`/`read` calls |
+| 14 | `verify_misled` | verification | the declared `[verify]` check passed and the external check failed |
+| 15 | `verify_failed` | verification | the declared `[verify]` check failed at the end |
+| 16 | `wrong_thing_verified` | verification | a failing command, then an edit of a test or check file, then a passing command, with no other file changed in between |
+| 17 | `context_loss` | context | `counters.model_calls.trims.overflow` above 0 (the provider refused a request as too long and gnomon dropped half the conversation) |
+| 18 | `no_deliverable` | execution | finished with no write, no edit and no change to the tree |
+| 19 | `unverified_finish` | verification | finished and no command ran after the last write to a non-document file |
+| 20 | `wrong_result` | execution | finished after a change and the check still failed (the catch-all) |
+| 21 | `unknown` | none | nothing recorded says why |
 
 A tag names where to look, not what a model did. `wrong_result` is where the harness
 cannot tell a wrong solution from a right one: it says only that the run finished,
