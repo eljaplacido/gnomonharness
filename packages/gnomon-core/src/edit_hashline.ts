@@ -113,8 +113,71 @@ interface Splice {
 const brief = (t: string) => (t.length > 80 ? `${t.slice(0, 80)}…` : t);
 const STALE_TAIL = "Nothing was edited. Read the file again and use the new anchors.";
 
+/** Lines of context shown around each changed or targeted region, and the most lines one result shows. */
+export const ANCHOR_CONTEXT = 3;
+export const ANCHOR_CAP = 60;
+
+/**
+ * Tagged lines for the 0-based half-open `ranges` of `texts`, each widened by
+ * ANCHOR_CONTEXT lines, merged, and capped at ANCHOR_CAP lines. `hidden` counts
+ * the window lines the cap cut off.
+ */
+export function anchorWindow(texts: readonly string[], ranges: ReadonlyArray<readonly [number, number]>): { lines: string[]; hidden: number } {
+  const wins = ranges
+    .map(([a, b]) => [Math.max(0, a - ANCHOR_CONTEXT), Math.min(texts.length, Math.max(b, a) + ANCHOR_CONTEXT)] as [number, number])
+    .filter(([a, b]) => b > a)
+    .sort((x, y) => x[0] - y[0]);
+  const merged: [number, number][] = [];
+  for (const w of wins) {
+    const last = merged[merged.length - 1];
+    if (last && w[0] <= last[1]) last[1] = Math.max(last[1], w[1]);
+    else merged.push([w[0], w[1]]);
+  }
+  const lines: string[] = [];
+  let hidden = 0;
+  let prevEnd = -1;
+  for (const [a, b] of merged) {
+    for (let i = a; i < b; i++) {
+      if (lines.length >= ANCHOR_CAP) {
+        hidden++;
+        continue;
+      }
+      if (i === a && prevEnd >= 0) lines.push("…");
+      lines.push(`${anchorOf(i + 1, texts[i])}|${texts[i]}`);
+    }
+    prevEnd = b;
+  }
+  return { lines, hidden };
+}
+
+/**
+ * What a successful hashline edit appends to its result: the new anchors for the
+ * changed regions (`regions`, 0-based half-open in the new file) with context.
+ * Line numbers below a change have moved, so the model must use these, not the
+ * ones from its earlier read.
+ */
+export function refreshedAnchorsNote(after: string, regions: ReadonlyArray<readonly [number, number]>): string {
+  const texts = splitAnchorLines(after).lines.map((l) => l.text);
+  const w = anchorWindow(texts, regions);
+  if (w.lines.length === 0) return "";
+  const more = w.hidden > 0 ? `\n… ${w.hidden} more lines changed — read again for the rest.` : "";
+  return (
+    `\nRefreshed anchors for the changed region (lines below a change have moved; use these, not the anchors from your earlier read):\n` +
+    w.lines.join("\n") +
+    more
+  );
+}
+
+export type HashlineDetailed = { ok: true; after: string; regions: Array<[number, number]> } | { ok: false; why: string };
+
 /** Apply every edit to `raw`, or refuse the whole call. */
 export function applyHashlineEdits(raw: string, edits: unknown, path: string): HashlineResult {
+  const r = applyHashlineEditsDetailed(raw, edits, path);
+  return r.ok ? { ok: true, after: r.after } : r;
+}
+
+/** As applyHashlineEdits, and says which lines of the new file the edits produced. */
+export function applyHashlineEditsDetailed(raw: string, edits: unknown, path: string): HashlineDetailed {
   if (!Array.isArray(edits) || edits.length === 0) {
     return { ok: false, why: `edits must be a non-empty array of {op, anchor, end?, text?}. Nothing was edited.` };
   }
@@ -122,17 +185,31 @@ export function applyHashlineEdits(raw: string, edits: unknown, path: string): H
   const n = file.lines.length;
   if (n === 0) return { ok: false, why: `${path} is empty, so it has no anchors. Use write to give it content.` };
 
+  // Every line the call targets, so a refusal can show their current anchors.
+  const targets: Array<[number, number]> = [];
+  for (const e of edits as Array<Record<string, unknown> | null>) {
+    for (const k of ["anchor", "end"] as const) {
+      const a = e && typeof e === "object" ? parseAnchor(e[k]) : null;
+      if (a && a.line >= 1) targets.push([Math.min(a.line, n + 1) - 1, Math.min(a.line, n + 1)]);
+    }
+  }
+  const stale = (msg: string): string => {
+    const w = anchorWindow(file.lines.map((l) => l.text), targets);
+    if (w.lines.length === 0) return msg;
+    return `${msg}\nCurrent anchors for the lines you targeted (retry with these; no full read needed):\n${w.lines.join("\n")}${w.hidden > 0 ? `\n… ${w.hidden} more lines not shown — read again for the rest.` : ""}`;
+  };
+
   const check = (spec: unknown, i: number, label: string): { line: number } | string => {
     const a = parseAnchor(spec);
     if (!a) return `edit ${i + 1}: ${label} ${JSON.stringify(spec ?? null)} is not an anchor like 12:a3 (LINE:HASH from read). Nothing was edited.`;
     if (a.line < 1 || a.line > n) {
-      return `Stale anchor ${a.line}:${a.hash} (edit ${i + 1}): ${path} has ${n} lines. ${STALE_TAIL}`;
+      return stale(`Stale anchor ${a.line}:${a.hash} (edit ${i + 1}): ${path} has ${n} lines. ${STALE_TAIL}`);
     }
     const now = file.lines[a.line - 1].text;
     if (lineHash(now) !== a.hash) {
-      return (
+      return stale(
         `Stale anchor ${a.line}:${a.hash} (edit ${i + 1}): line ${a.line} is now ${anchorOf(a.line, now)}|${brief(now)} — ` +
-        `${path} changed since it was read, or the anchor was mistyped. ${STALE_TAIL}`
+          `${path} changed since it was read, or the anchor was mistyped. ${STALE_TAIL}`
       );
     }
     return { line: a.line };
@@ -204,6 +281,13 @@ export function applyHashlineEdits(raw: string, edits: unknown, path: string): H
   const crOf = (s: Splice): boolean => (s.after ? eol[s.at - 1] : eol[s.at]);
   // Bottom to top, so earlier indexes stay valid. At one point a removal goes first,
   // so an insert there is not removed with it; same-point inserts keep call order.
+  // Where each splice lands in the new file (ascending: inserts before a removal at one point).
+  const regions: Array<[number, number]> = [];
+  let delta = 0;
+  for (const sp of splices.slice().sort((p, q) => p.at - q.at || (p.del > 0 ? 1 : 0) - (q.del > 0 ? 1 : 0) || p.order - q.order)) {
+    regions.push([sp.at + delta, sp.at + delta + sp.add.length]);
+    delta += sp.add.length - sp.del;
+  }
   const ordered = splices
     .slice()
     .sort((p, q) => q.at - p.at || (p.del > 0 ? 0 : 1) - (q.del > 0 ? 0 : 1) || q.order - p.order);
@@ -212,7 +296,7 @@ export function applyHashlineEdits(raw: string, edits: unknown, path: string): H
     out.splice(s.at, s.del, ...s.add.map((t): AnchorLine => ({ text: t, cr })));
   }
   // A new last line in a file with no final newline carries no "\r" of its own.
-  return { ok: true, after: joinAnchorLines({ lines: out, finalNewline: file.finalNewline, crlf: file.crlf }) };
+  return { ok: true, after: joinAnchorLines({ lines: out, finalNewline: file.finalNewline, crlf: file.crlf }), regions };
 }
 
 /** `edit`'s parameters under `edit_format = "hashline"`. */
@@ -240,4 +324,4 @@ export const HASHLINE_EDIT_PARAMETERS: Record<string, unknown> = {
 
 export const HASHLINE_READ_DESCRIPTION = "Read a file as LINE:HASH|text lines, or list a directory. Text only.";
 export const HASHLINE_EDIT_DESCRIPTION =
-  "Edit a file by the LINE:HASH anchors read shows. A stale anchor is refused: read again and retry.";
+  "Edit a file by the LINE:HASH anchors read shows. Stale anchors are refused. Edits return refreshed anchors.";

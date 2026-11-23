@@ -12,6 +12,10 @@ import {
   HASHLINE_OPS,
   anchorOf,
   applyHashlineEdits,
+  applyHashlineEditsDetailed,
+  anchorWindow,
+  refreshedAnchorsNote,
+  splitAnchorLines,
   lineHash,
   parseAnchor,
   resolveEditMode,
@@ -66,6 +70,25 @@ describe("the anchor spec (conformance/edit_hashline.json)", () => {
       } else {
         expect(r, v.name).toEqual({ ok: true, after: v.after });
       }
+    }
+  });
+
+  it("shows the pinned refreshed anchors for every refreshed_anchor_vector", () => {
+    for (const v of FIXTURE.refreshed_anchor_vectors) {
+      const r = applyHashlineEditsDetailed(v.before, v.edits, "f.txt");
+      expect(r.ok, v.name).toBe(true);
+      if (!r.ok) continue;
+      expect(r.after, v.name).toBe(v.after);
+      const texts = splitAnchorLines(r.after).lines.map((l) => l.text);
+      expect(anchorWindow(texts, r.regions).lines, v.name).toEqual(v.refreshed);
+    }
+  });
+
+  it("a stale refusal lists the pinned current anchors", () => {
+    for (const v of FIXTURE.stale_anchor_vectors) {
+      const r = applyHashlineEdits(v.before, v.edits, "f.txt");
+      expect(r.ok, v.name).toBe(false);
+      if (!r.ok) for (const line of v.error_contains) expect(r.why, v.name).toContain(line);
     }
   });
 
@@ -133,6 +156,66 @@ describe("read and edit under edit_format = hashline", () => {
     expect(e.content).toContain("Read the file again");
     // The valid first edit was not applied either: all or nothing.
     expect(readFileSync(join(root, "a.txt"), "utf-8")).toBe("alpha\nBETA CHANGED\n");
+  });
+
+  it("a second edit using the anchors from the first edit's result succeeds", async () => {
+    const lines = Array.from({ length: 12 }, (_, i) => `l${i + 1}`);
+    writeFileSync(join(root, "s.txt"), lines.join("\n") + "\n");
+    // Edit 1 adds two lines at the top, so every anchor below it moves.
+    const e1 = await executeTool("edit", { path: "s.txt", edits: [{ op: "insert_before", anchor: anchorOf(1, "l1"), text: "p\nq" }] }, ctx(), offered);
+    expect(e1.code).toBe(TOOL_OK);
+    expect(e1.content).toContain("Refreshed anchors");
+    expect(e1.content).toContain(`${anchorOf(3, "l1")}|l1`);
+    // The old anchor for l4 is stale now; the one the result shows works.
+    const old = await executeTool("edit", { path: "s.txt", edits: [{ op: "replace", anchor: anchorOf(4, "l4"), text: "X" }] }, ctx(), offered);
+    expect(old.code).toBe(TOOL_FAILED);
+    const shown = e1.content.split("\n").find((l) => l.endsWith("|l4"));
+    // l4 is outside the window of edit 1; ask for l3 which is inside.
+    const l3 = e1.content.split("\n").find((l) => l.endsWith("|l3"))!;
+    expect(shown).toBeUndefined();
+    const e2 = await executeTool("edit", { path: "s.txt", edits: [{ op: "replace", anchor: l3.split("|")[0], text: "THREE" }] }, ctx(), offered);
+    expect(e2.code).toBe(TOOL_OK);
+    expect(readFileSync(join(root, "s.txt"), "utf-8")).toBe(["p", "q", "l1", "l2", "THREE", ...lines.slice(3)].join("\n") + "\n");
+    // The refusal above carried current anchors, so a retry needs no read.
+    expect(old.content).toContain("Current anchors for the lines you targeted");
+    const cur = old.content.split("\n").find((l) => l.endsWith("|l2"));
+    expect(cur).toBe(`${anchorOf(4, "l2")}|l2`);
+  });
+
+  it("a stale refusal includes the current anchors and writes nothing", () => {
+    const r = applyHashlineEdits("a\nb\nc\n", [{ op: "replace", anchor: "2:00", text: "x" }], "f");
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.why).toContain(`${anchorOf(1, "a")}|a`);
+    expect(r.why).toContain(`${anchorOf(3, "c")}|c`);
+    expect(r.why).toContain("Read the file again");
+    const oob = applyHashlineEdits("a\nb\nc\n", [{ op: "delete", anchor: "9:00" }], "f");
+    expect(oob.ok).toBe(false);
+    if (!oob.ok) expect(oob.why).toContain(`${anchorOf(3, "c")}|c`);
+  });
+
+  it("caps the refreshed anchors and says how many were left out", () => {
+    const before = Array.from({ length: 100 }, (_, i) => `l${i + 1}`).join("\n") + "\n";
+    const text = Array.from({ length: 90 }, (_, i) => `n${i}`).join("\n");
+    const r = applyHashlineEditsDetailed(before, [{ op: "replace", anchor: anchorOf(1, "l1"), end: anchorOf(90, "l90"), text }], "f");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const note = refreshedAnchorsNote(r.after, r.regions);
+    expect(note.split("\n").filter((l) => /^\d+:[0-9a-f]{2}\|/.test(l))).toHaveLength(60);
+    expect(note).toMatch(/… \d+ more lines changed — read again for the rest\./);
+  });
+
+  it("the approval preview and the str_replace result are unchanged by refreshed anchors", async () => {
+    writeFileSync(join(root, "c.txt"), "alpha\nbeta\n");
+    const seen: string[][] = [];
+    const approve = async (r: { preview?: string[] }) => (seen.push(r.preview ?? []), true);
+    const a = await executeTool("edit", { path: "c.txt", edits: [{ op: "replace", anchor: anchorOf(2, "beta"), text: "B" }] }, ctx({ gate: "always", approve }), offered);
+    writeFileSync(join(root, "c.txt"), "alpha\nbeta\n");
+    const b = await executeTool("edit", { path: "c.txt", old_text: "beta", new_text: "B" }, ctx({ editVariant: undefined, gate: "always", approve }), offered);
+    expect(seen[0]).toEqual(seen[1]);
+    expect(b.content).toBe("Edited c.txt (+1 −1).");
+    expect(a.content.startsWith("Edited c.txt (+1 −1).\nRefreshed anchors")).toBe(true);
+    expect(a.summary).toBe(b.summary);
   });
 
   it("refuses an edit that moved under the approval prompt", async () => {

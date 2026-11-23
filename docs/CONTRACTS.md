@@ -322,7 +322,12 @@ against the file as it is, and one stale anchor refuses the whole call. Line
 endings: a new line takes the ending of the line it replaces (insert: the anchor
 line); a file with no final newline has no ending on its last line. The hash is
 8 bits, so about 1 in 256 changed lines collide; line number and hash must both
-match. Vectors: `conformance/edit_hashline.json`.
+match. The edit result is part of the format: a success returns `LINE:HASH|text`
+anchors for the changed regions (new numbering), a stale refusal returns the
+current anchors for the targeted lines; each window is 3 lines of context,
+merged, capped at 60 lines (`…` between windows, a note counts what was cut).
+Vectors: `conformance/edit_hashline.json` (`refreshed_anchor_vectors`,
+`stale_anchor_vectors`).
 
 **Fixture**: `conformance/enumerations_schema.json` — JSON Schema for the
 enumerations output. CI asserts the output conforms.

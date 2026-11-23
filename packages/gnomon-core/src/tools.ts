@@ -71,7 +71,8 @@ import {
   HASHLINE_EDIT_PARAMETERS,
   HASHLINE_READ_DESCRIPTION,
   anchoredLines,
-  applyHashlineEdits,
+  applyHashlineEditsDetailed,
+  refreshedAnchorsNote,
   resolveEditMode,
   splitAnchorLines,
   type EditMode,
@@ -8157,12 +8158,14 @@ async function editTool(
   // `edit_format = "hashline"`: the edits name anchors, and nothing below
   // matches text (edit_hashline.ts). A stale anchor refuses the whole call.
   let anchored: string | undefined;
+  let anchorRegions: Array<[number, number]> = [];
   if (hashline) {
-    const r = applyHashlineEdits(before, args.edits, path);
+    const r = applyHashlineEditsDetailed(before, args.edits, path);
     if (!r.ok) {
       return { code: TOOL_FAILED, content: r.why, summary: `edit ${path} — ${r.why.startsWith("Stale") ? "stale anchor" : "refused"}` };
     }
     anchored = r.after;
+    anchorRegions = r.regions;
   }
   const hits = hashline ? 1 : before.split(oldText).length - 1;
   // The compat variant's tiers (sweep_knobs.ts fuzzyEdit): an exact match
@@ -8282,7 +8285,7 @@ async function editTool(
     }
     return {
       code: TOOL_OK,
-      content: `Edited ${path} (+${added} −${removed}).`,
+      content: `Edited ${path} (+${added} −${removed}).` + (hashline ? refreshedAnchorsNote(after, anchorRegions) : ""),
       summary: `edit ${path} (+${added} −${removed})`,
       ...(tier ? { edit_tier: tier } : {}),
     };
