@@ -26,6 +26,24 @@
 
 ## [Unreleased]
 
+## [0.6.7] — 2026-11-23
+
+The survey release. Eight ideas from "Agent Harness Engineering: A Survey" (CMU, Stanford, Amazon and others; 2026), each opt-in or report-only, plus a Windows fix for trials. With no new key set, a session's prompt, tools and requests are byte-identical to 0.6.6. One warm turn, model-free, against 0.6.6 built from source with the same native binaries: +10 ms wall and +0.8 MB RSS, at the timer's 10 ms resolution.
+
+- **Edits:** `edit_format = "hashline"`, anchored `LINE:HASH|text` edits that are all-or-nothing and keep each line's own ending. The default `str_replace` is unchanged.
+- **Benchmark standard:**
+  - a harness signature on every eval report and evidence pack;
+  - layer-tagged failure attribution in `gnomon eval` and `gnomon audit attribute`, which agreed with 63 of 72 hand-labelled failures before any rule was tuned;
+  - `gnomon eval --ablate`, which removes one component at a time and reports what is load-bearing. It never touches governance.
+- **Governance and security:**
+  - a policy linter in `gnomon check`, whose findings are warnings unless you pass `--strict-policy`;
+  - `gnomon audit scan`, which looks for multi-step attack patterns across a whole trajectory;
+  - `gnomon security test --sandbox`, 16 non-destructive containment probes, with a threat matrix in docs/THREAT-MODEL.md.
+- **Self-improvement:** `gnomon improve --incidents` drafts regression trials from guard holds, tamper events, recovered verifies and overflows. Only a person can accept one.
+- **Fixed:** trial `setup`/`check` commands now run under a POSIX shell on Windows. Before this, trials, evals and improve probes could not pass there.
+
+`.gnomon/ci.sh` passes on the release commit, and the property suites hold their published figures (5/5).
+
 ### Fixed — trial commands run under a POSIX shell on Windows
 
 - A trial's `setup` and `check` (the scaffolded `trials/default.toml`, the drafted incident trials, `gnomon eval`
@@ -6257,7 +6275,8 @@ was written.
 
 <!-- 0.4.4 and 0.4.5 were never published, so 0.5.0 compares against 0.4.3 and
      their links point at the tags, not at (draft) release pages. -->
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.6...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.7...HEAD
+[0.6.7]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.4...v0.6.5
 [0.6.4]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.3...v0.6.4
