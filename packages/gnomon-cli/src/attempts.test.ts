@@ -283,13 +283,15 @@ describe("gnomon task --attempts", () => {
   }, 60_000);
 
   it("max_tokens is enforced while attempts run, without [audit], and cancelled attempts keep their tokens", async () => {
-    const root = await project(`[attempts]\nmax = 3\nmax_tokens = 100\nroles = ["a", "b", "c"]\n${CHECK}`);
+    // Each attempt's first reply is 120 tokens, so 300 is reached only once all three have
+    // reported: a slow-starting child cannot be cancelled before it has spent anything.
+    const root = await project(`[attempts]\nmax = 3\nmax_tokens = 300\nroles = ["a", "b", "c"]\n${CHECK}`);
     script.writes = { m1: "bad\n", m2: "bad\n", m3: "bad\n" };
     script.hold = { m1: 60_000, m2: 60_000, m3: 60_000 };
     const t0 = Date.now();
     const r = await gnomon(root, ["--attempts", "3", "--yes"]);
     expect(Date.now() - t0).toBeLessThan(30_000);
-    expect(r.json.budget_stop).toContain("max_tokens = 100");
+    expect(r.json.budget_stop).toContain("max_tokens = 300");
     expect(r.json.attempts.every((a: any) => a.status === "cancelled" && a.tokens >= 100)).toBe(true);
     expect(r.json.tokens_total).toBeGreaterThanOrEqual(300);
   }, 60_000);
