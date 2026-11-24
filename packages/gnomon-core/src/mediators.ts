@@ -206,7 +206,7 @@ export interface ModelCallsMeasured {
 /** One request, as callEndpoint saw it. */
 export interface CallObservation {
   target: RouteTarget;
-  messages: ReadonlyArray<{ role: string; content: string; reasoning_content?: string }>;
+  messages: ReadonlyArray<{ role: string; content: string; reasoning_content?: string; thinking_blocks?: unknown[] }>;
   /** The tool schemas the request offered; part of the prefix a template renders */
   tools?: readonly unknown[];
   /** gnomon's estimate of the whole request body; undefined when nothing was sent */
@@ -463,7 +463,7 @@ export class CallLedger {
     const delivered = deliveredOn(via, o.target.url);
     for (let k = 0; k < o.messages.length; k++) {
       const m = o.messages[k]!;
-      if (carries && m.role === "assistant" && typeof m.reasoning_content === "string" && m.reasoning_content !== "") replayed++;
+      if (carries && m.role === "assistant" && ((typeof m.reasoning_content === "string" && m.reasoning_content !== "") || (Array.isArray(m.thinking_blocks) && m.thinking_blocks.length > 0))) replayed++;
       if (k >= lead && m.role === "system") {
         const kind = this.tags.get(m) ?? "other";
         steer[kind]++;

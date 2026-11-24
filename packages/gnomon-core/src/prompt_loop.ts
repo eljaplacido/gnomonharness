@@ -742,7 +742,13 @@ export interface ChatMessage {
    */
   reasoning_details?: unknown[];
   content_parts?: unknown[];
-  /** `url|model` of the endpoint that produced `reasoning_details` / `content_parts` */
+  /**
+   * LiteLLM's `thinking_blocks` (Anthropic thinking / redacted_thinking blocks
+   * with their signatures), verbatim and in order. Sent back only to the
+   * endpoint named by `origin`, and only where replay is on.
+   */
+  thinking_blocks?: unknown[];
+  /** `url|model` of the endpoint that produced `reasoning_details` / `content_parts` / `thinking_blocks` */
   origin?: string;
   /** Set on a tool result; both spellings, since backends differ */
   tool_call_id?: string;
@@ -1038,7 +1044,9 @@ interface InferenceResult {
   reasoningDetails?: unknown[];
   /** The provider's own content parts, when they carried reasoning (Mistral's ThinkChunk); rebuilt when streamed */
   rawContent?: unknown[];
-  /** `url|model` of the endpoint that produced `reasoningDetails` / `rawContent` */
+  /** LiteLLM `thinking_blocks`, verbatim (see ChatMessage.thinking_blocks) */
+  thinkingBlocks?: unknown[];
+  /** `url|model` of the endpoint that produced `reasoningDetails` / `rawContent` / `thinkingBlocks` */
   origin?: string;
   /** The backend refused the request because this model cannot use tools */
   toolsUnsupported?: boolean;
@@ -1283,16 +1291,46 @@ export function mergeReasoningDetails(acc: Array<Record<string, unknown>>, chunk
  * callEndpoint sends them back to that endpoint only.
  */
 /**
+ * Fold one streamed `thinking_blocks` chunk into the blocks so far. LiteLLM
+ * sends Anthropic's thinking in pieces: text pieces without a signature, then
+ * the signature (or one whole block). A piece that continues an unsigned
+ * thinking block extends its text and takes the signature; any other piece
+ * (a signed block, redacted_thinking) is kept as it came. Nothing is edited.
+ */
+export function mergeThinkingBlocks(into: Array<Record<string, unknown>>, pieces: unknown[]): void {
+  for (const p of pieces) {
+    if (!p || typeof p !== "object") continue;
+    const piece = p as Record<string, unknown>;
+    const last = into[into.length - 1];
+    if (
+      piece.type === "thinking" &&
+      last &&
+      last.type === "thinking" &&
+      !last.signature &&
+      typeof last.thinking === "string" &&
+      typeof piece.thinking === "string"
+    ) {
+      last.thinking = last.thinking + piece.thinking;
+      if (typeof piece.signature === "string" && piece.signature) last.signature = piece.signature;
+    } else {
+      into.push({ ...piece });
+    }
+  }
+}
+
+/**
  * The provider's own reasoning objects out of a streamed reply. Details come
  * back merged; content parts are rebuilt in the shape the stream used, since a
  * stream carries the thinking parts in pieces and the answer as plain strings
  * (Mistral's reasoning guide, read 2026-11-21).
  */
 export function streamedReplay(
-  s: Pick<StreamedReply, "content" | "reasoning" | "reasoningFromParts" | "reasoningDetails" | "thinkingShape" | "thinkingSignature">,
+  s: Pick<StreamedReply, "content" | "reasoning" | "reasoningFromParts" | "reasoningDetails" | "thinkingShape" | "thinkingSignature"> & {
+    thinkingBlocks?: unknown[];
+  },
   promoted: boolean,
   target: { url: string; model: string }
-): { reasoningDetails?: unknown[]; rawContent?: unknown[]; origin?: string } {
+): { reasoningDetails?: unknown[]; rawContent?: unknown[]; thinkingBlocks?: unknown[]; origin?: string } {
   const details = s.reasoningDetails?.length ? s.reasoningDetails : undefined;
   const thinking =
     !promoted && s.reasoningFromParts && s.reasoning
@@ -1300,11 +1338,13 @@ export function streamedReplay(
         ? { type: "thinking", thinking: s.reasoning, ...(s.thinkingSignature ? { signature: s.thinkingSignature } : {}) }
         : { type: "thinking", thinking: [{ type: "text", text: s.reasoning }] }
       : undefined;
+  const blocks = s.thinkingBlocks?.length ? s.thinkingBlocks : undefined;
   const parts = thinking ? [thinking, ...(s.content ? [{ type: "text", text: s.content }] : [])] : undefined;
   return {
     ...(details ? { reasoningDetails: details } : {}),
     ...(parts ? { rawContent: parts } : {}),
-    ...(details || parts ? { origin: `${target.url}|${target.model}` } : {}),
+    ...(blocks ? { thinkingBlocks: blocks } : {}),
+    ...(details || parts || blocks ? { origin: `${target.url}|${target.model}` } : {}),
   };
 }
 
@@ -1312,15 +1352,18 @@ export function replayFields(r: {
   reasoning?: string;
   reasoningDetails?: unknown[];
   rawContent?: unknown[];
+  thinkingBlocks?: unknown[];
   origin?: string;
 }): Partial<ChatMessage> {
   const details = r.origin && r.reasoningDetails?.length ? r.reasoningDetails : undefined;
   const parts = r.origin && r.rawContent?.length ? r.rawContent : undefined;
+  const blocks = r.origin && r.thinkingBlocks?.length ? r.thinkingBlocks : undefined;
   return {
     ...(r.reasoning ? { reasoning_content: r.reasoning } : {}),
     ...(details ? { reasoning_details: details } : {}),
     ...(parts ? { content_parts: parts } : {}),
-    ...(details || parts ? { origin: r.origin } : {}),
+    ...(blocks ? { thinking_blocks: blocks } : {}),
+    ...(details || parts || blocks ? { origin: r.origin } : {}),
   };
 }
 
@@ -2266,6 +2309,31 @@ async function callEndpointOnce(
         sentProviderReasoning = true;
       }
     }
+    // LiteLLM's `thinking_blocks`: Anthropic's thinking / redacted_thinking
+    // blocks with their signatures, unmodified and in order, back to the
+    // endpoint and model that produced them and nowhere else. Anthropic:
+    // "When using extended thinking with tool use, you must pass thinking
+    // blocks back to the API for the last assistant turn ... the entire
+    // unmodified block" (docs.claude.com, build-with-claude/extended-thinking,
+    // "Preserving thinking blocks"); LiteLLM: assistant messages take a
+    // `thinking_blocks` list, echoed from the response's
+    // `message.thinking_blocks` (docs.litellm.ai, reasoning_content / "Pass
+    // `thinking` to Anthropic models" tool-calling section). Replaces the
+    // plain reasoning_content, which would be the same text twice.
+    if (!isOllama && target.replayReasoning && !target.replayReasoningDeclined && msg.origin === self && msg.thinking_blocks) {
+      out.thinking_blocks = msg.thinking_blocks;
+      delete out.reasoning_content;
+      sentProviderReasoning = true;
+    }
+    // OpenAI's spec: an assistant message that only calls tools has
+    // `content: null`. "" was rewritten by LiteLLM into a fabricated text block
+    // ("[System: Empty message content sanitised to satisfy protocol]") inside
+    // the model's own turn. Done where thinking_blocks are replayed (an
+    // OpenAI-shaped endpoint, never Ollama); every other request stays the
+    // bytes it always was (the byte-identity suites pin that).
+    if (out.thinking_blocks !== undefined && msg.role === "assistant" && out.content === "" && Array.isArray(out.tool_calls) && out.tool_calls.length > 0) {
+      out.content = null;
+    }
     // Ollama's /api/chat takes an assistant message's reasoning as `thinking`.
     // It was dropped by the allow-list even where replay_reasoning = true was
     // declared; local lanes stay off unless declared (replayFieldsOf).
@@ -2683,6 +2751,8 @@ async function callEndpointOnce(
       Array.isArray(message.reasoning_details) && message.reasoning_details.length > 0
         ? message.reasoning_details
         : undefined;
+    const thinkingBlocks: unknown[] | undefined =
+      Array.isArray(message.thinking_blocks) && message.thinking_blocks.length > 0 ? message.thinking_blocks : undefined;
     if (contentParts) message.content = partsText(message.content);
     else if (message.content != null && typeof message.content !== "string") {
       message.content = JSON.stringify(message.content);
@@ -2722,7 +2792,8 @@ async function callEndpointOnce(
       ...(partReasoning !== undefined && "reasoning" in kept ? { reasoningFromParts: true } : {}),
       ...(details ? { reasoningDetails: details } : {}),
       ...(rawParts ? { rawContent: rawParts } : {}),
-      ...(details || rawParts ? { origin: `${target.url}|${target.model}` } : {}),
+      ...(thinkingBlocks ? { thinkingBlocks } : {}),
+      ...(details || rawParts || thinkingBlocks ? { origin: `${target.url}|${target.model}` } : {}),
     };
   } catch (err) {
     if (signal?.aborted) {
@@ -2907,6 +2978,8 @@ export interface StreamedReply {
   thinkingShape?: "list" | "string";
   /** The last signature a thinking part carried */
   thinkingSignature?: string;
+  /** LiteLLM `thinking_blocks`, kept verbatim in arrival order */
+  thinkingBlocks?: Array<Record<string, unknown>>;
   finishReason?: string;
   usage?: TokenUsage;
   /** Cached and reasoning tokens, when the usage chunk carried them */
@@ -3060,6 +3133,9 @@ export async function readChatStream(
     if (typeof thought === "string") out.reasoning += thought;
     if (fromField) out.reasoningFromParts = false;
     else if (fromParts && out.reasoningFromParts === undefined) out.reasoningFromParts = true;
+    if (Array.isArray(delta.thinking_blocks)) {
+      mergeThinkingBlocks((out.thinkingBlocks ??= []), delta.thinking_blocks);
+    }
     if (Array.isArray(delta.reasoning_details) && delta.reasoning_details.length > 0) {
       mergeReasoningDetails((out.reasoningDetails ??= []), delta.reasoning_details);
     }

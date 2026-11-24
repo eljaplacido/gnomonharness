@@ -25,6 +25,7 @@ export interface TokenBearing {
   reasoning_content?: string;
   reasoning_details?: unknown[];
   content_parts?: unknown[];
+  thinking_blocks?: unknown[];
 }
 
 export interface MessageTokenOptions {
@@ -50,16 +51,22 @@ function jsonText(v: unknown): string {
  * target replays reasoning, the reasoning fields that go with it.
  */
 export function messageTokens(m: TokenBearing, opts: MessageTokenOptions = {}): number {
-  let chars = m.content.length;
+  // A wire message can carry `content: null` (a tool-call-only turn).
+  const own = typeof m.content === "string" ? m.content.length : 0;
+  let chars = own;
   if (Array.isArray(m.tool_calls) && m.tool_calls.length > 0) chars += jsonText(m.tool_calls).length;
   if (opts.reasoning) {
     if (typeof m.reasoning_content === "string") chars += m.reasoning_content.length;
     if (Array.isArray(m.reasoning_details) && m.reasoning_details.length > 0) {
       chars += jsonText(m.reasoning_details).length;
     }
+    // Sent in place of `reasoning_content` when present; counted on top, which over-estimates slightly.
+    if (Array.isArray(m.thinking_blocks) && m.thinking_blocks.length > 0) {
+      chars += jsonText(m.thinking_blocks).length;
+    }
     // Sent in place of `content`, so only what exceeds it is extra.
     if (Array.isArray(m.content_parts) && m.content_parts.length > 0) {
-      chars += Math.max(0, jsonText(m.content_parts).length - m.content.length);
+      chars += Math.max(0, jsonText(m.content_parts).length - own);
     }
   }
   return Math.ceil(chars / 4);
