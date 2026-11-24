@@ -23,6 +23,7 @@ import { AUTO_WINDOW, rememberedWindow, windowProbes, type ContextSource } from 
 import { knownHostedWindow } from "./known_windows.js";
 import { COMPLETION_GATE_MODES, auditCompletionGate } from "./completion_gate.js";
 import { auditVerifyKeys } from "./verify_run.js";
+import { ATTEMPTS_KEYS } from "./attempts.js";
 import { resolveExitMap, type ExitMap, type VerifyContract } from "./verify_outcome.js";
 import { auditSoftShell } from "./soft_shell.js";
 import { auditSandboxProfile } from "./sandbox_profile.js";
@@ -2938,6 +2939,9 @@ const KNOWN_BLOCKS = new Set([
   // [compliance] in policy.toml: resolveResidency reads allowed_regions.
   // Listed with the feature.
   "compliance",
+  // [attempts] in policy.toml: attempts.ts resolveAttempts reads it (gnomon
+  // task --attempts). Listed with the feature.
+  "attempts",
 ]);
 
 /**
@@ -3094,6 +3098,8 @@ const BLOCK_OWNER: Record<string, BlockOwner> = {
   governance: { file: "policy.toml", read: true },
   // resolveResidency reads config.policy.compliance.allowed_regions.
   compliance: { file: "policy.toml", read: true },
+  // resolveAttempts (attempts.ts) reads config.policy.attempts.
+  attempts: { file: "policy.toml", read: true },
   endpoints: { file: "config.toml", read: true },
   defaults: { file: "config.toml", read: true },
   context: { file: "config.toml", read: true },
@@ -3203,6 +3209,7 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "finish_gate",
     ],
   ],
+  ["policy.toml", "attempts", [...ATTEMPTS_KEYS]],
   ["policy.toml", "sandbox", ["level", "network", "exec", "image", "extra_roots", "allow_package_index", "filesystem", "profile", "reads", "read_roots"]],
   ["policy.toml", "approval", ["gate", "repo_code", "readonly_bash", "after_refusal", "after_refusal_calls", "modes", "default"]],
   // resolveLevels (governance.ts). A value outside the enumeration is fatal

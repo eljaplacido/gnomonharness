@@ -1381,6 +1381,32 @@ reads the surface in the working directory, not the `--base` revision's.
 
 ---
 
+### 6.9 Parallel attempts: `gnomon task --attempts <k>`
+
+For a task with an external check, run k attempts at once and keep the first that passes.
+Declare the budget in `policy.toml` (never on the machine):
+
+```toml
+[attempts]
+max = 3              # the most --attempts may ask for (default 3)
+max_tokens = 400000  # hard stop over all attempts (0 = none)
+max_wall_seconds = 1800
+max_parallel = 0     # 0 = all at once
+check = "pytest -q"  # used when [verify] command is not declared
+```
+
+```bash
+gnomon task "fix the failing parser test" --attempts 3 --yes
+```
+
+Each attempt runs in its own clone of HEAD under `.gnomon-attempts/<run>/`; the first whose
+change passes the check wins and the others are cancelled. The winner's change is applied to
+your tree only with `--yes`, and only if you have not touched the same files meanwhile;
+otherwise it is left as `winner.patch`. If none passes, the best by outside evidence is
+offered as unverified and never applied. It refuses with no check declared, with uncommitted
+changes, or above `max`. Cost is the sum of the attempts' tokens; the report shows tokens
+per attempt, total, wall-clock and what early stop saved. See CONTRACTS section 60.
+
 ## 7. Use-case patterns
 
 ### 7.1 Daily interactive coding

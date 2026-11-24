@@ -92,6 +92,7 @@ impl Enumerations {
                 "eval_run".into(),
                 "inbox_item".into(),
                 "proposal_decision".into(),
+                "attempt_event".into(),
                 "session_end".into(),
             ],
             guard_decision: vec!["allow".into(), "deny".into(), "ask".into()],
@@ -182,7 +183,7 @@ mod tests {
         assert_eq!(obj.get("role_profile").unwrap().as_array().unwrap().len(), 3);
         assert_eq!(obj.get("governance_level").unwrap().as_array().unwrap().len(), 4);
         assert_eq!(obj.get("governance_family").unwrap().as_array().unwrap().len(), 6);
-        assert_eq!(obj.get("audit_kind").unwrap().as_array().unwrap().len(), 36);
+        assert_eq!(obj.get("audit_kind").unwrap().as_array().unwrap().len(), 37);
         assert_eq!(obj.get("guard_decision").unwrap().as_array().unwrap().len(), 3);
         assert_eq!(obj.get("guard_rule").unwrap().as_array().unwrap().len(), 20);
         assert_eq!(obj.get("guard_tool").unwrap().as_array().unwrap().len(), 8);

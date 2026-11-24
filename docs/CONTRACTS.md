@@ -256,7 +256,7 @@ so both format drift and non-determinism fail the build.
                  "record_tamper_resolved", "record_notice", "mcp_tools", "stall_signal",
                  "completion_gate", "todo_gate", "job", "deliverable_first", "first_token_stall",
                  "checkpoint", "think_cap", "finish_gate", "model_call", "escalation", "eval_run",
-                 "inbox_item", "proposal_decision", "session_end"],
+                 "inbox_item", "proposal_decision", "attempt_event", "session_end"],
   "guard_decision": ["allow", "deny", "ask"],
   "guard_rule": ["tools", "malformed", "bash_deny", "bash_allow", "sudo", "sandbox", "surface",
                  "record", "git_hooks", "host_hooks", "write_allow", "outside_root", "secret_path",
@@ -5339,7 +5339,7 @@ that is not a valid item is reported, not read.
 (`session_start` mode `inbox`, the record, `session_end`), when `[audit]` is on.
 The item's text is never recorded (`conformance/audit_record_schema.json`
 classes `op` and `target` as metadata, `id` as an identifier). `audit_kind` (§3)
-has 36 entries; `inbox_item` follows `eval_run` and `proposal_decision` follows `inbox_item` (§58).
+has 37 entries (`attempt_event`, §60, precedes `session_end`); `inbox_item` follows `eval_run` and `proposal_decision` follows `inbox_item` (§58).
 
 **`gnomon inbox [list|show <id>|add --title T [--detail D] [--target X]
 [--evidence trail:seq:kind,...] [--scope p,...]|ack <id>|resolve <id> [--note N]|mcp]
@@ -6066,3 +6066,35 @@ gVisor backend, and that kernel flaws and side channels are not probed.
 (the contract, the docs matrix, the tool paths, a negative control that proves an
 escape under a claimed level is a FAIL, and the `os` and `docker` probes where the
 machine has them).
+
+## 60. `gnomon task --attempts <k>` — speculative parallel attempts, `[attempts]`, audit kind `attempt_event`, `gnomon.attempts/1`, `.gnomon-attempts/`
+
+**Opt-in.** `--attempts` absent or 1 runs the plain task, byte for byte (no clone, no run
+directory, no seed on the wire). For k > 1 a coordinator makes k shared clones of HEAD
+under `.gnomon-attempts/<run>/`, runs one `gnomon task` child in each under the same
+`.gnomon/` (the surface hash is checked equal in every clone and recorded once in
+`manifest.json`), each with its own `GNOMON_ATTEMPT_RUN`/`_NUMBER`/`_SEED`, `PORT` and `TMPDIR`.
+The seed is sent as `seed` only inside an attempt.
+
+**Judge.** The external check is `[verify] command`, else `[attempts] check` (policy.toml:
+`max` default 3, `max_tokens`, `max_wall_seconds`, `max_parallel`, `check`, `roles`, the role
+per attempt round-robin). The first attempt whose change passes it wins; the others are
+signalled and recorded `cancelled`, never as results. None passing: the evidence selector
+(check, bucket, smaller patch, fewer tokens, lower number; never a self-report) offers one,
+`verified: false`.
+
+**Refused before anything runs (exit 10):** no check declared, k above `max`, uncommitted
+changes, `.gnomon/` not committed, a non-integer k. Budgets stop the run (`budget_stop`).
+
+**Apply.** The change is `winner.patch`. Only a verified winner, only with `--yes`, only if
+none of its paths changed in the operator's tree since the run began, is applied; otherwise
+it is kept for review. Exit 0 verified, 1 unverified, 10 nothing to offer.
+
+**Audit.** `attempt_event` (37th `audit_kind`, before `session_end`):
+`{run_id, event: spawn|check|cancel|budget_stop|select|apply|refuse, ...}` in a sealed trail
+`attempts-<run>` (`session_start` mode `attempts`); each child's `session_start` carries
+`run_id` and `attempt`. Report: `gnomon.attempts/1` (`report.json`, and `--json`) with tokens
+per attempt, total, wall-clock and `early_stop` savings (an estimate against the mean of
+the attempts that finished).
+
+**Fixture**: `conformance/attempts.json`; `packages/gnomon-cli/src/attempts.test.ts`.
