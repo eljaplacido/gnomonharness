@@ -235,7 +235,7 @@ export interface GuardVerdict {
   exempt?: "readonly_bash";
   /**
    * Present only when `[guard] broker` put an ask to a person (CONTRACTS.md
-   * §18, the approval broker): `decision` is then the person's answer (allow
+   * §10, the approval broker): `decision` is then the person's answer (allow
    * or deny), never anything gnomon decided alone. `outcome` says how it ended.
    */
   broker?: GuardBrokerOutcome;
@@ -1306,7 +1306,7 @@ function appendDecision(
       exit: guardExit(v.decision, v.error !== undefined),
       // `[approval] readonly_bash`: why an on_write bash call was not asked.
       ...(v.exempt ? { exempt: v.exempt } : {}),
-      // The approval broker (CONTRACTS.md §18): who answered an ask, and how.
+      // The approval broker (CONTRACTS.md §10): who answered an ask, and how.
       ...(v.broker ? { broker: v.broker } : {}),
       // [governance] only (CONTRACTS.md §36): absent otherwise, so an
       // undeclared surface's records are what they were.

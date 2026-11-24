@@ -1,5 +1,5 @@
 // gnomon dashboard: pending-approval cards for the guard's approval broker
-// (CONTRACTS.md §18). A guard hook on a host that cannot ask (Codex, Cursor
+// (CONTRACTS.md §10). A guard hook on a host that cannot ask (Codex, Cursor
 // preToolUse and beforeReadFile) is HOLDING a call and waiting for a person.
 //
 // The card says what the call is and why gnomon asked. Allow and Deny are two

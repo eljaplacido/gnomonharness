@@ -493,7 +493,7 @@ export interface Policy {
    * preToolUse and beforeReadFile). `broker` is "dashboard" | "terminal"
    * (absent: no broker, an ask there is a deny as before); `broker_timeout_s`
    * is how long the hook holds the call (default 60, capped under the host's
-   * own hook timeout). CONTRACTS.md §18.
+   * own hook timeout). CONTRACTS.md §10.
    */
   guard?: { broker?: string; broker_timeout_s?: number };
   /**

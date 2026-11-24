@@ -1,5 +1,5 @@
 /**
- * The approval broker (CONTRACTS.md §18): a hook on a host that cannot ask
+ * The approval broker (CONTRACTS.md §10): a hook on a host that cannot ask
  * holds the call and a person answers; timeout or no one reachable is a deny;
  * never an auto-allow. A fake broker (the transports) stands in for the person.
  * One test runs the real dashboard end to end over loopback.

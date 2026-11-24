@@ -1093,7 +1093,11 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
           }
         }
         for (const n of spec.notes) console.error(`gnomon guard: ${n}`);
-        console.error(`gnomon guard: live verification against a real ${spec.what} binary is pending: the hook schema is from its documentation.`);
+        console.error(
+          target === "qwen-code"
+            ? "gnomon guard: verified live against Qwen Code 0.28.4 (a scripted endpoint; docs/evidence/live-qwen-code-0.28.4.json): an allowed read, a denied write outside the root and a shell command, with the deny honoured."
+            : `gnomon guard: live verification against a real ${spec.what} binary is pending: the hook schema is from its documentation.`
+        );
         travel(file);
         warnNoRole(project, target);
         return 0;

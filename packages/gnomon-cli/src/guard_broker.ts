@@ -1,5 +1,5 @@
 /**
- * The approval broker (CONTRACTS.md §18): a person answers an `ask` on a host
+ * The approval broker (CONTRACTS.md §10): a person answers an `ask` on a host
  * that cannot ask.
  *
  * Codex documents `permissionDecision: "ask"` as "parsed but not supported",

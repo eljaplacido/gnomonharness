@@ -1,6 +1,6 @@
 /**
  * The dashboard's half of the approval broker (guard_broker.ts, CONTRACTS.md
- * §18): a queue of calls a guard hook is HOLDING, each waiting for a person.
+ * §10): a queue of calls a guard hook is HOLDING, each waiting for a person.
  *
  * Two kinds of caller, two kinds of secret:
  *   - the hook (a separate process) signs with the broker secret the dashboard

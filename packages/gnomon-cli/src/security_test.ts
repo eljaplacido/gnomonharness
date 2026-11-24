@@ -170,7 +170,7 @@ const LIMITS = [
 ];
 
 const OPT_IN_LIMITS = [
-  "Codex, Qwen Code and Copilot: the payloads are built from each host's documentation (cited in packages/gnomon-core/src/guard.ts), not recorded from a real binary; live verification is pending.",
+  "Codex and Copilot: the payloads are built from each host's documentation (cited in packages/gnomon-core/src/guard.ts), not recorded from a real binary; live verification is pending (it needs the operator's accounts). Qwen Code was verified live (0.28.4, scripted endpoint: docs/evidence/live-qwen-code-0.28.4.json; GNOMON_LIVE_ADAPTERS=1).",
   "Codex cannot ask: a call the approval gate would ask about is left to Codex's own approval flow (read here from the guard's stderr), and any other ask is refused. It has no read-tool hook, and a project hook runs only once Codex trusts it (/hooks).",
 ];
 
