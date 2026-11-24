@@ -342,6 +342,58 @@ export function turnFooter(ctx: BoxCtx, f: { glyph?: string; glyphRole?: string;
   return rule(ctx, b.bl, title);
 }
 
+// ---------------------------------------------------------------------------
+// Tinted panels: `[ui] panels = "tinted"`
+// ---------------------------------------------------------------------------
+
+/** Is the tint in force? Opt-in, boxed, colour, and a truecolor terminal: 256 and 16 colours stay as they are. */
+export function panelsTinted(ctx: BoxCtx): boolean {
+  return ctx.ui.panels === "tinted" && ctx.color && ctx.depth === 24 && Boolean(ctx.theme.look?.accent);
+}
+
+/** The card's ground: the theme's own background with its accent mixed in at 9%. */
+export function panelTint(ctx: BoxCtx): [number, number, number] {
+  const base = rgb(ctx.theme.terminal?.bg ?? (ctx.theme.name === "light" ? "#ffffff" : "#101114"));
+  const a = rgb(ctx.theme.look?.accent?.hex ?? "#888888");
+  const k = 0.09;
+  return [0, 1, 2].map((i) => Math.round(base[i] * (1 - k) + a[i] * k)) as [number, number, number];
+}
+
+const bgRgb = (c: [number, number, number]): string => `${ESC}48;2;${c[0]};${c[1]};${c[2]}m`;
+
+/**
+ * One row of a tinted card: the tint behind the row's own colours, padded with
+ * spaces to exactly `columns - 1` and closed with a reset, so the colour ends
+ * where the card does. Every reset inside the row re-opens the tint (a reset
+ * would otherwise end it mid-row). No erase-line is used: that would paint the
+ * rest of a line in whatever background is current. `columns` is passed live
+ * by the loop, so a row printed after a resize is the new width.
+ */
+export function tintRow(ctx: BoxCtx, line: string, columns = ctx.columns): string {
+  if (!panelsTinted(ctx)) return line;
+  const bg = bgRgb(panelTint(ctx));
+  const w = Math.max(10, columns - 1);
+  const fitted = visibleWidth(line) > w ? fitRow(line, w) : line;
+  const body = fitted.replace(/\x1b\[(?:0|49)?m/g, (m) => m + bg);
+  return `${bg}${body}${" ".repeat(Math.max(0, w - visibleWidth(fitted)))}${RESET}`;
+}
+
+/** Tint each row of a possibly multi-row string. */
+export function tintRows(ctx: BoxCtx, text: string, columns = ctx.columns): string {
+  return panelsTinted(ctx) ? text.split("\n").map((l) => tintRow(ctx, l, columns)).join("\n") : text;
+}
+
+/** The turn header as a full-width bar in the theme accent. */
+export function panelHeader(ctx: BoxCtx, h: { role: string; model?: string }, columns = ctx.columns): string {
+  const a = ctx.theme.look?.accent;
+  if (!panelsTinted(ctx) || !a) return turnHeader(ctx, h);
+  const w = Math.max(10, columns - 1);
+  const text = clip(` ${bullet(ctx)} ${h.role}${h.model ? ` ${dot(ctx)} ${h.model}` : ""}`, w - 1);
+  const fg = colorCode(pillFg(ctx), 24);
+  const [r, g, b] = rgb(a.hex);
+  return `${ESC}1;${fg};48;2;${r};${g};${b}m${text}${" ".repeat(Math.max(0, w - visibleWidth(text)))}${RESET}`;
+}
+
 const LEAD_ESC = /^((?:\x1b\[[0-9;]*m)*)  /;
 
 /**

@@ -9,7 +9,7 @@
 import { describe, it, expect } from "vitest";
 import {
   boxCtx, boxedActive, startupCard, statusRule, promptGlyph, turnHeader, turnFooter,
-  railLine, swatch, sampleTurn, colorDepth, asciiOnly, legacyWindowsConsole, plain, type Depth,
+  railLine, swatch, sampleTurn, panelsTinted, tintRow, panelHeader, colorDepth, asciiOnly, legacyWindowsConsole, plain, type Depth,
 } from "./boxed.js";
 import { THEMES, renderExchange, renderMeta, Progress, spinnerSpec, spinnerFrames, paint } from "./render.js";
 import { resolveUi, type ResolvedUi } from "./config.js";
@@ -363,5 +363,37 @@ describe("the answer sits below the closed frame, unprefixed", () => {
     const r = railLine(c, "  " + "x".repeat(200));
     expect(visibleWidth(r)).toBeLessThanOrEqual(60);
     expect(plain(r)).toMatch(/^│ x+…$/);
+  });
+});
+
+describe("tinted panels ([ui] panels = tinted)", () => {
+  const tinted = (columns = 80, depth: Depth = 24) => boxCtx(ui({ panels: "tinted" }), { columns, depth, ascii: false, color: true });
+
+  it("default is byte-identical: no tint unless the key opts in", () => {
+    const c = ctxOf(80);
+    expect(panelsTinted(c)).toBe(false);
+    expect(tintRow(c, "  hello")).toBe("  hello");
+    expect(panelHeader(c, { role: "build" })).toBe(turnHeader(c, { role: "build" }));
+  });
+
+  it("tints each row to exactly columns - 1 cells, re-opens after inner resets, never erases the line", () => {
+    const c = tinted(60);
+    const row = tintRow(c, "│ \x1b[1mhi\x1b[0m there");
+    expect(visibleWidth(row)).toBe(59);
+    expect(row.endsWith("\x1b[0m")).toBe(true);
+    expect(row).toContain("48;2;");
+    expect(row).not.toContain("\x1b[K");
+    expect(row.split("\x1b[0m").length).toBeGreaterThan(2);
+  });
+
+  it("uses the width it is given, so a row after a resize is the new width", () => {
+    const c = tinted(80);
+    expect(visibleWidth(tintRow(c, "x", 40))).toBe(39);
+    expect(visibleWidth(tintRow(c, "x", 100))).toBe(99);
+  });
+
+  it("stays plain below truecolor; the header bar fills the width", () => {
+    expect(tintRow(tinted(80, 256), "x")).toBe("x");
+    expect(visibleWidth(panelHeader(tinted(80), { role: "build", model: "m" }))).toBe(79);
   });
 });

@@ -690,7 +690,7 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
       if (!sent.ok) return fail(res, sent.status ?? 502, sent.error ?? "the endpoint did not answer", { ...view, ms: sent.ms, ...egressView });
       return json(res, 200, {
         ...view,
-        ...shapeAnswer(sent.content ?? ""),
+        ...shapeAnswer(sent.content ?? "", brief),
         ms: sent.ms,
         brief_chars: brief.length,
         chars_sent: sent.chars_sent,

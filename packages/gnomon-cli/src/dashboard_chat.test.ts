@@ -18,7 +18,7 @@ import { AuditTrail, auditSurface, loadConfig, resolveAudit, recomputeManifest }
 import { initSurface } from "./init.js";
 import { knownProjects, type DashboardProject } from "./dashboard_data.js";
 import { startDashboard, DASHBOARD_ROUTES, type DashboardServer } from "./dashboard_server.js";
-import { BRIEF_MAX_CHARS, CHAT_PANELS, buildBrief, citedPanels, planChat, shapeAnswer } from "./dashboard_chat.js";
+import { BRIEF_MAX_CHARS, CHAT_PANELS, buildBrief, citedPanels, citedRecords, planChat, shapeAnswer } from "./dashboard_chat.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const made: string[] = [];
@@ -255,6 +255,29 @@ describe("POST /api/p/<id>/chat against a local endpoint", () => {
     expect(rest.at(-1)!.content).toBe("What was refused?");
     // A local question leaves no record of its own and writes nothing.
     expect(audits(root)).toEqual([]);
+  });
+
+  it("hands the model record ids and keeps only the ids the brief really holds", async () => {
+    const TRAIL = "2026-11-01T10-00-00-000Z-1.jsonl";
+    reply = () => ({ content: `One session ran [session] {session:${TRAIL}}; also {session:made-up} and {rule:R99}.` });
+    const before = seen.length;
+    const r = await s.ask({ question: "Which session ran?" });
+    expect(r.status).toBe(200);
+    expect(r.json).toMatchObject({ grounded: true, cites: ["session"], records: [`session:${TRAIL}`] });
+    const body = seen.at(-1)!.body;
+    expect(seen.length).toBe(before + 1);
+    expect(body.tools).toBeUndefined();
+    const system = (body.messages as Array<{ content: string }>)[0]!.content;
+    expect(system).toContain(`{session:${TRAIL}}`);
+    expect(system).toMatch(/Never write an id the BRIEF does not contain/);
+    expect(audits(root)).toEqual([]);
+  });
+
+  it("citedRecords: ids outside the brief are dropped, in order of first mention", () => {
+    const brief = "## [governance]\n{rule:R1} rule R1: 2 refused\n{rule:R2} rule R2: 1 refused";
+    expect(citedRecords("R2 {rule:R2} then {rule:R1} {rule:R2} and {rule:R7}", brief)).toEqual(["rule:R2", "rule:R1"]);
+    expect(shapeAnswer("Two [governance] {rule:R1}", brief)).toMatchObject({ records: ["rule:R1"] });
+    expect(shapeAnswer("Two [governance] {rule:R1}")).not.toHaveProperty("records");
   });
 
   it("an answer that cites nothing is withheld, with what the model said kept behind a fold", async () => {

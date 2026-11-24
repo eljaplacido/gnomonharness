@@ -3468,8 +3468,9 @@ Commands:
     the record's hash. Exit: 0 held, 2 a check failed, 10 no verdict.
     --transcript <file> --format <format> also puts every shell command
     the agent ran to the role's bash_allow / bash_deny. <format> is the
-    harness that wrote the file: claude-code, opencode, goose, qwen-code
-    or mini-swe-agent.
+    harness that wrote the file: claude-code, opencode, goose, qwen-code,
+    mini-swe-agent, antigravity (a JSONL of its hook payloads) or hermes
+    (hermes sessions export).
     --install-hook claude-code prints the SessionStart + Stop hooks that
     run this on every Claude Code session (it edits nothing).
     --require-guard fails (exit 2) a session that made calls the guard hook
