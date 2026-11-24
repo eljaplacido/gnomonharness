@@ -89,7 +89,7 @@ import { Progress, renderExchange, splitThinking, paint, THEMES, glyphsOf, termi
 } from "./render.js";
 import {
   boxedActive, boxCtx, startupCard, statusRule, promptGlyph, turnHeader, turnFooter,
-  railLine, swatch, panelHeader, tintRows, type BoxCtx,
+  railLine, swatch, panelHeader, tintRows, panelsTinted, type BoxCtx,
 } from "./boxed.js";
 export { isLocalEndpoint } from "./config.js";
 import {
@@ -4136,7 +4136,10 @@ function printExchangeBoxed(exchange: PromptExchange, ui: ResolvedUi, box: BoxCt
   // code copied from the answer never carries a rail. The spinner was stopped
   // (and its row erased) when the turn ended, before this runs.
   const m = metaText(exchange, ui, thinkTokens, Math.max(8, box.columns - 6 - 2));
-  console.log(tintRows(box, turnFooter(box, m ? { glyph: m.glyph, glyphRole: m.color, text: m.text } : { text: "" }), liveColumns(box)));
+  // A tinted card is one column narrower than the terminal (tintRow), so the
+  // footer rule is drawn to that width rather than cut with an ellipsis.
+  const footBox = panelsTinted(box) ? { ...box, columns: liveColumns(box) - 1 } : box;
+  console.log(tintRows(box, turnFooter(footBox, m ? { glyph: m.glyph, glyphRole: m.color, text: m.text } : { text: "" }), liveColumns(box)));
   for (const line of renderExchange(exchange, { ...ui, meta: [] })) console.log(line);
 }
 
