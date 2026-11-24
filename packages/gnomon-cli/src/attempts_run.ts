@@ -224,7 +224,7 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
     if (safeGit(["rev-parse", "--is-inside-work-tree"], { cwd: root }).status !== 0) {
       throw new Refusal("--attempts needs a git repository: each attempt is a clone of one base commit.");
     }
-    if (realpathSync(git(root, ["rev-parse", "--show-toplevel"]).trim()) !== realpathSync(root)) {
+    if (realpathSync.native(git(root, ["rev-parse", "--show-toplevel"]).trim()) !== realpathSync.native(root)) {
       throw new Refusal("--attempts needs .gnomon/ at the top of the git repository.");
     }
     const dirty = dirtyPaths(root);

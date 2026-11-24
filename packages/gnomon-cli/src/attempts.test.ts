@@ -229,15 +229,19 @@ describe("gnomon task --attempts", () => {
 
   it("stops on the token budget: no attempt starts past it", async () => {
     const root = await project(`[attempts]\nmax = 3\nmax_tokens = 100\nmax_parallel = 1\nroles = ["a", "b", "c"]\n${CHECK}`);
-    script.writes = { m1: "bad\n", m2: "ok\n", m3: "ok\n" };
+    script.writes = { m1: "ok\n", m2: "ok\n", m3: "ok\n" };
+    // Attempt 1's first reply alone is 120 tokens (> 100) and its second is held,
+    // so it is always still running when the budget trips: cancelled, deterministically.
+    script.hold = { m1: 60_000 };
     const r = await gnomon(root, ["--attempts", "3", "--yes", "--apply"]);
-    // Attempt 1 alone spends 100 + 20 + 100 + 5 > 100 tokens and fails the check.
     expect(r.json.budget_stop).toContain("max_tokens = 100");
-    expect(r.json.attempts[0].status).toBe("unchecked");
+    expect(r.json.attempts[0].status).toBe("cancelled");
+    expect(r.json.attempts[0].tokens).toBeGreaterThanOrEqual(100);
     expect(r.json.attempts[1].tokens).toBe(0);
+    expect(r.json.attempts[2].tokens).toBe(0);
     expect(new Set(seen.map((s) => s.model))).toEqual(new Set(["m1"]));
-    expect(r.json.chosen).toBe(1);
-    expect(r.json.verified).toBe(false);
+    expect(r.json.chosen).toBeNull();
+    expect(r.json.applied).toBe(false);
   }, 120_000);
 
   it("--attempts 1 is the plain task: the same record, no clones, no run directory", async () => {
@@ -290,7 +294,8 @@ describe("gnomon task --attempts", () => {
     expect(r.json.tokens_total).toBeGreaterThanOrEqual(300);
   }, 60_000);
 
-  it("Ctrl-C cancels every attempt; none is selectable or applied", async () => {
+  // Windows has no signal to deliver: kill("SIGINT") ends the process outright.
+  it.skipIf(process.platform === "win32")("Ctrl-C cancels every attempt; none is selectable or applied", async () => {
     const root = await project(ROLES);
     script.writes = { m1: "ok\n", m2: "ok\n", m3: "ok\n" };
     script.hold = { m1: 60_000, m2: 60_000, m3: 60_000 };
