@@ -323,7 +323,7 @@ describe("gnomon guard install codex|qwen-code|copilot", () => {
     for (const host of ["codex", "qwen-code", "copilot"] as const) {
       const w = await stderrOf(["install", host, "--write", "--dir", r]);
       expect(w.code, host).toBe(0);
-      expect(w.err).toMatch(/live verification against a real .* binary is pending/);
+      expect(w.err).toMatch(host === "qwen-code" ? /verified live against Qwen Code 0\.28\.4/ : /live verification against a real .* binary is pending/);
       const doc = JSON.parse(readFileSync(join(r, FILES[host]), "utf-8"));
       const text = JSON.stringify(doc);
       expect(text).toContain(`guard --from ${host} --agent ${host}`);

@@ -50,6 +50,7 @@ import {
   type DashboardProject,
 } from "./dashboard_data.js";
 import { lensView, lensRun } from "./dashboard_lens.js";
+import { BrokerQueue, brokerFile, removeBrokerAdvert, sameSecret as sameBrokerSecret, view as brokerView, writeBrokerAdvert } from "./dashboard_broker.js";
 import {
   CHAT_TIMEOUT_MS,
   ChatConfirmations,
@@ -130,7 +131,11 @@ export const DASHBOARD_ROUTES = {
     "POST /api/p/<id>/chat",
     "POST /api/actions/<name>",
     "GET /api/jobs/<id>",
+    "GET /api/broker/pending",
+    "POST /api/broker/<id>/decide",
   ],
+  /** Signed with the broker secret a hook reads from the dashboard's advert file, never with a session token. */
+  broker: ["POST /api/broker/request", "GET /api/broker/request/<id>", "POST /api/broker/request/<id>/cancel"],
 } as const;
 
 const STATIC: Record<string, { file: string; type: string }> = {
@@ -141,6 +146,7 @@ const STATIC: Record<string, { file: string; type: string }> = {
   "/lens.js": { file: "lens.js", type: "text/javascript; charset=utf-8" },
   "/inbox.js": { file: "inbox.js", type: "text/javascript; charset=utf-8" },
   "/chat.js": { file: "chat.js", type: "text/javascript; charset=utf-8" },
+  "/broker.js": { file: "broker.js", type: "text/javascript; charset=utf-8" },
   "/palette.js": { file: "palette.js", type: "text/javascript; charset=utf-8" },
   "/icon.svg": { file: "icon.svg", type: "image/svg+xml" },
   "/fonts/cinzel-wordmark.woff2": { file: "fonts/cinzel-wordmark.woff2", type: "font/woff2" },
@@ -191,6 +197,8 @@ export interface DashboardOptions {
   confirmTtlMs?: number;
   /** How long the chat waits for a model to answer (default 150 s). */
   chatTimeoutMs?: number;
+  /** Where to tell guard hooks how to reach the approval broker (default: beside the trust store); null = do not advertise. */
+  brokerAdvertFile?: string | null;
 }
 
 export interface DashboardServer {
@@ -238,6 +246,7 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
   /** Projects with a chat question in flight: one at a time each. */
   const chatBusy = new Set<string>();
   const chatConfirms = new ChatConfirmations(opts.confirmTtlMs);
+  const broker = new BrokerQueue();
   let port = 0;
   let commands: Promise<Set<string>> | null = null;
 
@@ -701,6 +710,30 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
       if (!p.hasSurface) return fail(res, 404, "this project has no .gnomon/");
       return req.method === "GET" ? json(res, 200, chatStatus(p)) : chat(req, res, p);
     }
+    if (req.method === "GET" && path === "/api/broker/pending") {
+      return json(res, 200, { pending: broker.pending().map((r) => brokerView(r)) });
+    }
+    const decide = /^\/api\/broker\/([0-9a-f]{18})\/decide$/.exec(path);
+    if (decide && req.method === "POST") {
+      let body: { decision?: unknown; confirm?: unknown };
+      try {
+        body = (await readBody(req)) as typeof body;
+      } catch (e) {
+        return fail(res, 400, (e as Error).message);
+      }
+      const decision = body.decision === "allow" ? "allow" : body.decision === "deny" ? "deny" : null;
+      if (!decision) return fail(res, 400, 'decision must be "allow" or "deny"');
+      const nonce = typeof body.confirm === "string" ? body.confirm : "";
+      if (!nonce) {
+        const issued = broker.prepare(decide[1]!, decision);
+        if (!issued) return fail(res, 404, "this call is no longer waiting for an answer");
+        return json(res, 200, { confirm: issued });
+      }
+      if (!broker.decide(decide[1]!, decision, nonce)) {
+        return fail(res, 409, "this confirmation is not for this call and answer, or it was used or has expired, or the call is no longer waiting: review it again");
+      }
+      return json(res, 200, { id: decide[1], state: decision === "allow" ? "approved" : "denied" });
+    }
     if (req.method === "GET" && path === "/api/meta") {
       projects.forEach(refresh);
       return json(res, 200, {
@@ -820,6 +853,31 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
         return json(res, 200, { token });
       }
 
+      if (isApi && url.pathname.startsWith("/api/broker/request")) {
+        // The guard hook's door: its own secret, and only these three routes.
+        const m = /^Bearer ([A-Za-z0-9_-]{20,100})$/.exec(req.headers.authorization ?? "");
+        if (!m || !sameBrokerSecret(broker.secret, m[1]!)) return fail(res, 401, "not the broker secret");
+        const one = /^\/api\/broker\/request(?:\/([0-9a-f]{18})(\/cancel)?)?$/.exec(url.pathname);
+        if (!one) return fail(res, 404, "not found");
+        if (req.method === "POST" && !one[1]) {
+          let body: Record<string, unknown>;
+          try {
+            body = (await readBody(req, 16_384)) as Record<string, unknown>;
+          } catch (e) {
+            return fail(res, 400, (e as Error).message);
+          }
+          const hold = typeof body.hold_s === "number" && Number.isFinite(body.hold_s) ? body.hold_s : 60;
+          const r = broker.create(body, hold);
+          return r ? json(res, 200, { request: brokerView(r) }) : fail(res, 429, "too many calls are waiting for an answer");
+        }
+        if (req.method === "GET" && one[1] && !one[2]) {
+          const r = broker.get(one[1]);
+          return r ? json(res, 200, { request: brokerView(r) }) : fail(res, 404, "no such request");
+        }
+        if (req.method === "POST" && one[1] && one[2]) return json(res, 200, { cancelled: broker.cancel(one[1]) });
+        return fail(res, 405, "not allowed");
+      }
+
       if (isApi) {
         if (!authorized(req)) return fail(res, 401, "sign in with the link the terminal printed");
         try {
@@ -847,6 +905,8 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
   });
   const addr = server.address();
   port = typeof addr === "object" && addr ? addr.port : 0;
+  const advertFile = opts.brokerAdvertFile === undefined ? brokerFile() : opts.brokerAdvertFile;
+  if (advertFile !== null) writeBrokerAdvert({ port, secret: broker.secret, pid: process.pid }, advertFile);
 
   return {
     server,
@@ -860,6 +920,7 @@ export async function startDashboard(opts: DashboardOptions): Promise<DashboardS
       new Promise<void>((done) => {
         // A download or a check still running is stopped with the server.
         for (const c of children) c.kill();
+        if (advertFile !== null) removeBrokerAdvert(process.pid, advertFile);
         server.closeAllConnections?.();
         server.close(() => done());
       }),
