@@ -272,6 +272,8 @@ export interface UiConfig {
   /** true/false, or the style: "sundial" | "clock" | "braille" | "ascii" */
   spinner?: boolean | SpinnerStyle;
   style?: UiStyle;
+  /** `"plain"` (default) or `"tinted"`: a background tint and a header bar on each turn card (truecolor only). */
+  panels?: PanelStyle;
   color?: boolean;
   markdown?: boolean;
 }
@@ -2170,8 +2172,12 @@ export interface ResolvedUi {
   spinner_style?: SpinnerStyle;
   /** Runtime: is the boxed look in force this session? Set by the loop. */
   boxed?: boolean;
+  /** `[ui] panels`; absent reads as "plain". */
+  panels?: PanelStyle;
 }
 
+export type PanelStyle = "plain" | "tinted";
+export const PANEL_STYLES: PanelStyle[] = ["plain", "tinted"];
 export type UiStyle = "auto" | "boxed" | "classic";
 export const UI_STYLES: UiStyle[] = ["auto", "boxed", "classic"];
 export type SpinnerStyle = "sundial" | "clock" | "braille" | "ascii";
@@ -2242,6 +2248,7 @@ export function resolveUi(config: GnomonConfig): ResolvedUi {
     cot: pickEnum(ui.cot, COT_MODES, "work"),
     spinner: typeof ui.spinner === "boolean" ? ui.spinner : true,
     style: pickEnum(ui.style, UI_STYLES, "auto"),
+    ...(ui.panels === "tinted" ? { panels: "tinted" as PanelStyle } : {}),
     spinner_style: pickEnum(ui.spinner, SPINNER_STYLES, "sundial"),
     color: typeof ui.color === "boolean" ? ui.color : true,
     markdown: typeof ui.markdown === "boolean" ? ui.markdown : true,
@@ -3326,6 +3333,7 @@ export function auditSurface(config: GnomonConfig): SurfaceProblem[] {
   const uiBlock = (config.config.ui ?? {}) as Record<string, unknown>;
   const uiEnums: Array<[string, string[], boolean]> = [
     ["style", UI_STYLES, false],
+    ["panels", PANEL_STYLES, false],
     ["spinner", SPINNER_STYLES, true],
     ["meta_style", META_STYLES, false],
     ["think", THINK_MODES, false],
