@@ -1,0 +1,69 @@
+{
+  "schema": "gnomon.attempts/1",
+  "description": "gnomon task --attempts <k>: speculative parallel attempts with early stop. CONTRACTS.md section 60. Pinned by packages/gnomon-cli/src/attempts.test.ts and the audit schema.",
+  "dir": "<system tmp>/gnomon-attempts-*",
+  "policy_block": {
+    "file": "policy.toml",
+    "block": "attempts",
+    "keys": [
+      "max",
+      "max_tokens",
+      "max_wall_seconds",
+      "max_parallel",
+      "check",
+      "roles"
+    ],
+    "default_max": 3
+  },
+  "statuses": [
+    "passed",
+    "failed",
+    "no_change",
+    "cancelled",
+    "unchecked",
+    "unfinished"
+  ],
+  "audit": {
+    "kind": "attempt_event",
+    "events": [
+      "spawn",
+      "check",
+      "cancel",
+      "budget_stop",
+      "select",
+      "apply",
+      "refuse"
+    ],
+    "session_start_mode": "attempts",
+    "session_start_extra": [
+      "run_id",
+      "attempt"
+    ]
+  },
+  "exit_codes": {
+    "verified": 0,
+    "unverified": 1,
+    "nothing_to_offer_or_refused": 10
+  },
+  "refusals": [
+    "k above [attempts] max",
+    "no [verify] command or [attempts] check",
+    "uncommitted changes in the working tree",
+    "k not a whole number"
+  ],
+  "selector": [
+    "check passed",
+    "bucket result",
+    "smaller patch",
+    "fewer tokens",
+    "lower attempt number"
+  ],
+  "apply": "only a verified winner, only with --apply, only if none of its paths changed in the operator's tree; never an unverified one",
+  "env": [
+    "GNOMON_ATTEMPT_RUN",
+    "GNOMON_ATTEMPT_NUMBER",
+    "GNOMON_ATTEMPT_SEED",
+    "PORT",
+    "TMPDIR"
+  ]
+}

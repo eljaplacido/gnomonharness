@@ -2381,6 +2381,13 @@ async function callEndpointOnce(
     payload.top_p = target.top_p;
     if (maxTokens > 0) payload[maxTokensField] = maxTokens;
   }
+  // A coordinator's seed for this attempt (gnomon task --attempts), sent where
+  // the endpoint takes one. Unset everywhere else: the bytes are unchanged.
+  const attemptSeedValue = attemptSeed();
+  if (attemptSeedValue !== undefined) {
+    if (payload.options) (payload.options as Record<string, unknown>).seed = attemptSeedValue;
+    else payload.seed = attemptSeedValue;
+  }
   // The sweep knobs (sweep_knobs.ts, docs/CONTRACTS.md §32), each only when
   // declared. Sampling left to the provider is taken out of the object built
   // above, so every other key keeps its place and an undeclared surface sends
@@ -11121,6 +11128,22 @@ export interface TaskRecord {
   escalation?: Omit<EscalationRecord, "usage_before" | "usage_after" | "elapsed_ms">;
 }
 
+/** The run and attempt a coordinator (gnomon task --attempts) set in this child's environment. */
+function attemptIdentity(): { run_id?: string; attempt?: number } {
+  const run = process.env.GNOMON_ATTEMPT_RUN;
+  const n = Number(process.env.GNOMON_ATTEMPT_NUMBER);
+  if (!run || !Number.isInteger(n) || n < 1) return {};
+  return { run_id: run, attempt: n };
+}
+
+/** The sampling seed a coordinator gave this attempt (diversity between attempts), or undefined. */
+function attemptSeed(): number | undefined {
+  const raw = process.env.GNOMON_ATTEMPT_SEED;
+  if (!raw || !process.env.GNOMON_ATTEMPT_RUN) return undefined;
+  const n = Number(raw);
+  return Number.isInteger(n) ? n : undefined;
+}
+
 /** One tool call's timing, as the record and the trail carry it (TB4). */
 export interface ToolTiming {
   tool: string;
@@ -11508,6 +11531,9 @@ export async function runTask(
     harness: harnessBuild(),
     cwd: process.cwd(),
     mode: "task",
+    // Present only inside a `gnomon task --attempts` run (attempts.ts): the
+    // run and this attempt, so the k trails join. Absent otherwise.
+    ...attemptIdentity(),
     // Present only under --deadline, so a run without one writes the record
     // it always wrote.
     ...(turnDeadline
@@ -11565,7 +11591,9 @@ export async function runTask(
   // session_start leaves a record. No file when [audit] is off.
   const stageRecords: NonNullable<TaskRecord["stages"]> = [];
   const live = new LiveRecord({
-    dir: auditSettings.enabled ? auditSettings.dir : null,
+    // Inside a `--attempts` run the coordinator reads this record for the
+    // tokens spent so far, whether or not [audit] is on (attempts_run.ts).
+    dir: auditSettings.enabled ? auditSettings.dir : attemptIdentity().run_id ? (process.env.GNOMON_ATTEMPT_LIVE || null) : null,
     session: sessionId,
     text: (value) => audit.text(value),
   });

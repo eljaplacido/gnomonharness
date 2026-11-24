@@ -313,6 +313,7 @@ export type AuditKind =
   // hash before and after. Never the proposal's text. Skill proposals keep
   // `skill_accept` / `skill_reject`.
   | "proposal_decision"
+  | "attempt_event"
   | "session_end";
 
 /**
@@ -357,6 +358,7 @@ export const AUDIT_KINDS = [
   "eval_run",
   "inbox_item",
   "proposal_decision",
+  "attempt_event",
   "session_end",
 ] as const satisfies readonly AuditKind[];
 type MissingAuditKind = Exclude<AuditKind, (typeof AUDIT_KINDS)[number]>;
