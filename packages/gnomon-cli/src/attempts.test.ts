@@ -142,7 +142,7 @@ describe("gnomon task --attempts", () => {
     script.writes = { m1: "bad\n", m2: "ok\n", m3: "bad\n" };
     script.hold = { m1: 60_000, m3: 60_000 };
     script.tokens = { m1: 20, m2: 20, m3: 20 };
-    const r = await gnomon(root, ["--attempts", "3", "--yes"]);
+    const r = await gnomon(root, ["--attempts", "3", "--yes", "--apply"]);
     expect(r.code, r.out + r.err).toBe(0);
     const rep = r.json;
     expect(rep.schema).toBe("gnomon.attempts/1");
@@ -175,7 +175,7 @@ describe("gnomon task --attempts", () => {
     const root = await project(ROLES);
     script.writes = { m1: "bad\n", m2: "bad\n", m3: "bad\n" };
     script.tokens = { m1: 50, m2: 30, m3: 40 };
-    const r = await gnomon(root, ["--attempts", "3", "--yes"]);
+    const r = await gnomon(root, ["--attempts", "3", "--yes", "--apply"]);
     expect(r.code, r.out + r.err).toBe(1);
     expect(r.json.verified).toBe(false);
     expect(r.json.chosen).toBe(2);
@@ -189,7 +189,7 @@ describe("gnomon task --attempts", () => {
 
   it("refuses k > 1 with no check declared, before anything runs", async () => {
     const root = await project(`[attempts]\nmax = 3\n`);
-    const r = await gnomon(root, ["--attempts", "3", "--yes"]);
+    const r = await gnomon(root, ["--attempts", "3", "--yes", "--apply"]);
     expect(r.code).toBe(10);
     expect(r.err + r.out).toContain("needs an external check");
     expect(seen).toHaveLength(0);
@@ -197,7 +197,7 @@ describe("gnomon task --attempts", () => {
 
   it("refuses k above [attempts] max", async () => {
     const root = await project(`[attempts]\nmax = 2\n${CHECK}`);
-    const r = await gnomon(root, ["--attempts", "3", "--yes"]);
+    const r = await gnomon(root, ["--attempts", "3", "--yes", "--apply"]);
     expect(r.code).toBe(10);
     expect(r.err + r.out).toContain("[attempts] max = 2");
     expect(seen).toHaveLength(0);
@@ -206,7 +206,7 @@ describe("gnomon task --attempts", () => {
   it("refuses a working tree with uncommitted changes, and never overwrites one that appears mid-run", async () => {
     const root = await project(ROLES);
     writeFileSync(join(root, "README.md"), "edited\n");
-    const r = await gnomon(root, ["--attempts", "3", "--yes"]);
+    const r = await gnomon(root, ["--attempts", "3", "--yes", "--apply"]);
     expect(r.code).toBe(10);
     expect(r.err + r.out).toContain("uncommitted changes");
     expect(seen).toHaveLength(0);
@@ -219,7 +219,7 @@ describe("gnomon task --attempts", () => {
     script.onSecond = (model) => {
       if (model === "m2") writeFileSync(join(root, "out.txt"), "mine\n");
     };
-    const r2 = await gnomon(root, ["--attempts", "3", "--yes"]);
+    const r2 = await gnomon(root, ["--attempts", "3", "--yes", "--apply"]);
     expect(r2.code, r2.out + r2.err).toBe(0);
     expect(r2.json.applied).toBe(false);
     expect(r2.json.not_applied).toContain("changed in your tree");
@@ -230,10 +230,10 @@ describe("gnomon task --attempts", () => {
   it("stops on the token budget: no attempt starts past it", async () => {
     const root = await project(`[attempts]\nmax = 3\nmax_tokens = 100\nmax_parallel = 1\nroles = ["a", "b", "c"]\n${CHECK}`);
     script.writes = { m1: "bad\n", m2: "ok\n", m3: "ok\n" };
-    const r = await gnomon(root, ["--attempts", "3", "--yes"]);
+    const r = await gnomon(root, ["--attempts", "3", "--yes", "--apply"]);
     // Attempt 1 alone spends 100 + 20 + 100 + 5 > 100 tokens and fails the check.
     expect(r.json.budget_stop).toContain("max_tokens = 100");
-    expect(r.json.attempts[0].status).toBe("failed");
+    expect(r.json.attempts[0].status).toBe("unchecked");
     expect(r.json.attempts[1].tokens).toBe(0);
     expect(new Set(seen.map((s) => s.model))).toEqual(new Set(["m1"]));
     expect(r.json.chosen).toBe(1);
@@ -254,7 +254,8 @@ describe("gnomon task --attempts", () => {
     expect(plain.json?.schema).toBeUndefined();
     expect(strip(one.json)).toEqual(strip(plain.json));
     expect(one.code).toBe(plain.code);
-    expect(existsSync(join(root, ".gnomon-attempts"))).toBe(false);
+    expect(readdirSync(root).filter((f) => f.includes("gnomon-attempts"))).toEqual([]);
+    expect(readFileSync(join(root, ".git", "info", "exclude"), "utf-8")).not.toContain("attempts");
     // The wire is the plain task's: no seed was sent.
     expect(seen.every((s) => s.seed === undefined)).toBe(true);
   }, 120_000);
@@ -265,4 +266,47 @@ describe("gnomon task --attempts", () => {
     expect(r.code).toBe(10);
     expect(r.err).toContain("--attempts needs a whole number");
   }, 60_000);
+
+  it("a wall-clock stop kills in-flight checks: it does not wait for them", async () => {
+    const root = await project(`[attempts]\nmax = 3\nmax_wall_seconds = 3\nroles = ["a", "b", "c"]\ncheck = "sleep 40; grep -q ok out.txt"\n`);
+    script.writes = { m1: "ok\n", m2: "ok\n", m3: "ok\n" };
+    const t0 = Date.now();
+    const r = await gnomon(root, ["--attempts", "3", "--yes", "--apply"]);
+    expect(Date.now() - t0).toBeLessThan(25_000);
+    expect(r.json.budget_stop).toContain("max_wall_seconds = 3");
+    expect(r.json.verified).toBe(false);
+    expect(r.json.applied).toBe(false);
+  }, 60_000);
+
+  it("max_tokens is enforced while attempts run, without [audit], and cancelled attempts keep their tokens", async () => {
+    const root = await project(`[attempts]\nmax = 3\nmax_tokens = 100\nroles = ["a", "b", "c"]\n${CHECK}`);
+    script.writes = { m1: "bad\n", m2: "bad\n", m3: "bad\n" };
+    script.hold = { m1: 60_000, m2: 60_000, m3: 60_000 };
+    const t0 = Date.now();
+    const r = await gnomon(root, ["--attempts", "3", "--yes"]);
+    expect(Date.now() - t0).toBeLessThan(30_000);
+    expect(r.json.budget_stop).toContain("max_tokens = 100");
+    expect(r.json.attempts.every((a: any) => a.status === "cancelled" && a.tokens >= 100)).toBe(true);
+    expect(r.json.tokens_total).toBeGreaterThanOrEqual(300);
+  }, 60_000);
+
+  it("Ctrl-C cancels every attempt; none is selectable or applied", async () => {
+    const root = await project(ROLES);
+    script.writes = { m1: "ok\n", m2: "ok\n", m3: "ok\n" };
+    script.hold = { m1: 60_000, m2: 60_000, m3: 60_000 };
+    const c = spawn(process.execPath, [GNOMON, "task", "write out.txt", "--attempts", "3", "--yes", "--apply", "--json", "--dir", root], {
+      env: { ...process.env, GNOMON_NO_UPDATE_CHECK: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    c.stdout.on("data", (d) => (out += d));
+    const until = Date.now() + 30_000;
+    while (seen.filter((x) => x.second).length < 3 && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+    c.kill("SIGINT");
+    await new Promise((r) => c.on("close", r));
+    const rep = JSON.parse(out);
+    expect(rep.attempts.every((a: any) => a.status === "cancelled")).toBe(true);
+    expect(rep.chosen).toBeNull();
+    expect(existsSync(join(root, "out.txt"))).toBe(false);
+  }, 90_000);
 });

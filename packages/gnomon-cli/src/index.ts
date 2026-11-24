@@ -265,6 +265,9 @@ export function parseArgs(args: string[]): CliArgs {
       // Bare: the declared [verify] check is in the exit (1 failed, 4 unrunnable)
       // and in the record's verify_* detail. Without it #211 stands: exit 0.
       result.flags["require-verify"] = "true";
+    } else if (arg === "--apply") {
+      // Bare: `task --attempts k --apply` applies a verified winner.
+      result.flags["apply"] = "true";
     } else if (arg === "--require-trust") {
       // Bare: an untrusted surface that grants more than the defaults stops
       // the run (exit 3) instead of running clamped. For CI.
@@ -1894,6 +1897,10 @@ async function cmdTask(args: CliArgs): Promise<void> {
           k,
           role: args.role,
           yes: args.yes,
+          apply: args.flags["apply"] === "true",
+          profile: args.flags["profile"],
+          deadline: args.flags["deadline"],
+          requireVerify: args.flags["require-verify"] === "true",
           ...(settled.outcome && settled.outcome.decision !== "clamped" ? { trustHash: settled.outcome.surface_hash } : {}),
           log: args.json ? undefined : (line) => console.error(line),
         });
@@ -3357,7 +3364,7 @@ Commands:
     not, 10 no answer. Never accepts anything.
 
   task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--dir <path>]
-       [--deadline <seconds|ISO time>] [--attempts <k>]
+       [--deadline <seconds|ISO time>] [--attempts <k> [--apply]]
   task --task-file <path|-> [...the same options]
     Run one task without a terminal and print the result. --json emits a
     record whose only run-to-run differences are under "volatile".
@@ -3376,7 +3383,9 @@ Commands:
     [attempts] check) passes, cancelling the rest; none passing offers the
     best by outside evidence, flagged unverified. Refused with no check
     declared, above [attempts] max, or with uncommitted changes. The change
-    is a patch under .gnomon-attempts/<run>/; --yes applies it. Exit 0
+    is a patch in a run directory under the system temp dir; --apply applies
+    a VERIFIED winner (--yes only approves the attempts' gated calls, as for
+    a plain task), never over files you changed meanwhile. Exit 0
     verified, 1 unverified, 10 nothing to offer. k = 1 is a plain task.
     --require-verify (or [verify] exit_on_fail = true) puts the declared
     [verify] check in the exit where the bucket says 0: 1 for a check that

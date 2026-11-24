@@ -6067,11 +6067,11 @@ gVisor backend, and that kernel flaws and side channels are not probed.
 escape under a claimed level is a FAIL, and the `os` and `docker` probes where the
 machine has them).
 
-## 60. `gnomon task --attempts <k>` — speculative parallel attempts, `[attempts]`, audit kind `attempt_event`, `gnomon.attempts/1`, `.gnomon-attempts/`
+## 60. `gnomon task --attempts <k>` — speculative parallel attempts, `[attempts]`, audit kind `attempt_event`, `gnomon.attempts/1`
 
 **Opt-in.** `--attempts` absent or 1 runs the plain task, byte for byte (no clone, no run
 directory, no seed on the wire). For k > 1 a coordinator makes k shared clones of HEAD
-under `.gnomon-attempts/<run>/`, runs one `gnomon task` child in each under the same
+in a run directory under the system temp dir (`gnomon-attempts-*`; no change to the user's repository config), runs one `gnomon task` child in each under the same
 `.gnomon/` (the surface hash is checked equal in every clone and recorded once in
 `manifest.json`), each with its own `GNOMON_ATTEMPT_RUN`/`_NUMBER`/`_SEED`, `PORT` and `TMPDIR`.
 The seed is sent as `seed` only inside an attempt.
@@ -6086,7 +6086,7 @@ signalled and recorded `cancelled`, never as results. None passing: the evidence
 **Refused before anything runs (exit 10):** no check declared, k above `max`, uncommitted
 changes, `.gnomon/` not committed, a non-integer k. Budgets stop the run (`budget_stop`).
 
-**Apply.** The change is `winner.patch`. Only a verified winner, only with `--yes`, only if
+**Apply.** The change is `winner.patch`. Only a verified winner, only with `--apply` (`--yes` only approves the children's gated calls), only if
 none of its paths changed in the operator's tree since the run began, is applied; otherwise
 it is kept for review. Exit 0 verified, 1 unverified, 10 nothing to offer.
 

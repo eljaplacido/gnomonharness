@@ -11424,7 +11424,9 @@ export async function runTask(
   // session_start leaves a record. No file when [audit] is off.
   const stageRecords: NonNullable<TaskRecord["stages"]> = [];
   const live = new LiveRecord({
-    dir: auditSettings.enabled ? auditSettings.dir : null,
+    // Inside a `--attempts` run the coordinator reads this record for the
+    // tokens spent so far, whether or not [audit] is on (attempts_run.ts).
+    dir: auditSettings.enabled ? auditSettings.dir : attemptIdentity().run_id ? (process.env.GNOMON_ATTEMPT_LIVE || null) : null,
     session: sessionId,
     text: (value) => audit.text(value),
   });

@@ -1396,12 +1396,12 @@ check = "pytest -q"  # used when [verify] command is not declared
 ```
 
 ```bash
-gnomon task "fix the failing parser test" --attempts 3 --yes
+gnomon task "fix the failing parser test" --attempts 3 --yes --apply
 ```
 
-Each attempt runs in its own clone of HEAD under `.gnomon-attempts/<run>/`; the first whose
-change passes the check wins and the others are cancelled. The winner's change is applied to
-your tree only with `--yes`, and only if you have not touched the same files meanwhile;
+Each attempt runs in its own clone of HEAD under a run directory in the system temp dir (nothing is written to your repository config); the first whose
+change passes the check wins and the others are cancelled. `--yes` approves the attempts' gated calls, as for a plain task. A verified winner is applied to
+your tree only with `--apply`, and only if you have not touched the same files meanwhile;
 otherwise it is left as `winner.patch`. If none passes, the best by outside evidence is
 offered as unverified and never applied. It refuses with no check declared, with uncommitted
 changes, or above `max`. Cost is the sum of the attempts' tokens; the report shows tokens

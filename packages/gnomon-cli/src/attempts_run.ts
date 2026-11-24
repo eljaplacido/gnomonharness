@@ -26,19 +26,21 @@
  * attempt can open a prompt, so there is no concurrent prompt to queue.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import {
-  appendFileSync,
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
+  realpathSync,
   readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import {
   AuditTrail,
   harnessBuild,
@@ -54,7 +56,8 @@ import {
 } from "gnomon-core";
 import { selfLauncher } from "./self_launcher.js";
 
-export const ATTEMPTS_DIR = ".gnomon-attempts";
+/** The run directory is made under the system temp dir with this prefix: nothing is written to the user's repository config or tree. */
+export const ATTEMPTS_DIR = "gnomon-attempts";
 export const ATTEMPTS_SCHEMA = "gnomon.attempts/1";
 
 /** What an attempt ended as. `cancelled` is never a result. */
@@ -107,6 +110,12 @@ export interface RunAttemptsOptions {
   yes?: boolean;
   /** Children's trust: GNOMON_TRUST=<hash> when the operator's checkout was trusted. */
   trustHash?: string;
+  /** Passed to every child, as `gnomon task` would take them. */
+  profile?: string;
+  deadline?: string;
+  requireVerify?: boolean;
+  /** Apply a verified winner to the working tree (`--apply`). `yes` only approves the children's gated calls. */
+  apply?: boolean;
   /** Told as it happens (stderr in human mode). */
   log?: (line: string) => void;
   /** Override the child launcher (tests). */
@@ -179,7 +188,7 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
   const check = verify?.command ?? policy.check;
   const t0 = Date.now();
   const runId = `att-${new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14)}-${randomBytes(3).toString("hex")}`;
-  const runDir = join(root, ATTEMPTS_DIR, runId);
+  const runDir = join(realpathSync(mkdtempSync(join(tmpdir(), `${ATTEMPTS_DIR}-`))), runId);
   const surface = recomputeManifest(config.gnomonDir).surface_hash;
 
   const audit = resolveAudit(config);
@@ -215,7 +224,7 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
     if (safeGit(["rev-parse", "--is-inside-work-tree"], { cwd: root }).status !== 0) {
       throw new Refusal("--attempts needs a git repository: each attempt is a clone of one base commit.");
     }
-    if (resolve(git(root, ["rev-parse", "--show-toplevel"]).trim()) !== resolve(root)) {
+    if (realpathSync(git(root, ["rev-parse", "--show-toplevel"]).trim()) !== realpathSync(root)) {
       throw new Refusal("--attempts needs .gnomon/ at the top of the git repository.");
     }
     const dirty = dirtyPaths(root);
@@ -235,23 +244,15 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
   if (!launcher) return refuse("--attempts could not find the gnomon launcher to start the attempts with.");
 
   mkdirSync(runDir, { recursive: true });
-  try {
-    const common = resolve(root, git(root, ["rev-parse", "--git-common-dir"]).trim());
-    const exclude = join(common, "info", "exclude");
-    const have = existsSync(exclude) ? readFileSync(exclude, "utf-8") : "";
-    if (!have.split("\n").includes(`/${ATTEMPTS_DIR}/`)) {
-      mkdirSync(join(common, "info"), { recursive: true });
-      appendFileSync(exclude, `${have && !have.endsWith("\n") ? "\n" : ""}/${ATTEMPTS_DIR}/\n`);
-    }
-  } catch {
-    // Only so `git status` does not list the run directory.
-  }
   const taskFile = join(runDir, "task.txt");
   writeFileSync(taskFile, text);
 
   const seedBase = parseInt(createHash("sha256").update(runId).digest("hex").slice(0, 7), 16);
   const live: Live[] = [];
+  let cleaned = false;
   const cleanup = (): void => {
+    if (cleaned) return;
+    cleaned = true;
     for (const a of live) {
       try {
         const src = join(a.dir, relDir(audit.dir, root));
@@ -262,6 +263,7 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
       rmSync(a.dir, { recursive: true, force: true, maxRetries: 2 });
     }
     rmSync(join(runDir, "tmp"), { recursive: true, force: true });
+    rmSync(join(runDir, "live"), { recursive: true, force: true });
   };
   const relDir = (dir: string, r: string): string => (dir.startsWith(r) ? dir.slice(r.length + 1) : ".gnomon-audit");
 
@@ -273,6 +275,7 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
       git(dir, ["remote", "remove", "origin"]);
       git(dir, ["checkout", "--quiet", "--detach", base]);
       mkdirSync(join(runDir, "tmp", String(n)), { recursive: true });
+      mkdirSync(join(runDir, "live", String(n)), { recursive: true });
       const role = policy.roles.length > 0 ? policy.roles[(n - 1) % policy.roles.length]! : opts.role ?? null;
       live.push({ n, dir, role, seed: seedBase + n, stdout: "", record: null, finished: false, cancelled: false, changed_lines: 0, check_exit: null, checked: false, tokens: 0 });
       const h = recomputeManifest(join(dir, ".gnomon")).surface_hash;
@@ -299,15 +302,19 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
   let stopped = false;
 
   const shell = trialShellPath();
+  const checkProcs = new Set<ChildProcess>();
+  const killChecks = (): void => checkProcs.forEach((c) => killGroup(c, "SIGKILL"));
   const runCheck = (a: Live): Promise<number | null> =>
     new Promise((done) => {
       if (shell === null) return done(null);
       const env = attemptEnv(a);
       const run = (cmd: string, ms: number, cb: (code: number | null) => void): void => {
+        if (stopped && !winner) return cb(null);
         const c = spawn(shell, ["-c", cmd], { cwd: a.dir, env, stdio: "ignore", windowsHide: true, detached: process.platform !== "win32" });
+        checkProcs.add(c);
         const timer = setTimeout(() => killGroup(c, "SIGKILL"), ms);
-        c.on("error", () => (clearTimeout(timer), cb(null)));
-        c.on("close", (code, signal) => (clearTimeout(timer), cb(signal ? null : code)));
+        c.on("error", () => (checkProcs.delete(c), clearTimeout(timer), cb(null)));
+        c.on("close", (code, signal) => (checkProcs.delete(c), clearTimeout(timer), cb(signal ? null : code)));
       };
       const ms = (verify?.timeout_seconds ?? 600) * 1000;
       const main = () => run(check!, ms, done);
@@ -324,6 +331,7 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
       GNOMON_ATTEMPT_RUN: runId,
       GNOMON_ATTEMPT_NUMBER: String(a.n),
       GNOMON_ATTEMPT_SEED: String(a.seed),
+      GNOMON_ATTEMPT_LIVE: join(runDir, "live", String(a.n)),
       GNOMON_NO_UPDATE_CHECK: "1",
       ...(opts.trustHash ? { GNOMON_TRUST: opts.trustHash } : {}),
     };
@@ -331,7 +339,8 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
 
   function killGroup(c: ChildProcess, signal: NodeJS.Signals): void {
     try {
-      if (process.platform !== "win32" && c.pid) process.kill(-c.pid, signal);
+      if (process.platform === "win32" && c.pid) spawnSync("taskkill", ["/T", "/F", "/PID", String(c.pid)], { stdio: "ignore", windowsHide: true });
+      else if (c.pid) process.kill(-c.pid, signal);
       else c.kill(signal);
     } catch {
       // Already gone.
@@ -361,15 +370,17 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
     log(`attempt ${a.n}: cancelled (${reason}), ${a.tokens} tokens spent`);
   };
 
-  const tokensNow = (): number => live.reduce((s, a) => s + (a.finished || a.cancelled ? a.tokens : Math.max(a.tokens, liveTokens(join(a.dir, relDir(audit.dir, root))))), 0);
+  const liveOf = (a: Live): number => Math.max(a.tokens, liveTokens(join(runDir, "live", String(a.n))), liveTokens(join(a.dir, relDir(audit.dir, root))));
+  const tokensNow = (): number => live.reduce((s, a) => s + (a.finished || a.cancelled ? a.tokens : liveOf(a)), 0);
 
   let checkChain: Promise<void> = Promise.resolve();
+  let judging = 0;
   const wake: Array<() => void> = [];
   const poke = (): void => void wake.splice(0).forEach((f) => f());
 
   const start = (a: Live): void => {
     a.started = Date.now();
-    const args = [launcher, "task", "--task-file", taskFile, "--json", "--dir", a.dir, ...(opts.yes ? ["--yes"] : []), ...(a.role ? ["--role", a.role] : [])];
+    const args = [launcher, "task", "--task-file", taskFile, "--json", "--dir", a.dir, ...(opts.yes ? ["--yes"] : []), ...(a.role ? ["--role", a.role] : []), ...(opts.profile ? ["--profile", opts.profile] : []), ...(opts.deadline ? ["--deadline", opts.deadline] : []), ...(opts.requireVerify ? ["--require-verify"] : [])];
     const child = spawn(process.execPath, args, { cwd: a.dir, env: attemptEnv(a), stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32", windowsHide: true });
     a.child = child;
     child.stdout.on("data", (c) => (a.stdout += c));
@@ -381,10 +392,13 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
       child.on("close", () => {
         a.ended = Date.now();
         try { a.record = JSON.parse(a.stdout); } catch { a.record = null; }
-        a.tokens = Math.max(tokensOf(a.record), a.tokens);
+        a.tokens = Math.max(tokensOf(a.record), liveOf(a));
         if (!a.cancelled) a.finished = true;
         res();
-        if (a.finished && !a.cancelled) checkChain = checkChain.then(() => judge(a));
+        if (a.finished && !a.cancelled) {
+          judging++;
+          checkChain = checkChain.then(() => judge(a)).finally(() => { judging--; poke(); });
+        }
         poke();
       });
     });
@@ -395,13 +409,16 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
     // Once a winner stands, the others are not judged: the race is over.
     if (a.cancelled || winner) return;
     try { patchOf(a); } catch { a.patch = ""; a.changed_lines = 0; }
+    // Stopped (a budget, Ctrl-C): its change is kept for selection, but the check does not start.
+    if (stopped) return;
     // A change is what is judged: an attempt that changed nothing has not answered.
     a.check_exit = a.changed_lines > 0 ? await runCheck(a) : null;
-    a.checked = true;
+    // A check killed by the stop (null) is not a verdict; one that exited 0 is, even after the stop.
+    a.checked = a.check_exit !== null || a.changed_lines === 0;
     const passed = a.check_exit === 0 && a.changed_lines > 0;
     trail.write("attempt_event", { run_id: runId, event: "check", attempt: a.n, check_exit: a.check_exit, passed, tokens: a.tokens });
     log(`attempt ${a.n}: ${passed ? "check passed" : a.changed_lines === 0 ? "no change" : `check failed (exit ${a.check_exit ?? "none"})`}`);
-    if (passed && !winner && !stopped) {
+    if (passed && !winner) {
       winner = a;
       stopped = true;
       await Promise.all(live.filter((x) => x !== a && !x.finished).map((x) => cancel(x, `attempt ${a.n} passed the check`)));
@@ -410,10 +427,27 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
   };
 
   // The race.
+  const killAll = (): void => {
+    killChecks();
+    for (const a of live) if (a.child && a.ended === undefined) killGroup(a.child, "SIGKILL");
+  };
+  try {
   const deadline = policy.max_wall_seconds > 0 ? t0 + policy.max_wall_seconds * 1000 : 0;
-  const onSignal = (): void => { stopped = true; for (const a of live) if (a.child && !a.finished) killGroup(a.child, "SIGTERM"); };
-  process.once("SIGINT", onSignal);
-  process.once("SIGTERM", onSignal);
+  let signals = 0;
+  const onSignal = (): void => {
+    signals++;
+    stopped = true;
+    killChecks();
+    for (const a of live) {
+      if (!a.child || a.finished || a.cancelled) continue;
+      a.cancelled = true;
+      a.cancelReason = "interrupted";
+      killGroup(a.child, signals > 1 ? "SIGKILL" : "SIGTERM");
+      trail.write("attempt_event", { run_id: runId, event: "cancel", attempt: a.n, reason: "interrupted", tokens: liveOf(a) });
+    }
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
   try {
     while (true) {
       // The budget first: an attempt is never started past it.
@@ -425,13 +459,14 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
           stopped = true;
           trail.write("attempt_event", { run_id: runId, event: "budget_stop", reason: budgetStop, tokens: used });
           log(`budget stop: ${budgetStop}`);
+          killChecks();
           await Promise.all(live.filter((x) => !x.finished).map((x) => cancel(x, budgetStop!)));
         }
       }
       const running = live.filter((a) => a.child && !a.finished && !a.cancelled).length;
       if (!stopped) for (let i = running; i < parallel && queue.length > 0; i++) start(queue.shift()!);
       const active = live.filter((a) => a.child && !a.finished && !a.cancelled);
-      if (active.length === 0 && (stopped || queue.length === 0)) break;
+      if (active.length === 0 && judging === 0 && (stopped || queue.length === 0)) break;
       await Promise.race([
         new Promise<void>((r) => wake.push(r)),
         new Promise<void>((r) => setTimeout(r, 300).unref?.()),
@@ -489,8 +524,8 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
     patchSha = createHash("sha256").update(chosen.patch).digest("hex");
     if (!verified) {
       notApplied = `not applied: no attempt passed the check, so this change is unverified. Review it, then: git apply ${patchPath}`;
-    } else if (!opts.yes) {
-      notApplied = `not applied without --yes; review it, then: git apply ${patchPath}`;
+    } else if (!opts.apply) {
+      notApplied = `not applied without --apply; review it, then: git apply ${patchPath}`;
     } else {
       const touched = git(chosen.dir, ["diff", "--cached", "--name-only", "HEAD"]).split("\n").filter(Boolean);
       const now = dirtyPaths(root, touched);
@@ -540,8 +575,11 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
   };
   writeFileSync(join(runDir, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
   trail.write("session_end", {});
-  cleanup();
   return report;
+  } finally {
+    killAll();
+    cleanup();
+  }
 }
 
 /** The human summary: what ran, what passed, what it cost, what early stop saved. */
