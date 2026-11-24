@@ -82,6 +82,36 @@
  *                ran — all 24 G1 trajectories end that way. Commands a person
  *                typed in human mode are not the agent's and are not read.
  *
+ *   antigravity  Google Antigravity CLI / IDE. Its own `transcript.jsonl`
+ *                (`<app_data_dir>/brain/<conversationId>/.system_generated/logs/`)
+ *                is named in the hooks reference but its record shape is NOT
+ *                documented, so it is not read: guessing a shape would make a
+ *                silent "no commands" look like a clean session. What IS
+ *                documented is the hook payload (antigravity.google/docs/hooks):
+ *                `{toolCall: {name, args}, stepIdx, conversationId, error?}`,
+ *                the shell tool is `run_command` with `args.CommandLine`. This
+ *                reads a JSONL of those payloads, one per line, as a logging
+ *                hook on PreToolUse and/or PostToolUse writes it (`tee`).
+ *                A PreToolUse record cannot say whether the call was denied
+ *                (the decision is the hook's output, not its input), so every
+ *                recorded call is read as run; it is judged, never skipped.
+ *                A PostToolUse `error` means the tool failed, which is not the
+ *                same as not run (`exit status 1`), so it is also read as run.
+ *                Pre and Post of the same `(conversationId, stepIdx)` count once.
+ *   hermes       Nous Hermes Agent. `hermes sessions export <file>` (or `-` for
+ *                stdout) writes one JSON object per session per line
+ *                (`hermes_cli/session_export.py: to_legacy_export_dict`), each
+ *                with `messages[]` rows: an assistant row's `tool_calls` are
+ *                OpenAI-style `{id, function: {name, arguments}}`, and the shell
+ *                tool is `terminal` with `command`. The tool row that answers
+ *                (`tool_call_id`) carries `effect_disposition: "none"` when a
+ *                pre_tool_call hook or edit approval blocked the call
+ *                (`agent/tool_executor.py`), so the command never ran. The
+ *                crash-rescue file `<HERMES_HOME>/sessions/<id>.jsonl` holds the
+ *                same message rows one per line and is read too. Rows that were
+ *                rewound or compacted still ran, so they are read. Source read
+ *                at hermes-agent main, 2026-11-22.
+ *
  * Added 2026-11-02, after G1-R (2026-11) found check's one remaining miss was gnomon's own arm: nothing
  * read gnomon's record of its own session.
  *
@@ -110,7 +140,7 @@ import { basename, dirname, join, relative, sep } from "node:path";
 import type { TranscriptCommand } from "./check.js";
 import { verifyTrail } from "./audit.js";
 
-export const TRANSCRIPT_FORMATS = ["claude-code", "opencode", "goose", "qwen-code", "mini-swe-agent", "gnomon"] as const;
+export const TRANSCRIPT_FORMATS = ["claude-code", "opencode", "goose", "qwen-code", "mini-swe-agent", "antigravity", "hermes", "gnomon"] as const;
 export type TranscriptFormat = (typeof TRANSCRIPT_FORMATS)[number];
 
 export interface TranscriptRead {
@@ -141,6 +171,10 @@ export function readTranscript(path: string, format: TranscriptFormat): Transcri
       return readQwenCode(path, text);
     case "mini-swe-agent":
       return readMiniSweAgent(path, text);
+    case "antigravity":
+      return readAntigravity(path, text);
+    case "hermes":
+      return readHermes(path, text);
     case "gnomon":
       return readGnomon(path, text);
   }
@@ -490,6 +524,84 @@ function readMiniSweAgent(path: string, text: string): TranscriptRead {
     }
   });
   return { format: "mini-swe-agent", commands, unreadable: 0 };
+}
+
+// ── antigravity ──────────────────────────────────────────────────────────
+
+const ANTIGRAVITY_SHELL = "run_command";
+
+function readAntigravity(path: string, text: string): TranscriptRead {
+  const parsed = jsonLines(text);
+  const payloads = parsed.records.filter(({ r }) => isObj(r.toolCall) && typeof r.toolCall.name === "string");
+  if (payloads.length === 0) {
+    throw new Error(
+      `${path} holds no Antigravity hook payloads (JSONL of \`{toolCall: {name, args}, stepIdx, …}\`, as a PreToolUse/PostToolUse ` +
+        "logging hook writes it). Antigravity's own transcript.jsonl has no documented record shape and is not read"
+    );
+  }
+  const seen = new Set<string>();
+  const commands: TranscriptCommand[] = [];
+  for (const { line, r } of payloads) {
+    const call = r.toolCall as Json;
+    if (call.name !== ANTIGRAVITY_SHELL) continue;
+    const args = argsOf(call.args);
+    if (typeof args.CommandLine !== "string") continue;
+    const key = typeof r.stepIdx === "number" ? `${String(r.conversationId ?? "")}#${r.stepIdx}` : undefined;
+    if (key !== undefined) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+    }
+    commands.push({ tool: ANTIGRAVITY_SHELL, command: args.CommandLine, at: `${basename(path)}:${line}` });
+  }
+  return { format: "antigravity", commands, unreadable: parsed.unreadable };
+}
+
+// ── hermes ───────────────────────────────────────────────────────────────
+
+const HERMES_SHELL = "terminal";
+
+function readHermes(path: string, text: string): TranscriptRead {
+  const parsed = jsonLines(text);
+  // A session object (`hermes sessions export`) or a bare message row (the rescue file).
+  const rows: Array<{ line: number; m: Json }> = [];
+  let sawMessages = false;
+  for (const { line, r } of parsed.records) {
+    if (Array.isArray(r.messages)) {
+      sawMessages = true;
+      for (const m of r.messages) if (isObj(m)) rows.push({ line, m });
+    } else if (typeof r.role === "string") {
+      sawMessages = true;
+      rows.push({ line, m: r });
+    }
+  }
+  if (!sawMessages) {
+    throw new Error(
+      `${path} is not a Hermes session export (\`hermes sessions export <file>\`: JSONL of sessions with \`messages\`) ` +
+        "nor its sessions/<id>.jsonl rescue file"
+    );
+  }
+  const found: Array<TranscriptCommand & { id?: string }> = [];
+  const notRun = new Set<string>();
+  for (const { line, m } of rows) {
+    if (m.role === "tool" && m.effect_disposition === "none" && typeof m.tool_call_id === "string") notRun.add(m.tool_call_id);
+    if (m.role !== "assistant") continue;
+    let calls: unknown = m.tool_calls;
+    if (typeof calls === "string") {
+      try {
+        calls = JSON.parse(calls);
+      } catch {
+        calls = undefined;
+      }
+    }
+    if (!Array.isArray(calls)) continue;
+    for (const c of calls) {
+      if (!isObj(c) || !isObj(c.function) || c.function.name !== HERMES_SHELL) continue;
+      const args = argsOf(c.function.arguments);
+      if (typeof args.command !== "string") continue;
+      found.push({ tool: HERMES_SHELL, command: args.command, at: `${basename(path)}:${line}`, id: typeof c.id === "string" ? c.id : undefined });
+    }
+  }
+  return { format: "hermes", commands: settle(found, notRun), unreadable: parsed.unreadable };
 }
 
 // ── gnomon ───────────────────────────────────────────────────────────────

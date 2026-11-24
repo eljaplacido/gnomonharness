@@ -206,6 +206,53 @@ class GuardedEnv(LocalEnvironment):
 
 Where no person can answer, treat `ask` (exit 3) as no, as both do.
 
+## Transcript readers for Antigravity and Hermes
+
+`gnomon check --transcript <file> --format antigravity|hermes` holds a session of either
+host to the committed policy (check 5, `bash_allow` / `bash_deny`), exactly as for the
+other readers; the verdict lands in the audit trail and feed the same way.
+
+**Hermes Agent (Nous), `--format hermes`.** Reads `hermes sessions export <file>` (JSONL,
+one session per line with `messages[]`; `hermes_cli/session_export.py`) and the crash-rescue
+file `<HERMES_HOME>/sessions/<id>.jsonl` (bare message rows; `session_rescue.py`). The shell
+tool is `terminal` (`tools/terminal_tool.py`), its calls OpenAI-style in an assistant row's
+`tool_calls`. A call whose answering `tool` row has `effect_disposition: "none"` was blocked
+before it ran (`pre_tool_call` hook or edit approval; `agent/tool_executor.py`) and is listed
+as `ran: false`, not failed. Rewound or compacted rows still ran and are read. Source: hermes-agent
+main, read 2026-11-22; the export is a CLI feature, not a versioned contract, so a layout
+change shows up as a refusal ("not a Hermes session export"), never a silent pass.
+
+**Antigravity (Google; CLI and IDE), `--format antigravity`.** Antigravity's own
+`transcript.jsonl` (`<app_data_dir>/brain/<conversationId>/.system_generated/logs/`) is named in
+the [hooks reference](https://antigravity.google/docs/hooks) but **its record shape is not
+documented**, so gnomon does not read it. What is documented is the hook payload:
+`{toolCall: {name, args}, stepIdx, conversationId, error?}`, with the shell tool `run_command` and
+`args.CommandLine`. The reader takes a JSONL of those payloads, which a PreToolUse or
+PostToolUse logging hook writes (for example `tee -a payloads.jsonl`). Two limits, stated so
+nobody reads more into a pass than is there: a PreToolUse payload cannot say whether the call was
+denied (the decision is the hook's output), so every recorded call is judged as run; and a
+Pre/Post pair for the same `(conversationId, stepIdx)` counts once. Fixtures:
+`conformance/transcripts/*.ndjson` (synthetic, in the documented shape). If Google documents
+`transcript.jsonl`, a direct reader replaces the hook-log requirement.
+
+## Harness² (prepared, not upstreamed)
+
+[Harness²](https://github.com/google-research/harness2) (Google Research) runs coding agents as
+*substrates*, today OpenCode and Codex. A `GnomonSubstrate` is prepared locally in a clone of that
+repository (branch `gnomon-substrate`, one commit, `harness2/substrate/gnomon.py`); it is **not
+pushed and no upstream pull request is open**: that needs the maintainer's decision.
+
+It maps a Harness² edit onto a governed gnomon surface change: `systemprompt.md`, `guardrails.md`
+and `LongTermMEMORY.md` are appended to `.gnomon/system.md`; `skills/<n>/SKILL.md` becomes
+`.gnomon/skills/<n>.md`; `scripts/` ride in the workspace; subagents, plugins and hooks are
+rejected with an error. Each materialised harness carries a proposal record (the base and
+candidate surface hashes from `gnomon surface`, and the sha256 of every changed file). Runs use
+`gnomon task --yes --json`, so a candidate surface is untrusted and gnomon's trust gate gives it
+no grant beyond the defaults. Results come back as a run directory (`run.json`, `answer.txt`,
+`stream.jsonl` = gnomon's hash-chained audit trail, rendered into Harness²'s
+`[ACTION]/[OBSERVATION]` grammar). A smoke test drives it against a scripted fake model (a local
+HTTP server; no real model); it needs `GNOMON_CMD` and is skipped otherwise.
+
 ## Governance levels
 
 `[governance]` in `.gnomon/policy.toml` (and `[roles.<name>.governance]` in
