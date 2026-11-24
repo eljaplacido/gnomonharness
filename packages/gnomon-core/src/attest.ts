@@ -357,6 +357,33 @@ interface CommandResult {
   code: number;
   out: string;
   err: string;
+  /** The command never got to run (spawn failure, or died to a start-up fault). */
+  startFailure?: boolean;
+}
+
+// Windows NTSTATUS exit codes a process gets when the loader or a DLL init
+// fails before main(), unsigned and as signed 32-bit.
+const WIN_START_CODES = new Set([
+  0xc0000142, 0xc0000135, 0xc0000139, 0xc0000005, 0xc0000409,
+  -1073741502, -1073741515, -1073741511, -1073741819, -1073740791,
+]);
+// Cygwin/MSYS (Git Bash) fork and signal-pipe failures under load.
+const CYGWIN_START_STDERR =
+  /fork: retry|fork: Resource temporarily unavailable|couldn't create signal pipe|child_info_fork::abort|Win32 error \d+|cygheap|\*\*\* fatal error|Cannot allocate memory/i;
+
+/** True when a failed run says "could not start", not "ran and said no". */
+export function isStartFailure(f: {
+  spawnCode?: string;
+  status: number | null | undefined;
+  signal?: string | null;
+  stdout: string;
+  stderr: string;
+}): boolean {
+  if (f.spawnCode && f.spawnCode !== "ETIMEDOUT") return true;
+  if (f.status != null && WIN_START_CODES.has(f.status) && f.stdout === "") return true;
+  if (f.status == null && f.signal && f.stdout === "") return true;
+  if (f.stdout === "" && CYGWIN_START_STDERR.test(f.stderr)) return true;
+  return false;
 }
 
 /**
@@ -393,16 +420,24 @@ function run(cmd: string, digest: string, timeoutSec: number, env: Record<string
       stderr?: string | Buffer;
       killed?: boolean;
       signal?: string | null;
+      code?: string;
     };
     // Same timeout detection as the loop guards: execFileSync reports a timeout
     // as status:null + signal:"SIGTERM", and `killed` is set on spawnSync's
     // result rather than on the thrown error, so testing it alone reports every
     // timeout as a plain exit-1.
     const timedOut = Boolean(err.killed) || (err.status == null && Boolean(err.signal));
+    const out = (err.stdout ?? "").toString().trim();
+    const errText = (err.stderr ?? "").toString().trim();
+    // A timeout is its own verdict (124). Anything else that never got going
+    // is a start failure, and must not be read as a rejected signature.
+    const startFailure =
+      !timedOut && isStartFailure({ spawnCode: err.code, status: err.status, signal: err.signal, stdout: out, stderr: errText });
     return {
       code: timedOut ? 124 : err.status ?? 1,
-      out: (err.stdout ?? "").toString().trim(),
-      err: (err.stderr ?? "").toString().trim(),
+      out,
+      err: errText,
+      ...(startFailure ? { startFailure: true } : {}),
     };
   }
 }
@@ -485,7 +520,11 @@ export function checkSignature(
     // "your trail was tampered with" because the checker is missing would be
     // the same conflation commit 902a93f removed from the verify gate -- "the
     // check could not run" is not "your work is wrong" -- reintroduced here.
-    if (r.code === 126 || r.code === 127) {
+    // Likewise a verifier that failed to START (spawn error, a signal with no
+    // output, an NTSTATUS loader code, Git Bash/Cygwin "fork: retry" under
+    // load): the run says nothing about the signature. A genuine non-zero
+    // verdict from a verifier that ran stays "broken".
+    if (r.code === 126 || r.code === 127 || r.startFailure) {
       return {
         checked: false,
         detail: `verify command could not run (exit ${r.code})${r.err ? `: ${r.err}` : ""}`,

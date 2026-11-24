@@ -22,6 +22,7 @@ import { AuditTrail, verifyTrail, recordHash, type ResolvedAudit, type AuditReco
 import {
   resolveAttest,
   verifyAttestation,
+  isStartFailure,
   headDigest,
   headsPathFor,
   type AttestHead,
@@ -570,6 +571,34 @@ process.stdout.write(sign(null, readFileSync(0), key).toString("hex"));
     expect(r.status).toBe("broken");
     expect(r.problems[0].reason).toBe("signature");
     expect(r.problems[0].detail).toContain("exit 3");
+  });
+
+  it("reports a verify command that fails to start as unverifiable, not broken", () => {
+    const attest = attestSettings();
+    const t = signedTrail(attest);
+    const cases: Record<string, string> = {
+      "a Cygwin fork failure": `echo "bash: fork: retry: Resource temporarily unavailable" >&2; exit 254`,
+    };
+    if (process.platform !== "win32") cases["a signal with no output"] = "kill -SEGV $$";
+    for (const [name, verify] of Object.entries(cases)) {
+      const r = verifyAttestation(t.path!, attestSettings({ public_key: null, verify }));
+      expect(r.status, name).toBe("unverifiable");
+    }
+  });
+
+  it("classifies start failures and keeps a real verdict broken (isStartFailure)", () => {
+    const base = { stdout: "", stderr: "", status: 1 as number | null };
+    expect(isStartFailure({ ...base, spawnCode: "ENOENT", status: null })).toBe(true);
+    expect(isStartFailure({ ...base, spawnCode: "EAGAIN", status: null })).toBe(true);
+    expect(isStartFailure({ ...base, spawnCode: "ETIMEDOUT", status: null })).toBe(false);
+    expect(isStartFailure({ ...base, status: 0xc0000142 })).toBe(true);
+    expect(isStartFailure({ ...base, status: -1073741502 })).toBe(true);
+    expect(isStartFailure({ ...base, status: null, signal: "SIGSEGV" })).toBe(true);
+    expect(isStartFailure({ ...base, status: null, signal: "SIGSEGV", stdout: "x" })).toBe(false);
+    expect(isStartFailure({ ...base, status: 128, stderr: "0 [main] bash 1 child_info_fork::abort: Win32 error 5" })).toBe(true);
+    // A verifier that ran and rejected.
+    expect(isStartFailure({ ...base, status: 3 })).toBe(false);
+    expect(isStartFailure({ ...base, status: 1, stderr: "bad signature" })).toBe(false);
   });
 
   it("never puts an attacker-controlled signature into a shell command", () => {
