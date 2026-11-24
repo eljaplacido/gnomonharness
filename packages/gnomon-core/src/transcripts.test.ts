@@ -10,6 +10,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readTranscript } from "./transcripts.js";
 import { judgeTranscript } from "./check.js";
 import { bashPolicy } from "./tools.js";
@@ -662,3 +663,70 @@ describe("readTranscript — gnomon (its own audit trail)", () => {
   });
 });
 
+
+// ── Antigravity and Hermes ────────────────────────────────────────────────
+
+const fixture = (name: string) => fileURLToPath(new URL(`../../../conformance/transcripts/${name}`, import.meta.url));
+
+describe("readTranscript — antigravity (documented hook payloads)", () => {
+  it("reads run_command, counts a Pre/Post pair once, skips other tools", () => {
+    const r = readTranscript(fixture("antigravity_hook_payloads.ndjson"), "antigravity");
+    expect(r.format).toBe("antigravity");
+    expect(r.commands).toEqual([
+      { tool: "run_command", command: "npm test", at: "antigravity_hook_payloads.ndjson:1" },
+      { tool: "run_command", command: "git clean -fdx", at: "antigravity_hook_payloads.ndjson:4" },
+    ]);
+  });
+
+  it("refuses Antigravity's own transcript.jsonl (undocumented shape) and empty files", () => {
+    const p = join(dir, "transcript.jsonl");
+    writeFileSync(p, jsonl([{ step: 1, type: "USER_INPUT", content: "hi" }]));
+    expect(() => readTranscript(p, "antigravity")).toThrow(/no documented record shape/);
+    writeFileSync(p, "not json\n");
+    expect(() => readTranscript(p, "antigravity")).toThrow(/holds no Antigravity hook payloads/);
+  });
+
+  it("fails check 5 on a denied command and passes an allowed one", () => {
+    const t = readTranscript(fixture("antigravity_hook_payloads.ndjson"), "antigravity");
+    const DENY = ["\\bgit\\s+clean\\b[^|;&]*\\s-[A-Za-z]*[fxX]"];
+    expect(judgeTranscript(t, undefined, DENY, "implement")).toMatchObject({
+      status: "fail",
+      findings: [{ command: "git clean -fdx", rule: "bash_deny", at: "antigravity_hook_payloads.ndjson:4" }],
+    });
+    const ok = { ...t, commands: t.commands.slice(0, 1) };
+    expect(judgeTranscript(ok, undefined, DENY, "implement")).toMatchObject({ status: "pass" });
+  });
+});
+
+describe("readTranscript — hermes", () => {
+  it("reads a sessions export: terminal calls, a blocked call marked not-run, rewound rows still read", () => {
+    const r = readTranscript(fixture("hermes_sessions_export.ndjson"), "hermes");
+    expect(r.format).toBe("hermes");
+    expect(r.commands).toEqual([
+      { tool: "terminal", command: "git status", at: "hermes_sessions_export.ndjson:1" },
+      { tool: "terminal", command: "git clean -fdx", at: "hermes_sessions_export.ndjson:1", ran: false },
+      { tool: "terminal", command: "rm -rf var/", at: "hermes_sessions_export.ndjson:1" },
+    ]);
+  });
+
+  it("reads the sessions/<id>.jsonl rescue file with object arguments", () => {
+    expect(readTranscript(fixture("hermes_rescue_session.ndjson"), "hermes").commands).toEqual([
+      { tool: "terminal", command: "ls -la", at: "hermes_rescue_session.ndjson:2" },
+    ]);
+  });
+
+  it("fails closed on the wrong file", () => {
+    const p = join(dir, "x.jsonl");
+    writeFileSync(p, jsonl([{ type: "message" }]));
+    expect(() => readTranscript(p, "hermes")).toThrow(/not a Hermes session export/);
+    writeFileSync(p, "garbage\n");
+    expect(() => readTranscript(p, "hermes")).toThrow(/not a Hermes session export/);
+  });
+
+  it("feeds check 5: a refused deletion is listed, an executed one fails", () => {
+    const t = readTranscript(fixture("hermes_sessions_export.ndjson"), "hermes");
+    const e = judgeTranscript(t, undefined, ["\\brm\\s+(-[A-Za-z]*[rR][A-Za-z]*|--recursive)\\b", "\\bgit\\s+clean\\b"], "implement");
+    expect(e.status).toBe("fail");
+    expect(e.findings?.map((f) => [f.command, f.ran])).toEqual([["git clean -fdx", false], ["rm -rf var/", undefined]]);
+  });
+});

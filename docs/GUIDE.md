@@ -1144,7 +1144,7 @@ nothing; `gnomon --help` prints all of it.
 | `gnomon migrate [--check]` | Brings a surface up to current scaffold defaults. `--check` writes nothing and exits 1 if anything is pending. | After `gnomon update` |
 | `gnomon endpoint [list \| test NAME \| add …]` | Lists endpoints and keys and cross-checks model ids; runs one token; declares an endpoint end to end | Model setup, diagnosis |
 | `gnomon key [set \| list \| unset] NAME` | The machine-local credential store | Keys |
-| `gnomon check --base REV [--head REV] [--role R \| --agent N] [--transcript F --format FMT] [--json]` | Judges a change by this surface's rules as they stood at `REV`. Exit 0 held, 2 failed, 10 no verdict. `FMT`: `claude-code`, `opencode`, `goose`, `qwen-code`, `mini-swe-agent` or `gnomon` (its own chained, sealed audit trail). | CI, hooks, other harnesses |
+| `gnomon check --base REV [--head REV] [--role R \| --agent N] [--transcript F --format FMT] [--json]` | Judges a change by this surface's rules as they stood at `REV`. Exit 0 held, 2 failed, 10 no verdict. `FMT`: `claude-code`, `opencode`, `goose`, `qwen-code`, `mini-swe-agent`, `antigravity` (a JSONL of its hook payloads), `hermes` (`hermes sessions export`) or `gnomon` (its own chained, sealed audit trail). | CI, hooks, other harnesses |
 | `gnomon check --policy-lint [--strict-policy] [--json]` | Lints the surface's own rules: contradictory, shadowed, never-matching, uncovered and granted-but-always-denied. Warnings; `--strict-policy` exits 2 on any finding. The same findings ride `check --base`'s verdict as `policy_lint`. | Reviewing a surface; CI |
 | `gnomon check --install-hook claude-code` | Prints the Claude Code hooks JSON and writes nothing | Governing Claude Code |
 | `gnomon guard --tool T --input JSON [--role R \| --agent N]`, or `--from claude-code\|opencode\|cursor\|generic` with the call on stdin | Decides one tool call another harness is about to make, by the committed rules: exit 0 allow, 2 deny, 3 ask, 10 no decision (answered as ask) | Governing another agent at run time |
@@ -1513,7 +1513,7 @@ gnomon check --base "$START_REV" --role implement --transcript session.json --fo
 | `surface` | the change edits `.gnomon/` |
 | `verify` | the `[verify]` command fails on head |
 | `must_fail_first` | a new or changed test still passes against the old sources, so it pins nothing |
-| `bash_allow` | a command in the transcript breaks the role's `bash_allow` or `bash_deny` |
+| `bash_allow` | a command in the transcript breaks the role's `bash_allow` or `bash_deny` (`--format` also reads Antigravity hook payloads and `hermes sessions export`; see [GOVERNING-OTHER-HARNESSES](GOVERNING-OTHER-HARNESSES.md#transcript-readers-for-antigravity-and-hermes)) |
 | `audit` | the verdict could not be appended to the hash-chained trail |
 
 A check that does not apply says `skipped` and gives the reason; it never
