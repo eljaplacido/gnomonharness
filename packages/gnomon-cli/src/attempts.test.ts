@@ -159,7 +159,7 @@ describe("gnomon task --attempts", () => {
     expect(new Set(seen.map((s) => s.seed)).size).toBe(3);
     // Applied as an ordinary change to the operator's tree, reviewable with git.
     expect(rep.applied).toBe(true);
-    expect(readFileSync(join(root, "out.txt"), "utf-8")).toBe("ok\n");
+    expect(readFileSync(join(root, "out.txt"), "utf-8").replace(/\r\n/g, "\n")).toBe("ok\n");
     expect(git(root, "status", "--porcelain", "--", ".", ":(exclude).gnomon-*").stdout).toContain("out.txt");
     expect(existsSync(rep.patch)).toBe(true);
     // The run's own trail: spawn x3, check, cancel x2, select, apply.
