@@ -470,6 +470,12 @@ export interface Policy {
      * the defaults. `~/` is the user's home; relative paths are from the root.
      */
     read_roots?: string[];
+    /**
+     * `"deny"` (opt-in): under exec = "os" with network = false, a command may
+     * not connect to this machine's loopback either (`gnomon-exec --network
+     * none`). Absent: loopback stays open, by design. See LOOPBACK_VALUES.
+     */
+    loopback?: string;
     // `env_whitelist` was declared here and read by nothing -- no code path, no
     // test, no doc. A surface author who wrote it got a key the harness ignores,
     // which is the published-option-that-does-nothing defect this project
@@ -482,6 +488,14 @@ export interface Policy {
   };
   /** `[governance]`: levels per family (governance.ts, CONTRACTS.md §36). */
   governance?: Record<string, unknown>;
+  /**
+   * `[guard]`: the approval broker for hosts that cannot ask (Codex, Cursor
+   * preToolUse and beforeReadFile). `broker` is "dashboard" | "terminal"
+   * (absent: no broker, an ask there is a deny as before); `broker_timeout_s`
+   * is how long the hook holds the call (default 60, capped under the host's
+   * own hook timeout). CONTRACTS.md §10.
+   */
+  guard?: { broker?: string; broker_timeout_s?: number };
   /**
    * A check the harness runs after a turn that changed files.
    *
@@ -2938,6 +2952,8 @@ const KNOWN_BLOCKS = new Set([
   // [compliance] in policy.toml: resolveResidency reads allowed_regions.
   // Listed with the feature.
   "compliance",
+  // [guard] in policy.toml: the approval broker (guard_broker.ts). Listed with the feature.
+  "guard",
 ]);
 
 /**
@@ -3203,7 +3219,7 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "finish_gate",
     ],
   ],
-  ["policy.toml", "sandbox", ["level", "network", "exec", "image", "extra_roots", "allow_package_index", "filesystem", "profile", "reads", "read_roots"]],
+  ["policy.toml", "sandbox", ["level", "network", "exec", "image", "extra_roots", "allow_package_index", "filesystem", "profile", "reads", "read_roots", "loopback"]],
   ["policy.toml", "approval", ["gate", "repo_code", "readonly_bash", "after_refusal", "after_refusal_calls", "modes", "default"]],
   // resolveLevels (governance.ts). A value outside the enumeration is fatal
   // (auditGovernance); an unknown key is warned here like any other.
@@ -3214,6 +3230,7 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
   // (auditResidency): a rule that silently admitted less, or more, than it
   // says is the inert-control failure this audit exists for.
   ["policy.toml", "compliance", ["allowed_regions"]],
+  ["policy.toml", "guard", ["broker", "broker_timeout_s"]],
 ];
 
 const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "escalate", "fallback", "max_steps", "max_steps_total", "max_tokens", "model", "exec", "image", "source", "profile", "reasoning_effort", "task_allow", "temperature", "tools", "top_p", "write_allow", "governance"]);
@@ -4269,6 +4286,36 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
         `reads = ${JSON.stringify(reads)} is not one of ${READS_VALUES.join(" | ")}. It does not fall back: ` +
         `under exec = "os" bash refuses every command until it is one of them.`,
       fix: 'Use reads = "scoped" to confine reads, or remove the key for "all".',
+      fatal: false,
+    });
+  }
+  {
+    const g = (config.policy as { guard?: { broker?: unknown; broker_timeout_s?: unknown } } | undefined)?.guard;
+    const gw = ".gnomon/policy.toml [guard]";
+    if (g?.broker !== undefined && g.broker !== "dashboard" && g.broker !== "terminal") {
+      problems.push({
+        where: gw,
+        problem: `broker = ${JSON.stringify(g.broker)} is not "dashboard" or "terminal", so no broker runs: an ask on a host that cannot ask is still a deny.`,
+        fix: 'Use broker = "dashboard" or broker = "terminal", or remove the key.',
+        fatal: false,
+      });
+    }
+    const t = g?.broker_timeout_s;
+    if (t !== undefined && !(typeof t === "number" && Number.isFinite(t) && t >= 1 && t <= 3600)) {
+      problems.push({
+        where: gw,
+        problem: `broker_timeout_s = ${JSON.stringify(t)} is not a number of seconds from 1 to 3600, so the default (60) applies.`,
+        fix: "Write a whole number of seconds, e.g. broker_timeout_s = 60.",
+        fatal: false,
+      });
+    }
+  }
+  const lb = (sb as { loopback?: unknown }).loopback;
+  if (lb !== undefined && !(LOOPBACK_VALUES as readonly unknown[]).includes(lb)) {
+    problems.push({
+      where,
+      problem: `loopback = ${JSON.stringify(lb)} is not one of ${LOOPBACK_VALUES.join(" | ")}. It does not fall back: under exec = "os" bash refuses every command until it is one of them.`,
+      fix: 'Use loopback = "deny" to refuse loopback under network = false, or remove the key.',
       fatal: false,
     });
   }
@@ -5823,6 +5870,14 @@ export type ExecMode = (typeof EXEC_VALUES)[number];
  * be a typo that silently unscopes reads.
  */
 export const READS_VALUES = ["all", "scoped"] as const;
+
+/**
+ * `[sandbox] loopback`. Read by exec = "os" only. Absent leaves a local service
+ * reachable under network = false (a dev server, a registry: not egress).
+ * "deny" refuses loopback too (gnomon-exec `--network none`). Not a published
+ * enumeration; a value that is neither is kept as written and bash refuses.
+ */
+export const LOOPBACK_VALUES = ["allow", "deny"] as const;
 export type ReadsMode = (typeof READS_VALUES)[number];
 
 /** Where `bash` actually runs. See resolveExec. */
@@ -5840,6 +5895,11 @@ export interface ResolvedExec {
   reads: string;
   /** `[sandbox] read_roots`, absolute. Read only under reads = "scoped". */
   readRoots: string[];
+  /**
+   * `[sandbox] loopback` as written; absent when not declared (loopback open).
+   * "deny" closes it under exec = "os"; anything but "allow" | "deny" refuses.
+   */
+  loopback?: string;
   /**
    * Set when `exec` is declared but is not one of EXEC_VALUES ("OS",
    * "landlock", "os " ...): the value as written. `mode` is then "off", and
@@ -5946,12 +6006,14 @@ export function resolveExec(config: GnomonConfig, role?: string): ResolvedExec {
   const readOnly = roleDef?.source === "read_only";
   const readsRaw = (config.policy?.sandbox as { reads?: unknown } | undefined)?.reads;
   const reads = readsRaw === undefined ? "all" : typeof readsRaw === "string" ? readsRaw : JSON.stringify(readsRaw);
+  const loopbackRaw = (config.policy?.sandbox as { loopback?: unknown } | undefined)?.loopback;
   return {
     mode,
     image,
     network: sandbox.network === true,
     reads,
     readRoots: resolveReadRoots(config),
+    ...(loopbackRaw !== undefined ? { loopback: typeof loopbackRaw === "string" ? loopbackRaw : JSON.stringify(loopbackRaw) } : {}),
     ...(invalid !== undefined ? { invalid } : {}),
     ...(readOnly ? { read_only_source: true } : {}),
   };

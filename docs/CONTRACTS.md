@@ -1034,7 +1034,23 @@ Keys: `schema`, `decision`, `rule`, `reason`, `tool`, `role`, `base` (the
 commit the rules were read from, full sha), `surface_hash` (the surface at
 `base`), `governed`, `elapsed_ms`; optionally `pattern`, `audit` (`trail`,
 `seq`, `hash`, when `[audit] enabled = true`), `error`, `base_note`, `exempt`
-(`"readonly_bash"`, above).
+(`"readonly_bash"`, above), `broker` (below).
+
+**The approval broker (`[guard] broker`).** Opt-in, `"dashboard"` or
+`"terminal"` in policy.toml (a misspelt value is no broker, and the surface
+audit says so), with `broker_timeout_s` (1 to 3600, default 60). On a host that
+cannot ask (`--from codex`; `--from cursor` at `preToolUse` and
+`beforeReadFile`) an `ask` verdict is held and put to a person before the
+decision is recorded; `decision` is then the person's `allow` or `deny`, never
+anything gnomon decided alone, and the verdict and the guard record carry
+`broker`: `{via: "dashboard"|"terminal", outcome: "approved"|"denied"|"timeout"|"unreachable", waited_s}`.
+Only `approved` allows; every other outcome is a `deny` whose `reason` says
+which. An undecidable call (rule `error`) is never brokered. The hold is at
+most `broker_timeout_s` and at most the installed hook's timeout minus 5 s
+(30 s when it cannot be read). Fixtures: `conformance/guard_decision.json`
+(`verdict_keys.optional`), `audit_record_schema.json` and `audit_feed_schema.json`
+(`broker`); `guard_broker.test.ts` runs approve, deny, timeout, unreachable and
+the host-timeout cap against a fake broker, and the real dashboard end to end.
 
 **Which revision's rules.** `--base <rev>` when given. Otherwise the session's
 recorded base, or the `--session-base` hint, or HEAD -- and then, since
@@ -1882,6 +1898,18 @@ text), with the child's exit code unchanged. `setup.pull` answers 202 with a
 `job` (`id`, `state` `running`|`done`, `progress`: setup's last lines on
 stderr, `exit`, `result`), read at `GET /api/jobs/<id>`. Stopping the server
 stops a running action.
+
+**The approval broker's routes** (§10, `[guard] broker = "dashboard"`).
+`GET /api/broker/pending` and `POST /api/broker/<id>/decide` are the page's,
+with its session token: the decision is two steps (a POST with `decision` only
+answers what it will do and a one-use nonce for that card and that decision;
+a POST that also carries the nonce decides, and a nonce for `allow` never
+denies). `POST /api/broker/request`, `GET /api/broker/request/<id>` and
+`POST /api/broker/request/<id>/cancel` are the guard hook's, signed with a
+separate secret the dashboard writes (0600, beside the trust store, removed on
+close) and accepted nowhere else: a hook can ask, never decide, and the page's
+token cannot pose as a hook. At most 20 cards wait at once; an unanswered card
+expires into `timeout`.
 
 **The `/api` JSON is the page's own.** Each answer carries
 `schema: "gnomon.dashboard/1"`, but it is not a published record: a script

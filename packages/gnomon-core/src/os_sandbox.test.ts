@@ -1056,3 +1056,39 @@ describe("third review, finding 9 — gnomon's sandboxed git takes the session's
     }
   });
 });
+
+describe("[sandbox] loopback = \"deny\" (opt-in: loopback closed under network = false)", () => {
+  const onWindows = process.platform === "win32";
+  const planFor = (exec: { network: boolean; loopback?: string }, probe = okProbe(), extra: { network?: boolean } = {}) =>
+    osSandboxPlan("ls", { root: "/repo", exec, ...extra }, "/bin/sh", probe);
+  const netFlag = (r: ReturnType<typeof osSandboxPlan>): string | undefined => {
+    if (!("file" in r)) return undefined;
+    rmSync(r.tmp, { recursive: true, force: true });
+    return r.args[r.args.indexOf("--network") + 1];
+  };
+
+  it.skipIf(onWindows)("absent: the plan is byte-identical to before (--network off)", () => {
+    expect(netFlag(planFor({ network: false }))).toBe("off");
+    expect(netFlag(planFor({ network: false, loopback: "allow" }))).toBe("off");
+  });
+
+  it.skipIf(onWindows)("deny: gnomon-exec gets --network none", () => {
+    expect(netFlag(planFor({ network: false, loopback: "deny" }))).toBe("none");
+  });
+
+  it.skipIf(onWindows)("a typo refuses, it does not leave loopback open", () => {
+    const r = planFor({ network: false, loopback: "dney" });
+    expect("refusal" in r && r.refusal.content).toContain("NOT run");
+    expect("refusal" in r && r.refusal.content).toContain('loopback = "dney"');
+  });
+
+  it.skipIf(onWindows)("deny with the network open refuses (it would claim what it does not give)", () => {
+    const r = planFor({ network: false, loopback: "deny" }, okProbe(), { network: true });
+    expect("refusal" in r && r.refusal.content).toContain("network open");
+  });
+
+  it.skipIf(onWindows)("deny on a machine without the Linux supervisor (Seatbelt) refuses, never runs unconfined", () => {
+    const r = planFor({ network: false, loopback: "deny" }, okProbe({ mechanism: "seatbelt", network_supported: true }));
+    expect("refusal" in r && r.refusal.content).toContain("cannot be enforced on this machine");
+  });
+});

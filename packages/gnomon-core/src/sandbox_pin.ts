@@ -161,6 +161,12 @@ export function tightenExec(pinned: ResolvedExec, fresh: ResolvedExec): { exec: 
       }
     }
   }
+  // loopback = "deny" is a tightening that stays: a reload may not drop it.
+  let loopback = fresh.loopback;
+  if (pinned.mode === "os" && pinned.loopback === "deny" && fresh.loopback !== "deny") {
+    loosened.push(`loopback = ${JSON.stringify(fresh.loopback ?? "allow")} (pinned: "deny")`);
+    loopback = "deny";
+  }
   // A read-only project stays read-only for the session (2026-11-17).
   let readOnly = fresh.read_only_source === true;
   if (pinned.read_only_source && !readOnly) {
@@ -174,6 +180,7 @@ export function tightenExec(pinned: ResolvedExec, fresh: ResolvedExec): { exec: 
       network,
       reads,
       readRoots,
+      ...(loopback !== undefined ? { loopback } : {}),
       // A misspelt exec mid-session keeps bash refusing, not running unsandboxed.
       ...(fresh.invalid !== undefined ? { invalid: fresh.invalid } : {}),
       ...(readOnly ? { read_only_source: true } : {}),

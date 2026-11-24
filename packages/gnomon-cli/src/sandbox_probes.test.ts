@@ -190,6 +190,27 @@ describe("the probes on this machine", () => {
     expect(scoped.find((c) => c.probe === "bash_write_outside_root")!.status).toBe("pass");
   });
 
+  it("[sandbox] loopback = deny: the loopback probe is claimed for exec = os and passes; by default it stays open by design", async () => {
+    if (osWhy) {
+      console.warn(`[SKIPPED loopback probes: ${osWhy}]`);
+      return;
+    }
+    const only = ["exec_os", "exec_os_scoped"] as const;
+    const dflt = await runSandboxProbes({ only });
+    for (const c of only) {
+      const cell = cellsOf(dflt.cells, c).find((k) => k.probe === "network_loopback_when_off")!;
+      expect(cell.claimed, `${c} default`).toBe(false);
+      expect(cell.status, `${c} default`).toBe("open");
+    }
+    const denied = await runSandboxProbes({ only, loopback: "deny" });
+    for (const c of only) {
+      const cell = cellsOf(denied.cells, c).find((k) => k.probe === "network_loopback_when_off")!;
+      expect(cell.claimed, `${c} deny`).toBe(true);
+      expect(cell.status, `${c} deny: ${cell.detail}`).toBe("pass");
+    }
+    expect(denied.cells.filter((c) => c.status === "FAIL")).toEqual([]);
+  });
+
   const dockerWhy = process.platform === "win32" ? "Windows" : avail.exec_docker;
   it("exec = docker: no claimed containment fails (says why when this machine cannot run it)", async () => {
     if (dockerWhy) {
@@ -211,7 +232,7 @@ describe("the probes on this machine", () => {
 describe("the flag is opt-in", () => {
   it("a plain security test run has no sandbox section, and --help says what --sandbox adds", () => {
     const help = spawnSync(process.execPath, [join(ROOT, "packages/gnomon-cli/gnomon.js"), "--help"], { encoding: "utf-8" });
-    expect(help.stdout).toMatch(/security test \[--host [^\]]*\] \[--role <r>\] \[--sandbox \[--image <ref>\]\]/);
+    expect(help.stdout).toMatch(/security test \[--host [^\]]*\] \[--role <r>\] \[--sandbox \[--image <ref>\] \[--loopback deny\]\]/);
     expect(help.stdout).toMatch(/--sandbox adds the sandbox-escape probes/);
   });
 });

@@ -98,7 +98,8 @@ are:
 - **exec os, reads all**: writes outside the root, the docker socket and
   non-loopback network are refused (probed). Reads are not confined (any file
   your user can read, secrets in `$HOME` included), loopback is open by design (a
-  local service that itself reaches the network is reachable), and host PIDs
+  local service that itself reaches the network is reachable; opt-in
+  `[sandbox] loopback = "deny"` closes it, below), and host PIDs
   and namespaces are shared. Key variables are scrubbed from the environment,
   which is why the credential row says *partially* and not *not covered*. The
   Landlock/seccomp boundary is permission, not partition: same kernel.
@@ -111,6 +112,20 @@ are:
   docker socket, `/proc/sys` and cgroup read-only (all probed). *Partially* for
   breakout because the kernel is shared: a kernel or runtime flaw is outside what
   gnomon can test or claim, and `network = true` reopens egress.
+- **`[sandbox] loopback = "deny"`** (opt-in, `exec = "os"` with `network = false`)
+  runs the command under `gnomon-exec --network none`: the Linux network
+  supervisor refuses a connect to any loopback address, so a local service the
+  user (or an earlier command) left running, such as a proxy or a resolver that
+  reaches the network, is no longer a way out. `gnomon security test --sandbox`
+  then claims the loopback probe for `exec_os` and `exec_os_scoped` and reports
+  `pass` (a loopback that stays open is a `FAIL`); without the setting that probe
+  stays `open`, as the matrix says. The matrix cell for network stays *partially*:
+  inbound listeners on non-loopback addresses and the other `not_enforced`
+  limits remain. Where it cannot be enforced (macOS, whose Seatbelt network block
+  is not offered, or a kernel without the supervisor) bash refuses rather than run
+  with loopback open. The loopback-deny run and the refusal paths are tested;
+  Unix-domain sockets are a separate limit (the supervisor vets pathname sockets
+  outside the root).
 - Under every column, a secret **inside** the project root is contained only by
   keeping it out (CONTRACTS.md §37, `gnomon security`: `secrets_in_tree`).
 

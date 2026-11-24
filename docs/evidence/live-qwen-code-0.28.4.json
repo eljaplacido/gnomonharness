@@ -1,0 +1,39 @@
+{
+  "schema": "gnomon.live_adapter_evidence/1",
+  "host": "qwen-code",
+  "host_version": "0.28.4",
+  "package": "@qwen-code/qwen-code",
+  "node": "v22.22.2",
+  "platform": "linux-arm64",
+  "model": "scripted OpenAI-compatible endpoint on loopback (no real model, no network, no account)",
+  "approval_mode": "yolo (headless -p; the host asks nobody, so gnomon's answers alone decide)",
+  "hook": "gnomon guard install qwen-code --write (PreToolUse, matcher QWEN_MATCHER)",
+  "calls": [
+    {
+      "host_tool": "read_file",
+      "gnomon_tool": "read",
+      "target": "<project>/src/a.ts",
+      "decision": "allow",
+      "rule": null
+    },
+    {
+      "host_tool": "write_file",
+      "gnomon_tool": "write",
+      "target": "<outside>/escape.txt",
+      "decision": "deny",
+      "rule": "sandbox"
+    },
+    {
+      "host_tool": "run_shell_command",
+      "gnomon_tool": "bash",
+      "target": "echo hi > src/b.txt",
+      "decision": "allow",
+      "rule": null
+    }
+  ],
+  "host_honoured": {
+    "denied_write_outside_root_created_file": false,
+    "allowed_shell_command_ran": true
+  },
+  "not_covered": "Codex and Copilot were not run: they need the user's accounts (docs/GOVERNING-OTHER-HARNESSES.md)."
+}
