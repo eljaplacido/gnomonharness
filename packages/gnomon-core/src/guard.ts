@@ -233,8 +233,24 @@ export interface GuardVerdict {
    * The reason names the programs it was read as.
    */
   exempt?: "readonly_bash";
+  /**
+   * Present only when `[guard] broker` put an ask to a person (CONTRACTS.md
+   * §18, the approval broker): `decision` is then the person's answer (allow
+   * or deny), never anything gnomon decided alone. `outcome` says how it ended.
+   */
+  broker?: GuardBrokerOutcome;
   /** Wall time inside the decision, for the latency budget. */
   elapsed_ms: number;
+}
+
+/** How an ask the approval broker held ended. */
+export interface GuardBrokerOutcome {
+  /** Where the person was asked. */
+  via: "dashboard" | "terminal";
+  /** `approved` and `denied` are the person's; the rest are denies gnomon made for them. */
+  outcome: "approved" | "denied" | "timeout" | "unreachable";
+  /** Whole seconds the hook held the call. */
+  waited_s: number;
 }
 
 /**
@@ -295,6 +311,13 @@ export interface GuardRequest {
   askUnanswerable?: string;
   /** The host's own permission mode, as its payload named it. Recorded only. */
   hostMode?: string;
+  /**
+   * The approval broker (cli guard_broker.ts): called with an `ask` verdict, on
+   * a host that cannot ask, before the decision is recorded. It returns the
+   * person's answer or a deny with why; the record then carries it. Never
+   * called for a call gnomon could not decide (rule "error").
+   */
+  broker?: (v: GuardVerdict, call: GuardCall) => Promise<{ decision: "allow" | "deny"; reason: string; broker: GuardBrokerOutcome }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -825,6 +848,12 @@ export async function guardToolCall(req: GuardRequest): Promise<GuardVerdict> {
       v.level = policy.level ?? null;
     }
     unanswerable(v, req);
+    if (v.decision === "ask" && req.broker) {
+      const asked = await req.broker({ ...v }, req.call);
+      v.decision = asked.decision;
+      v.reason = asked.reason;
+      v.broker = asked.broker;
+    }
     appendDecision(v, where, req, session);
     return done();
   } catch (err) {
@@ -1277,6 +1306,8 @@ function appendDecision(
       exit: guardExit(v.decision, v.error !== undefined),
       // `[approval] readonly_bash`: why an on_write bash call was not asked.
       ...(v.exempt ? { exempt: v.exempt } : {}),
+      // The approval broker (CONTRACTS.md §18): who answered an ask, and how.
+      ...(v.broker ? { broker: v.broker } : {}),
       // [governance] only (CONTRACTS.md §36): absent otherwise, so an
       // undeclared surface's records are what they were.
       ...(levelled

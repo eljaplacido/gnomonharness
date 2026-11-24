@@ -489,6 +489,14 @@ export interface Policy {
   /** `[governance]`: levels per family (governance.ts, CONTRACTS.md §36). */
   governance?: Record<string, unknown>;
   /**
+   * `[guard]`: the approval broker for hosts that cannot ask (Codex, Cursor
+   * preToolUse and beforeReadFile). `broker` is "dashboard" | "terminal"
+   * (absent: no broker, an ask there is a deny as before); `broker_timeout_s`
+   * is how long the hook holds the call (default 60, capped under the host's
+   * own hook timeout). CONTRACTS.md §18.
+   */
+  guard?: { broker?: string; broker_timeout_s?: number };
+  /**
    * A check the harness runs after a turn that changed files.
    *
    * Declared data, hashed with the rest of the surface, and absent by default:
@@ -2944,6 +2952,8 @@ const KNOWN_BLOCKS = new Set([
   // [compliance] in policy.toml: resolveResidency reads allowed_regions.
   // Listed with the feature.
   "compliance",
+  // [guard] in policy.toml: the approval broker (guard_broker.ts). Listed with the feature.
+  "guard",
 ]);
 
 /**
@@ -3220,6 +3230,7 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
   // (auditResidency): a rule that silently admitted less, or more, than it
   // says is the inert-control failure this audit exists for.
   ["policy.toml", "compliance", ["allowed_regions"]],
+  ["policy.toml", "guard", ["broker", "broker_timeout_s"]],
 ];
 
 const ROLE_KEYS = new Set(["allowed_edit_formats", "bash_allow", "bash_deny", "converge_after", "description", "endpoint", "escalate", "fallback", "max_steps", "max_steps_total", "max_tokens", "model", "exec", "image", "source", "profile", "reasoning_effort", "task_allow", "temperature", "tools", "top_p", "write_allow", "governance"]);
@@ -4277,6 +4288,27 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
       fix: 'Use reads = "scoped" to confine reads, or remove the key for "all".',
       fatal: false,
     });
+  }
+  {
+    const g = (config.policy as { guard?: { broker?: unknown; broker_timeout_s?: unknown } } | undefined)?.guard;
+    const gw = ".gnomon/policy.toml [guard]";
+    if (g?.broker !== undefined && g.broker !== "dashboard" && g.broker !== "terminal") {
+      problems.push({
+        where: gw,
+        problem: `broker = ${JSON.stringify(g.broker)} is not "dashboard" or "terminal", so no broker runs: an ask on a host that cannot ask is still a deny.`,
+        fix: 'Use broker = "dashboard" or broker = "terminal", or remove the key.',
+        fatal: false,
+      });
+    }
+    const t = g?.broker_timeout_s;
+    if (t !== undefined && !(typeof t === "number" && Number.isFinite(t) && t >= 1 && t <= 3600)) {
+      problems.push({
+        where: gw,
+        problem: `broker_timeout_s = ${JSON.stringify(t)} is not a number of seconds from 1 to 3600, so the default (60) applies.`,
+        fix: "Write a whole number of seconds, e.g. broker_timeout_s = 60.",
+        fatal: false,
+      });
+    }
   }
   const lb = (sb as { loopback?: unknown }).loopback;
   if (lb !== undefined && !(LOOPBACK_VALUES as readonly unknown[]).includes(lb)) {
