@@ -1252,6 +1252,15 @@ closed frame with nothing in front of it, and its code blocks carry no gutter,
 so code copied from the terminal never includes a `│`; nothing is drawn to the right of or
 below the input line, because readline redraws that line and would erase it.
 
+In the boxed look the launch prints one status line (role and tool count,
+profile, audit, sandbox, network, verify) instead of a screen of notes.
+Warnings and refusals still print every time; a routine notice (no `[verify]`
+declared, a network filter that is not isolation) prints the first time on this
+machine for a project, and `/status` shows everything the launch folded. A gated
+call's approval is one line (`✓ approved`, `✓ approved — rest of this turn`,
+`✗ declined`). `[ui] panels = "tinted"` (default `"plain"`) tints each turn
+card and fills its header as a bar in the theme accent; truecolor terminals only.
+
 `auto` (the default) is boxed only when stdout is a TTY at least 60 columns
 wide with colour allowed. `classic` is the plain output, byte for byte, and is
 what `gnomon task`, `--json`, pipes and `NO_COLOR` always get.
