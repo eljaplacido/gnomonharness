@@ -1675,6 +1675,17 @@ refusal text the model and you see names `extra_roots`, the restart it needs, `/
 safest fallback. To watch
 before refusing, level the family: `[governance] write = "advise"`.
 
+Codex, and Cursor at `preToolUse` and `beforeReadFile`, cannot put an ask to a
+person. Declare `[guard] broker = "dashboard"` (a card in the running `gnomon
+dashboard`) or `"terminal"` (a prompt on `/dev/tty`) in `.gnomon/policy.toml`,
+re-run `gnomon guard install codex --write` (it lengthens the hook's timeout to
+leave room), and the hook holds the call for up to `broker_timeout_s` (default
+60) while you answer. Only a yes allows; a timeout, no dashboard or no terminal
+is a deny with the reason, and the answer is in the guard record. Qwen Code has
+been run against the guard live (see
+[GOVERNING-OTHER-HARNESSES.md](GOVERNING-OTHER-HARNESSES.md)); Codex and
+Copilot have not (they need your accounts).
+
 `guard` stops only what a hook shows it; a harness without one is judged after
 the fact by `check`. The README section
 [Before the call: `gnomon guard`](../README.md#before-the-call-gnomon-guard)
@@ -1892,6 +1903,12 @@ gate = "on_write"
 repo_code = true      # ask before npm test, make, pip install -e . — whatever the gate says
 readonly_bash = "allow"  # but not before ls, cat, rg, git status/log/diff (CONTRACTS.md §10)
 ```
+
+For `exec = "os"`, loopback stays open under `network = false` by default (a dev
+server is not egress). `[sandbox] loopback = "deny"` closes it (Linux; the
+command runs under `gnomon-exec --network none`); it refuses where it cannot be
+enforced, and `gnomon security test --sandbox` then reports the loopback probe as
+`pass`.
 
 `exec` can be set per role, and is refused on native Windows. Nothing checks
 for a docker daemon before a turn. Since v0.5.0 (v0.4.3 and earlier do not

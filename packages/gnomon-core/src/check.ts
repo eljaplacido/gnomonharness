@@ -411,7 +411,7 @@ function checkExec(
     warnings.push(`the live surface asks for reads = ${JSON.stringify(reads)}; this project ran with ${JSON.stringify(strict.reads)}, so the check does`);
     reads = strict.reads;
   }
-  const exec: ResolvedExec = { mode, image, network, reads, readRoots: live.readRoots };
+  const exec: ResolvedExec = { mode, image, network, reads, readRoots: live.readRoots, ...(live.loopback !== undefined ? { loopback: live.loopback } : {}) };
 
   const said: string[] = [];
   if (fromBase.mode !== exec.mode) said.push(`exec = "${fromBase.mode}"`);
