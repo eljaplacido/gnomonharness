@@ -240,7 +240,7 @@ const PROBES: ProbeDef[] = [
     id: "network_loopback_when_off",
     threat: "network",
     escape_class: "permission_boundary",
-    what: "with network = false, a shell command connects to a loopback port this test opened (exec = os leaves loopback open by design)",
+    what: "with network = false, a shell command connects to a loopback port this test opened (exec = os leaves loopback open by design; [sandbox] loopback = \"deny\" closes it)",
     applies: BASH,
     claimed: ["exec_docker"],
     run: async (e, cfg) => {
@@ -522,6 +522,12 @@ async function runSandboxProbesInner(
     onCell?: (cell: Cell) => void;
     /** Tests only: treat these configurations as if gnomon claimed them contained, to prove an escape is reported as a FAIL. */
     assume?: readonly ProbeConfigId[];
+    /**
+     * `[sandbox] loopback = "deny"`: exec = "os" runs with `--network none`, and
+     * the loopback probe is then CLAIMED for exec_os and exec_os_scoped, so a
+     * loopback that stays open is a FAIL, not "open by design".
+     */
+    loopback?: "deny";
   } = {},
   box: { leftover: string | null } = { leftover: null }
 ): Promise<SandboxProbeReport> {
@@ -603,9 +609,9 @@ async function runSandboxProbesInner(
         cfg.exec === "docker"
           ? { mode: "docker", image, network: false }
           : cfg.exec === "os"
-            ? { mode: "os", image: "unused", network: false, reads: "all" }
+            ? { mode: "os", image: "unused", network: false, reads: "all", ...(opts.loopback ? { loopback: opts.loopback } : {}) }
             : cfg.exec === "os-scoped"
-              ? { mode: "os", image: "unused", network: false, reads: "scoped", readRoots: [] }
+              ? { mode: "os", image: "unused", network: false, reads: "scoped", readRoots: [], ...(opts.loopback ? { loopback: opts.loopback } : {}) }
               : { mode: "off", image: "unused", network: false },
     });
     const run = async (cfg: ConfigSpec, name: string, args: Record<string, unknown>): Promise<string> => {
@@ -637,7 +643,10 @@ async function runSandboxProbesInner(
       configs.push(rep);
       for (const p of PROBES) {
         if (!p.applies.includes(cfg.id)) continue;
-        const claimed = p.claimed.includes(cfg.id) || (opts.assume ?? []).includes(cfg.id);
+        const claimed =
+          p.claimed.includes(cfg.id) ||
+          (opts.assume ?? []).includes(cfg.id) ||
+          (opts.loopback === "deny" && p.id === "network_loopback_when_off" && (cfg.id === "exec_os" || cfg.id === "exec_os_scoped"));
         if (why) {
           cells.push({ probe: p.id, config: cfg.id, status: "skipped", claimed, detail: why });
           rep.not_measured++;

@@ -1281,7 +1281,7 @@ export interface ToolContext {
    * Where bash runs (resolveExec). `reads` / `readRoots` are read by exec =
    * "os" only, and are optional so a context built by hand means reads = "all".
    */
-  exec?: { mode: ExecMode; image: string; network: boolean; reads?: string; readRoots?: string[]; invalid?: string; read_only_source?: boolean };
+  exec?: { mode: ExecMode; image: string; network: boolean; reads?: string; readRoots?: string[]; loopback?: string; invalid?: string; read_only_source?: boolean };
   gate: ApprovalGate;
   approve: Approver;
   /** bash timeout, ms */
@@ -2624,7 +2624,7 @@ export function osSandboxPlan(
     root: string;
     extraRoots?: string[];
     network?: boolean;
-    exec?: { network: boolean; reads?: string; readRoots?: string[] };
+    exec?: { network: boolean; reads?: string; readRoots?: string[]; loopback?: string };
     config?: GnomonConfig;
   },
   shellBin: string,
@@ -2682,6 +2682,31 @@ export function osSandboxPlan(
   // The session grant (/network) wins over the declaration, as it does for
   // webfetch. Only an explicit true opens the network.
   const network = (ctx.network ?? ctx.exec?.network) === true;
+  // [sandbox] loopback. Checked like reads: a typo must not leave loopback open.
+  const loopback = ctx.exec?.loopback;
+  if (loopback !== undefined && loopback !== "allow" && loopback !== "deny") {
+    return refuse(
+      `[sandbox] loopback = ${JSON.stringify(loopback)} is not one of "allow" | "deny". It does not fall back to "allow", ` +
+        `because a typo would then leave loopback open without a word. Fix the value in .gnomon/policy.toml.`,
+      "invalid [sandbox] loopback"
+    );
+  }
+  const denyLoopback = loopback === "deny";
+  if (denyLoopback && network) {
+    return refuse(
+      `[sandbox] loopback = "deny" is declared with the network open (network = true, or a /network grant). ` +
+        `loopback = "deny" closes loopback under network = false; with the network open it would claim a containment the sandbox does not give.`,
+      "loopback = deny needs network = false"
+    );
+  }
+  if (denyLoopback && (!sb.probe.network_supported || sb.probe.mechanism !== "landlock+seccomp")) {
+    return refuse(
+      `[sandbox] loopback = "deny" cannot be enforced on this machine (mechanism: ${sb.probe.mechanism ?? "none"}): ` +
+        `it needs the Linux network supervisor (gnomon-exec --network none). Seatbelt's network block is not offered on macOS, ` +
+        `so there is no loopback deny there either.`,
+      "loopback deny unsupported here"
+    );
+  }
   if (!network && !sb.probe.network_supported) {
     return refuse(
       `network = false cannot be enforced on this machine: ${sb.probe.reason ?? "unsupported"}. ` +
@@ -2760,7 +2785,7 @@ export function osSandboxPlan(
       "--root", ctx.root,
       "--write", tmp,
       ...extra.flatMap((r) => ["--write", r]),
-      "--network", network ? "on" : "off",
+      "--network", network ? "on" : denyLoopback ? "none" : "off",
       ...readArgs,
       ...readonly.flatMap((r) => ["--readonly", r]),
       // fd 3: gnomon-exec writes the supervisor's pid there (sandbox-kill).
