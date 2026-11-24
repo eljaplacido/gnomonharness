@@ -10,7 +10,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { loadConfig, recomputeManifest, type GnomonConfig } from "./config.js";
-import { runTask } from "./prompt_loop.js";
+import { runTask, buildSystemPrompt } from "./prompt_loop.js";
+import { loadMemory } from "./memory.js";
 import { setDecisionContextProbe } from "./agent_context.js";
 import { verifyTrail } from "./audit.js";
 import { runEval, type EvalCellRunner } from "./eval.js";
@@ -1092,5 +1093,39 @@ describe("gnomon improve: the attributed cause chooses the candidate (CONTRACTS 
     const c = project();
     for (let s = 1; s <= 3; s++) trail(`stall${s}`, [{ kind: "session_start", mode: "task" }, failing({ stop_reason: "stall", code: 4 })]);
     expect(mineAll(c).candidates.map((x) => x.signal)).toEqual(["stall"]);
+  });
+});
+
+describe("memory fill: improve candidates reach .gnomon/memory only through acceptance (S1)", () => {
+  it("proposed memory is not in the surface or the prompt; accepting it writes the entry and the next prompt indexes it", async () => {
+    const c = project({ trials: false });
+    for (let s = 1; s <= 3; s++) trail(`s${s}`, [ran("npm test"), ran("cargo test")]);
+    const r = await runImprove(c, { run: true });
+    const mem = r.proposals.filter((p) => p.kind === "memory");
+    expect(mem.map((p) => p.title).sort()).toEqual(["cargo command", "npm command"]);
+
+    // Proposed, pending, and nowhere near the surface or the prompt.
+    const memDir = join(root, ".gnomon", "memory");
+    expect(existsSync(memDir)).toBe(false);
+    expect(loadMemory(loadConfig(root))).toEqual([]);
+    const state = (cfg: GnomonConfig) => ({ config: cfg, exchanges: [], currentRole: "implement" });
+    expect(buildSystemPrompt(state(loadConfig(root)), "implement", "hi")).not.toContain("npm command");
+
+    // A rejected one stays out.
+    rejectProposal(c, mem.find((p) => p.title === "cargo command")!.id, {});
+    expect(existsSync(memDir)).toBe(false);
+
+    // Accepted: the file is written, loads, and the prompt carries its index line.
+    const accepted = mem.find((p) => p.title === "npm command")!;
+    acceptProposal(c, accepted.id);
+    const files = readdirSync(memDir);
+    expect(files).toHaveLength(1);
+    const fresh = loadConfig(root);
+    const entries = loadMemory(fresh);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!.provenance).toBe(accepted.id);
+    const prompt = buildSystemPrompt(state(fresh), "implement", "hi");
+    expect(prompt).toContain("npm command");
+    expect(prompt).toContain(entries[0]!.description);
   });
 });

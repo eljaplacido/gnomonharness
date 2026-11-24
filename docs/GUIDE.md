@@ -743,12 +743,23 @@ default (a few thousand tokens, depending on version and VRAM) and silently
 drops the start of a longer prompt. gnomon sends `num_ctx` when the surface
 names the number: a `max_context_tokens` declared on the endpoint (the
 `[defaults]` fallback is not an instruction to allocate), or a Modelfile `num_ctx` that `/api/show` reports, bounded by
-the model's trained context length. A window that is only the trained length is
-not sent, because it can mean hundreds of thousands of tokens of KV cache you
-never asked for; gnomon warns once and names the fix: set `OLLAMA_CONTEXT_LENGTH`
-for the server, a Modelfile `PARAMETER num_ctx <n>`, or declare
-`max_context_tokens = <n>` on the endpoint. Only Ollama requests carry
-`num_ctx`; no other endpoint kind ever sees it.
+the model's trained context length. A window that is only the trained length
+(`/api/show` says nothing else) is sent **capped at 32768**, and gnomon
+budgets to the number it sends, so it trims where Ollama would have silently
+truncated. Before this, that case sent nothing and Ollama ran its own default.
+The cap exists because the full trained length can mean hundreds of
+thousands of tokens of KV cache: a 32768 window costs roughly 1 to 4 GB of
+extra memory on a 7B to 30B model with a full-precision cache, and a longer
+window costs proportionally more. Change it per endpoint:
+
+```toml
+[endpoints.local]
+num_ctx = 65536    # replaces the 32768 cap; the budget follows
+# num_ctx = 0      # send none: Ollama's own default applies and may truncate
+```
+
+`num_ctx = 0` restores the old behaviour (and its startup warning). Only
+Ollama requests carry `num_ctx`; no other endpoint kind ever sees it.
 
 ```toml
 [endpoints.go]
@@ -2740,6 +2751,7 @@ again.
 keep_last = 10        # the newest tool results always stay verbatim
 at_fill = 0.5         # do nothing until the turn's context reaches half the window
 batch = 5             # then mask only when at least 5 results can go at once
+cache_aware = false   # true: rarer, larger batches and first-line stubs (see below)
 ```
 
 - **In batches, never one result per call.** Each batch changes the prompt
@@ -2747,6 +2759,19 @@ batch = 5             # then mask only when at least 5 results can go at once
   valid only up to the first changed byte. On Qwen3.5/3.6 under llama.cpp the
   cache cannot be cut back at all, so every change is a re-prefill. Between
   batches the request only grows at its end, so the cached prefix holds.
+- **`cache_aware = true`** (opt-in) rewrites the prompt less often: it masks
+  only from at least 0.8 of the window and with at least 10 eligible results
+  (a higher `at_fill` or `batch` still wins), and each stub also keeps the
+  result's first line. A batch rewrites the prompt from its first masked result
+  to the end, so masking often costs fresh, uncached prompt tokens. Measured on
+  the CTXC apparatus (50 shell steps, 32k window, fake model; fresh tokens are
+  request bytes after the common prefix with the previous request, over 4):
+  plain masking 236k against 171k with no masking (+38%); `cache_aware`
+  161k (-6%) at `keep_last = 10`, with the peak request at 0.93 of the window
+  against 0.98 (plain masking: 0.72); at `keep_last = 5` 153k (-11%) and a
+  peak of 0.85. `keep_last` is the other lever: each batch rewrites about
+  `batch + keep_last` results. Masking pays on uncached and local endpoints;
+  on a cached hosted one, measure before turning it on.
 - **Never masked:** the system prompt, the tool definitions, any user message,
   anything gnomon wrote itself (a failed `[verify]`, a nudge, a context
   notice), the newest `keep_last` results, a `task` sub-turn's report, and a
@@ -2758,6 +2783,30 @@ batch = 5             # then mask only when at least 5 results can go at once
 - **Write it as a table.** `mask_observations = { keep_last = 10 }` is an
   inline table, which gnomon reads as a string, so the surface audit refuses
   it.
+
+**Dropped-step digest.** When a long turn outgrows the window, gnomon trims
+its oldest tool steps and says so. By default it keeps one line per dropped
+step (what ran, how it ended), so the facts those steps returned are gone: the
+CTXC apparatus plants five facts in the first 50 steps and none survives the
+trim. With `[context] digest = true` the line also carries the result's first
+line and up to three `key: value` or `key=value` lines, at most 160
+characters a step and 16,000 characters (about 4k tokens) in all. No model
+call is made.
+
+```toml
+# config.toml
+[context]
+digest = true
+```
+
+- **Written once.** The digest is added at the trim point and never rewritten.
+  A later trim leaves it where it is and appends its own message after it, so
+  the prompt before the new message stays byte-stable for the provider's
+  cache. When the total is spent, the oldest lines of the newest message give
+  way and it says how many.
+- **Never digested away:** the system prompt and the pinned task text.
+- **Recorded:** `counters.digest` (`trims`, `steps`, `chars`) on every turn
+  of a surface that declares it.
 
 **Environment bootstrap.** At the start of a session, gnomon runs one
 read-only compound command that you declare. It runs through the ordinary

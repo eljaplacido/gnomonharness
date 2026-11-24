@@ -395,7 +395,8 @@ describe('max_context_tokens = "auto" against a fake endpoint, one per shape', (
     const infoOnly = await fake({ show: { body: { model_info: { "qwen3.context_length": 40_960 } } } });
     config = loadConfig(surface(`${infoOnly.base}/api/chat`, { kind: "ollama", endpoint: AUTO }));
     route = await settleContextWindows(config, routeRole(config, "smol"), hooks(config).h);
-    expect(route.target).toMatchObject({ contextTokens: 40_960, contextSource: "listing:ollama" });
+    // S1: the trained length 40960 is sent capped at 32768, and the budget is what is sent.
+    expect(route.target).toMatchObject({ contextTokens: 32_768, contextSource: "listing:ollama", ollamaCtx: 32_768 });
   });
 
   it("sends the endpoint's key to the listing, and prints it nowhere", async () => {
@@ -882,7 +883,7 @@ describe("Ollama's request carries num_ctx (B2)", () => {
     });
   });
 
-  it("a window that is only the trained length is not sent (it may be 262k of KV); the warning names the fix", async () => {
+  it("a window that is only the trained length is sent capped at 32768, and gnomon budgets to it (S1)", async () => {
     const f = await fake({
       show: { body: { model_info: { "qwen3.context_length": 262_144 } } },
       chat: [ollamaReply],
@@ -890,15 +891,37 @@ describe("Ollama's request carries num_ctx (B2)", () => {
     const config = loadConfig(surface(`${f.base}/api/chat`, { kind: "ollama" }));
     const h = hooks(config);
     const route = await settleContextWindows(config, routeRole(config, "smol"), h.h);
-    expect(route.target).toMatchObject({ contextTokens: 262_144, contextSource: "listing:ollama" });
+    // Before: contextTokens 262144 budgeted, nothing sent, Ollama truncated at its own default.
+    expect(route.target).toMatchObject({ contextTokens: 32_768, contextSource: "listing:ollama", ollamaCtx: 32_768 });
+    expect(h.warned.join("\n")).not.toContain("OLLAMA_CONTEXT_LENGTH");
+    await runTask(config, "hi", { role: "smol", yes: true });
+    expect(f.chat[0]!.options).toMatchObject({ num_ctx: 32_768 });
+  });
+
+  it("a trained length under the cap is sent whole", async () => {
+    const f = await fake({ show: { body: { model_info: { "x.context_length": 8192 } } }, chat: [ollamaReply] });
+    const config = loadConfig(surface(`${f.base}/api/chat`, { kind: "ollama" }));
+    const route = await settleContextWindows(config, routeRole(config, "smol"), hooks(config).h);
+    expect(route.target).toMatchObject({ contextTokens: 8192, ollamaCtx: 8192 });
+  });
+
+  it("[endpoints.<n>] num_ctx replaces the cap, and the budget follows", async () => {
+    const f = await fake({ show: { body: { model_info: { "x.context_length": 262_144 } } }, chat: [ollamaReply] });
+    const config = loadConfig(surface(`${f.base}/api/chat`, { kind: "ollama", endpoint: "num_ctx = 49152" }));
+    const route = await settleContextWindows(config, routeRole(config, "smol"), hooks(config).h);
+    expect(route.target).toMatchObject({ contextTokens: 49_152, ollamaCtx: 49_152 });
+    await runTask(config, "hi", { role: "smol", yes: true });
+    expect(f.chat[0]!.options).toMatchObject({ num_ctx: 49_152 });
+  });
+
+  it("num_ctx = 0 opts out: nothing is sent, and the old warning comes back", async () => {
+    const f = await fake({ show: { body: { model_info: { "x.context_length": 262_144 } } }, chat: [ollamaReply] });
+    const config = loadConfig(surface(`${f.base}/api/chat`, { kind: "ollama", endpoint: "num_ctx = 0" }));
+    const h = hooks(config);
+    const route = await settleContextWindows(config, routeRole(config, "smol"), h.h);
     expect(route.target.ollamaCtx).toBeUndefined();
-    const text = h.warned.join("\n");
-    expect(text).toContain("OLLAMA_CONTEXT_LENGTH");
-    expect(text).toContain("num_ctx");
-    // Said once: the second settle is cached and silent.
-    const again = hooks(config);
-    await settleContextWindows(config, routeRole(config, "smol"), again.h);
-    expect(again.warned).toEqual([]);
+    expect(route.target.contextTokens).toBe(262_144);
+    expect(h.warned.join("\n")).toContain("num_ctx = 0");
     await runTask(config, "hi", { role: "smol", yes: true });
     expect((f.chat[0]!.options as Record<string, unknown>).num_ctx).toBeUndefined();
   });

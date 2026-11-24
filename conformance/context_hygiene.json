@@ -16,7 +16,8 @@
     "config.toml [context.mask_observations]": {
       "keep_last": "the newest tool results always kept verbatim; a whole number, 0 or more; default 10",
       "at_fill": "mask only once the turn's context reaches this fraction of the window; at least 0, below 1; default 0.5",
-      "batch": "and only when at least this many results can be masked at once; a whole number, 1 or more; default 5"
+      "batch": "and only when at least this many results can be masked at once; a whole number, 1 or more; default 5",
+      "cache_aware": "opt-in switch (true or false; absent is off): mask in larger, rarer batches (the trigger is at least 0.8 of the window and a batch needs at least 10 eligible results) and keep each result's first line in its stub, so the prompt prefix is rewritten less often"
     },
     "config.toml [context] bootstrap": "the id of a [bootstrap.<id>] block in policy.toml",
     "policy.toml [bootstrap.<id>]": {
@@ -32,6 +33,14 @@
     "batches": "masking batches this turn",
     "observations": "tool results replaced by a placeholder",
     "tokens_saved": "estimated context occupancy removed at the batches (~4 characters per token); not tokens billed"
+  },
+  "surface_context_digest": {
+    "config.toml [context] digest": "opt-in switch (true or false; absent is off): a mid-turn trim replaces the dropped steps with one deterministic digest line each (tool, subject, the result's first line and up to three key: value lines; at most 160 characters a line, 16000 characters in all), written once at the trim point and never rewritten"
+  },
+  "counters.digest": {
+    "trims": "trims this turn that wrote a digest message",
+    "steps": "dropped tool steps those digests cover",
+    "chars": "characters the digest messages added (~4 per token)"
   },
   "counters.bootstrap": {
     "required": {

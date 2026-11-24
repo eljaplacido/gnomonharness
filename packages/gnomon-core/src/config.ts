@@ -213,6 +213,14 @@ export interface EndpointConfig {
    */
   max_context_tokens?: number | typeof AUTO_WINDOW;
   /**
+   * Ollama only: the `options.num_ctx` a request carries when the window is
+   * the model's trained length. Default: the budgeted window capped at 32768
+   * (OLLAMA_NUM_CTX_DEFAULT), and gnomon budgets to what it sends. A number
+   * replaces that cap; `0` sends none (Ollama's own default applies, and it
+   * may silently truncate a longer prompt).
+   */
+  num_ctx?: number;
+  /**
    * Send each assistant message's reasoning back as `reasoning_content`.
    * Undeclared: on once a remote endpoint answers a tool call with reasoning;
    * off on a local lane (replayFieldsOf).
@@ -371,6 +379,13 @@ export interface ContextConfig {
    * docs/CONTRACTS.md §32.
    */
   env_snapshot?: boolean;
+  /**
+   * Dropped-step digest, opt-in: `true` replaces the steps a mid-turn trim drops
+   * with one compact, deterministic line each (tool, subject, the result's first
+   * line and its key: value lines) instead of the outcome-only ledger. No model
+   * call. See trimWorking and docs/GUIDE.md.
+   */
+  digest?: boolean;
 }
 
 /** config.toml [context.mask_observations] */
@@ -381,6 +396,12 @@ export interface MaskObservationsConfig {
   at_fill?: number;
   /** ...and only when at least this many results can be masked at once. */
   batch?: number;
+  /**
+   * Opt-in: mask in larger, rarer batches (at least 80% of the window, at
+   * least 10 results) and keep each result's first line in its stub, so the
+   * prompt prefix is rewritten less often. See maskObservations.
+   */
+  cache_aware?: boolean;
 }
 
 /**
@@ -1821,6 +1842,14 @@ export function defaultContextWindow(config: GnomonConfig): number {
   return pickInt(config.config.defaults?.max_context_tokens, 65536);
 }
 
+/** What an Ollama request carries when the window is only the model's trained length. */
+export const OLLAMA_NUM_CTX_DEFAULT = 32768;
+
+/** The endpoint's `num_ctx` key, for an Ollama target only. */
+function numCtxOf(v: unknown, kind: EndpointKind | undefined): { ollamaNumCtx?: number } {
+  return kind === "ollama" && typeof v === "number" && Number.isInteger(v) && v >= 0 ? { ollamaNumCtx: v } : {};
+}
+
 /**
  * The window fields of a route target, from its endpoint's declaration.
  *
@@ -1929,6 +1958,11 @@ export function resolveContext(
 // null as "do exactly what the build before this did".
 // ---------------------------------------------------------------------------
 
+/** `[context] digest`: on only when it is exactly `true`. */
+export function resolveDigest(config: GnomonConfig): boolean {
+  return (config.config.context as { digest?: unknown } | undefined)?.digest === true;
+}
+
 /** Observation masking, fully resolved. */
 export interface ResolvedMasking {
   /** The newest tool results always kept verbatim. */
@@ -1937,6 +1971,8 @@ export interface ResolvedMasking {
   at_fill: number;
   /** The fewest results a batch masks; fewer eligible means no batch yet. */
   batch: number;
+  /** Larger, rarer batches and first-line stubs (see maskObservations). */
+  cache_aware?: boolean;
 }
 
 /**
@@ -1959,7 +1995,8 @@ export const MASK_DEFAULTS: Readonly<ResolvedMasking> = Object.freeze({
 });
 
 /** The keys `[context.mask_observations]` reads. */
-export const MASK_KEYS = Object.keys(MASK_DEFAULTS);
+// cache_aware is a switch, not a number: absent means off, so it is not in the defaults.
+export const MASK_KEYS = [...Object.keys(MASK_DEFAULTS), "cache_aware"];
 
 /**
  * Read `[context.mask_observations]`. Null when it is absent -- or not a table,
@@ -1979,6 +2016,7 @@ export function resolveMasking(config: GnomonConfig): ResolvedMasking | null {
     keep_last: int(r.keep_last, 0) ?? MASK_DEFAULTS.keep_last,
     at_fill: fill ?? MASK_DEFAULTS.at_fill,
     batch: int(r.batch, 1) ?? MASK_DEFAULTS.batch,
+    ...(r.cache_aware === true ? { cache_aware: true } : {}),
   };
 }
 
@@ -2248,6 +2286,11 @@ export interface RouteTarget {
    * (settleContextWindows). Absent otherwise, and never set on another kind.
    */
   ollamaCtx?: number;
+  /**
+   * Ollama only: the endpoint's own `num_ctx` key. A number caps (or, with a
+   * window that is only the trained length, sets) what is sent; `0` opts out.
+   */
+  ollamaNumCtx?: number;
   /** Replay reasoning_content on assistant messages. See resolveReplayReasoning. */
   replayReasoning?: boolean;
   /**
@@ -2513,6 +2556,7 @@ const ENDPOINT_KEYS = new Set([
   "stream",
   "max_tokens",
   "max_context_tokens",
+  "num_ctx",
   "replay_reasoning",
   "steer_role",
   "reasoning_effort",
@@ -2985,6 +3029,7 @@ const KEY_OWNER: Record<string, string> = {
   bootstrap: "context",
   token_estimate: "context",
   env_snapshot: "context",
+  digest: "context",
   todo_gate: "turn",
   allow_package_index: "sandbox",
 };
@@ -3967,6 +4012,14 @@ problems.push(...auditSandboxProfile(config));
           fatal: true,
         });
       }
+      if (m.cache_aware !== undefined && typeof m.cache_aware !== "boolean") {
+        problems.push({
+          where: `${at} cache_aware`,
+          problem: `cache_aware must be true or false; got ${JSON.stringify(m.cache_aware)}, so it would not be on.`,
+          fix: `cache_aware = true`,
+          fatal: true,
+        });
+      }
       if (
         m.at_fill !== undefined &&
         !(typeof m.at_fill === "number" && Number.isFinite(m.at_fill) && m.at_fill >= 0 && m.at_fill < 1)
@@ -3979,6 +4032,15 @@ problems.push(...auditSandboxProfile(config));
         });
       }
     }
+  }
+
+  if (ctx.digest !== undefined && typeof ctx.digest !== "boolean") {
+    problems.push({
+      where: `${where} digest`,
+      problem: `digest must be true or false; got ${JSON.stringify(ctx.digest)}, so no digest is written.`,
+      fix: `digest = true`,
+      fatal: true,
+    });
   }
 
   const blocks = config.policy?.bootstrap as unknown;
@@ -4302,6 +4364,14 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
       });
     }
 
+    if (block.num_ctx !== undefined && !(typeof block.num_ctx === "number" && Number.isInteger(block.num_ctx) && block.num_ctx >= 0)) {
+      problems.push({
+        where,
+        problem: `num_ctx = ${JSON.stringify(block.num_ctx)} is not a whole number of tokens, so it is ignored.`,
+        fix: "num_ctx = 32768 caps what an Ollama request carries; 0 sends none.",
+        fatal: false,
+      });
+    }
     for (const field of ["max_tokens", "max_context_tokens"]) {
       const v = block[field];
       if (field === "max_context_tokens" && v === AUTO_WINDOW) continue;
@@ -5379,6 +5449,7 @@ export function routeRole(
     ...firstTokenOf(resilience),
     maxTokens: resolveMaxTokens(config, roleDef, endpoint),
     ...contextWindowOf(config, endpoint.max_context_tokens, { url, kind, model }),
+    ...numCtxOf(endpoint.num_ctx, kind),
     ...replayFieldsOf(endpoint),
     ...replayDeclinedOf(endpoint),
     ...steerFieldsOf(endpoint),
@@ -5415,6 +5486,7 @@ export function routeRole(
       ...firstTokenOf(resilience),
       maxTokens: resolveMaxTokens(config, roleDef, fbEndpoint),
       ...contextWindowOf(config, fbEndpoint?.max_context_tokens, { url: fbUrl, kind: fbKind, model: fb.model }),
+      ...numCtxOf(fbEndpoint?.num_ctx, fbKind),
       // By its own URL: the one the fallback is actually sent to.
       ...replayFieldsOf({ ...(fbEndpoint ?? {}), url: fbUrl }, "openai"),
       ...replayDeclinedOf(fbEndpoint),
@@ -5453,6 +5525,7 @@ export function routeRole(
       ...firstTokenOf(resilience),
       maxTokens: resolveMaxTokens(config, roleDef, escEndpoint),
       ...contextWindowOf(config, escEndpoint?.max_context_tokens, { url: escUrl, kind: escKind, model: esc.model }),
+      ...numCtxOf(escEndpoint?.num_ctx, escKind),
       ...replayFieldsOf({ ...(escEndpoint ?? {}), url: escUrl }, "openai"),
       ...replayDeclinedOf(escEndpoint),
       ...steerFieldsOf(escEndpoint),
