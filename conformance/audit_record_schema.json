@@ -37,7 +37,9 @@
         "agent": {"type": ["string"], "class": "metadata"},
         "via": {"type": ["string"], "class": "metadata"},
         "client": {"type": ["object", "null"], "class": "metadata"},
-        "deadline": {"type": ["object"], "class": "metadata"}
+        "deadline": {"type": ["object"], "class": "metadata"},
+        "run_id": {"type": ["string"], "class": "identifier", "note": "gnomon task --attempts: the run this attempt belongs to"},
+        "attempt": {"type": ["integer"], "class": "metadata", "note": "gnomon task --attempts: this attempt's 1-based number"}
       }
     },
     "session_resume": {
@@ -629,6 +631,26 @@
         "note": {"type": ["string"], "class": "content", "note": "the operator's free-text note on a rejection"},
         "policy_rule": {"type": ["string"], "class": "metadata", "note": "the declared rule that decided, improve.auto_accept; only when decided_by is policy:<rule>"},
         "policy_evidence": {"type": ["object"], "class": "metadata", "note": "the numbers a policy acceptance rested on: kind, probe_pairs, pass_delta, token_delta, the eval report and its sha256, the trial spec sha256, the thresholds in force"}
+      }
+    },
+    "attempt_event": {
+      "required": {
+        "run_id": {"type": ["string"], "class": "identifier", "note": "the attempts run's id (gnomon task --attempts)"},
+        "event": {"type": ["string"], "class": "metadata", "note": "spawn, check, cancel, budget_stop, select, apply or refuse"}
+      },
+      "optional": {
+        "attempt": {"type": ["integer"], "class": "metadata", "note": "1-based attempt number; absent on a run-level event"},
+        "worktree": {"type": ["string"], "class": "identifier"},
+        "seed": {"type": ["integer"], "class": "metadata"},
+        "role": {"type": ["string"], "class": "metadata"},
+        "surface_hash": {"type": ["string"], "class": "identifier", "note": "the one surface hash every attempt runs under"},
+        "check_exit": {"type": ["integer", "null"], "class": "metadata", "note": "the external check's exit code; null when it could not run"},
+        "passed": {"type": ["boolean"], "class": "metadata"},
+        "tokens": {"type": ["integer"], "class": "metadata"},
+        "patch_sha256": {"type": ["string"], "class": "identifier"},
+        "verified": {"type": ["boolean"], "class": "metadata", "note": "select and apply: true when the chosen attempt passed the check"},
+        "applied": {"type": ["boolean"], "class": "metadata"},
+        "reason": {"type": ["string"], "class": "metadata", "note": "harness-written: the selector's rule, the budget that was reached, or why a run was refused"}
       }
     },
     "session_end": {

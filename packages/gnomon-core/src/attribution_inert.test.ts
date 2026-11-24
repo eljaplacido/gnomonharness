@@ -49,6 +49,6 @@ describe("an ordinary session is unchanged by failure attribution", () => {
     expect(trail.some((r) => "attribution" in r || r.kind === "attribution")).toBe(false);
     for (const r of trail) expect(AUDIT_KINDS as readonly string[]).toContain(r.kind);
     // The published enumeration is the same length it was in v0.6.6: attribution added no audit kind.
-    expect(AUDIT_KINDS.length).toBe(36);
+    expect(AUDIT_KINDS.length).toBe(37);
   });
 });

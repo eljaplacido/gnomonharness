@@ -117,6 +117,7 @@ import {
   onKillSignal,
   type TaskInterrupt,
 } from "gnomon-core";
+import { runAttempts, formatAttemptsReport, type AttemptsReport } from "./attempts_run.js";
 import {
   manifest as surfaceManifest,
   surfaceHash,
@@ -264,6 +265,9 @@ export function parseArgs(args: string[]): CliArgs {
       // Bare: the declared [verify] check is in the exit (1 failed, 4 unrunnable)
       // and in the record's verify_* detail. Without it #211 stands: exit 0.
       result.flags["require-verify"] = "true";
+    } else if (arg === "--apply") {
+      // Bare: `task --attempts k --apply` applies a verified winner.
+      result.flags["apply"] = "true";
     } else if (arg === "--require-trust") {
       // Bare: an untrusted surface that grants more than the defaults stops
       // the run (exit 3) instead of running clamped. For CI.
@@ -1872,6 +1876,46 @@ async function cmdTask(args: CliArgs): Promise<void> {
     deadline = { at: parsed.at, source: args.flags["deadline"] !== undefined ? "flag" : "env" };
   }
 
+  // `--attempts <k>`: k speculative attempts in k clones, the first to pass
+  // the external check wins (attempts_run.ts, docs/CONTRACTS.md §60). Absent
+  // or 1, none of this runs and the task is the task it always was.
+  const attemptsRaw = args.flags["attempts"];
+  if (attemptsRaw !== undefined) {
+    const k = /^\d+$/.test(attemptsRaw) ? Number(attemptsRaw) : 0;
+    if (k < 1) {
+      console.error(`gnomon task: --attempts needs a whole number of 1 or more, got "${attemptsRaw}"`);
+      process.exit(10);
+    }
+    if (k > 1) {
+      let result: AttemptsReport;
+      try {
+        const base = loadConfig(args.dir, args.flags["profile"]);
+        const settled = settleTrustHeadless(base, trustOptions(args));
+        result = await runAttempts({
+          config: settled.config,
+          text,
+          k,
+          role: args.role,
+          yes: args.yes,
+          apply: args.flags["apply"] === "true",
+          profile: args.flags["profile"],
+          deadline: args.flags["deadline"],
+          requireVerify: args.flags["require-verify"] === "true",
+          ...(settled.outcome && settled.outcome.decision !== "clamped" ? { trustHash: settled.outcome.surface_hash } : {}),
+          log: args.json ? undefined : (line) => console.error(line),
+        });
+      } catch (err) {
+        if (err instanceof TrustRequiredError) exitTrustRequired(err, Boolean(args.json));
+        console.error(`gnomon task --attempts could not start: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(10);
+      }
+      if (args.json) console.log(JSON.stringify(result, null, 2));
+      else if (result.attempts.length === 0) console.error(`gnomon task --attempts: ${result.reason}`);
+      else console.log(formatAttemptsReport(result));
+      process.exit(result.exit);
+    }
+  }
+
   // A task has nobody to ask. An untrusted surface that grants more than the
   // defaults runs clamped to them, with one line on stderr -- never blocked,
   // never silently widened.
@@ -3329,7 +3373,7 @@ Commands:
     not, 10 no answer. Never accepts anything.
 
   task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--dir <path>]
-       [--deadline <seconds|ISO time>]
+       [--deadline <seconds|ISO time>] [--attempts <k> [--apply]]
   task --task-file <path|-> [...the same options]
     Run one task without a terminal and print the result. --json emits a
     record whose only run-to-run differences are under "volatile".
@@ -3343,6 +3387,15 @@ Commands:
     sealed trail (exit 2).
     Gated tool calls are REFUSED unless --yes: a non-interactive run has
     nobody to ask. Exit code: 0 result, 2 refusal, 10 apparatus_failure.
+    --attempts <k> (k > 1) runs k attempts in k clones of HEAD under one
+    surface and keeps the first whose external check ([verify] command, else
+    [attempts] check) passes, cancelling the rest; none passing offers the
+    best by outside evidence, flagged unverified. Refused with no check
+    declared, above [attempts] max, or with uncommitted changes. The change
+    is a patch in a run directory under the system temp dir; --apply applies
+    a VERIFIED winner (--yes only approves the attempts' gated calls, as for
+    a plain task), never over files you changed meanwhile. Exit 0
+    verified, 1 unverified, 10 nothing to offer. k = 1 is a plain task.
     --require-verify (or [verify] exit_on_fail = true) puts the declared
     [verify] check in the exit where the bucket says 0: 1 for a check that
     failed (or regressed, or passed_unverified), 4 for one that could not
