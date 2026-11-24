@@ -146,6 +146,7 @@ const STATIC: Record<string, { file: string; type: string }> = {
   "/lens.js": { file: "lens.js", type: "text/javascript; charset=utf-8" },
   "/inbox.js": { file: "inbox.js", type: "text/javascript; charset=utf-8" },
   "/chat.js": { file: "chat.js", type: "text/javascript; charset=utf-8" },
+  "/broker.js": { file: "broker.js", type: "text/javascript; charset=utf-8" },
   "/palette.js": { file: "palette.js", type: "text/javascript; charset=utf-8" },
   "/icon.svg": { file: "icon.svg", type: "image/svg+xml" },
   "/fonts/cinzel-wordmark.woff2": { file: "fonts/cinzel-wordmark.woff2", type: "font/woff2" },
