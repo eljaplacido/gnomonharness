@@ -26,6 +26,15 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Claude behind a LiteLLM proxy (`replay_reasoning = true`): the streamed
+  `thinking_blocks` (with signatures) are kept verbatim and replayed on the
+  assistant message to the same url and model, and tool-call-only turns that
+  replay them carry `content: null` instead of `""`, which LiteLLM rewrote into
+  a fabricated "[System: Empty message content sanitised ...]" block. Counted in
+  the pre-call estimate. Requests with no `thinking_blocks` are unchanged.
+
 - **`gnomon check --format antigravity` and `--format hermes`.** Check 5 now reads Nous Hermes Agent sessions (`hermes sessions export`, and the `sessions/<id>.jsonl` rescue file; a call blocked by a hook has `effect_disposition: "none"` and is listed as not run) and Google Antigravity sessions, from a JSONL of its documented hook payloads (`toolCall.name` `run_command`, `args.CommandLine`). Antigravity's own `transcript.jsonl` has no documented record shape, so it is refused with that reason rather than guessed at. Synthetic fixtures in `conformance/transcripts/`; a malformed file fails closed (check 5 could-not-run, verdict 10). Other formats are unchanged. docs/GOVERNING-OTHER-HARNESSES.md also records a locally prepared, not upstreamed, Harness² `GnomonSubstrate`.
 - **Boxed terminal: compact launch, `/status`, one-line approvals, opt-in tinted panels.** The boxed look folds the launch screen into one status line (warnings and refusals still print every time; routine notices print once per machine and project) and the new `/status` command prints everything folded. A gated call's approval is one line per choice. New `[ui] panels = "plain" | "tinted"` (default plain, byte-identical): a background tint on each turn card and an accent header bar, truecolor only, sized to the live terminal width. Classic output, `--json` and pipes are unchanged.
 - **Dashboard chat names the records.** The chat brief carries record ids (`{session:<trail>}`, `{rule:<id>}`); the answer's `records` lists the ids it cites that the brief really holds (an invented id is dropped) and the page shows them under the panel citations.

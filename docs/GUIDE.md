@@ -851,6 +851,18 @@ escalation target is sent the plain text. `replay_reasoning = false` sends none
 of them, and a server that refuses one by name is resent the call without it,
 once, as for `reasoning_content`.
 
+**Claude behind LiteLLM.** A LiteLLM proxy in front of Claude streams
+`thinking_blocks` (`thinking` blocks with their `signature`, or
+`redacted_thinking` with `data`). With `replay_reasoning = true` gnomon keeps
+them verbatim, in order (signature pieces folded into their block, nothing
+else edited), and sends them back as `thinking_blocks` on that assistant
+message, to the same endpoint and model only, in place of the plain
+`reasoning_content`. Anthropic requires the unmodified blocks back when
+thinking is used with tools. On such a turn a tool-call-only assistant message
+is sent with `content: null`, not `""`, which LiteLLM would rewrite into a
+`[System: Empty message content sanitised...]` text block inside the model's
+own turn. Requests without `thinking_blocks` are byte-identical to before.
+
 **Reasoning formats.** gnomon reads a model's reasoning in every shape the
 2026 families send it (survey read 2026-11-21), shows it in the live trace
 (`✻`), and keeps it out of the answer, the gates and the history replayed on
