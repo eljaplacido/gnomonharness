@@ -4,8 +4,8 @@
  * policy that may accept, and the budget. The model is a script behind
  * `globalThis.fetch`; every probe cell is gnomon's own loop in its own clone.
  */
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -75,9 +75,63 @@ interface ProjectOpts {
 }
 
 /** A committed project: a surface, an optional trial spec, and a model that only solves the task when MARKER is in its system prompt. */
+// A committed fixture is built once per distinct option set and then COPIED
+// (.git included) for each test. `git init` + `add` + `commit` is three process
+// spawns per test, and a hosted Windows runner spends about a second on each;
+// a directory copy is a few milliseconds. Every test still gets its own root.
+const templates = new Map<string, string>();
+afterAll(() => {
+  for (const t of templates.values()) rmSync(t, { recursive: true, force: true });
+});
+
 function project(o: ProjectOpts = {}): GnomonConfig {
+  const key = JSON.stringify(o);
+  let template = templates.get(key);
+  if (template === undefined) {
+    template = buildProject(o);
+    templates.set(key, template);
+  }
   root = mkdtempSync(join(tmpdir(), "gnomon-improve-test-"));
   roots.push(root);
+  cpSync(template, root, { recursive: true });
+  return loadConfig(root);
+}
+
+// The same probed run is the setup of many tests (a project, a refusal trail, a
+// drafted skill, k=1 probe cells). Run it once per distinct input, keep the
+// finished directory, and copy it for each test: every test still gets its own
+// root and its own .git, and asserts on its own copy, but the cells (each a
+// clone plus a spawned harness) are paid for once.
+const probedRuns = new Map<string, { dir: string; value: unknown }>();
+afterAll(() => {
+  for (const t of probedRuns.values()) rmSync(t.dir, { recursive: true, force: true });
+});
+async function memoRun<T>(key: string, make: () => Promise<T>): Promise<T> {
+  const hit = probedRuns.get(key);
+  if (hit) {
+    root = mkdtempSync(join(tmpdir(), "gnomon-improve-test-"));
+    roots.push(root);
+    cpSync(hit.dir, root, { recursive: true });
+    return hit.value as T;
+  }
+  const value = await make();
+  const dir = mkdtempSync(join(tmpdir(), "gnomon-improve-run-"));
+  cpSync(root, dir, { recursive: true });
+  probedRuns.set(key, { dir, value });
+  return value;
+}
+/** project(o) + refusal trails + one k=1 probed run with the scripted model; memoised. */
+async function probedRun(o: ProjectOpts, patterns: string[], body?: string) {
+  const r = await memoRun(JSON.stringify([o, patterns, body]), async () => {
+    const c = project(o);
+    refusalTrails(patterns);
+    return withModel(() => runImprove(c, { run: true, k: 1, model: drafter({ body }), runCell }));
+  });
+  return { c: loadConfig(root), r };
+}
+
+function buildProject(o: ProjectOpts): string {
+  root = mkdtempSync(join(tmpdir(), "gnomon-improve-tpl-"));
   put(".gnomon/config.toml", `[defaults]\napproval = "on_write"\n\n[endpoints.local]\nurl = "${o.url ?? "http://127.0.0.1:9/api/chat"}"\nkind = "ollama"\n\n[resilience]\nattempts = 1\ntransport_grace_ms = 0\n`);
   put(".gnomon/roles.toml", `[roles.implement]\nmodel = "dull"\nendpoint = "local"\ntools = ['read', 'write']\n${o.extraRole ?? ""}`);
   put(".gnomon/tools.toml", `[[tools]]\nname = "read"\nenabled = true\n\n[[tools]]\nname = "write"\nenabled = true\n`);
@@ -91,9 +145,13 @@ function project(o: ProjectOpts = {}): GnomonConfig {
   put("README.md", "fixture\n");
   put(".gitattributes", ".gnomon/** text eol=lf\n");
   git("init", "-q");
+  // No background git: an auto gc/maintenance detached after a commit can pack and delete
+  // loose objects while cpSync copies the template (ENOENT .git/objects on macOS CI).
+  git("config", "gc.auto", "0");
+  git("config", "maintenance.auto", "false");
   git("add", "-A");
   git("commit", "-q", "-m", "fixture");
-  return loadConfig(root);
+  return root;
 }
 
 let seq = 0;
@@ -397,9 +455,7 @@ describe("a run: propose, probe, compose", () => {
   });
 
   it("probes the candidate against the base on the trial spec and records the contrasts", async () => {
-    const c = project();
-    refusalTrails(["check pass"]);
-    const r = await withModel(() => runImprove(c, { run: true, k: 1, model: drafter(), runCell }));
+    const { r } = await probedRun({}, ["check pass"]);
     const pr = r.proposals[0]!.probe;
     expect(pr.status).toBe("probed");
     expect(pr).toMatchObject({ spec: "default", k: 1, eval_status: "complete", pairs: { planned: 2, valid: 2 } });
@@ -450,9 +506,7 @@ describe("a run: propose, probe, compose", () => {
   });
 
   it("composes candidates that each improved into one probed proposal", async () => {
-    const c = project();
-    refusalTrails(["check pass", "Make"]);
-    const r = await withModel(() => runImprove(c, { run: true, k: 1, model: drafter(), runCell }));
+    const { c, r } = await probedRun({ tasks: 1 }, ["check pass", "Make"]);
     expect(r.proposals).toHaveLength(3);
     const composed = r.proposals.find((p) => p.candidate === "composed")!;
     const parts = r.proposals.filter((p) => p.candidate === "skill");
@@ -569,11 +623,9 @@ describe("the declared policy", () => {
   const POLICY = `[improve]\nauto_accept = ["skill"]\nmin_probe_runs = 2\nmin_pass_delta = 0.5\nmax_token_increase = 10\n`;
 
   /** A run under a policy committed with the surface; returns the proposals and the config after. */
-  async function declared(policy = POLICY, body?: string) {
-    const c = project({ policy });
-    refusalTrails(["check pass"]);
-    const r = await withModel(() => runImprove(c, { run: true, k: 1, model: drafter({ body }), runCell }));
-    return { c: loadConfig(root), r };
+  async function declared(policy = POLICY, body?: string, oneTask = false) {
+    // oneTask: for refusals that do not depend on the number of pairs, one task and min_probe_runs 1 halves the cells.
+    return oneTask ? probedRun({ policy: policy.replace("min_probe_runs = 2", "min_probe_runs = 1"), tasks: 1 }, ["check pass"], body) : probedRun({ policy }, ["check pass"], body);
   }
 
   it("accepts a lint-clean, probed proposal that meets the thresholds, as policy:improve.auto_accept, recording the rule and the evidence", async () => {
@@ -595,9 +647,8 @@ describe("the declared policy", () => {
   });
 
   it("accepts a composed proposal and leaves the parts it supersedes pending, refused as stale", async () => {
-    const c0 = project({ policy: POLICY });
-    refusalTrails(["check pass", "Make"]);
-    const r = await withModel(() => runImprove(c0, { run: true, k: 1, model: drafter(), runCell }));
+    // One task: composition and the policy's acceptance do not depend on how many pairs the probe had, so this does not pay for two (min_probe_runs 1 to match).
+    const { r } = await probedRun({ policy: POLICY.replace("min_probe_runs = 2", "min_probe_runs = 1"), tasks: 1 }, ["check pass", "Make"]);
     const composed = r.proposals.find((p) => p.candidate === "composed")!;
     expect(composed.auto, JSON.stringify(composed)).toEqual({ accepted: true });
     const parts = r.proposals.filter((p) => p.candidate === "skill");
@@ -607,16 +658,14 @@ describe("the declared policy", () => {
   });
 
   it("does nothing when the surface declares no [improve] auto_accept", async () => {
-    const c = project();
-    refusalTrails(["check pass"]);
-    const r = await withModel(() => runImprove(c, { run: true, k: 1, model: drafter(), runCell }));
+    const { c, r } = await probedRun({}, ["check pass"]);
     expect(r.proposals[0]!.auto).toBeUndefined();
     expect(existsSync(join(root, ".gnomon/skills/check-boundary.md"))).toBe(false);
     expect(readProposal(c, r.proposals[0]!.id)!.status).toBe("pending");
   });
 
   it("refuses a proposal with a lint finding, and still writes it for a person", async () => {
-    const { c, r } = await declared(POLICY, `${MARKER} on 2026-11-20 because the check reads it.`);
+    const { c, r } = await declared(POLICY, `${MARKER} on 2026-11-20 because the check reads it.`, true);
     const p = r.proposals[0]!;
     expect(p.lint.clean).toBe(false);
     expect(p.auto).toMatchObject({ accepted: false, reason: expect.stringMatching(/lint/) });
@@ -626,12 +675,12 @@ describe("the declared policy", () => {
 
   it("refuses a candidate that did not improve enough (min_pass_delta) and one that costs too many tokens", async () => {
     // The drafted skill does nothing for the task: the pass rate does not move.
-    const { c, r } = await declared(POLICY, "Prefer short answers because they are cheaper to read.");
+    const { c, r } = await declared(POLICY, "Prefer short answers because they are cheaper to read.", true);
     expect(r.proposals[0]!.probe).toMatchObject({ status: "probed", pass_delta: 0 });
     expect(r.proposals[0]!.auto).toMatchObject({ accepted: false, reason: expect.stringMatching(/min_pass_delta/) });
     expect(readProposal(c, r.proposals[0]!.id)!.status).toBe("pending");
     // It helps, but the declared ceiling on extra output tokens is 0 (the default): refused.
-    const tight = await declared(`[improve]\nauto_accept = ["skill"]\nmin_probe_runs = 2\n`);
+    const tight = await declared(`[improve]\nauto_accept = ["skill"]\nmin_probe_runs = 2\n`, undefined, true);
     expect(tight.r.proposals[0]!.probe.pass_delta).toBe(1);
     expect(tight.r.proposals[0]!.auto).toMatchObject({ accepted: false, reason: expect.stringMatching(/output tokens rose/) });
   });
@@ -645,9 +694,7 @@ describe("the declared policy", () => {
   });
 
   it("is checked by acceptProposal itself: a caller naming the policy gets the same refusals", async () => {
-    const c0 = project();
-    refusalTrails(["check pass"]);
-    const r = await withModel(() => runImprove(c0, { run: true, k: 1, model: drafter(), runCell }));
+    const { r } = await probedRun({}, ["check pass"]);
     const id = r.proposals[0]!.id;
     const c = loadConfig(root);
     const asPolicy = { decidedBy: `policy:${AUTO_ACCEPT_RULE}` } as const;
@@ -721,7 +768,7 @@ describe("the declared policy", () => {
 
   it("a harness edit is accepted by policy only when harness is listed, and only to system.md", async () => {
     const mk = async (list: string) => {
-      const c = project({ policy: `[improve]\nauto_accept = [${list}]\nmin_probe_runs = 2\nmax_token_increase = 100\n[proposals]\nharness_paths = ["policy.toml"]\n` });
+      const c = project({ policy: `[improve]\nauto_accept = [${list}]\nmin_probe_runs = 1\nmax_token_increase = 100\n[proposals]\nharness_paths = ["policy.toml"]\n`, tasks: 1 });
       for (let s = 1; s <= 3; s++) trail(`s${s}`, [turn("stall")]);
       // A note that carries the marker, so the probe's candidate arm solves the tasks.
       const model: DraftModel = async () => ({ ok: true, text: JSON.stringify({ note: `${MARKER} because the check reads it.` }) });
@@ -933,9 +980,7 @@ describe("review fixes: what policy acceptance rests on", () => {
   const IMPROVE = { auto_accept: ["skill"], min_probe_runs: 2, max_token_increase: 10 };
   const declare = (extra: Record<string, unknown> = {}): GnomonConfig => ({ ...loadConfig(root), policy: { ...(loadConfig(root).policy as object), improve: { ...IMPROVE, ...extra } } }) as GnomonConfig;
   async function probed(_policy = "", body?: string) {
-    const c = project();
-    refusalTrails(["check pass"]);
-    const r = await withModel(() => runImprove(c, { run: true, k: 1, model: drafter({ body }), runCell }));
+    const { r } = await probedRun({}, ["check pass"], body);
     return { cfg: declare(), p: readProposal(loadConfig(root), r.proposals[0]!.id)!, r };
   }
   const reasons = (cfg: GnomonConfig, p: Proposal): string => {

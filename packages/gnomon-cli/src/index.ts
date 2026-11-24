@@ -2667,7 +2667,16 @@ async function cmdSecurity(args: CliArgs): Promise<number> {
       if (args.flags.sandbox === "true") {
         const { runSandboxProbes, formatSandboxProbes } = await import("./sandbox_probes.js");
         const image = args.flags.image && args.flags.image !== "true" ? args.flags.image : undefined;
-        const probes = await runSandboxProbes({ image });
+        // [sandbox] loopback = "deny" (policy.toml, or --loopback deny): the loopback probe is then claimed for exec = os.
+        let loopback: "deny" | undefined = args.flags.loopback === "deny" ? "deny" : undefined;
+        if (!loopback) {
+          try {
+            loopback = loadConfig(dir).policy?.sandbox?.loopback === "deny" ? "deny" : undefined;
+          } catch {
+            /* an unreadable surface is reported by the other checks */
+          }
+        }
+        const probes = await runSandboxProbes({ image, ...(loopback ? { loopback } : {}) });
         const exit = report.exit !== 0 && report.exit !== 10 ? report.exit : probes.exit !== 0 ? probes.exit : report.exit;
         if (args.json) console.log(JSON.stringify({ ...report, exit, sandbox_probes: probes }, null, 2));
         else {
@@ -3463,7 +3472,7 @@ Commands:
     surface problem); advice names a setting that would contain more. Runs
     no model and changes nothing. Exit 0 no risk, 2 a risk, 10 could not run.
 
-  security test [--host claude-code|opencode|cursor|codex|qwen-code|copilot|all] [--role <r>] [--sandbox [--image <ref>]] [--json] [--dir <path>]
+  security test [--host claude-code|opencode|cursor|codex|qwen-code|copilot|all] [--role <r>] [--sandbox [--image <ref>] [--loopback deny]] [--json] [--dir <path>]
     A model-free attack corpus run through the real guard against a scratch
     copy of this surface (bait .env, CI workflow, a precious directory, an
     isolated HOME; all removed afterwards): destructive commands,

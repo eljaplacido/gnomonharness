@@ -19,6 +19,8 @@ import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync, realpa
 import { readRegular } from "./root_fs.js";
 import { createHash } from "node:crypto";
 import { gnomonDataDir } from "./credentials.js";
+import { sayOnce, noticeKey, isAttention } from "./startup_notes.js";
+import { plain as stripAnsi } from "./width.js";
 import { fileURLToPath } from "node:url";
 import {
   GnomonConfig,
@@ -87,7 +89,7 @@ import { Progress, renderExchange, splitThinking, paint, THEMES, glyphsOf, termi
 } from "./render.js";
 import {
   boxedActive, boxCtx, startupCard, statusRule, promptGlyph, turnHeader, turnFooter,
-  railLine, swatch, type BoxCtx,
+  railLine, swatch, panelHeader, tintRows, panelsTinted, type BoxCtx,
 } from "./boxed.js";
 export { isLocalEndpoint } from "./config.js";
 import {
@@ -354,6 +356,8 @@ export type { Todo, RunNote };
 
 export interface PromptState {
   config: GnomonConfig;
+  /** What the boxed terminal folded out of the launch screen; `/status` prints it. */
+  startup?: StartupFold;
   /**
    * Compaction since the last turn record (`summary_style = "structured"`).
    * The next turn stamps it on `counters.compaction` and clears it.
@@ -517,6 +521,85 @@ function sessionIdOf(state: PromptState): string {
 }
 
 /** The session's UI settings, resolving from the surface on first use. */
+/** The launch screen of the boxed terminal, folded into one line. */
+export interface StartupFold {
+  /** Everything the launch printed that is detail only. */
+  details: string[];
+  /** The notices that matter, every time they apply, whether or not they were shown at launch. */
+  notes: string[];
+  /** The lines printed under the status line now: attention lines, and a notice the first time on this machine. */
+  shown: string[];
+}
+
+/** Run `fn` with console.log collected into `sink`; with no sink, run it as it is. */
+async function captureLog(sink: string[] | null, fn: () => Promise<void> | void): Promise<void> {
+  if (!sink) {
+    await fn();
+    return;
+  }
+  const orig = console.log;
+  console.log = (...a: unknown[]) => {
+    sink.push(a.map((x) => String(x)).join(" "));
+  };
+  try {
+    await fn();
+  } finally {
+    console.log = orig;
+  }
+}
+
+/** Sort the captured launch lines: shown now, kept for /status, or both. */
+export function foldStartup(
+  _state: PromptState,
+  sink: readonly string[],
+  project: string,
+  once: (project: string, key: string) => boolean = sayOnce
+): StartupFold {
+  const fold: StartupFold = { details: [], notes: [], shown: [] };
+  for (const line of sink) {
+    const p = stripAnsi(line);
+    if (p.trim() === "") continue;
+    const key = noticeKey(p);
+    if (key) {
+      fold.notes.push(line);
+      if (once(project, key)) fold.shown.push(line);
+    } else if (isAttention(p)) {
+      fold.details.push(line);
+      fold.shown.push(line);
+    } else {
+      fold.details.push(line);
+    }
+  }
+  return fold;
+}
+
+/** The facts the status line and /status state, read from the live config. */
+export function startupFacts(state: PromptState): Array<[string, string]> {
+  const config = state.config;
+  const names = buildToolSet(config, state.currentRole, state.mcp?.tools() ?? []).schemas.length;
+  const facts: Array<[string, string]> = [[state.currentRole, `${names} tools`]];
+  if (config.profile?.name) facts.push(["profile", config.profile.name]);
+  facts.push(["audit", resolveAudit(config).enabled ? "on" : "off"]);
+  const level = resolveSandboxLevel(config);
+  const declared = (config.policy?.sandbox as { network?: boolean } | undefined)?.network;
+  facts.push(["sandbox", level]);
+  facts.push(["network", (state.network ?? declared) === true ? "on" : "off"]);
+  const v = resolveVerify(config);
+  facts.push(["verify", v ? v.command : "none"]);
+  return facts;
+}
+
+/** One line: role and tools, profile, audit, sandbox, network, verify. */
+export function startupSummary(state: PromptState): string {
+  const f = startupFacts(state);
+  const [first, ...rest] = f;
+  return (
+    `  ${first[0]} · ${first[1]} · ` +
+    rest.map(([k, v]) => `${k} ${v}`).join(" · ") +
+    "  (/status for details)"
+  );
+}
+
 function uiOf(state: PromptState): ResolvedUi {
   if (!state.ui) state.ui = resolveUi(state.config);
   return state.ui;
@@ -3667,6 +3750,11 @@ function branchOf(root: string): string | undefined {
 }
 
 /** The boxed context, or null when the classic look is in force. */
+/** The terminal's width now, not when the turn began: a resize mid-turn changes the next row a tinted card prints. */
+function liveColumns(box: BoxCtx): number {
+  return process.stdout.isTTY && process.stdout.columns ? Math.max(30, process.stdout.columns) : box.columns;
+}
+
 function boxOf(state: PromptState): BoxCtx | null {
   const ui = uiOf(state);
   ui.boxed = boxedActive(ui);
@@ -4048,7 +4136,10 @@ function printExchangeBoxed(exchange: PromptExchange, ui: ResolvedUi, box: BoxCt
   // code copied from the answer never carries a rail. The spinner was stopped
   // (and its row erased) when the turn ended, before this runs.
   const m = metaText(exchange, ui, thinkTokens, Math.max(8, box.columns - 6 - 2));
-  console.log(turnFooter(box, m ? { glyph: m.glyph, glyphRole: m.color, text: m.text } : { text: "" }));
+  // A tinted card is one column narrower than the terminal (tintRow), so the
+  // footer rule is drawn to that width rather than cut with an ellipsis.
+  const footBox = panelsTinted(box) ? { ...box, columns: liveColumns(box) - 1 } : box;
+  console.log(tintRows(box, turnFooter(footBox, m ? { glyph: m.glyph, glyphRole: m.color, text: m.text } : { text: "" }), liveColumns(box)));
   for (const line of renderExchange(exchange, { ...ui, meta: [] })) console.log(line);
 }
 
@@ -12052,7 +12143,7 @@ export interface CommandSpec {
  * bound to a role and a context should not have either moved under it.
  */
 export const LIVE_SAFE_COMMANDS = new Set([
-  "/help", "/roles", "/profiles", "/tools", "/endpoints", "/context",
+  "/help", "/roles", "/profiles", "/tools", "/status", "/endpoints", "/context",
   "/skills", "/manifest", "/explain", "/reflect", "/meta", "/think", "/cot", "/mode",
   // Reading the checklist mid-turn is the point of having one: it answers
   // "how far through is it" without stopping the work to find out.
@@ -12114,6 +12205,7 @@ export const COMMANDS: CommandSpec[] = [
   { name: "/endpoints", help: "List declared inference endpoints" },
   { name: "/profiles", help: "Show available profiles" },
   { name: "/tools", help: "Show the tools this role may call" },
+  { name: "/status", help: "The launch details the boxed terminal folds into one line: tools, profile, audit, sandbox, network, verify, and the notices that apply" },
   { name: "/context", help: "Show context policy and the current window" },
   { name: "/reset", help: "Alias for /new — the old 'clear history in place' lost the record" },
   { name: "/meta", arg: "[fields]", help: "Show or set the meta line" },
@@ -13486,6 +13578,26 @@ export function processCommand(cmd: string, state: PromptState): boolean {
       return true;
     }
 
+    case "/status": {
+      const ui = uiOf(state);
+      console.log("\nStatus\n");
+      for (const [k, v] of startupFacts(state)) console.log(`  ${k.padEnd(10)} ${v}`);
+      const fold = state.startup;
+      if (fold) {
+        if (fold.details.length > 0) {
+          console.log("\nDetails");
+          for (const l of fold.details) console.log(l);
+        }
+        if (fold.notes.length > 0) {
+          console.log("\nNotices");
+          for (const l of fold.notes) console.log(l);
+        }
+      } else {
+        console.log(paint(ui, "gray", "\n  This screen printed its launch details in full when gnomon started."));
+      }
+      return true;
+    }
+
     case "/help": {
       console.log("\nCommands  (press Tab after \"/\" to complete)\n");
       const width = Math.max(
@@ -14754,6 +14866,9 @@ export async function runPromptLoop(
     }
 
     let yes = false;
+    // The boxed look (a capable TTY) gets one confirmation line per choice.
+    const compact = boxOf(state) !== null;
+    let scope: "once" | "turn" | "session" = "once";
     // Restored below. Left set, every keystroke typed during the rest of the
     // turn repainted `approve> ` -- an answered, session-approved prompt that
     // looked like the harness was waiting on a decision it already had.
@@ -14770,22 +14885,28 @@ export async function runPromptLoop(
       if (/^(a|all)$/i.test(answer)) {
         approveRestOfTurn = true;
         yes = true;
-        console.log(
-          paint(ui, "yellow", "  approving the rest of THIS TURN without asking")
-        );
+        scope = "turn";
+        if (!compact) {
+          console.log(
+            paint(ui, "yellow", "  approving the rest of THIS TURN without asking")
+          );
+        }
         break;
       }
       if (/^(s|session)$/i.test(answer)) {
         approveRestOfSession = true;
         yes = true;
-        console.log(
-          paint(
-            ui,
-            "red",
-            "  approving every gated call for the REST OF THE SESSION — " +
-              "writes included. /reset does not clear this; restart to revoke."
-          )
-        );
+        scope = "session";
+        if (!compact) {
+          console.log(
+            paint(
+              ui,
+              "red",
+              "  approving every gated call for the REST OF THE SESSION — " +
+                "writes included. /reset does not clear this; restart to revoke."
+            )
+          );
+        }
         break;
       }
       if (/^(n|no)$/i.test(answer) || answer === "") {
@@ -14863,11 +14984,25 @@ export async function runPromptLoop(
       interactive: Boolean(process.stdin.isTTY),
       ...(req.escalated ? { escalated: AFTER_REFUSAL_REASON } : {}),
     });
-    console.log(
-      yes
-        ? paint(ui, "green", "  approved")
-        : paint(ui, "yellow", "  declined")
-    );
+    if (compact) {
+      // One line per choice, the same shape for all four. The two scopes that
+      // outlast the call say so in the line itself rather than on a second one.
+      console.log(
+        !yes
+          ? paint(ui, "yellow", "  ✗ declined")
+          : scope === "session"
+            ? paint(ui, "red", "  ✓ approved — rest of the SESSION, writes included (restart to revoke)")
+            : scope === "turn"
+              ? paint(ui, "yellow", "  ✓ approved — rest of this turn")
+              : paint(ui, "green", "  ✓ approved")
+      );
+    } else {
+      console.log(
+        yes
+          ? paint(ui, "green", "  approved")
+          : paint(ui, "yellow", "  declined")
+      );
+    }
     return yes;
   };
 
@@ -14916,8 +15051,12 @@ export async function runPromptLoop(
     }
   };
 
+  // The boxed terminal folds everything between the card and the first prompt
+  // into one status line; the lines themselves are kept for /status.
+  const startSink: string[] | null = box0 ? [] : null;
   {
     const ui = uiOf(state);
+    await captureLog(startSink, async () => {
     reportTools();
 
     // Which profile is in force, and whether a flag chose it.
@@ -14976,6 +15115,7 @@ export async function runPromptLoop(
       console.log(paint(ui, "yellow", `  ${line}`));
     }
     prepareContextWindows(config, listRoles(config));
+    });
     if (resumedFrom) {
     const ui0 = uiOf(state);
     console.log(
@@ -15011,6 +15151,7 @@ export async function runPromptLoop(
     });
   }
 
+  await captureLog(startSink, async () => {
   if (suppliedKeys.length > 0) {
     console.log(
       paint(uiOf(state), "gray", `Keys: ${suppliedKeys.join(", ")} supplied from the credential store`)
@@ -15107,6 +15248,12 @@ export async function runPromptLoop(
               : " Declare [verify] command in .gnomon/policy.toml.")
         )
       );
+    }
+    });
+    if (startSink) {
+      state.startup = foldStartup(state, startSink, workRootOf(config));
+      console.log(paint(uiOf(state), "gray", startupSummary(state)));
+      for (const l of state.startup.shown) console.log(l);
     }
     console.log("");
   }
@@ -15527,7 +15674,7 @@ export async function runPromptLoop(
       cancelTurn = () => controller.abort();
       let done: SessionTurn;
       const boxT = boxOf(state);
-      if (boxT) console.log(turnHeader(boxT, { role: choice.role, model: routeRole(config, choice.role).model }));
+      if (boxT) console.log(panelHeader(boxT, { role: choice.role, model: routeRole(config, choice.role).model }, liveColumns(boxT)));
       try {
         done = await runSessionTurn(state, choice.role, choice.input, choice.prefixed, {
           approve,
@@ -15537,8 +15684,8 @@ export async function runPromptLoop(
           surfaceHash,
           shadow: shadowFor(config),
           persist,
-          log: (line) => console.log(boxT ? railLine(boxT, line) : line),
-          ...(boxT ? { print: (line: string) => progress.print(railLine(boxT, line)) } : {}),
+          log: (line) => console.log(boxT ? tintRows(boxT, railLine(boxT, line), liveColumns(boxT)) : line),
+          ...(boxT ? { print: (line: string) => progress.print(tintRows(boxT, railLine(boxT, line), liveColumns(boxT))) } : {}),
           progress,
           reconfigure,
           live,

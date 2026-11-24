@@ -73,6 +73,7 @@ export const CHAT_RULES = [
   "4. Never invent a number, a name, a date or a path. Quote figures exactly as the BRIEF gives them.",
   "5. You have no tools and cannot run anything. If asked to run or change something, say you can only read the records, and name the screen where the button is.",
   "6. Be short. Lead with the answer.",
+  "7. Many BRIEF lines carry a record id in braces, like {session:NAME} or {rule:R3}. When a claim rests on such a line, also write its id exactly as given, e.g. [session] {session:NAME}. Never write an id the BRIEF does not contain.",
 ].join("\n");
 
 export interface ChatEndpoint {
@@ -230,7 +231,7 @@ export async function buildBrief(p: DashboardProject, opts: { text: boolean; tru
         max: 2600,
         lines: s.trails.slice(0, 10).map(
           (t) =>
-            `${t.name}: mode ${t.mode}, started ${t.started ?? "?"}, ${t.turns} turns, ${t.tool_calls} tool calls, ${t.refusals} refusals, ${t.sealed ? "sealed" : "not sealed"}` +
+            `{session:${t.name}} ${t.name}: mode ${t.mode}, started ${t.started ?? "?"}, ${t.turns} turns, ${t.tool_calls} tool calls, ${t.refusals} refusals, ${t.sealed ? "sealed" : "not sealed"}` +
             (opts.text && t.opening ? `, opened with "${clip(t.opening, 90)}"` : "")
         ),
       });
@@ -240,14 +241,14 @@ export async function buildBrief(p: DashboardProject, opts: { text: boolean; tru
       const rules = (g.rules as Array<Record<string, any>>)
         .filter((r) => r.refused + r.asked > 0)
         .sort((a, b) => b.refused + b.asked - (a.refused + a.asked))
-        .map((r) => `rule ${r.rule}: ${r.refused} refused, ${r.asked} asked`);
+        .map((r) => `{rule:${r.rule}} rule ${r.rule}: ${r.refused} refused, ${r.asked} asked`);
       const lines = [
         rules.length ? rules.join("; ") : "no refusals attributed to a rule",
         `refusals with no rule named: ${g.unnamed?.count ?? 0}`,
         `approvals: ${g.approvals?.approved} approved, ${g.approvals?.declined} declined; guard allowed: ${g.guard_allowed}`,
         `audit: enabled ${g.audit?.enabled}, chain ${g.audit?.chain}, ${g.audit?.trails} trails, ${g.audit?.records} records`,
         `trust: ${g.trust?.status ?? "unknown"}`,
-        ...(g.checks as Array<Record<string, any>>).slice(0, 5).map((c) => `check: exit ${c.exit}${c.base ? `, base ${c.base}` : ""}${c.ts ? `, ${c.ts}` : ""}`),
+        ...(g.checks as Array<Record<string, any>>).slice(0, 5).map((c, i) => `{check:${i + 1}} check: exit ${c.exit}${c.base ? `, base ${c.base}` : ""}${c.ts ? `, ${c.ts}` : ""}`),
       ];
       if (opts.text) {
         for (const r of g.rules as Array<Record<string, any>>)
@@ -271,7 +272,7 @@ export async function buildBrief(p: DashboardProject, opts: { text: boolean; tru
               `${k}: ${loc[k].turns ?? 0} turns, answered ${loc[k].answered}, median ${num(loc[k].median_ms)} ms, tokens in ${num(loc[k].tokens_in)} out ${num(loc[k].tokens_out)}`
           ),
           `stop reasons: ${JSON.stringify(m.stop_reasons)}`,
-          ...(m.by_model as Array<Record<string, any>>).slice(0, 6).map((x) => `model ${x.model} (${x.locality}): ${x.turns} turns, in ${x.tokens_in}, out ${x.tokens_out}`),
+          ...(m.by_model as Array<Record<string, any>>).slice(0, 6).map((x) => `{model:${x.model}} model ${x.model} (${x.locality}): ${x.turns} turns, in ${x.tokens_in}, out ${x.tokens_out}`),
         ],
       });
     }
@@ -279,7 +280,7 @@ export async function buildBrief(p: DashboardProject, opts: { text: boolean; tru
   const c = guard(() => contractsView(p, { sourceRoot: opts.sourceRoot })) as Record<string, any> | null;
   if (c) {
     const lines = [`harness: ${c.harness}`, `[verify]: ${c.verify?.declared ? `declared, command "${clip(c.verify.command, 80)}"` : "not declared"}`];
-    if (Array.isArray(c.suites)) for (const s of c.suites) lines.push(`suite ${s.name}: ${num(s.hit)}/${num(s.total)}, published ${s.published}, matches: ${s.matches_published}`);
+    if (Array.isArray(c.suites)) for (const s of c.suites) lines.push(`{suite:${s.name}} suite ${s.name}: ${num(s.hit)}/${num(s.total)}, published ${s.published}, matches: ${s.matches_published}`);
     if (c.tests) lines.push(`tests: ${JSON.stringify(c.tests)}`);
     sections.push({ panel: "contracts", max: 1400, lines });
   }
@@ -335,9 +336,24 @@ export function citedPanels(answer: string): ChatPanel[] {
   return seen;
 }
 
+/** The record ids a brief carries, `{kind:value}`, exactly as written. */
+export function briefRecordIds(brief: string): Set<string> {
+  return new Set([...brief.matchAll(/\{([a-z]+:[^{}\s][^{}]*)\}/g)].map((m) => m[1]!));
+}
+
+/** The ids an answer cites that the brief really holds, in order of first mention. An invented id is dropped. */
+export function citedRecords(answer: string, brief: string): string[] {
+  const known = briefRecordIds(brief);
+  const out: string[] = [];
+  for (const m of answer.matchAll(/\{([a-z]+:[^{}\s][^{}]*)\}/g)) if (known.has(m[1]!) && !out.includes(m[1]!)) out.push(m[1]!);
+  return out;
+}
+
 export interface ChatAnswer {
   answer: string;
   cites: ChatPanel[];
+  /** Record ids the answer cites and the brief holds (`session:<trail>`, `rule:<id>`...); present when the brief was given. */
+  records?: string[];
   /** True when the answer cites a panel, or says it is not in the records. */
   grounded: boolean;
   not_in_records: boolean;
@@ -347,7 +363,12 @@ export interface ChatAnswer {
 }
 
 /** Shapes the model's text into an answer the page may show. Citations are required. */
-export function shapeAnswer(text: string): ChatAnswer {
+export function shapeAnswer(text: string, brief?: string): ChatAnswer {
+  const shaped = shapeAnswerText(text);
+  return brief === undefined || shaped.withheld ? shaped : { ...shaped, records: citedRecords(shaped.answer, brief) };
+}
+
+function shapeAnswerText(text: string): ChatAnswer {
   const clean = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
   const cites = citedPanels(clean);
   const not_in_records = /not in the records/i.test(clean);

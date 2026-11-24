@@ -45,6 +45,36 @@ Publish, and after the publish-npm run confirm that
 release text says the package reaches npm "once the npm workflow completes",
 not that it is there.
 
+## Release gates
+
+Two CI jobs answer questions no unit test can. A red on either blocks the
+release; do not tag over it.
+
+**End to end with a scripted model** (`scripts/e2e_smoke.mjs`; windows-latest
+and ubuntu-latest). It runs the real CLI through `init`, `eval --against
+surface:<ref>` on the scaffolded `trials/default.toml`, `improve` (dry run, then
+`--run --k 1` with the scripted model) and `check`, and asserts exit codes and
+report shapes. It exists because 0.6.6 shipped trials whose setup and check ran
+under cmd.exe on Windows: every cell was invalid, and nothing model-free could
+see it. The canary task must PASS in both arms, which needs the trial shell
+(`skill_trial.ts` `trialShellPath`). Run it locally with
+`node scripts/e2e_smoke.mjs` after `cargo build --workspace --bins` (set
+`GNOMON_BIN_OVERRIDE=target/debug` if the binaries are elsewhere).
+
+**Perf gate** (`scripts/perf_gate.mjs`; ubuntu-latest only). It installs the
+previous release (`gnomon-harness@latest`) and head (packed tarballs, the same
+install form) and runs them interleaved on one runner against a model that
+answers at once: `n = 15` one-turn tasks with a declared window, a 10-turn
+session, and one turn with the window undeclared while `/models` answers after
+200 ms (the case 0.6.6-rc regressed, +0.3 to +10 s, found only by the manual
+overhead check in `benchmarks/results/ux4-2026-11`). Per run: wall, CPU, peak
+RSS. A metric fails when head's paired median difference exceeds BOTH 15% of the
+previous median AND 30 ms (RSS: 15% and 10 MB); both, so runner noise cannot
+fail a build and a real regression cannot hide in a percentage. The table is
+printed and written to the job summary. If it goes red on a change that cannot
+have touched startup, rerun once; a second red is real. Raise the thresholds only
+with a measured reason, in the same change.
+
 ## Why a script rather than an instruction
 
 The version is written down in eight places:

@@ -40,11 +40,15 @@ import {
   toCopilot,
   toCursor,
   type GovernanceGaps,
+  type GuardRequest,
+  guardTarget,
   type GuardHarness,
   type GuardLiveSession,
   type GuardVerdict,
   writeFileIn,
 } from "gnomon-core/guard";
+
+import { HOOK_TIMEOUT_DEFAULT_S, askPerson, brokerHookTimeoutS, dashboardTransport, holdSeconds, hostCannotAsk, installedHookTimeoutS, resolveBroker, terminalTransport, type BrokerTransports } from "./guard_broker.js";
 
 export const GUARD_USAGE = `Usage: gnomon guard --tool <${GUARD_TOOLS.join("|")}> --input <json> [options]
        gnomon guard [--from generic|claude-code|opencode|cursor|codex|qwen-code|copilot] [options] < call.json
@@ -102,7 +106,9 @@ export function parseGuardArgs(argv: string[]): GuardArgs {
 export async function cmdGuard(
   argv: string[],
   out: (s: string) => void = (s) => process.stdout.write(s.endsWith("\n") || s === "" ? s : `${s}\n`),
-  stdin: () => string = () => readFileSync(0, "utf-8")
+  stdin: () => string = () => readFileSync(0, "utf-8"),
+  /** Tests: the approval broker's ways of reaching a person. */
+  brokerTransports: BrokerTransports = { dashboard: dashboardTransport(), terminal: terminalTransport() }
 ): Promise<number> {
   const args = parseGuardArgs(argv);
   if (args.flags.help === "true" || args.flags.h === "true") {
@@ -138,7 +144,23 @@ export async function cmdGuard(
   }
 
   const hr = readHarness(from, raw);
+  // The approval broker: only on a host that cannot ask, only when the surface
+  // declares `[guard] broker`. Absent, nothing below runs and an ask is
+  // answered exactly as before.
+  let broker: GuardRequest["broker"];
+  if (hostCannotAsk(from, hr.event)) {
+    const dirs = [args.flags.dir ? resolve(args.flags.dir) : undefined, hr.cwd, hr.project, process.cwd()].filter((d): d is string => !!d);
+    const dir = dirs.find((d) => resolveBroker(d)) ?? dirs[0]!;
+    const settings = resolveBroker(dir);
+    if (settings) {
+      const hookS = Math.min(...[hr.project, hr.cwd, dir].filter((d): d is string => !!d).map((d) => installedHookTimeoutS(d, from)));
+      const holdS = holdSeconds(settings.timeoutS, hookS);
+      broker = (v, call) =>
+        askPerson(settings, holdS, { host: from, tool: v.tool, target: guardTarget(call), reason: v.reason, project: dir }, v, brokerTransports);
+    }
+  }
   const verdict = await guardHarnessRequest(hr, {
+    ...(broker ? { broker } : {}),
     cwd: args.flags.dir ? resolve(args.flags.dir) : undefined,
     // Claude Code names its project root to every hook. A shell an earlier
     // `cd` moved out of the project still answers to the project's rules.
@@ -349,9 +371,9 @@ export const CURSOR_GUARD_EVENTS = ["beforeShellExecution", "beforeReadFile", "b
  * agent in a loop nobody asked for. `gnomon check` after the session says the same
  * without that.
  */
-export function cursorHooks(bin: string[] = ["gnomon"]): { version: number; hooks: Record<string, unknown[]> } {
+export function cursorHooks(bin: string[] = ["gnomon"], guardTimeoutS = 30): { version: number; hooks: Record<string, unknown[]> } {
   const command = shellCommand(bin, CURSOR_TAIL);
-  const guard = { command, timeout: 30, failClosed: true };
+  const guard = { command, timeout: guardTimeoutS, failClosed: true };
   return {
     version: 1,
     hooks: {
@@ -407,11 +429,11 @@ export const QWEN_MATCHED_TOOLS = [
  * check --hook stop` answers, and the dashboard inbox is not delivered
  * (its target is Claude Code's).
  */
-export function codexHooks(bin: string[] = ["gnomon"]): { hooks: Record<string, unknown[]> } {
+export function codexHooks(bin: string[] = ["gnomon"], guardTimeoutS = 30): { hooks: Record<string, unknown[]> } {
   return {
     hooks: {
       SessionStart: [{ hooks: [{ type: "command", command: shellCommand(bin, CC_START_TAIL), timeout: 30 }] }],
-      PreToolUse: [{ matcher: CODEX_MATCHER, hooks: [{ type: "command", command: shellCommand(bin, CODEX_GUARD_TAIL), timeout: 30 }] }],
+      PreToolUse: [{ matcher: CODEX_MATCHER, hooks: [{ type: "command", command: shellCommand(bin, CODEX_GUARD_TAIL), timeout: guardTimeoutS }] }],
     },
   };
 }
@@ -791,8 +813,8 @@ function mergeHooks(project: string, file: string, fragment: { hooks: Record<str
   const current = existsSync(file) ? (JSON.parse(readFileSync(file, "utf-8")) as Record<string, unknown>) : {};
   const hooks = (current.hooks && typeof current.hooks === "object" ? current.hooks : {}) as Record<string, unknown[]>;
   const added: string[] = [];
-  type Entry = { command?: unknown; matcher?: unknown; hooks?: Array<{ command?: unknown }> };
-  const slots = (entry: unknown): Array<{ command?: unknown }> => {
+  type Entry = { command?: unknown; matcher?: unknown; hooks?: Array<{ command?: unknown; timeout?: unknown }> };
+  const slots = (entry: unknown): Array<{ command?: unknown; timeout?: unknown }> => {
     const e = entry as Entry;
     return [...(typeof e.command === "string" ? [e] : []), ...(Array.isArray(e.hooks) ? e.hooks : [])];
   };
@@ -816,6 +838,12 @@ function mergeHooks(project: string, file: string, fragment: { hooks: Record<str
             const m = (entry as Entry).matcher;
             if (m !== undefined && (existing as Entry).matcher !== m) {
               (existing as Entry).matcher = m;
+              changed = true;
+            }
+            // A longer hook timeout (the approval broker holds a call) is applied; one is never shortened.
+            const wantT = (slots(entry).find((x) => x.command === cmd) as { timeout?: unknown } | undefined)?.timeout;
+            if (typeof wantT === "number" && typeof h.timeout === "number" && wantT > h.timeout) {
+              h.timeout = wantT;
               changed = true;
             }
             // Cursor's failClosed: an older install had none. Re-running install is the
@@ -852,6 +880,12 @@ function mergeHooks(project: string, file: string, fragment: { hooks: Record<str
  * the file is listed in `.git/info/exclude`), so each machine installs its
  * own; without it, a path under $HOME or a versioned directory is warned of.
  */
+/** The guard hook timeout to write for Codex and Cursor: 30 s, or the broker's hold plus headroom when `[guard] broker` is declared. */
+function brokerInstallTimeoutS(project: string): number {
+  const b = resolveBroker(project);
+  return b ? Math.max(HOOK_TIMEOUT_DEFAULT_S, brokerHookTimeoutS(b.timeoutS)) : HOOK_TIMEOUT_DEFAULT_S;
+}
+
 function installGuard(args: GuardArgs, out: (s: string) => void): number {
   const target = args.positional[0];
   const write = args.flags.write === "true";
@@ -961,7 +995,7 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
       return 0;
     }
     case "cursor": {
-      const fragment = cursorHooks(bin);
+      const fragment = cursorHooks(bin, brokerInstallTimeoutS(project));
       if (write) {
         const file = join(project, ".cursor", "hooks.json");
         const added = mergeHooks(project, file, fragment);
@@ -999,7 +1033,7 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
     case "copilot": {
       const spec = {
         codex: {
-          fragment: codexHooks(bin),
+          fragment: codexHooks(bin, brokerInstallTimeoutS(project)),
           file: join(project, ".codex", "hooks.json"),
           what: "Codex",
           notes: [
@@ -1059,7 +1093,11 @@ function installGuard(args: GuardArgs, out: (s: string) => void): number {
           }
         }
         for (const n of spec.notes) console.error(`gnomon guard: ${n}`);
-        console.error(`gnomon guard: live verification against a real ${spec.what} binary is pending: the hook schema is from its documentation.`);
+        console.error(
+          target === "qwen-code"
+            ? "gnomon guard: verified live against Qwen Code 0.28.4 (a scripted endpoint; docs/evidence/live-qwen-code-0.28.4.json): an allowed read, a denied write outside the root and a shell command, with the deny honoured."
+            : `gnomon guard: live verification against a real ${spec.what} binary is pending: the hook schema is from its documentation.`
+        );
         travel(file);
         warnNoRole(project, target);
         return 0;

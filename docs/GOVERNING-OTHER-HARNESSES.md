@@ -104,11 +104,33 @@ place, and a file that is not a JSON object (or whose `hooks` is not an object o
 arrays) is refused with exit 10 and left untouched. Without `--write` it prints
 the fragment.
 
-**Live verification pending.** None of the three CLIs was installed where this
-was written, so no hook has run against a real binary. The schemas below were
-read from each host's documentation on 2026-11-22, and the tests use payloads
-built from them. Run `gnomon guard status` and a harmless denied call (`security
-test --host <h>` shows the decisions, not the host) before relying on one.
+**Live verification.** Qwen Code is verified live: Qwen Code 0.28.4 (npm
+`@qwen-code/qwen-code`, installed into an isolated prefix) was run headless
+against a scripted OpenAI-compatible endpoint on loopback (no model, no network,
+no account), in a temp project hooked by `gnomon guard install qwen-code
+--write`. Three scripted calls: an allowed `read_file`, a `write_file` outside
+the project root (denied: the file was never written) and a `run_shell_command`
+(allowed: it ran). gnomon's three guard records match what the host did. The
+evidence is `docs/evidence/live-qwen-code-0.28.4.json`; the check is the opt-in
+`guard_live_adapters.test.ts` (`GNOMON_LIVE_ADAPTERS=1 pnpm --filter
+gnomon-cli exec vitest run src/guard_live_adapters.test.ts`; it installs Qwen
+Code itself unless `GNOMON_QWEN_PREFIX` names a prefix). Two things the run
+showed: a project's hooks load only once the folder is trusted (an untrusted
+folder prints "Project hooks ... were not loaded" and runs unguarded), and in
+`--approval-mode default` headless Qwen declines `write_file` and
+`run_shell_command` itself, before any hook, so the hook is exercised under
+`yolo` (where gnomon's `permission_mode` rule turns every ask into a deny).
+
+**Codex and Copilot: still pending.** They need accounts, so nothing has run
+against their binaries; the schemas were read from each host's documentation on
+2026-11-22, and the tests use payloads built from them. To verify them the
+operator provides: for **Codex**, the Codex CLI installed and signed in to an
+OpenAI account (or an API key it accepts), a trusted test project, and `/hooks`
+review of the installed hook; for **Copilot**, the Copilot CLI signed in with a
+GitHub account that has a Copilot seat. A scripted-endpoint run like Qwen's is
+not possible for either: both talk to their vendor's service. Until then run
+`gnomon guard status` and a harmless denied call (`security test --host <h>`
+shows the decisions, not the host) before relying on one.
 
 | Host | What was verified, and where | Not verified |
 |---|---|---|
@@ -131,7 +153,8 @@ What differs from Claude Code, and so is **not** `fromClaudeCode` plus a path:
   tool the role does not hold, an ungoverned tool under `[governance]`, a call gnomon
   could not decide, no role) is refused. Under `permission_mode`
   `bypassPermissions` every ask is refused. **This makes the `[approval]` gate weaker
-  on Codex than on Claude Code**: `deny` rules stand, the gate is Codex's. Stop and
+  on Codex than on Claude Code**: `deny` rules stand, the gate is Codex's (unless
+  you turn on the approval broker below). Stop and
   the dashboard inbox are not installed (the inbox is addressed to Claude Code).
 - **Qwen Code** sends its runtime tool ids (`run_shell_command`, `write_file`,
   `edit`, `read_file`, ...), not Claude's names, so Claude Code's reader would see
@@ -252,6 +275,45 @@ no grant beyond the defaults. Results come back as a run directory (`run.json`, 
 `stream.jsonl` = gnomon's hash-chained audit trail, rendered into Harness²'s
 `[ACTION]/[OBSERVATION]` grammar). A smoke test drives it against a scripted fake model (a local
 HTTP server; no real model); it needs `GNOMON_CMD` and is skipped otherwise.
+
+## The approval broker: asking a person where the host cannot
+
+Two hosts cannot put an `ask` to a person: Codex (`ask` is "parsed but not
+supported yet") and Cursor at `preToolUse` and `beforeReadFile` (`ask` is not
+enforced; `beforeReadFile` takes only allow or deny). Without a broker gnomon
+answers such an ask with a deny, except the `[approval]` gate's own ask, which it
+leaves to the host's flow. With the opt-in
+
+```toml
+# .gnomon/policy.toml
+[guard]
+broker = "dashboard"      # or "terminal"; absent = no broker (the behaviour above)
+broker_timeout_s = 60     # optional, 1 to 3600, default 60
+```
+
+the hook **holds** the call and asks a person:
+
+- `dashboard`: a pending-approval card appears in the running `gnomon dashboard`
+  (it finds it through a 0600 file beside the trust store, written on start and
+  removed on close; the hook signs with a secret that lets it ask but never
+  decide). Allow and Deny are two steps with the confirm-nonce every dashboard
+  action uses: the first click says what it will do, only Confirm decides.
+- `terminal`: a `[y/N]` prompt on `/dev/tty`, when the hook has one.
+
+Never an auto-allow: only a person's yes allows. A timeout, no dashboard
+running, no terminal, a refused request, or any answer but yes is a deny whose
+reason says which. The answer is recorded in the guard decision record: `decision`
+is the person's allow or deny and `broker` carries `{via, outcome, waited_s}`
+(CONTRACTS.md §10). A call gnomon could not decide at all (rule `error`) is not
+put to a broker; it stays a deny. Claude Code, Qwen Code and Copilot ask through
+their own prompts and are not brokered.
+
+**The hold stays under the host's own hook timeout.** `guard install codex|cursor`
+writes a 30 s hook timeout; with a broker declared it writes `broker_timeout_s +
+15`, and re-running install lengthens an older, shorter one (never shortens). At
+run time the hook reads the installed timeout back (30 when it cannot) and holds
+for at most that minus 5 s, so an unlengthened install holds 25 s, not 60: a hook
+the host kills may let the call run, which is what the broker exists to prevent.
 
 ## Governance levels
 

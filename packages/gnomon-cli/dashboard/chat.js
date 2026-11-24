@@ -117,6 +117,7 @@ function bubble(t) {
   return h("div", { class: `chat-turn assistant${t.kind === "withheld" ? " withheld" : ""}` },
     h("p", { class: "chat-text" }, rich(t.text)),
     t.cites?.length ? h("p", { class: "chat-cites small" }, h("span", { class: "muted", text: "Cites " }), t.cites.map((k, i) => [i ? " " : "", cite(k)])) : null,
+    t.records?.length ? h("p", { class: "chat-records small" }, h("span", { class: "muted", text: "Records " }), t.records.map((r, i) => [i ? " " : "", h("code", { text: r })])) : null,
     t.raw ? h("details", { class: "chat-raw small" }, h("summary", { text: "Show what the model said anyway (uncited, so unchecked)" }), h("p", { class: "chat-text muted", text: t.raw })) : null,
     meta);
 }
@@ -295,6 +296,7 @@ async function submit() {
         kind: b.withheld ? "withheld" : b.not_in_records && !b.cites.length ? "notinrecords" : "answer",
         text: b.answer,
         cites: b.cites,
+        records: b.records,
         raw: b.raw,
         meta: { local: b.local, model: b.model, ms: b.ms, egress: b.egress },
       });
