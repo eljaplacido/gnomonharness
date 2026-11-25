@@ -134,7 +134,9 @@ beforeEach(() => {
 });
 
 /** A check that sleeps only on the merged tree (the coordinator clone is <run>/integrate). */
-const SLOW_ON_MERGE = `case \\"$PWD\\" in */integrate) sleep 40;; esac; true`;
+// 120 s, far above every bound below: a run that waited for it cannot pass by being merely slow
+// (Windows runners take ~40 s for the rest of the run).
+const SLOW_ON_MERGE = `case \\"$PWD\\" in */integrate) sleep 120;; esac; true`;
 afterEach(() => {
   while (made.length) rmSync(made.pop()!, { recursive: true, force: true });
 });
@@ -301,13 +303,13 @@ describe("gnomon task --graph", () => {
     const g = graphFile(node("a", SLOW_ON_MERGE));
     const t0 = Date.now();
     const r = await gnomon(root, ["--graph", g, "--yes", "--apply"]);
-    expect(Date.now() - t0).toBeLessThan(30_000);
+    expect(Date.now() - t0).toBeLessThan(90_000);
     expect(r.code, r.out + r.err).toBe(1);
     expect(r.json.budget_stop).toContain("max_wall_seconds = 4");
     expect(r.json.verified).toBe(false);
     expect(r.json.applied).toBe(false);
     expect(r.json.integration.error).toContain("budget");
-  }, 60_000);
+  }, 180_000);
 
   it.skipIf(process.platform === "win32")("Ctrl-C during integration stops its checks, reports (exit 1) and cleans the run dir", async () => {
     const root = await project();
