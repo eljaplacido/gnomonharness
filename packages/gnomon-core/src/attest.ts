@@ -94,11 +94,16 @@ import { posixShell, NO_POSIX_SHELL } from "./tools.js";
  * Signer output larger than this is refused.
  *
  * An unbounded read from a declared command means one misbehaving signer can
- * write its stdout into the heads file forever. 8 KiB holds an Ed25519
- * signature (88 base64 chars), an RSA-4096 signature (684), and an armoured
- * PGP block, with room to spare.
+ * write its stdout into the heads file forever. The bound stays; it is sized
+ * for post-quantum signatures. 128 KiB holds, as hex (the larger encoding),
+ * the biggest NIST signature: SLH-DSA-256f at 49,856 bytes is 66,476 base64
+ * chars or 99,712 hex chars. Also fits ML-DSA-87 (4,627 B), SLH-DSA-128s
+ * (7,856 B), RSA-4096 and an armoured PGP block, with room to spare. It was
+ * 8 KiB, which refused every SLH-DSA signature and ML-DSA-87 only barely
+ * passed. Each head line is still bounded, so a runaway signer cannot grow
+ * the heads file without limit.
  */
-const MAX_SIGNATURE_BYTES = 8192;
+const MAX_SIGNATURE_BYTES = 131072;
 
 /** Default seconds a signer or verifier may run before it is killed. */
 const DEFAULT_TIMEOUT_SEC = 10;
@@ -539,14 +544,23 @@ export function checkSignature(
 
   if (settings.public_key) {
     const key = publicKeyOf(settings.public_key);
-    if (!key) return { checked: false, detail: "public_key did not parse" };
+    if (!key) {
+      // A key type this Node cannot load (ML-DSA / SLH-DSA on Node 22) is not a
+      // broken signature: say what is true and where to verify instead.
+      const alg = head.algorithm ?? settings.algorithm;
+      return {
+        checked: false,
+        detail: `signature present, algorithm ${alg} not verifiable by this Node (public_key did not parse); verify with the signer's tool, or declare [audit.attest].verify`,
+      };
+    }
     const sig = decodeSignature(head.signature, head.signature_encoding ?? settings.signature_encoding);
     if (!sig) return { checked: true, valid: false, detail: "signature did not decode" };
     // Ed25519 and Ed448 hash internally and REJECT a named digest; everything
     // else needs one. Passing "sha256" to an Ed25519 key throws, which would
     // have read as an invalid signature rather than a misuse of the API.
     const type = key.asymmetricKeyType;
-    const algo = type === "ed25519" || type === "ed448" ? null : "sha256";
+    const algo =
+      type === "ed25519" || type === "ed448" || /^(ml-dsa|slh-dsa)-/.test(type ?? "") ? null : "sha256";
     try {
       return { checked: true, valid: verifyBytes(algo, Buffer.from(digest, "utf-8"), key, sig) };
     } catch (e) {
