@@ -737,13 +737,16 @@ process.stdout.write(sign(null, readFileSync(0), createPrivateKey(${JSON.stringi
     const m = /OpenSSL (\d+)\.(\d+)/.exec(r.stdout ?? "");
     return !!m && (+m[1] > 3 || (+m[1] === 3 && +m[2] >= 5));
   })();
+  const opensslBin = spawnSync("sh", ["-c", "command -v openssl"], { encoding: "utf-8" }).stdout?.trim() || "openssl";
   it.skipIf(!hasOpenssl35)("the sample OpenSSL ML-DSA-65 signer round-trips", () => {
     const key = join(root, "k.pem"), pub = join(root, "k.pub");
     spawnSync("openssl", ["genpkey", "-algorithm", "ML-DSA-65", "-out", key]);
     spawnSync("openssl", ["pkey", "-in", key, "-pubout", "-out", pub]);
     const script = join(process.cwd().replace(/packages.*$/, ""), "docs/examples/pq-signer-openssl.sh");
     const attest = attestSettings({
-      sign: `sh ${script} ${key}`, verify: `sh ${script} --verify ${pub}`, public_key: "", algorithm: "ml-dsa-65",
+      // The signer runs in a login shell, whose PATH can put an older openssl
+      // (macOS: LibreSSL) first; pin the one this test checked.
+      sign: `OPENSSL=${opensslBin} sh ${script} ${key}`, verify: `OPENSSL=${opensslBin} sh ${script} --verify ${pub}`, public_key: "", algorithm: "ml-dsa-65",
     });
     const t = signedTrail(attest);
     expect(verifyAttestation(t.path!, attest).status).toBe("signed");

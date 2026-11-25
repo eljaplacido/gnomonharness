@@ -10,16 +10,20 @@
 #   verify = "sh docs/examples/pq-signer-openssl.sh --verify /path/to/mldsa.pub"
 #   algorithm = "ml-dsa-65"
 #
+# Set OPENSSL to an OpenSSL >= 3.5 binary when the login shell's `openssl`
+# is older (macOS ships LibreSSL first on PATH).
+#
 # Not run in CI unless openssl >= 3.5 is present. Keep the key off this machine
 # where you can; gnomon never holds it.
 set -eu
+OPENSSL=${OPENSSL:-openssl}
 tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 cat > "$tmp/digest"
 if [ "${1:-}" = "--verify" ]; then
   # GNOMON_ATTEST_SIGNATURE carries the base64 signature; exit 0 = valid.
-  printf %s "$GNOMON_ATTEST_SIGNATURE" | openssl base64 -d -A > "$tmp/sig"
-  openssl pkeyutl -verify -pubin -inkey "$2" -rawin -in "$tmp/digest" -sigfile "$tmp/sig" >/dev/null
+  printf %s "$GNOMON_ATTEST_SIGNATURE" | "$OPENSSL" base64 -d -A > "$tmp/sig"
+  "$OPENSSL" pkeyutl -verify -pubin -inkey "$2" -rawin -in "$tmp/digest" -sigfile "$tmp/sig" >/dev/null
 else
-  openssl pkeyutl -sign -inkey "$1" -rawin -in "$tmp/digest" -out "$tmp/sig"
-  openssl base64 -A -in "$tmp/sig"
+  "$OPENSSL" pkeyutl -sign -inkey "$1" -rawin -in "$tmp/digest" -out "$tmp/sig"
+  "$OPENSSL" base64 -A -in "$tmp/sig"
 fi
