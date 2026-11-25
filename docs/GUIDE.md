@@ -3012,6 +3012,24 @@ The record fields and the outcome list are a contract: [CONTRACTS.md §19](CONTR
 
 ---
 
+### Long-term evidence integrity and post-quantum signatures
+
+SHA-256 hash chains stay sound against quantum attacks. Signatures do not:
+Ed25519, ECDSA and RSA (including the `[audit.attest]` default), RFC 3161
+time-stamp tokens and Sigstore release attestations are all breakable by a
+large quantum computer, so a trail anchored only by them could be re-signed
+after the fact. To prepare, point `[audit.attest].sign` at a signer command that
+uses a NIST post-quantum scheme (ML-DSA, SLH-DSA) and set `algorithm` to match.
+Signer output may be up to 128 KiB, enough for the largest SLH-DSA signature.
+`docs/examples/pq-signer-openssl.sh` is an example using OpenSSL 3.5 and
+ML-DSA-65 (an example, not exercised in CI without OpenSSL 3.5).
+`gnomon audit verify` checks ML-DSA in-process only where the running Node
+supports it; otherwise the trail reports `unverifiable` ("algorithm X not
+verifiable by this Node") and you verify with the signer's tool by declaring
+`[audit.attest].verify`. That is not a failure and not a pass. To migrate old
+trails, re-anchor their heads under a PQ key: sign the existing sealed head
+digests with the new key and keep both signatures.
+
 ## 9. Troubleshooting
 
 | You see | Cause | Fix |

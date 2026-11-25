@@ -27,6 +27,10 @@
 ## [Unreleased]
 
 - **Opt-in `gnomon task --graph <file>`: a task graph with a check per node.** Nodes (`[nodes.<id>]`: `instruction`, `files` allow-list, `check`, optional `deps`, `role`) run in parallel clones of HEAD plus their deps' work, reusing `--attempts`' machinery (one surface hash, per-node `PORT`/`TMPDIR`, `[attempts]` budgets and `max_parallel`). A node is done only when its own check passes and it changed only its allowed files; a failing node gets one retry with the check's output, then its dependents are skipped while the rest continue. Done nodes are merged in dependency order and every check plus `[verify]` runs again on the merged tree; conflicts and post-merge failures are reported by node, never resolved. `--apply` applies the integrated change only when all of that passed. A node without a check refuses the run (exit 10). Audit reuses `attempt_event` with new event values and fields `node`, `nodes`, `paths`; `conformance/graph.json`, CONTRACTS section 64. Default (no flag) unchanged. `--attempts` now reads paths with `git -z` too, so a non-ASCII path no longer escapes its apply-time dirty check.
+### Added
+
+- **Post-quantum-ready audit signatures.** The `[audit.attest]` external-signer stdout cap is raised from 8 KiB to 128 KiB (still bounded) so ML-DSA-87, SLH-DSA-128s and SLH-DSA-256f signatures fit, base64 or hex. A public key or algorithm this Node cannot load (ML-DSA on Node 22) now reports `unverifiable` with "signature present, algorithm X not verifiable by this Node; verify with the signer's tool" instead of an opaque parse failure; where `node:crypto` has ML-DSA/SLH-DSA, heads verify in-process (feature-detected). Example OpenSSL 3.5 ML-DSA-65 signer in `docs/examples/pq-signer-openssl.sh`; GUIDE section on long-term evidence integrity. No new status strings or record shapes; Ed25519 defaults unchanged.
+
 ### Fixed
 
 - Claude behind a LiteLLM proxy (`replay_reasoning = true`): the streamed
