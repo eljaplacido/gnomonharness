@@ -17,7 +17,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, mkdirSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createPrivateKey, createPublicKey, createHash, sign as signBytes } from "node:crypto";
+import { createPrivateKey, createPublicKey, createHash, generateKeyPairSync, sign as signBytes } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { AuditTrail, verifyTrail, recordHash, type ResolvedAudit, type AuditRecord } from "./audit.js";
 import {
   resolveAttest,
@@ -637,9 +638,9 @@ describe("when signing fails", () => {
   });
 
   it("refuses a signer that floods stdout, and says so", () => {
-    const attest = attestSettings({ sign: "head -c 20000 /dev/zero | tr '\\0' 'A'" });
+    const attest = attestSettings({ sign: "head -c 200000 /dev/zero | tr '\\0' 'A'" });
     const t = signedTrail(attest);
-    expect(t.attestProblems.join(" ")).toContain("exceeds 8192 bytes");
+    expect(t.attestProblems.join(" ")).toContain("exceeds 131072 bytes");
     expect(existsSync(headsPathFor(t.path!, attest))).toBe(false);
   });
 
@@ -673,5 +674,82 @@ describe("heads held off the machine", () => {
     expect(r.status).toBe("broken");
     expect(r.problems[0].reason).toBe("hash_mismatch");
     expect(r.heads_path).toBe(offbox);
+  });
+});
+
+describe("post-quantum signature sizes and algorithms", () => {
+  // Fake signer emitting an SLH-DSA-128s-sized (7,856 B) or SLH-DSA-256f-sized
+  // (49,856 B) blob. Refused at the old 8 KiB cap (base64 of 7,856 B is 10,472).
+  const bigSigner = (bytes: number) =>
+    writeSigner(signerPath, `process.stdout.write(Buffer.alloc(${bytes}, 7).toString("base64"));`);
+
+  for (const bytes of [4627, 7856, 49856]) {
+    it(`accepts a ${bytes}-byte signature (base64) and records it`, () => {
+      const attest = attestSettings({ sign: bigSigner(bytes), public_key: "", algorithm: "pq-test" });
+      const t = signedTrail(attest);
+      const head = JSON.parse(readFileSync(t.attestPath!, "utf-8").split("\n")[0]) as AttestHead;
+      expect(Buffer.from(head.signature, "base64").length).toBe(bytes);
+      expect(attest.problems).toEqual([]);
+    });
+  }
+
+  it("still refuses a runaway signer", () => {
+    const attest = attestSettings({ sign: bigSigner(200_000), public_key: "" });
+    const t = signedTrail(attest);
+    expect(t.attestProblems.join(" ")).toContain("exceeds 131072 bytes");
+  });
+
+  it("an algorithm this Node cannot load is unverifiable with an honest detail, not broken", () => {
+    const attest = attestSettings({ sign: bigSigner(4627), public_key: "", algorithm: "ml-dsa-87" });
+    const t = signedTrail(attest);
+    const res = verifyAttestation(t.path!, attestSettings({
+      sign: null, algorithm: "ml-dsa-87",
+      public_key: "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n",
+    }));
+    expect(res.status).toBe("unverifiable");
+    expect(res.problem).toContain("ml-dsa-87 not verifiable by this Node");
+    expect(res.problem).toContain("verify with the signer's tool");
+  });
+
+  it("verifies ML-DSA in-process when this Node supports it", () => {
+    let kp: { privateKey: import("node:crypto").KeyObject; publicKey: import("node:crypto").KeyObject };
+    try {
+      kp = generateKeyPairSync("ml-dsa-65" as never) as never;
+    } catch {
+      return; // feature-detect: Node 22 has no ML-DSA
+    }
+    const priv = kp.privateKey.export({ format: "pem", type: "pkcs8" }).toString();
+    const pub = kp.publicKey.export({ format: "pem", type: "spki" }).toString();
+    const attest = attestSettings({
+      sign: writeSigner(signerPath, `
+import { readFileSync } from "node:fs";
+import { createPrivateKey, sign } from "node:crypto";
+process.stdout.write(sign(null, readFileSync(0), createPrivateKey(${JSON.stringify(priv)})).toString("base64"));
+`),
+      public_key: pub, algorithm: "ml-dsa-65",
+    });
+    const t = signedTrail(attest);
+    expect(verifyAttestation(t.path!, attest).status).toBe("signed");
+  });
+
+  const hasOpenssl35 = (() => {
+    const r = spawnSync("openssl", ["version"], { encoding: "utf-8" });
+    const m = /OpenSSL (\d+)\.(\d+)/.exec(r.stdout ?? "");
+    return !!m && (+m[1] > 3 || (+m[1] === 3 && +m[2] >= 5));
+  })();
+  const opensslBin = spawnSync("sh", ["-c", "command -v openssl"], { encoding: "utf-8" }).stdout?.trim() || "openssl";
+  // A POSIX sh example; Windows paths and shells are not its target (Linux and macOS run it).
+  it.skipIf(!hasOpenssl35 || process.platform === "win32")("the sample OpenSSL ML-DSA-65 signer round-trips", () => {
+    const key = join(root, "k.pem"), pub = join(root, "k.pub");
+    spawnSync("openssl", ["genpkey", "-algorithm", "ML-DSA-65", "-out", key]);
+    spawnSync("openssl", ["pkey", "-in", key, "-pubout", "-out", pub]);
+    const script = join(process.cwd().replace(/packages.*$/, ""), "docs/examples/pq-signer-openssl.sh");
+    const attest = attestSettings({
+      // The signer runs in a login shell, whose PATH can put an older openssl
+      // (macOS: LibreSSL) first; pin the one this test checked.
+      sign: `OPENSSL=${opensslBin} sh ${script} ${key}`, verify: `OPENSSL=${opensslBin} sh ${script} --verify ${pub}`, public_key: "", algorithm: "ml-dsa-65",
+    });
+    const t = signedTrail(attest);
+    expect(verifyAttestation(t.path!, attest).status).toBe("signed");
   });
 });

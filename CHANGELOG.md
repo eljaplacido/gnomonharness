@@ -26,6 +26,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Post-quantum-ready audit signatures.** The `[audit.attest]` external-signer stdout cap is raised from 8 KiB to 128 KiB (still bounded) so ML-DSA-87, SLH-DSA-128s and SLH-DSA-256f signatures fit, base64 or hex. A public key or algorithm this Node cannot load (ML-DSA on Node 22) now reports `unverifiable` with "signature present, algorithm X not verifiable by this Node; verify with the signer's tool" instead of an opaque parse failure; where `node:crypto` has ML-DSA/SLH-DSA, heads verify in-process (feature-detected). Example OpenSSL 3.5 ML-DSA-65 signer in `docs/examples/pq-signer-openssl.sh`; GUIDE section on long-term evidence integrity. No new status strings or record shapes; Ed25519 defaults unchanged.
+
 ### Fixed
 
 - Claude behind a LiteLLM proxy (`replay_reasoning = true`): the streamed
