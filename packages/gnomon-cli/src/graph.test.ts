@@ -25,6 +25,8 @@ interface Write { path: string; content: string }
 /** Per node: what it writes on its first try, and on its retry (default: the same). */
 let script: Record<string, { first: Write; retry?: Write }>;
 const seen: Array<{ node: string; retry: boolean; text: string }> = [];
+/** Called when a node's tool result comes back (its file is written): a side effect on the operator's repository. */
+let onWritten: ((node: string) => void) | undefined;
 let server: Server;
 let base = "";
 const made: string[] = [];
@@ -42,7 +44,10 @@ beforeAll(async () => {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ choices: [{ index: 0, message, finish_reason: finish }], usage: { prompt_tokens: 100, completion_tokens: 20 } }));
       };
-      if (j.messages.some((m) => m.role === "tool")) return reply({ role: "assistant", content: "done" }, "stop");
+      if (j.messages.some((m) => m.role === "tool")) {
+        onWritten?.(node);
+        return reply({ role: "assistant", content: "done" }, "stop");
+      }
       seen.push({ node, retry, text: user });
       const s = script[node];
       const w = (retry ? s?.retry : undefined) ?? s?.first ?? { path: "junk.txt", content: "x\n" };
@@ -125,7 +130,11 @@ const status = (r: Run) => Object.fromEntries(r.json.nodes.map((n: any) => [n.id
 beforeEach(() => {
   seen.length = 0;
   script = {};
+  onWritten = undefined;
 });
+
+/** A check that sleeps only on the merged tree (the coordinator clone is <run>/integrate). */
+const SLOW_ON_MERGE = `case \\"$PWD\\" in */integrate) sleep 40;; esac; true`;
 afterEach(() => {
   while (made.length) rmSync(made.pop()!, { recursive: true, force: true });
 });
@@ -244,6 +253,95 @@ describe("gnomon task --graph", () => {
     expect(r.json.applied).toBe(false);
     expect(existsSync(join(root, "shared.txt"))).toBe(false);
   }, 120_000);
+
+  it("judges a non-ASCII path by its real name (git -z), not git's quoted form", async () => {
+    const root = await project();
+    script = { a: { first: { path: "\u00e4.txt", content: "A\n" } } };
+    const g = graphFile(`[nodes.a]\ninstruction = "NODE:a"\nfiles = ["\u00e4.txt"]\ncheck = "true"\n`);
+    const r = await gnomon(root, ["--graph", g, "--yes", "--apply"]);
+    expect(r.code, r.out + r.err).toBe(0);
+    expect(r.json.nodes[0]).toMatchObject({ status: "done", tries: 1, outside: [], changed: ["\u00e4.txt"] });
+    expect(r.json.applied).toBe(true);
+    expect(existsSync(join(root, "\u00e4.txt"))).toBe(true);
+  }, 120_000);
+
+  it("does not apply when the operator's HEAD moved during the run", async () => {
+    const root = await project();
+    script = { a: { first: { path: "a.txt", content: "A\n" } } };
+    onWritten = () => {
+      if (existsSync(join(root, "other.txt"))) return;
+      writeFileSync(join(root, "other.txt"), "o\n");
+      git(root, "add", "other.txt");
+      git(root, "commit", "-q", "-m", "meanwhile");
+    };
+    const g = graphFile(node("a", "grep -q A a.txt"));
+    const r = await gnomon(root, ["--graph", g, "--yes", "--apply"]);
+    expect(r.code, r.out + r.err).toBe(0);
+    expect(r.json.verified).toBe(true);
+    expect(r.json.applied).toBe(false);
+    expect(r.json.not_applied).toContain("HEAD moved");
+    expect(existsSync(join(root, "a.txt"))).toBe(false);
+  }, 120_000);
+
+  it("skips transitive dependents to a fixpoint, each naming the dep that will not finish", async () => {
+    const root = await project();
+    script = { a: { first: { path: "a.txt", content: "wrong\n" } } };
+    // d is declared before c, its dep: one pass in file order would leave d for the end-of-run sweep.
+    const g = graphFile(node("a", "grep -q A a.txt") + node("d", "true", `deps = ["c"]`) + node("c", "true", `deps = ["a"]`));
+    const r = await gnomon(root, ["--graph", g, "--yes"]);
+    expect(r.code, r.out + r.err).toBe(1);
+    expect(status(r)).toEqual({ a: "failed", d: "skipped", c: "skipped" });
+    expect(r.json.nodes.find((n: any) => n.id === "c").reason).toBe("dependency a ended failed");
+    expect(r.json.nodes.find((n: any) => n.id === "d").reason).toBe("dependency c was skipped");
+  }, 120_000);
+
+  it("the wall-clock budget also stops a check running on the merged tree", async () => {
+    const root = await project(`[attempts]\nmax_wall_seconds = 4\n`);
+    script = { a: { first: { path: "a.txt", content: "A\n" } } };
+    const g = graphFile(node("a", SLOW_ON_MERGE));
+    const t0 = Date.now();
+    const r = await gnomon(root, ["--graph", g, "--yes", "--apply"]);
+    expect(Date.now() - t0).toBeLessThan(30_000);
+    expect(r.code, r.out + r.err).toBe(1);
+    expect(r.json.budget_stop).toContain("max_wall_seconds = 4");
+    expect(r.json.verified).toBe(false);
+    expect(r.json.applied).toBe(false);
+    expect(r.json.integration.error).toContain("budget");
+  }, 60_000);
+
+  it.skipIf(process.platform === "win32")("Ctrl-C during integration stops its checks, reports (exit 1) and cleans the run dir", async () => {
+    const root = await project();
+    script = { a: { first: { path: "a.txt", content: "A\n" } } };
+    const g = graphFile(node("a", SLOW_ON_MERGE));
+    const c = spawn(process.execPath, [GNOMON, "task", "--graph", g, "--yes", "--apply", "--json", "--dir", root], {
+      env: { ...process.env, GNOMON_NO_UPDATE_CHECK: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    c.stdout.on("data", (d) => (out += d));
+    const until = Date.now() + 30_000;
+    const merged = () => {
+      try {
+        const dir = join(root, ".gnomon-audit");
+        const f = readdirSync(dir).find((x) => x.startsWith("graph-"));
+        return f ? readFileSync(join(dir, f), "utf-8").includes('"event":"merge"') : false;
+      } catch {
+        return false;
+      }
+    };
+    while (!merged() && Date.now() < until) await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 500));
+    const t0 = Date.now();
+    c.kill("SIGINT");
+    const code = await new Promise((r) => c.on("close", r));
+    expect(Date.now() - t0).toBeLessThan(15_000);
+    expect(code).toBe(1);
+    const rep = JSON.parse(out);
+    expect(rep.reason).toBe("interrupted");
+    expect(rep.applied).toBe(false);
+    expect(existsSync(join(rep.run_dir, "integrate"))).toBe(false);
+    expect(existsSync(join(root, "a.txt"))).toBe(false);
+  }, 90_000);
 
   it("refuses a graph with a node that has no check, before anything runs", async () => {
     const root = await project();

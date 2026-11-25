@@ -1469,9 +1469,15 @@ gnomon resolves nothing.
 
 The merged change is `integrated.patch` in a run directory under the system temp dir.
 `--apply` applies it only when every node was done, the merge was clean and every
-check passed again, and only over files you have not touched meanwhile. Budgets are
+check passed again, only if your HEAD has not moved, and only over files you have not
+touched meanwhile. Budgets are
 `[attempts] max_tokens` and `max_wall_seconds`, for the whole run. A node with no
 `check` refuses the run before anything starts (exit 10). Exit 0 verified, 1 not.
+
+What the allow-list sees: the node's staged change, so `.gnomon/`, `.gnomon-*`, `.tmp`
+and gitignored files are outside it (and naming them in `files` is refused). Paths match
+without case on Windows and macOS. Each check runs with `[verify] timeout_seconds`
+(default 600), in a node's clone and again on the merged tree.
 See CONTRACTS section 64.
 
 ## 7. Use-case patterns

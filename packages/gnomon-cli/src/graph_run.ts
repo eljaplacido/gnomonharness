@@ -49,7 +49,7 @@ import {
   type GraphNode,
   type TaskGraph,
 } from "gnomon-core";
-import { GNOMON_OWNED, dirtyPaths, git, killGroup, liveTokens, tokensOf } from "./attempts_run.js";
+import { GNOMON_OWNED, dirtyPaths, git, killGroup, liveTokens, namesZ, tokensOf } from "./attempts_run.js";
 import { selfLauncher } from "./self_launcher.js";
 
 /** The run directory is made under the system temp dir with this prefix. */
@@ -87,6 +87,8 @@ export interface IntegrationReport {
   checks: Array<{ node: string; exit: number | null }>;
   /** The nodes (or "[verify]") whose check failed on the merged tree. */
   failed: string[];
+  /** Integration could not finish (a fetch or merge that git refused, or the run stopped); null when it did. */
+  error: string | null;
 }
 
 export interface GraphReport {
@@ -290,7 +292,7 @@ export async function runGraph(opts: RunGraphOptions): Promise<GraphReport> {
   /** Stage the clone's change (gnomon's own files excluded) and list the paths it touched since `from`. */
   const changedSince = (dir: string, from: string): string[] => {
     git(dir, ["add", "-A", "--", ".", ...GNOMON_OWNED, ":(exclude).tmp"]);
-    return git(dir, ["diff", "--cached", "--name-only", "--no-renames", from]).split("\n").filter(Boolean);
+    return namesZ(dir, ["--cached", "--no-renames", from]);
   };
 
   const recordsIn = (dir: string): Set<string> => {
@@ -336,7 +338,16 @@ export async function runGraph(opts: RunGraphOptions): Promise<GraphReport> {
     });
 
   /** A node from its clone to done, or to why not. */
-  const runNode = async (l: NodeLive): Promise<void> => {
+  /** runNodeOnce, where anything unforeseen ends this node as failed, never the whole run. */
+  const runNode = (l: NodeLive): Promise<void> =>
+    runNodeOnce(l).catch((e: unknown) => {
+      l.state = "failed";
+      l.ended = Date.now();
+      l.reason = `it could not be run: ${e instanceof Error ? e.message : String(e)}`;
+      poke();
+    });
+
+  const runNodeOnce = async (l: NodeLive): Promise<void> => {
     const node = l.node;
     l.state = "running";
     l.started = Date.now();
@@ -386,7 +397,11 @@ export async function runGraph(opts: RunGraphOptions): Promise<GraphReport> {
       });
       log(`node ${node.id}: ${passed ? "check passed" : l.outside.length > 0 ? `changed outside its files (${l.outside.join(", ")})` : `check failed (exit ${chk.exit ?? "none"})`}`);
       if (passed) {
-        if (l.changed.length > 0) git(l.dir, [...IDENTITY, "commit", "--quiet", "--no-verify", "-m", `gnomon graph: node ${node.id}`]);
+        try {
+          if (l.changed.length > 0) git(l.dir, [...IDENTITY, "commit", "--quiet", "--no-verify", "-m", `gnomon graph: node ${node.id}`]);
+        } catch (e) {
+          return end("failed", `its passing change could not be committed: ${(e as Error).message}`);
+        }
         return end("done");
       }
       if (t === 1) {
@@ -445,9 +460,23 @@ export async function runGraph(opts: RunGraphOptions): Promise<GraphReport> {
     rmSync(join(runDir, "live"), { recursive: true, force: true });
   };
 
-  try {
-    const deadline = policy.max_wall_seconds > 0 ? t0 + policy.max_wall_seconds * 1000 : 0;
-    let signals = 0;
+  const deadline = policy.max_wall_seconds > 0 ? t0 + policy.max_wall_seconds * 1000 : 0;
+  /** A budget reached: stop everything, nodes and checks alike, in any phase (integration included). */
+  const tripBudget = async (why: string, used: number): Promise<void> => {
+    if (stopped) return;
+    budgetStop = why;
+    stopped = true;
+    trail.write("attempt_event", { run_id: runId, event: "budget_stop", reason: why, tokens: used });
+    log(`budget stop: ${why}`);
+    killChecks();
+    await Promise.all(live.filter((l) => l.state === "running").map((l) => cancelNode(l, why)));
+    poke();
+  };
+  // The wall clock also fires while nothing polls (a long check on the merged tree).
+  const wallTimer = deadline
+    ? setTimeout(() => void tripBudget(`[attempts] max_wall_seconds = ${policy.max_wall_seconds} reached`, tokensNow()), Math.max(0, deadline - Date.now()))
+    : null;
+  let signals = 0;
     const onSignal = (): void => {
       signals++;
       stopped = true;
@@ -461,27 +490,29 @@ export async function runGraph(opts: RunGraphOptions): Promise<GraphReport> {
       }
       poke();
     };
-    process.on("SIGINT", onSignal);
-    process.on("SIGTERM", onSignal);
-    try {
+  // Held until the report is built: a Ctrl-C during integration stops its checks
+  // (they are detached process groups) and still leaves a report and a clean run dir.
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  try {
       while (true) {
         if (!stopped) {
           const used = tokensNow();
-          if (policy.max_tokens > 0 && used >= policy.max_tokens) budgetStop = `[attempts] max_tokens = ${policy.max_tokens} reached (${used} used)`;
-          else if (deadline && Date.now() >= deadline) budgetStop = `[attempts] max_wall_seconds = ${policy.max_wall_seconds} reached`;
-          if (budgetStop) {
-            stopped = true;
-            trail.write("attempt_event", { run_id: runId, event: "budget_stop", reason: budgetStop, tokens: used });
-            log(`budget stop: ${budgetStop}`);
-            killChecks();
-            await Promise.all(live.filter((l) => l.state === "running").map((l) => cancelNode(l, budgetStop!)));
-          }
+          if (policy.max_tokens > 0 && used >= policy.max_tokens) await tripBudget(`[attempts] max_tokens = ${policy.max_tokens} reached (${used} used)`, used);
+          else if (deadline && Date.now() >= deadline) await tripBudget(`[attempts] max_wall_seconds = ${policy.max_wall_seconds} reached`, used);
         }
         // A pending node whose dep will never be done is skipped, and says which dep.
-        for (const l of live) {
-          if (l.state !== "pending") continue;
-          const bad = l.node.deps.map((d) => byId.get(d)!).find((d) => d.state !== "pending" && d.state !== "running" && d.state !== "done");
-          if (bad) skip(l, `dependency ${bad.node.id} ${bad.state === "skipped" ? "was skipped" : `ended ${bad.state}`}`);
+        // To a fixpoint: a dependent declared before its skipped dep is still skipped for it.
+        for (let changed = true; changed; ) {
+          changed = false;
+          for (const l of live) {
+            if (l.state !== "pending") continue;
+            const bad = l.node.deps.map((d) => byId.get(d)!).find((d) => d.state !== "pending" && d.state !== "running" && d.state !== "done");
+            if (bad) {
+              skip(l, `dependency ${bad.node.id} ${bad.state === "skipped" ? "was skipped" : `ended ${bad.state}`}`);
+              changed = true;
+            }
+          }
         }
         let active = live.filter((l) => l.state === "running").length;
         if (!stopped) {
@@ -497,10 +528,6 @@ export async function runGraph(opts: RunGraphOptions): Promise<GraphReport> {
         await Promise.race([new Promise<void>((r) => wake.push(r)), new Promise<void>((r) => setTimeout(r, 300).unref?.())]);
       }
       await Promise.all(running);
-    } finally {
-      process.off("SIGINT", onSignal);
-      process.off("SIGTERM", onSignal);
-    }
     for (const l of live) if (l.state === "pending") skip(l, budgetStop ? `the run stopped (${budgetStop})` : "the run stopped");
 
     // Each done node's own change, for review.
@@ -513,14 +540,21 @@ export async function runGraph(opts: RunGraphOptions): Promise<GraphReport> {
     // Integration: merge in dependency order, then judge the merged tree.
     let integration: IntegrationReport | null = null;
     if (!stopped) {
-      integration = { merged: [], conflict: null, checks: [], failed: [] };
+      integration = { merged: [], conflict: null, checks: [], failed: [], error: null };
       const order = topoOrder(graph).filter((id) => byId.get(id)!.state === "done");
       for (const id of order) {
+        if (stopped) break;
         const l = byId.get(id)!;
-        git(integDir, ["fetch", "--quiet", l.dir, "HEAD"]);
+        try {
+          git(integDir, ["fetch", "--quiet", l.dir, "HEAD"]);
+        } catch (e) {
+          integration.error = `node ${id} could not be fetched into the coordinator clone: ${(e as Error).message}`;
+          trail.write("attempt_event", { run_id: runId, event: "conflict", node: id, reason: integration.error });
+          break;
+        }
         const m = safeGit([...IDENTITY, "merge", "--no-ff", "--no-edit", "-m", `gnomon graph: merge node ${id}`, "FETCH_HEAD"], { cwd: integDir });
         if (m.status !== 0) {
-          const paths = safeGit(["diff", "--name-only", "--diff-filter=U"], { cwd: integDir }).stdout.split("\n").filter(Boolean);
+          const paths = safeGit(["diff", "--name-only", "-z", "--diff-filter=U"], { cwd: integDir }).stdout.split("\0").filter(Boolean);
           safeGit(["merge", "--abort"], { cwd: integDir });
           const withNodes = integration.merged.filter((o) => byId.get(o)!.changed.some((p) => paths.includes(p)));
           integration.conflict = { node: id, with: withNodes, paths };
@@ -531,8 +565,9 @@ export async function runGraph(opts: RunGraphOptions): Promise<GraphReport> {
         integration.merged.push(id);
         trail.write("attempt_event", { run_id: runId, event: "merge", node: id });
       }
-      if (!integration.conflict && integration.merged.length > 0) {
+      if (!integration.conflict && !integration.error && integration.merged.length > 0 && !stopped) {
         for (const id of integration.merged) {
+          if (stopped) break;
           const r = await runCheck(integDir, byId.get(id)!.node.check, envFor(null));
           integration.checks.push({ node: id, exit: r.exit });
         }
@@ -543,6 +578,7 @@ export async function runGraph(opts: RunGraphOptions): Promise<GraphReport> {
           integration.checks.push({ node: "[verify]", exit: r.exit });
         }
         integration.failed = integration.checks.filter((c) => c.exit !== 0).map((c) => c.node);
+        if (stopped) integration.error = budgetStop ? `stopped on the budget during integration (${budgetStop})` : "interrupted during integration";
         trail.write("attempt_event", {
           run_id: runId, event: "integrate", nodes: integration.merged, passed: integration.failed.length === 0,
           ...(integration.failed.length > 0 ? { reason: `failed on the merged tree: ${integration.failed.join(", ")}` } : {}),
@@ -552,7 +588,7 @@ export async function runGraph(opts: RunGraphOptions): Promise<GraphReport> {
     }
 
     const allDone = live.every((l) => l.state === "done");
-    const verified = Boolean(integration && allDone && !integration.conflict && integration.merged.length === live.length && integration.failed.length === 0);
+    const verified = Boolean(!stopped && integration && !integration.error && allDone && !integration.conflict && integration.merged.length === live.length && integration.failed.length === 0);
     const notDone = live.filter((l) => l.state !== "done");
     const reason = verified
       ? "every node passed its check, the merge was clean, and every check passed again on the merged tree"
@@ -562,7 +598,9 @@ export async function runGraph(opts: RunGraphOptions): Promise<GraphReport> {
           ? "interrupted"
           : notDone.length > 0
             ? `not every node was done: ${notDone.map((l) => `${l.node.id} ${l.state}`).join(", ")}`
-            : integration?.conflict
+            : integration?.error
+              ? integration.error
+              : integration?.conflict
               ? `merge conflict: ${integration.conflict.node} with ${integration.conflict.with.join(", ") || "the merged nodes"}`
               : `failed on the merged tree: ${integration?.failed.join(", ")}`;
 
@@ -570,7 +608,7 @@ export async function runGraph(opts: RunGraphOptions): Promise<GraphReport> {
     let patchPath: string | null = null;
     let applied = false;
     let notApplied: string | undefined;
-    if (integration && !integration.conflict && integration.merged.length > 0) {
+    if (integration && !integration.conflict && !integration.error && integration.merged.length > 0) {
       const diff = safeGit(["diff", "--binary", "--no-color", base, "HEAD"], { cwd: integDir }).stdout;
       if (diff) {
         patchPath = join(runDir, "integrated.patch");
@@ -578,9 +616,11 @@ export async function runGraph(opts: RunGraphOptions): Promise<GraphReport> {
         if (!verified) notApplied = `not applied: the integrated result is not verified (${reason}). Review it, then: git apply ${patchPath}`;
         else if (!opts.apply) notApplied = `not applied without --apply; review it, then: git apply ${patchPath}`;
         else {
-          const touched = git(integDir, ["diff", "--name-only", base, "HEAD"]).split("\n").filter(Boolean);
+          const touched = namesZ(integDir, [base, "HEAD"]);
           const now = dirtyPaths(root, touched);
-          if (now.length > 0) notApplied = `not applied: ${now.slice(0, 5).join(", ")} changed in your tree since the run started. The patch is kept at ${patchPath}.`;
+          const head = safeGit(["rev-parse", "HEAD"], { cwd: root }).stdout.trim();
+          if (head !== base) notApplied = `not applied: your HEAD moved since the run started (${base.slice(0, 12)} -> ${head.slice(0, 12) || "unknown"}), so the patch's base is not yours. It is kept at ${patchPath}.`;
+          else if (now.length > 0) notApplied = `not applied: ${now.slice(0, 5).join(", ")} changed in your tree since the run started. The patch is kept at ${patchPath}.`;
           else {
             const r = safeGit(["apply", "--binary", patchPath], { cwd: root });
             if (r.status === 0) applied = true;
@@ -623,12 +663,16 @@ export async function runGraph(opts: RunGraphOptions): Promise<GraphReport> {
       ...(budgetStop ? { budget_stop: budgetStop } : {}),
       tokens_total: nodes.reduce((s, n) => s + n.tokens, 0),
       wall_ms: Date.now() - t0,
-      exit: verified ? 0 : nodes.some((n) => n.tries > 0) ? 1 : 10,
+      // 10 is only a refusal (refuse(), before anything ran). Anything that went wrong at run time is 1.
+      exit: verified ? 0 : 1,
     };
     writeFileSync(join(runDir, "report.json"), `${JSON.stringify(report, null, 2)}\n`);
     trail.write("session_end", {});
     return report;
   } finally {
+    if (wallTimer) clearTimeout(wallTimer);
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
     killAll();
     cleanup();
   }

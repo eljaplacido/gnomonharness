@@ -134,9 +134,25 @@ export const GNOMON_OWNED = [":(exclude).gnomon", ":(exclude).gnomon-*"];
 
 /** Uncommitted changes in the operator's tree, outside what gnomon itself writes. */
 export function dirtyPaths(root: string, paths?: string[]): string[] {
-  const spec = paths && paths.length > 0 ? ["--", ...paths] : ["--", ".", ":(exclude).gnomon-*"];
-  const out = git(root, ["status", "--porcelain", "--untracked-files=all", ...spec]);
-  return out.split("\n").filter(Boolean).map((l) => l.slice(3));
+  // Literal pathspecs: a file named "*.md" names that file, not a glob.
+  const spec = paths && paths.length > 0 ? ["--", ...paths.map((p) => `:(literal)${p}`)] : ["--", ".", ":(exclude).gnomon-*"];
+  // -z: paths verbatim. Without it git quotes a non-ASCII path ("docs/\303\244.md"),
+  // which then names no file in the comparisons that follow.
+  const recs = git(root, ["status", "--porcelain", "-z", "--untracked-files=all", ...spec]).split("\0");
+  const out: string[] = [];
+  for (let i = 0; i < recs.length; i++) {
+    const r = recs[i]!;
+    if (r.length < 4) continue;
+    out.push(r.slice(3));
+    // A rename or copy is followed by its source path: touched as well.
+    if (r[0] === "R" || r[0] === "C") out.push(recs[++i] ?? "");
+  }
+  return out.filter(Boolean);
+}
+
+/** `git diff --name-only -z ...` as a list of verbatim paths. */
+export function namesZ(cwd: string, args: string[]): string[] {
+  return git(cwd, ["diff", "--name-only", "-z", ...args]).split("\0").filter(Boolean);
 }
 
 export function tokensOf(rec: unknown): number {
@@ -528,7 +544,7 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
     } else if (!opts.apply) {
       notApplied = `not applied without --apply; review it, then: git apply ${patchPath}`;
     } else {
-      const touched = git(chosen.dir, ["diff", "--cached", "--name-only", "HEAD"]).split("\n").filter(Boolean);
+      const touched = namesZ(chosen.dir, ["--cached", "HEAD"]);
       const now = dirtyPaths(root, touched);
       if (now.length > 0) {
         notApplied = `not applied: ${now.slice(0, 5).join(", ")} changed in your tree since the run started. The patch is kept at ${patchPath}.`;

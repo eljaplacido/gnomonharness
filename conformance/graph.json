@@ -8,7 +8,10 @@
     "id": "letters, digits, _ and -",
     "keys": ["instruction", "files", "check", "deps", "role"],
     "required": ["instruction", "files", "check"],
-    "files_match": "a path equal to an entry, or under it as a directory"
+    "files_match": "a path equal to an entry, or under it as a directory; entries normalised; case folded on win32 and darwin",
+    "files_refused": [".gnomon*", ".tmp"],
+    "outside_the_check": [".gnomon/", ".gnomon-*", ".tmp", "gitignored files"],
+    "check_timeout": "[verify] timeout_seconds, default 600"
   },
   "policy_block": {
     "file": "policy.toml",
@@ -26,8 +29,8 @@
   },
   "exit_codes": {
     "verified": 0,
-    "not_verified": 1,
-    "refused_or_nothing_ran": 10
+    "not_verified_or_failed_at_run_time": 1,
+    "refused_before_anything_ran": 10
   },
   "refusals": [
     "a node with no check",
@@ -40,6 +43,7 @@
     "--graph with task text, --task-file or --attempts"
   ],
   "verified_when": "every node done, every merge clean, every node's check and [verify] passed again on the merged tree",
-  "apply": "only a verified integration, only with --apply, only if none of its paths changed in the operator's tree; never a conflict or a partial graph",
+  "integration_fields": ["merged", "conflict", "checks", "failed", "error"],
+  "apply": "only a verified integration, only with --apply, only if HEAD is still the base commit and none of its paths changed in the operator's tree; never a conflict or a partial graph",
   "env": ["GNOMON_ATTEMPT_RUN", "GNOMON_ATTEMPT_NUMBER", "GNOMON_ATTEMPT_LIVE", "PORT", "TMPDIR"]
 }

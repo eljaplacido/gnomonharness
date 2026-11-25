@@ -20,6 +20,7 @@
  *   role = "coder"       # optional: the role this node runs as
  */
 
+import { posix } from "node:path";
 import { parseToml } from "./config.js";
 
 /** The keys a node table may hold. Anything else is refused: a misspelt `check` would leave a node unjudged. */
@@ -84,7 +85,13 @@ export function parseTaskGraph(text: string): { graph: TaskGraph } | { errors: s
     if (!check) errors.push(`${where}: needs a check, the command that judges this node (a node with no check of its own is never run)`);
     if (files === null) errors.push(`${where}: files must be a list of paths`);
     else if (files.length === 0) errors.push(`${where}: needs files, the paths this node may change`);
-    else for (const f of files) if (!safeRelPath(f)) errors.push(`${where}: files entry "${f}" must be a path inside the repository (relative, no "..")`);
+    else
+      for (const f of files) {
+        if (!safeRelPath(f)) errors.push(`${where}: files entry "${f}" must be a path inside the repository (relative, no "..")`);
+        else if (/^\.gnomon/.test(normalPath(f)) || normalPath(f) === ".tmp" || normalPath(f).startsWith(".tmp/")) {
+          errors.push(`${where}: files entry "${f}" names gnomon's own files (.gnomon/, .gnomon-*, .tmp), which a node's change never includes`);
+        }
+      }
     if (deps === null) errors.push(`${where}: deps must be a list of node ids`);
     if (t.role !== undefined && !str("role")) errors.push(`${where}: role must be a role name`);
     nodes.push({ id, instruction, files: (files ?? []).map(normalPath), check, deps: deps ?? [], ...(str("role") ? { role: str("role") } : {}) });
@@ -106,26 +113,38 @@ export function parseTaskGraph(text: string): { graph: TaskGraph } | { errors: s
   return errors.length > 0 ? { errors } : { graph: { nodes } };
 }
 
+/** "/"-separated, with "./", "//" and "." segments resolved and no trailing "/" ("" for the root). */
 function normalPath(p: string): string {
-  return p.replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+  const n = posix.normalize(p.replace(/\\/g, "/")).replace(/\/+$/, "");
+  return n === "." ? "" : n.replace(/^\.\//, "");
 }
+
+/** Whether paths compare without case: the default file systems of Windows and macOS do. */
+const FOLD_CASE = process.platform === "win32" || process.platform === "darwin";
 
 function safeRelPath(p: string): boolean {
   const n = p.replace(/\\/g, "/");
   if (n.startsWith("/") || /^[A-Za-z]:/.test(n)) return false;
-  if (n.split("/").some((s) => s === "..")) return false;
-  return normalPath(n) !== "" && normalPath(n) !== ".";
+  if (normalPath(n).split("/").some((s) => s === "..")) return false;
+  return normalPath(n) !== "";
 }
 
-/** True when `path` (repository-relative, "/"-separated) is one of `files` or under one of them. */
-export function pathAllowed(path: string, files: readonly string[]): boolean {
-  const p = normalPath(path);
-  return files.some((f) => p === f || p.startsWith(`${f}/`));
+/**
+ * True when `path` (repository-relative) is one of `files` or under one of
+ * them. Without case on Windows and macOS, whose file systems fold it.
+ */
+export function pathAllowed(path: string, files: readonly string[], foldCase: boolean = FOLD_CASE): boolean {
+  const fold = (s: string): string => (foldCase ? s.toLowerCase() : s);
+  const p = fold(normalPath(path));
+  return files.some((f0) => {
+    const f = fold(normalPath(f0));
+    return f !== "" && (p === f || p.startsWith(`${f}/`));
+  });
 }
 
 /** The paths in `changed` that `files` does not allow, in the given order. */
-export function outsideAllowList(changed: readonly string[], files: readonly string[]): string[] {
-  return changed.filter((p) => !pathAllowed(p, files));
+export function outsideAllowList(changed: readonly string[], files: readonly string[], foldCase: boolean = FOLD_CASE): string[] {
+  return changed.filter((p) => !pathAllowed(p, files, foldCase));
 }
 
 /**

@@ -44,10 +44,32 @@ describe("parseTaskGraph", () => {
 describe("the allow-list", () => {
   it("allows a listed file or anything under a listed directory, nothing else", () => {
     expect(pathAllowed("src/a.ts", ["src/a.ts"])).toBe(true);
-    expect(pathAllowed("src/lib/x.ts", ["src/lib/"])).toBe(false); // "src/lib/" is normalised at parse time
+    expect(pathAllowed("src/lib/x.ts", ["src/lib/"])).toBe(true);
+    expect(pathAllowed("src/lib/x.ts", ["./src//lib/."])).toBe(true);
+    expect(pathAllowed("./src/a.ts", ["src/a.ts"])).toBe(true);
+    expect(pathAllowed("docs/\u00e4.md", ["docs/\u00e4.md"])).toBe(true);
     expect(pathAllowed("src/lib/x.ts", ["src/lib"])).toBe(true);
     expect(pathAllowed("src/library.ts", ["src/lib"])).toBe(false);
     expect(outsideAllowList(["a.txt", "z.txt", "d/e.txt"], ["a.txt", "d"])).toEqual(["z.txt"]);
+  });
+});
+
+describe("allow-list edges", () => {
+  it("folds case only where the file system does (Windows, macOS)", () => {
+    expect(pathAllowed("Src/A.ts", ["src/a.ts"], true)).toBe(true);
+    expect(pathAllowed("Src/A.ts", ["src/a.ts"], false)).toBe(false);
+    expect(outsideAllowList(["SRC/x"], ["src"], true)).toEqual([]);
+  });
+  it("normalises entries at parse time and refuses gnomon's own paths", () => {
+    const r = parseTaskGraph(`[nodes.a]\ninstruction = "x"\nfiles = ["./src//lib/", "a/../b.txt"]\ncheck = "true"\n`);
+    if (!("graph" in r)) throw new Error("parse");
+    expect(r.graph.nodes[0]!.files).toEqual(["src/lib", "b.txt"]);
+    for (const bad of [".gnomon/policy.toml", ".gnomon-audit", "./.gnomon", ".tmp/x"]) {
+      const e = parseTaskGraph(`[nodes.a]\ninstruction = "x"\nfiles = ["${bad}"]\ncheck = "true"\n`);
+      expect("errors" in e && e.errors.join(), bad).toContain("gnomon's own files");
+    }
+    const up = parseTaskGraph(`[nodes.a]\ninstruction = "x"\nfiles = ["a/../../x"]\ncheck = "true"\n`);
+    expect("errors" in up && up.errors.join()).toContain("inside the repository");
   });
 });
 
