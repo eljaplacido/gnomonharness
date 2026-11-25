@@ -545,12 +545,13 @@ export function checkSignature(
   if (settings.public_key) {
     const key = publicKeyOf(settings.public_key);
     if (!key) {
-      // A key type this Node cannot load (ML-DSA / SLH-DSA on Node 22) is not a
-      // broken signature: say what is true and where to verify instead.
+      // A key this Node cannot load (ML-DSA / SLH-DSA on Node 22, or a malformed
+      // key) says nothing about the signature: say what is true and where to
+      // verify instead. Both cases stay `checked: false`, as before.
       const alg = head.algorithm ?? settings.algorithm;
       return {
         checked: false,
-        detail: `signature present, algorithm ${alg} not verifiable by this Node (public_key did not parse); verify with the signer's tool, or declare [audit.attest].verify`,
+        detail: `signature present, algorithm ${alg} not verifiable by this Node (public_key did not parse: a malformed key, or a key type this Node cannot load); verify with the signer's tool, or declare [audit.attest].verify`,
       };
     }
     const sig = decodeSignature(head.signature, head.signature_encoding ?? settings.signature_encoding);
