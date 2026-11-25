@@ -283,8 +283,27 @@ export async function runGraph(opts: RunGraphOptions): Promise<GraphReport> {
         c.stdout!.on("data", add);
         c.stderr!.on("data", add);
         const timer = setTimeout(() => killGroup(c, "SIGKILL"), ms);
-        c.on("error", (e) => (checkProcs.delete(c), clearTimeout(timer), cb({ exit: null, output: e.message })));
-        c.on("close", (code, signal) => (checkProcs.delete(c), clearTimeout(timer), cb({ exit: signal ? null : code, output: tail(out) })));
+        let settled = false;
+        const settle = (r: { exit: number | null; output: string }): void => {
+          if (settled) return;
+          settled = true;
+          checkProcs.delete(c);
+          clearTimeout(timer);
+          cb(r);
+        };
+        c.on("error", (e) => settle({ exit: null, output: e.message }));
+        c.on("close", (code, signal) => settle({ exit: signal ? null : code, output: tail(out) }));
+        // A grandchild can outlive a killed shell and hold the output pipes open, so
+        // "close" waits for it (Windows: taskkill ends bash, Git Bash's sleep keeps the
+        // pipe). Once the shell has exited, give the pipes a moment, then stop waiting.
+        c.on("exit", (code, signal) => {
+          setTimeout(() => {
+            if (settled) return;
+            c.stdout?.destroy();
+            c.stderr?.destroy();
+            settle({ exit: signal ? null : code, output: tail(out) });
+          }, 1000).unref();
+        });
       };
       run(cmd, (verify?.timeout_seconds ?? 600) * 1000, done);
     });
