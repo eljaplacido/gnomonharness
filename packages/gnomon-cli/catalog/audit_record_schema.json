@@ -636,10 +636,13 @@
     "attempt_event": {
       "required": {
         "run_id": {"type": ["string"], "class": "identifier", "note": "the attempts run's id (gnomon task --attempts)"},
-        "event": {"type": ["string"], "class": "metadata", "note": "spawn, check, cancel, budget_stop, select, apply or refuse"}
+        "event": {"type": ["string"], "class": "metadata", "note": "spawn, check, cancel, budget_stop, select, apply or refuse; under task --graph also plan, retry, reject, skip, merge, conflict and integrate"}
       },
       "optional": {
         "attempt": {"type": ["integer"], "class": "metadata", "note": "1-based attempt number; absent on a run-level event"},
+        "node": {"type": ["string"], "class": "metadata", "note": "task --graph: the graph node's id (attempt is then its try, 1 or 2)"},
+        "nodes": {"type": ["array"], "class": "metadata", "note": "task --graph: node ids (plan: all; conflict: the merged nodes collided with; integrate: those merged)"},
+        "paths": {"type": ["array"], "class": "content", "note": "task --graph: paths a node changed outside its allow-list, or a merge conflict's paths"},
         "worktree": {"type": ["string"], "class": "identifier"},
         "seed": {"type": ["integer"], "class": "metadata"},
         "role": {"type": ["string"], "class": "metadata"},

@@ -124,37 +124,48 @@ export interface RunAttemptsOptions {
 
 class Refusal extends Error {}
 
-function git(cwd: string, args: string[]): string {
+export function git(cwd: string, args: string[]): string {
   const r = safeGit(args, { cwd });
   if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${(r.stderr || r.stdout || "").trim()}`);
   return r.stdout;
 }
 
-const GNOMON_OWNED = [":(exclude).gnomon", ":(exclude).gnomon-*"];
+export const GNOMON_OWNED = [":(exclude).gnomon", ":(exclude).gnomon-*"];
 
 /** Uncommitted changes in the operator's tree, outside what gnomon itself writes. */
-function dirtyPaths(root: string, paths?: string[]): string[] {
+export function dirtyPaths(root: string, paths?: string[]): string[] {
   const spec = paths && paths.length > 0 ? ["--", ...paths] : ["--", ".", ":(exclude).gnomon-*"];
   const out = git(root, ["status", "--porcelain", "--untracked-files=all", ...spec]);
   return out.split("\n").filter(Boolean).map((l) => l.slice(3));
 }
 
-function tokensOf(rec: unknown): number {
+export function tokensOf(rec: unknown): number {
   const v = (rec as { volatile?: { tokens_in?: number; tokens_out?: number } } | null)?.volatile;
   return (v?.tokens_in ?? 0) + (v?.tokens_out ?? 0);
 }
 
 /** Tokens a running attempt has used so far, from its live record (only when [audit] is on there). */
-function liveTokens(auditDir: string): number {
+export function liveTokens(auditDir: string, skip?: ReadonlySet<string>): number {
   try {
     let best = 0;
     for (const f of readdirSync(auditDir)) {
-      if (!f.endsWith(".record.json")) continue;
+      if (!f.endsWith(".record.json") || skip?.has(f)) continue;
       best = Math.max(best, tokensOf(JSON.parse(readFileSync(join(auditDir, f), "utf-8"))));
     }
     return best;
   } catch {
     return 0;
+  }
+}
+
+/** Signal a child and its process group (taskkill /T on Windows). */
+export function killGroup(c: ChildProcess, signal: NodeJS.Signals): void {
+  try {
+    if (process.platform === "win32" && c.pid) spawnSync("taskkill", ["/T", "/F", "/PID", String(c.pid)], { stdio: "ignore", windowsHide: true });
+    else if (c.pid) process.kill(-c.pid, signal);
+    else c.kill(signal);
+  } catch {
+    // Already gone.
   }
 }
 
@@ -335,16 +346,6 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
       GNOMON_NO_UPDATE_CHECK: "1",
       ...(opts.trustHash ? { GNOMON_TRUST: opts.trustHash } : {}),
     };
-  }
-
-  function killGroup(c: ChildProcess, signal: NodeJS.Signals): void {
-    try {
-      if (process.platform === "win32" && c.pid) spawnSync("taskkill", ["/T", "/F", "/PID", String(c.pid)], { stdio: "ignore", windowsHide: true });
-      else if (c.pid) process.kill(-c.pid, signal);
-      else c.kill(signal);
-    } catch {
-      // Already gone.
-    }
   }
 
   const patchOf = (a: Live): void => {

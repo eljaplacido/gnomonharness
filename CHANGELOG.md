@@ -26,6 +26,7 @@
 
 ## [Unreleased]
 
+- **Opt-in `gnomon task --graph <file>`: a task graph with a check per node.** Nodes (`[nodes.<id>]`: `instruction`, `files` allow-list, `check`, optional `deps`, `role`) run in parallel clones of HEAD plus their deps' work, reusing `--attempts`' machinery (one surface hash, per-node `PORT`/`TMPDIR`, `[attempts]` budgets and `max_parallel`). A node is done only when its own check passes and it changed only its allowed files; a failing node gets one retry with the check's output, then its dependents are skipped while the rest continue. Done nodes are merged in dependency order and every check plus `[verify]` runs again on the merged tree; conflicts and post-merge failures are reported by node, never resolved. `--apply` applies the integrated change only when all of that passed. A node without a check refuses the run (exit 10). Audit reuses `attempt_event` with new event values and fields `node`, `nodes`, `paths`; `conformance/graph.json`, CONTRACTS section 64. Default (no flag) unchanged.
 ### Fixed
 
 - Claude behind a LiteLLM proxy (`replay_reasoning = true`): the streamed
