@@ -738,7 +738,8 @@ process.stdout.write(sign(null, readFileSync(0), createPrivateKey(${JSON.stringi
     return !!m && (+m[1] > 3 || (+m[1] === 3 && +m[2] >= 5));
   })();
   const opensslBin = spawnSync("sh", ["-c", "command -v openssl"], { encoding: "utf-8" }).stdout?.trim() || "openssl";
-  it.skipIf(!hasOpenssl35)("the sample OpenSSL ML-DSA-65 signer round-trips", () => {
+  // A POSIX sh example; Windows paths and shells are not its target (Linux and macOS run it).
+  it.skipIf(!hasOpenssl35 || process.platform === "win32")("the sample OpenSSL ML-DSA-65 signer round-trips", () => {
     const key = join(root, "k.pem"), pub = join(root, "k.pub");
     spawnSync("openssl", ["genpkey", "-algorithm", "ML-DSA-65", "-out", key]);
     spawnSync("openssl", ["pkey", "-in", key, "-pubout", "-out", pub]);
