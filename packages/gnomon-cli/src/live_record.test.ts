@@ -317,7 +317,11 @@ describe("the record changes nothing the model sees", () => {
 
     const sha = (s: string) => createHash("sha256").update(s).digest("hex");
     expect(bodies.get("kept")).toHaveLength(4);
-    expect(bodies.get("kept")!.map(sha)).toEqual(bodies.get("off")!.map(sha));
+    // On a mismatch, show the first differing body itself (a hash says only that it differs).
+    const k = bodies.get("kept")!, o = bodies.get("off")!;
+    const i = k.findIndex((b, n) => b !== o[n]);
+    if (i >= 0) expect(JSON.parse(k[i]!), `request ${i}`).toEqual(JSON.parse(o[i]!));
+    expect(k.map(sha)).toEqual(o.map(sha));
   }, 120_000);
 });
 

@@ -1,0 +1,49 @@
+{
+  "schema": "gnomon.graph/1",
+  "description": "gnomon task --graph <file>: a task graph whose every node has its own external check. CONTRACTS.md section 64. Pinned by packages/gnomon-cli/src/graph.test.ts, packages/gnomon-core/src/task_graph.test.ts and the audit schema.",
+  "dir": "<system tmp>/gnomon-graph-*",
+  "graph_file": {
+    "format": "TOML, gnomon's subset (CONTRACTS section 5)",
+    "table": "nodes.<id>",
+    "id": "letters, digits, _ and -",
+    "keys": ["instruction", "files", "check", "deps", "role"],
+    "required": ["instruction", "files", "check"],
+    "files_match": "a path equal to an entry, or under it as a directory; entries normalised; case folded on win32 and darwin",
+    "files_refused": [".gnomon*", ".tmp"],
+    "outside_the_check": [".gnomon/", ".gnomon-*", ".tmp", "gitignored files"],
+    "check_timeout": "[verify] timeout_seconds, default 600"
+  },
+  "policy_block": {
+    "file": "policy.toml",
+    "block": "attempts",
+    "keys_read": ["max_tokens", "max_wall_seconds", "max_parallel"]
+  },
+  "node_statuses": ["done", "failed", "rejected", "skipped", "cancelled"],
+  "retries_per_node": 1,
+  "audit": {
+    "kind": "attempt_event",
+    "events": ["plan", "spawn", "check", "retry", "reject", "skip", "cancel", "budget_stop", "merge", "conflict", "integrate", "apply", "refuse"],
+    "fields": ["node", "nodes", "paths"],
+    "session_start_mode": "graph",
+    "trail": "graph-<run_id>"
+  },
+  "exit_codes": {
+    "verified": 0,
+    "not_verified_or_failed_at_run_time": 1,
+    "refused_before_anything_ran": 10
+  },
+  "refusals": [
+    "a node with no check",
+    "a node with no instruction or no files",
+    "an unknown key or table",
+    "a dep the graph does not declare, or a cycle",
+    "a role the surface does not define",
+    "uncommitted changes in the working tree",
+    ".gnomon/ not committed",
+    "--graph with task text, --task-file or --attempts"
+  ],
+  "verified_when": "every node done, every merge clean, every node's check and [verify] passed again on the merged tree",
+  "integration_fields": ["merged", "conflict", "checks", "failed", "error"],
+  "apply": "only a verified integration, only with --apply, only if HEAD is still the base commit and none of its paths changed in the operator's tree; never a conflict or a partial graph",
+  "env": ["GNOMON_ATTEMPT_RUN", "GNOMON_ATTEMPT_NUMBER", "GNOMON_ATTEMPT_LIVE", "PORT", "TMPDIR"]
+}

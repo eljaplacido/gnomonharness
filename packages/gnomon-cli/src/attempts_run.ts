@@ -124,37 +124,64 @@ export interface RunAttemptsOptions {
 
 class Refusal extends Error {}
 
-function git(cwd: string, args: string[]): string {
+export function git(cwd: string, args: string[]): string {
   const r = safeGit(args, { cwd });
   if (r.status !== 0) throw new Error(`git ${args.join(" ")}: ${(r.stderr || r.stdout || "").trim()}`);
   return r.stdout;
 }
 
-const GNOMON_OWNED = [":(exclude).gnomon", ":(exclude).gnomon-*"];
+export const GNOMON_OWNED = [":(exclude).gnomon", ":(exclude).gnomon-*"];
 
 /** Uncommitted changes in the operator's tree, outside what gnomon itself writes. */
-function dirtyPaths(root: string, paths?: string[]): string[] {
-  const spec = paths && paths.length > 0 ? ["--", ...paths] : ["--", ".", ":(exclude).gnomon-*"];
-  const out = git(root, ["status", "--porcelain", "--untracked-files=all", ...spec]);
-  return out.split("\n").filter(Boolean).map((l) => l.slice(3));
+export function dirtyPaths(root: string, paths?: string[]): string[] {
+  // Literal pathspecs: a file named "*.md" names that file, not a glob.
+  const spec = paths && paths.length > 0 ? ["--", ...paths.map((p) => `:(literal)${p}`)] : ["--", ".", ":(exclude).gnomon-*"];
+  // -z: paths verbatim. Without it git quotes a non-ASCII path ("docs/\303\244.md"),
+  // which then names no file in the comparisons that follow.
+  const recs = git(root, ["status", "--porcelain", "-z", "--untracked-files=all", ...spec]).split("\0");
+  const out: string[] = [];
+  for (let i = 0; i < recs.length; i++) {
+    const r = recs[i]!;
+    if (r.length < 4) continue;
+    out.push(r.slice(3));
+    // A rename or copy is followed by its source path: touched as well.
+    if (r[0] === "R" || r[0] === "C") out.push(recs[++i] ?? "");
+  }
+  return out.filter(Boolean);
 }
 
-function tokensOf(rec: unknown): number {
+/** `git diff --name-only -z ...` as a list of verbatim paths. */
+export function namesZ(cwd: string, args: string[]): string[] {
+  return git(cwd, ["diff", "--name-only", "-z", ...args]).split("\0").filter(Boolean);
+}
+
+export function tokensOf(rec: unknown): number {
   const v = (rec as { volatile?: { tokens_in?: number; tokens_out?: number } } | null)?.volatile;
   return (v?.tokens_in ?? 0) + (v?.tokens_out ?? 0);
 }
 
 /** Tokens a running attempt has used so far, from its live record (only when [audit] is on there). */
-function liveTokens(auditDir: string): number {
+export function liveTokens(auditDir: string, skip?: ReadonlySet<string>): number {
   try {
     let best = 0;
     for (const f of readdirSync(auditDir)) {
-      if (!f.endsWith(".record.json")) continue;
+      if (!f.endsWith(".record.json") || skip?.has(f)) continue;
       best = Math.max(best, tokensOf(JSON.parse(readFileSync(join(auditDir, f), "utf-8"))));
     }
     return best;
   } catch {
     return 0;
+  }
+}
+
+/** Signal a child and its process group (taskkill /T on Windows). */
+export function killGroup(c: ChildProcess, signal: NodeJS.Signals): void {
+  try {
+    if (process.platform === "win32" && c.pid) spawnSync("taskkill", ["/T", "/F", "/PID", String(c.pid)], { stdio: "ignore", windowsHide: true });
+    else if (c.pid) process.kill(-c.pid, signal);
+    else c.kill(signal);
+  } catch {
+    // Already gone.
   }
 }
 
@@ -337,16 +364,6 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
     };
   }
 
-  function killGroup(c: ChildProcess, signal: NodeJS.Signals): void {
-    try {
-      if (process.platform === "win32" && c.pid) spawnSync("taskkill", ["/T", "/F", "/PID", String(c.pid)], { stdio: "ignore", windowsHide: true });
-      else if (c.pid) process.kill(-c.pid, signal);
-      else c.kill(signal);
-    } catch {
-      // Already gone.
-    }
-  }
-
   const patchOf = (a: Live): void => {
     git(a.dir, ["add", "-A", "--", ".", ...GNOMON_OWNED, ":(exclude).tmp"]);
     const diff = safeGit(["diff", "--cached", "--binary", "--no-color", "HEAD"], { cwd: a.dir }).stdout;
@@ -527,7 +544,7 @@ export async function runAttempts(opts: RunAttemptsOptions): Promise<AttemptsRep
     } else if (!opts.apply) {
       notApplied = `not applied without --apply; review it, then: git apply ${patchPath}`;
     } else {
-      const touched = git(chosen.dir, ["diff", "--cached", "--name-only", "HEAD"]).split("\n").filter(Boolean);
+      const touched = namesZ(chosen.dir, ["--cached", "HEAD"]);
       const now = dirtyPaths(root, touched);
       if (now.length > 0) {
         notApplied = `not applied: ${now.slice(0, 5).join(", ")} changed in your tree since the run started. The patch is kept at ${patchPath}.`;

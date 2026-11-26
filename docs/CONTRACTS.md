@@ -6126,3 +6126,62 @@ per attempt, total, wall-clock and `early_stop` savings (an estimate against the
 the attempts that finished).
 
 **Fixture**: `conformance/attempts.json`; `packages/gnomon-cli/src/attempts.test.ts`.
+
+## 64. `gnomon task --graph <file>` — a task graph with a check per node, `gnomon.graph/1`
+
+**Opt-in.** Without `--graph` nothing here runs. `--graph` with task text, `--task-file` or
+`--attempts` is refused (exit 10).
+
+**The file.** TOML in the subset of §5: one `[nodes.<id>]` table per node (id: letters,
+digits, `_`, `-`) with `instruction`, `files` (repository-relative paths the node may
+change: entries are normalised (`./`, `//`, `.` segments), a path matches an entry equal
+to it or a directory above it, without case on Windows and macOS; an entry naming
+`.gnomon*` or `.tmp` is refused) and `check` (a shell command) required, `deps` (node ids) and `role` optional. Any other key or table, an
+unknown dep, a cycle, an unknown role, or a node with no `check` refuses the run before
+anything is created or spent (exit 10), as do uncommitted changes and an uncommitted
+`.gnomon/`.
+
+**Run.** It reuses §60's machinery: shared clones of HEAD in a run directory under the
+system temp dir (`gnomon-graph-*`), one surface hash checked and recorded once in
+`manifest.json`, one headless `gnomon task` child per node try with its own `PORT`,
+`TMPDIR`, `GNOMON_ATTEMPT_RUN` and `GNOMON_ATTEMPT_NUMBER` (the node's 1-based position;
+no seed is sent), cancellation by SIGTERM (taskkill on Windows). Ready nodes (every dep
+`done`) start at once, up to `[attempts] max_parallel` (0 = all); each clone is the base
+with its deps' commits merged. A node is `done` only when its check exits 0 in its clone
+and every path it changed is allowed. The changed paths are read with `git -z` (verbatim,
+never git's quoted form) from what `git add -A` stages: `.gnomon/`, `.gnomon-*`, `.tmp` and
+gitignored files are never part of a node's change, so the allow-list does not see them.
+Every check (in a node's clone and on the merged tree) has `[verify] timeout_seconds`
+(default 600) and is killed at it. Otherwise it gets exactly one retry in the same
+clone, whose instruction adds the check's exit and output tail and the out-of-bounds
+paths; still not done, it ends `rejected` (paths out of bounds) or `failed`, and every
+node depending on it is `skipped`. `[attempts] max_tokens` and `max_wall_seconds` bound
+the whole run, integration included; a stop cancels running nodes (`cancelled`), kills
+running checks and skips the rest. A node whose clone, commit or fetch fails ends
+`failed` with the reason; the other nodes carry on. Ctrl-C stops nodes and checks in any
+phase and still writes the report.
+
+**Integration.** The done nodes are merged (`--no-ff`) in dependency order (ties: file
+order) in a coordinator clone; each merged node's check and then `[verify] command` (with
+its `setup`) run again on the merged tree. A conflict is reported as `{node, with, paths}`
+and the merge aborted; nothing is auto-resolved. `error` says why integration could not
+finish (a fetch git refused, a budget stop or Ctrl-C), else null. `verified` is true only when every node is
+`done`, every merge is clean and every check passed on the merged tree.
+
+**Apply.** The merged change is `integrated.patch` (each done node's own change is also in
+`patches/<id>.patch`). It is applied only when verified, only with `--apply` (`--yes` only
+approves the children's gated calls), and only if the operator's HEAD is still the base commit and none of its paths changed in the
+operator's tree since the run began. Exit 0 verified, 1 not verified (including a run
+that failed or was interrupted at run time), 10 refused before anything ran.
+
+**Audit.** No new kind: `attempt_event` (§60) in a sealed trail `graph-<run>`
+(`session_start` mode `graph`), with events `plan`, `spawn`, `check`, `retry`, `reject`,
+`skip`, `cancel`, `budget_stop`, `merge`, `conflict`, `integrate`, `apply`, `refuse` and
+the optional fields `node`, `nodes` and `paths` (`attempt` is the node's try, 1 or 2).
+Report `gnomon.graph/1` (`report.json`, and `--json`): per node `status` (`done`,
+`failed`, `rejected`, `skipped`, `cancelled`), `tries`, `check_exit`, `outside`,
+`changed`, `tokens`; `integration` `{merged, conflict, checks, failed, error}`; `verified`,
+`patch`, `applied`, `tokens_total`, `wall_ms`, `exit`.
+
+**Fixture**: `conformance/graph.json`; `packages/gnomon-cli/src/graph.test.ts`,
+`packages/gnomon-core/src/task_graph.test.ts`.

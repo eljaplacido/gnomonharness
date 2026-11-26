@@ -118,6 +118,7 @@ import {
   type TaskInterrupt,
 } from "gnomon-core";
 import { runAttempts, formatAttemptsReport, type AttemptsReport } from "./attempts_run.js";
+import { runGraph, formatGraphReport, type GraphReport } from "./graph_run.js";
 import {
   manifest as surfaceManifest,
   surfaceHash,
@@ -1828,8 +1829,57 @@ async function cmdAudit(args: CliArgs): Promise<void> {
   if (!allOk) process.exit(1);
 }
 
+/** `gnomon task --graph <file>`: the graph coordinator (graph_run.ts). Exits 0 verified, 1 not verified, 10 refused. */
+async function cmdTaskGraph(args: CliArgs, text: string): Promise<void> {
+  const graphPath = args.flags["graph"]!;
+  if (!graphPath || graphPath === "true") {
+    console.error("gnomon task: --graph needs the path of a graph file");
+    process.exit(10);
+  }
+  if (text || args.flags["task-file"] !== undefined || args.flags["attempts"] !== undefined) {
+    console.error("gnomon task: --graph takes its instructions from the graph file; give no task text, --task-file or --attempts with it");
+    process.exit(10);
+  }
+  if (args.flags["deadline"] !== undefined && !("at" in parseDeadline(args.flags["deadline"]))) {
+    console.error(`gnomon task: ${(parseDeadline(args.flags["deadline"]) as { error: string }).error}`);
+    process.exit(10);
+  }
+  let result: GraphReport;
+  try {
+    const base = loadConfig(args.dir, args.flags["profile"]);
+    const settled = settleTrustHeadless(base, trustOptions(args));
+    result = await runGraph({
+      config: settled.config,
+      graphPath: resolve(graphPath),
+      role: args.role,
+      yes: args.yes,
+      apply: args.flags["apply"] === "true",
+      profile: args.flags["profile"],
+      deadline: args.flags["deadline"],
+      requireVerify: args.flags["require-verify"] === "true",
+      ...(settled.outcome && settled.outcome.decision !== "clamped" ? { trustHash: settled.outcome.surface_hash } : {}),
+      log: args.json ? undefined : (line) => console.error(line),
+    });
+  } catch (err) {
+    if (err instanceof TrustRequiredError) exitTrustRequired(err, Boolean(args.json));
+    console.error(`gnomon task --graph could not start: ${err instanceof Error ? err.message : String(err)}`);
+    process.exit(10);
+  }
+  if (args.json) console.log(JSON.stringify(result, null, 2));
+  else if (result.nodes.length === 0) console.error(`gnomon task --graph: ${result.reason}`);
+  else console.log(formatGraphReport(result));
+  process.exit(result.exit);
+}
+
 async function cmdTask(args: CliArgs): Promise<void> {
   let text = [args.subcommand, ...args.positional].filter(Boolean).join(" ").trim();
+  // `--graph <file>`: a task graph whose every node has its own external
+  // check, run in clones and merged in dependency order (graph_run.ts,
+  // docs/CONTRACTS.md §64). Absent, none of this runs.
+  if (args.flags["graph"] !== undefined) {
+    await cmdTaskGraph(args, text);
+    return;
+  }
   // Every way out of this command exits 0, 2 or 10, the bucket, as
   // docs/CONTRACTS.md §1 says it does. A missing task and a missing surface
   // both used to exit 1, which is `failed` in the `result` bucket: a caller
@@ -3374,6 +3424,7 @@ Commands:
 
   task "<what to do>" [--role <name>] [--yes] [--json] [--trust] [--dir <path>]
        [--deadline <seconds|ISO time>] [--attempts <k> [--apply]]
+  task --graph <file> [--yes] [--apply] [--json] [--role <name>] [--dir <path>]
   task --task-file <path|-> [...the same options]
     Run one task without a terminal and print the result. --json emits a
     record whose only run-to-run differences are under "volatile".
@@ -3396,6 +3447,15 @@ Commands:
     a VERIFIED winner (--yes only approves the attempts' gated calls, as for
     a plain task), never over files you changed meanwhile. Exit 0
     verified, 1 unverified, 10 nothing to offer. k = 1 is a plain task.
+    --graph <file> runs a task graph (TOML: [nodes.<id>] with instruction,
+    files, check, deps, role). Ready nodes run in parallel ([attempts]
+    max_parallel) in clones of HEAD plus their deps; a node is done only
+    when its own check passes AND it changed only its files; a failing node
+    gets one retry with the check's output, then its dependents are skipped.
+    Done nodes are merged in dependency order and every check (and [verify])
+    runs again on the merged tree; a conflict is reported, never resolved.
+    --apply applies the merged change only when all of that passed. Refused
+    (exit 10) when a node has no check. Exit 0 verified, 1 not verified.
     --require-verify (or [verify] exit_on_fail = true) puts the declared
     [verify] check in the exit where the bucket says 0: 1 for a check that
     failed (or regressed, or passed_unverified), 4 for one that could not

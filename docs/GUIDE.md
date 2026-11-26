@@ -1428,6 +1428,58 @@ offered as unverified and never applied. It refuses with no check declared, with
 changes, or above `max`. Cost is the sum of the attempts' tokens; the report shows tokens
 per attempt, total, wall-clock and what early stop saved. See CONTRACTS section 60.
 
+### 6.10 Task graphs: `gnomon task --graph <file>`
+
+For a change that splits into steps you can judge one at a time, write a graph where
+every node declares what it may change and how it is checked. The idea is the one
+behind quantum error correction: catch an error at the step that made it, mid-run,
+without throwing away the steps that already finished.
+
+```toml
+# graph.toml (anywhere; it is not part of the change)
+[nodes.parser]
+instruction = "make the parser accept trailing commas"
+files = ["src/parser.ts", "test/parser"]   # a file, or everything under a directory
+check = "npm test -- parser"
+
+[nodes.docs]
+instruction = "document trailing commas in docs/syntax.md"
+files = ["docs/syntax.md"]
+check = "grep -q 'trailing comma' docs/syntax.md"
+
+[nodes.cli]
+instruction = "add --strict to reject trailing commas"
+files = ["src/cli.ts"]
+check = "npm test -- cli"
+deps = ["parser"]   # starts from parser's finished work
+```
+
+```bash
+gnomon task --graph graph.toml --yes --apply
+```
+
+Ready nodes run at once (up to `[attempts] max_parallel`), each in its own clone of HEAD
+with its deps' work merged in. A node is done only when its own check passes AND it
+changed nothing outside its `files`. A node that is not gets one retry, told what its
+check printed and which paths were out of bounds; if it still fails, the nodes that
+depend on it are skipped and the rest carry on. Then the done nodes are merged in
+dependency order and every node's check, plus `[verify] command` if declared, runs again
+on the merged tree. A merge conflict or a check that fails there is reported by node;
+gnomon resolves nothing.
+
+The merged change is `integrated.patch` in a run directory under the system temp dir.
+`--apply` applies it only when every node was done, the merge was clean and every
+check passed again, only if your HEAD has not moved, and only over files you have not
+touched meanwhile. Budgets are
+`[attempts] max_tokens` and `max_wall_seconds`, for the whole run. A node with no
+`check` refuses the run before anything starts (exit 10). Exit 0 verified, 1 not.
+
+What the allow-list sees: the node's staged change, so `.gnomon/`, `.gnomon-*`, `.tmp`
+and gitignored files are outside it (and naming them in `files` is refused). Paths match
+without case on Windows and macOS. Each check runs with `[verify] timeout_seconds`
+(default 600), in a node's clone and again on the merged tree.
+See CONTRACTS section 64.
+
 ## 7. Use-case patterns
 
 ### 7.1 Daily interactive coding
