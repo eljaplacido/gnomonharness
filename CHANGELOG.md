@@ -41,6 +41,28 @@
 
 ### Fixed
 
+- **Workspace run lock for `gnomon task` (#279).** When `[audit]` is enabled,
+  `gnomon task` acquires `<auditDir>/run.lock` atomically (`O_CREAT | O_EXCL`)
+  before opening a trail, and releases it on exit. A second live `gnomon task`
+  in the same workspace now refuses to start as `apparatus_failure` (exit 10,
+  naming the live PID and trail) instead of writing into `.gnomon-audit/` and
+  stopping both runs as `record_tamper`. Stale locks from dead PIDs are
+  replaced automatically, and `RecordGuard` excludes `run.lock`.
+- **`gnomon doctor` shares `gnomon task`'s surface usability check (#272).**
+  Fatal findings from `auditSurface` and `auditSecretsInRoot` (such as `[audit]`
+  declared in `policy.toml` instead of `config.toml`) are now reported as
+  `problem` findings with the same message and fix, exiting 1 instead of 0.
+- **Undeclared role tools / missing `tools.toml` are disclosed (#274).**
+  `auditSurface` flags roles whose `tools` list names tools absent from
+  `tools.toml` (explicitly noting when `tools.toml` is missing and when the role
+  is offered no tools), `gnomon doctor` reports that as a `problem` (exit 1),
+  and the turn loop warns on stderr when a role with listed tools ends up
+  offered none.
+- **CI stability:** `checkpoint_grind.test.ts` no longer forks external `grep`
+  inside `check.sh` and gives `win32` sufficient deadline margin for the final
+  check; `prompt_loop.test.ts` isolates `"confines run-to-run variance to
+  volatile"` in a temp surface so parallel test workers cannot perturb
+  `tree_delta` (#217).
 - Claude behind a LiteLLM proxy (`replay_reasoning = true`): the streamed
   `thinking_blocks` (with signatures) are kept verbatim and replayed on the
   assistant message to the same url and model, and tool-call-only turns that

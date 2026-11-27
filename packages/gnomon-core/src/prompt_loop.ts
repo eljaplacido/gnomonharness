@@ -128,7 +128,8 @@ import { pinCredentials, holdCredentials, heldNotice, type CredentialPin } from 
 import { StallSignals, STALL_SIGNAL_PATTERNS, normalizeCommand, type StallSignalCounters } from "./stall_signals.js";
 import { JobTable, scratchDirs, statSnapshot, statChangedPaths } from "./tools.js";
 import { resolveSandboxProfile, sandboxProfileRecord } from "./sandbox_profile.js";
-import { auditSecretsInRoot, secretsInRootRecord } from "./secrets_in_root.js";
+import { auditSecretsInRoot, secretsInRootRecord, surfaceFindingsFor } from "./secrets_in_root.js";
+import { acquireRunLock } from "./run_lock.js";
 import { JOB_TOOL, resolveSoftTimeout } from "./soft_shell.js";
 import {
   resolveCompletionGate,
@@ -6680,6 +6681,16 @@ async function agenticTurn(
     toolSet.schemas = toolSet.schemas.filter((t) => keep.has(t.function.name));
   }
   const offered = new Set(toolSet.schemas.map((t) => t.function.name));
+  // #274: a role that explicitly lists tools in roles.toml but ends up with
+  // none (missing tools.toml or every listed tool undeclared/disabled) used
+  // to run silently without tools, making models emit raw `<tool_call>` markup.
+  const declaredRoleTools = config.roles[role]?.tools;
+  if (offered.size === 0 && Array.isArray(declaredRoleTools) && declaredRoleTools.length > 0 && !sub?.readOnly) {
+    warn(
+      `  [gnomon] role "${role}" lists tools (${declaredRoleTools.join(", ")}) in roles.toml, ` +
+        `but none are declared/enabled in tools.toml — this role is offered no tools.`
+    );
+  }
   // bash soft_timeout = "handle" (soft_shell.ts, CONTRACTS.md §34): a
   // command past the timeout becomes a job of this turn's, when `job` is
   // offered to wait on it (the completion reviewer is offered none). Absent,
@@ -11441,24 +11452,7 @@ export async function runTask(
   // an interpreter, saw nothing at all. A record is where a measured fact
   // belongs, and these are measured facts about the surface that produced the
   // record.
-  const surfaceFindings = [...auditSurface(config), ...auditSecretsInRoot(config)];
-  // A `role_profile` the surface names and does not ship is a routing change
-  // that did not happen. The interactive loop discloses it -- "✗ profile "x"
-  // is not in .gnomon/profiles/ ... running the base roles unchanged" -- and
-  // the scripted path dropped it entirely, so in CI, the one mode with nobody
-  // reading the terminal, the run silently used routing nobody asked for.
-  if (config.profile?.problem) {
-    surfaceFindings.push({
-      where: config.profile.overridden
-        ? "--profile"
-        : ".gnomon/config.toml [defaults] role_profile",
-      problem: `${config.profile.problem} — running the base roles unchanged`,
-      fix: config.profile.requested
-        ? `Add .gnomon/profiles/${config.profile.requested}.toml, or drop the name that asks for it.`
-        : "Name a profile that exists, or drop the name that asks for it.",
-      fatal: false,
-    });
-  }
+  const surfaceFindings = surfaceFindingsFor(config);
   {
     const fatal = surfaceFindings.filter((p) => p.fatal);
     if (fatal.length > 0) {
@@ -11526,6 +11520,23 @@ export async function runTask(
   // watched it happen.
   const auditSettings = resolveAudit(config);
   const sessionId = `task-${new Date().toISOString().replace(/[:.]/g, "-")}-${process.pid}`;
+  // #279: two concurrent `gnomon task` runs in one workspace with `[audit]` on
+  // both write into `.gnomon-audit/` and stop each other as `record_tamper`.
+  // Acquire `<auditDir>/run.lock` BEFORE opening a trail so a second live run
+  // refuses cleanly at start (exit 10) without touching the first run's records.
+  let runLock: { release: () => void } | undefined;
+  if (auditSettings.enabled) {
+    const acquired = acquireRunLock(auditSettings.dir, { trail: `${sessionId}.jsonl` });
+    if (!acquired.acquired) {
+      return unstartedTaskRecord(
+        input,
+        role,
+        `another gnomon task (pid ${acquired.holder.pid}, trail ${acquired.holder.trail}) is running in this workspace`
+      );
+    }
+    runLock = acquired;
+  }
+  try {
   const audit = new AuditTrail(auditSettings, sessionId);
   // Set once `interrupt.kill` has written the killed turn and `session_end`.
   // The trail is sealed then, and a turn that runs on in-process (nothing
@@ -11684,6 +11695,7 @@ export async function runTask(
         audit.write("session_end", { turns: 1, surface_hash, signal });
         sealedByKill = true;
       }
+      runLock?.release();
       return killed.record;
     };
     // From here the run has started. A throw that leaves runTask after this
@@ -11713,6 +11725,7 @@ export async function runTask(
         }
         sealedByKill = true;
       }
+      runLock?.release();
       // The --json record a run that ends normally prints: the live file's own
       // fields (record_state, session, turn, endpoint_url, wire) stay in the file.
       const { record_state: _state, session: _session, turn: _turn, endpoint_url: _url, wire: _wire, ...record } = ended.record;
@@ -12175,6 +12188,9 @@ export async function runTask(
   // The shadow was flushed and closed above, before the turn record.
 
   return record;
+  } finally {
+    runLock?.release();
+  }
 }
 
 /** The reproducible part of an escalation, for a record outside `volatile`. */
