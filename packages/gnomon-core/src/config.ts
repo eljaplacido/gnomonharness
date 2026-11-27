@@ -567,6 +567,12 @@ export interface Policy {
     exit_on_fail?: boolean;
     /** true: the task record carries `verify_exit`, `verify_rounds`, `verify_reason`, `verify_tail`. */
     record_detail?: boolean;
+    /**
+     * true: a write-capable role (holding `write` or `edit`) whose turn ends
+     * with an unchanged worktree is handed back once, then ends on the refusal
+     * floor with `stop_reason = "no_change"` (code 4, exit 2) (#273).
+     */
+    require_change?: boolean;
     /** The completion gate (completion_gate.ts): "off", "checklist", "review" or "review_only". */
     completion_gate?: string;
     completion_rounds?: number;
@@ -3225,6 +3231,7 @@ export const BLOCK_KEYS: ReadonlyArray<readonly [file: "config.toml" | "policy.t
       "protects",
       "exit_on_fail",
       "record_detail",
+      "require_change",
       "completion_gate",
       "completion_rounds",
       "completion_min_remaining",
@@ -6681,6 +6688,14 @@ export interface ResolvedVerify {
   exit_on_fail?: true;
   /** `[verify] record_detail = true` (#235); `exit_on_fail` implies it. */
   record_detail?: true;
+  /** `[verify] require_change = true` (#273). */
+  require_change?: true;
+}
+
+/** Whether `[verify] require_change = true` is declared (works with or without a verify command, #273). */
+export function resolveVerifyRequireChange(config: GnomonConfig): boolean {
+  const v = (config.policy as { verify?: Record<string, unknown> } | undefined)?.verify;
+  return v?.require_change === true;
 }
 
 /** A positive, finite number of seconds, or undefined. */
@@ -6728,6 +6743,7 @@ export function resolveVerify(config: GnomonConfig): ResolvedVerify | null {
     ...(v?.regressed_hand_back === true ? { regressed_hand_back: true as const } : {}),
     ...(v?.exit_on_fail === true ? { exit_on_fail: true as const } : {}),
     ...(v?.record_detail === true || v?.exit_on_fail === true ? { record_detail: true as const } : {}),
+    ...(v?.require_change === true ? { require_change: true as const } : {}),
     ...(Array.isArray(v?.protects) && v.protects.some((g) => typeof g === "string" && g.trim())
       ? { protects: (v.protects as unknown[]).filter((g): g is string => typeof g === "string" && g.trim() !== "").map((g) => g.trim()) }
       : {}),

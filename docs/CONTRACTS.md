@@ -74,6 +74,7 @@ every `TaskRecord`.
 | `in_progress` | the turn had not ended when the record was written: only on a partial record (`record_state: "partial"`), which is what a SIGKILL leaves (§28) |
 | `killed` | SIGINT, SIGTERM or SIGHUP ended the process mid-turn and the record was flushed first; `stop_detail.signal` names the signal, and the record is `apparatus_failure` (11) (§28) |
 | `deadline` | `gnomon task --deadline` (or `GNOMON_DEADLINE`) was given and the turn reached the deadline less its margin, so it stopped itself: the call in flight aborted, the record final, the trail sealed. On the `refusal` floor a `step_wall` lands on (exit 2), with `stop_detail.deadline`, `budget_ms` and `margin_ms` (§31) |
+| `no_change` | opt-in `[verify] require_change = true` (#273): a write-capable role (holding `write` or `edit`) answered with an unchanged worktree; handed back once (unless the role was offered no tools), then stopped on the `refusal` floor (code 4, exit 2) instead of recording `answered` |
 
 `in_progress` and `killed` are written by the live record, never returned by
 a turn's own loop. They are here because a consumer reads them on the same
