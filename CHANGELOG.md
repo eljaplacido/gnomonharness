@@ -26,6 +26,20 @@
 
 ## [Unreleased]
 
+## [0.6.8] — 2026-11-27
+
+Parallel execution, end-to-end reliability, and provenance hardening. All new loop and verification modes are opt-in; existing surfaces stay byte-identical until opted in.
+
+- **Parallel execution:** opt-in `gnomon task --attempts <k>` (speculative parallel clones with early stop) and `gnomon task --graph <file>` (DAG task graphs with per-node checks, file allow-lists, and post-merge verification).
+- **Verification & change honesty:** opt-in `[verify] require_change = true` (`#273`) hands back once when a write-capable role finishes with an unchanged worktree and stops on `stop_reason: "no_change"` (refusal floor, exit `2`).
+- **Security, governance & provenance:** post-quantum-ready `[audit.attest]` signatures (128 KiB cap, ML-DSA / SLH-DSA), `gnomon check --format antigravity|hermes`, atomic workspace `run.lock` (`#279`), `gnomon-surface` manifest `build` provenance fixed to never stamp a user repo's commit SHA (`#239`), and `[sandbox] loopback = "deny"` probes.
+- **UX & reliability:** boxed terminal compact launch, `/status`, tinted panels; LiteLLM `thinking_blocks` replay; `gnomon doctor` parity with `gnomon task` fatal surface checks (`#272`) and undeclared role tools (`#274`); `gnomon tui` honours `NO_COLOR` (`#239`); fresh `gnomon audit scan` exits `0` on initialized repos without trails; Windows CI (`checkpoint_grind.test.ts`) and `#217` stabilized.
+- **Benchmarks:** `B-SCALE-1` monorepo/hook latency suite (100 → 25,000 tracked files, O(1) p95 78–91 ms on GX10), stdlib `GBS-REPORTING` v0.2 validator, and `v0.6.8` pre-registrations.
+
+`.gnomon/ci.sh` passes on the release commit (**5,546 tests**: 5,423 TypeScript + 123 Rust).
+
+### Details
+
 - **Opt-in `gnomon task --graph <file>`: a task graph with a check per node.** Nodes (`[nodes.<id>]`: `instruction`, `files` allow-list, `check`, optional `deps`, `role`) run in parallel clones of HEAD plus their deps' work, reusing `--attempts`' machinery (one surface hash, per-node `PORT`/`TMPDIR`, `[attempts]` budgets and `max_parallel`). A node is done only when its own check passes and it changed only its allowed files; a failing node gets one retry with the check's output, then its dependents are skipped while the rest continue. Done nodes are merged in dependency order and every check plus `[verify]` runs again on the merged tree; conflicts and post-merge failures are reported by node, never resolved. `--apply` applies the integrated change only when all of that passed. A node without a check refuses the run (exit 10). Audit reuses `attempt_event` with new event values and fields `node`, `nodes`, `paths`; `conformance/graph.json`, CONTRACTS section 64. Default (no flag) unchanged. `--attempts` now reads paths with `git -z` too, so a non-ASCII path no longer escapes its apply-time dirty check.
 ### Added
 
@@ -6350,7 +6364,8 @@ was written.
 
 <!-- 0.4.4 and 0.4.5 were never published, so 0.5.0 compares against 0.4.3 and
      their links point at the tags, not at (draft) release pages. -->
-[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.7...HEAD
+[Unreleased]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.8...HEAD
+[0.6.8]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.7...v0.6.8
 [0.6.7]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.6...v0.6.7
 [0.6.6]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.5...v0.6.6
 [0.6.5]: https://github.com/eljaplacido/gnomonharness/compare/v0.6.4...v0.6.5
