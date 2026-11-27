@@ -363,6 +363,7 @@ describe("a roles.toml edit the active profile overrides is reported", () => {
       `[defaults]\nrole_profile = "p"\n\n[endpoints.local]\nurl = "http://127.0.0.1:11434/api/chat"\nkind = "ollama"\n\n` +
       `[endpoints.cloud]\nurl = "https://example.invalid/v1/chat/completions"\nkind = "openai"\n`);
     writeFileSync(join(root, ".gnomon", "roles.toml"), `[roles.plan]\n${rolesPlan}tools = ["read"]\n`);
+    writeFileSync(join(root, ".gnomon", "tools.toml"), `[[tools]]\nname = "read"\nenabled = true\n`);
     writeFileSync(join(root, ".gnomon", "system.md"), "x\n");
     writeFileSync(join(root, ".gnomon", "profiles", "p.toml"), `name = "p"\n\n[roles.plan]\n${profilePlan}`);
     return root;
@@ -426,6 +427,7 @@ describe("a model pick leaves the two files agreeing", () => {
     writeFileSync(join(root, ".gnomon", "roles.toml"),
       `# why plan is scoped this way\n[roles.plan]\n${opts.rolesPlan ?? 'model = "qwen"\nendpoint = "local"\n'}` +
       `tools = ["read"]\n\n[roles.smol]\nmodel = "small"\nendpoint = "local"\ntools = ["read"]\n`);
+    writeFileSync(join(root, ".gnomon", "tools.toml"), `[[tools]]\nname = "read"\nenabled = true\n`);
     writeFileSync(join(root, ".gnomon", "system.md"), "x\n");
     const profiles = opts.profiles ?? { p: `name = "p"\n\n[roles.plan]\nmodel = "qwen"\nendpoint = "local"\n` };
     for (const [name, body] of Object.entries(profiles)) {

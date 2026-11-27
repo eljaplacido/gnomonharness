@@ -82,6 +82,7 @@ export * from "./skills.js";
 export * from "./skill_export.js";
 export * from "./record_guard.js";
 export * from "./record_tamper.js";
+export * from "./run_lock.js";
 // A turn's record on disk while it runs, and the signals that flush it.
 export * from "./live_record.js";
 export * from "./skill_mine.js";

@@ -2970,18 +2970,40 @@ describe("runTask — the non-interactive contract", () => {
   it("confines run-to-run variance to `volatile`", async () => {
     // The gate compares two runs and ignores exactly what is allowed to
     // differ. Anything outside `volatile` that moves would break that.
-    await withFetch(answers("stable"), async () => {
-      const config = loadConfig("../..");
-      const a = await promptLoop.runTask(config, "same input", { role: "smol" });
-      const b = await promptLoop.runTask(config, "same input", { role: "smol" });
-      const strip = (r: typeof a) => ({ ...r, volatile: undefined });
-      expect(strip(a)).toEqual(strip(b));
-      // `model_calls`: what came back per request, with its clock -- which
-      // differs between the two runs, so it is volatile. What each request
-      // carried is counters.model_calls, compared above.
-      expect(Object.keys(a.volatile)).toEqual(["duration_ms", "model_calls"]);
-      expect(a.counters.model_calls!.calls).toEqual(b.counters.model_calls!.calls);
-    });
+    // Run in an isolated temp surface rather than `../..` so parallel vitest
+    // workers or coverage output in the repo root cannot perturb `tree_delta` (#217).
+    const dir = mkdtempSync(join(tmpdir(), "gnomon-variance-"));
+    try {
+      mkdirSync(join(dir, ".gnomon"), { recursive: true });
+      writeFileSync(
+        join(dir, ".gnomon", "config.toml"),
+        `[defaults]\nmax_context_tokens = 32768\n\n[endpoints.local]\nurl = "http://127.0.0.1:11434/api/chat"\nkind = "ollama"\n`
+      );
+      writeFileSync(
+        join(dir, ".gnomon", "roles.toml"),
+        `[roles.smol]\nmodel = "qwen3.6:35b"\nendpoint = "local"\ntools = ["read"]\nmax_steps = 8\n`
+      );
+      writeFileSync(
+        join(dir, ".gnomon", "tools.toml"),
+        `[[tools]]\nname = "read"\ndescription = "Read a file."\nenabled = true\n`
+      );
+      writeFileSync(join(dir, ".gnomon", "policy.toml"), `[approval]\ngate = "on_write"\n`);
+      writeFileSync(join(dir, ".gnomon", "system.md"), "be brief\n");
+      await withFetch(answers("stable"), async () => {
+        const config = loadConfig(dir);
+        const a = await promptLoop.runTask(config, "same input", { role: "smol" });
+        const b = await promptLoop.runTask(config, "same input", { role: "smol" });
+        const strip = (r: typeof a) => ({ ...r, volatile: undefined });
+        expect(strip(a)).toEqual(strip(b));
+        // `model_calls`: what came back per request, with its clock -- which
+        // differs between the two runs, so it is volatile. What each request
+        // carried is counters.model_calls, compared above.
+        expect(Object.keys(a.volatile)).toEqual(["duration_ms", "model_calls"]);
+        expect(a.counters.model_calls!.calls).toEqual(b.counters.model_calls!.calls);
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("refuses gated calls when nobody is there to ask", async () => {

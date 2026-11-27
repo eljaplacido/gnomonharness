@@ -41,6 +41,7 @@ import { createHash } from "node:crypto";
 import type { GnomonConfig } from "./config.js";
 import { verifyTrail, resolveAudit, type AuditRecord } from "./audit.js";
 import type { ResolvedAttest } from "./attest.js";
+import { isRunLockFile } from "./run_lock.js";
 
 /** The record directories of a surface: absolute, existing or not. */
 export function recordDirsOf(config: GnomonConfig): string[] {
@@ -170,6 +171,9 @@ export function snapshotRecords(dirs: string[], exclude: string[] = []): RecordS
         if (skip.size === 0 || !skip.has(resolve(p))) walk(p);
         continue;
       }
+      // Workspace run lock (run_lock.ts, #279): lifecycle file created/removed
+      // around a `gnomon task` run, not an audit record.
+      if (isRunLockFile(p)) continue;
       const state: RecordFileState = { key: stateKey(st) };
       if (st.isSymbolicLink()) {
         try {
