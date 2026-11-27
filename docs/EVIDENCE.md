@@ -164,9 +164,21 @@ Listed because omitting them would imply coverage that does not exist.
   (#164) and governance levels (#167). No result for any of them is published
   here. They are opt-in and unproven.
 
-- **`[sandbox] exec = "docker"` containment against a real Docker** — CI tests
-  it against a stub `docker` (argv inspection and a fake), not a real engine.
-  The kernel sandbox `exec = "os"` (PR #156) is not merged.
+- **The opt-in capability levers shipped in `v0.6.6`–`v0.6.8`** —
+  `edit_format = "hashline"`, `[context]` retention (`#301`), `gnomon task
+  --attempts <k>`, `gnomon task --graph <file>`, `gnomon improve`, and `[verify]
+  require_change = true` (`#273`). Each has deterministic unit and conformance
+  coverage; none has a published live-model A/B task-completion measurement yet.
+
+- **Kernel & container containment (`[sandbox] exec = "os"` and `"docker"`):**
+  *Corrected 2026-11-27:* this row previously stated `exec = "os"` (PR #156) was
+  not merged. `exec = "os"` (Linux Landlock + seccomp with optional
+  `reads = "scoped"` and `loopback = "deny"`; macOS Seatbelt; fail-closed on
+  native Windows) is merged (`a62a31bc1`, `a20482543`) and covered by 46 kernel
+  sandbox integration tests in `crates/gnomon-exec/tests/sandbox.rs`. Both
+  `exec = "os"` and real `exec = "docker"` containers are probed live by
+  `gnomon security test --sandbox` (29/29 claimed probes passing on Linux with
+  Docker; CI unit tests for `exec = "docker"` still stub the `docker` binary).
 
 ## The one that failed
 
