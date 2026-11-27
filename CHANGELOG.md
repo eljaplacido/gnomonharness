@@ -29,6 +29,14 @@
 - **Opt-in `gnomon task --graph <file>`: a task graph with a check per node.** Nodes (`[nodes.<id>]`: `instruction`, `files` allow-list, `check`, optional `deps`, `role`) run in parallel clones of HEAD plus their deps' work, reusing `--attempts`' machinery (one surface hash, per-node `PORT`/`TMPDIR`, `[attempts]` budgets and `max_parallel`). A node is done only when its own check passes and it changed only its allowed files; a failing node gets one retry with the check's output, then its dependents are skipped while the rest continue. Done nodes are merged in dependency order and every check plus `[verify]` runs again on the merged tree; conflicts and post-merge failures are reported by node, never resolved. `--apply` applies the integrated change only when all of that passed. A node without a check refuses the run (exit 10). Audit reuses `attempt_event` with new event values and fields `node`, `nodes`, `paths`; `conformance/graph.json`, CONTRACTS section 64. Default (no flag) unchanged. `--attempts` now reads paths with `git -z` too, so a non-ASCII path no longer escapes its apply-time dirty check.
 ### Added
 
+- **Opt-in `[verify] require_change = true` and `stop_reason: "no_change"` (#273).**
+  A write-capable role (holding `write` or `edit`) whose turn ends with an
+  unchanged worktree is handed back once to carry out the work with its tools
+  instead of describing it; if the worktree is still unchanged (or the role was
+  offered no tools), the turn stops on the refusal floor (`code: 4`,
+  `bucket: "refusal"`, `stop_reason: "no_change"`, exit `2` on `gnomon task`)
+  instead of recording `result`/`answered`. Works with or without a `[verify]`
+  command; off by default so existing surfaces are unchanged.
 - **Post-quantum-ready audit signatures.** The `[audit.attest]` external-signer stdout cap is raised from 8 KiB to 128 KiB (still bounded) so ML-DSA-87, SLH-DSA-128s and SLH-DSA-256f signatures fit, base64 or hex. A public key or algorithm this Node cannot load (ML-DSA on Node 22) now reports `unverifiable` with "signature present, algorithm X not verifiable by this Node; verify with the signer's tool" instead of an opaque parse failure; where `node:crypto` has ML-DSA/SLH-DSA, heads verify in-process (feature-detected). Example OpenSSL 3.5 ML-DSA-65 signer in `docs/examples/pq-signer-openssl.sh`; GUIDE section on long-term evidence integrity. No new status strings or record shapes; Ed25519 defaults unchanged.
 
 ### Fixed
@@ -47,6 +55,28 @@
   but no `.gnomon-audit/` yet now returns a clean empty `gnomon.audit_scan/1`
   report (exit 0) instead of failing with exit 10; explicit missing paths still
   fail closed with exit 10.
+- **Workspace run lock for `gnomon task` (#279).** When `[audit]` is enabled,
+  `gnomon task` acquires `<auditDir>/run.lock` atomically (`O_CREAT | O_EXCL`)
+  before opening a trail, and releases it on exit. A second live `gnomon task`
+  in the same workspace now refuses to start as `apparatus_failure` (exit 10,
+  naming the live PID and trail) instead of writing into `.gnomon-audit/` and
+  stopping both runs as `record_tamper`. Stale locks from dead PIDs are
+  replaced automatically, and `RecordGuard` excludes `run.lock`.
+- **`gnomon doctor` shares `gnomon task`'s surface usability check (#272).**
+  Fatal findings from `auditSurface` and `auditSecretsInRoot` (such as `[audit]`
+  declared in `policy.toml` instead of `config.toml`) are now reported as
+  `problem` findings with the same message and fix, exiting 1 instead of 0.
+- **Undeclared role tools / missing `tools.toml` are disclosed (#274).**
+  `auditSurface` flags roles whose `tools` list names tools absent from
+  `tools.toml` (explicitly noting when `tools.toml` is missing and when the role
+  is offered no tools), `gnomon doctor` reports that as a `problem` (exit 1),
+  and the turn loop warns on stderr when a role with listed tools ends up
+  offered none.
+- **CI stability:** `checkpoint_grind.test.ts` no longer forks external `grep`
+  inside `check.sh` and gives `win32` sufficient deadline margin for the final
+  check; `prompt_loop.test.ts` isolates `"confines run-to-run variance to
+  volatile"` in a temp surface so parallel test workers cannot perturb
+  `tree_delta` (#217).
 - Claude behind a LiteLLM proxy (`replay_reasoning = true`): the streamed
   `thinking_blocks` (with signatures) are kept verbatim and replayed on the
   assistant message to the same url and model, and tool-call-only turns that

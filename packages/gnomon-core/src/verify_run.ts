@@ -199,7 +199,7 @@ export function auditVerifyKeys(config: GnomonConfig): VerifyKeyProblem[] {
       fatal: false,
     });
   }
-  for (const key of ["regressed_hand_back", "exit_on_fail", "record_detail"]) {
+  for (const key of ["regressed_hand_back", "exit_on_fail", "record_detail", "require_change"]) {
     if (v[key] !== undefined && typeof v[key] !== "boolean") {
       out.push({
         where: `${where} ${key}`,

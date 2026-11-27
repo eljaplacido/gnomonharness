@@ -21,7 +21,7 @@
  * a fatal finding (chat, task, acp) add these to theirs.
  */
 import { relative, resolve } from "node:path";
-import { listRoles, resolveExec, type GnomonConfig, type SurfaceProblem } from "./config.js";
+import { auditSurface, listRoles, resolveExec, type GnomonConfig, type SurfaceProblem } from "./config.js";
 import { levelAtLeast, resolveLevels, resolveProtectedPaths } from "./governance.js";
 import { secretFilesInRoot } from "./tools.js";
 
@@ -92,4 +92,28 @@ export function secretsInRootRecord(config: GnomonConfig): { accepted: true; fil
   if (!secretsInRootAllowed(config)) return undefined;
   const files = exposedSecretFiles(config);
   return files.length > 0 ? { accepted: true, files: names(config, files) } : undefined;
+}
+
+/**
+ * The single surface-usability check shared by `gnomon task` and `gnomon doctor` (#272).
+ *
+ * Returns every finding from `auditSurface`, `auditSecretsInRoot`, and an
+ * unresolved `role_profile`. Any `fatal: true` entry refuses `gnomon task`
+ * and makes `gnomon doctor` report a `problem` and exit 1.
+ */
+export function surfaceFindingsFor(config: GnomonConfig): SurfaceProblem[] {
+  const findings: SurfaceProblem[] = [...auditSurface(config), ...auditSecretsInRoot(config)];
+  if (config.profile?.problem) {
+    findings.push({
+      where: config.profile.overridden
+        ? "--profile"
+        : ".gnomon/config.toml [defaults] role_profile",
+      problem: `${config.profile.problem} — running the base roles unchanged`,
+      fix: config.profile.requested
+        ? `Add .gnomon/profiles/${config.profile.requested}.toml, or drop the name that asks for it.`
+        : "Name a profile that exists, or drop the name that asks for it.",
+      fatal: false,
+    });
+  }
+  return findings;
 }

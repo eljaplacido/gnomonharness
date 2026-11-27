@@ -37,7 +37,11 @@
     "",
     "`provider_refusal` was added 2026-11-23 (R65 diagnosis): a provider refusal (Anthropic",
     "stop_reason refusal, OpenAI-shaped finish_reason content_filter) was handled as an empty",
-    "completion, so the model was told to answer now and the turn ended `answered` with no work."
+    "completion, so the model was told to answer now and the turn ended `answered` with no work.",
+    "",
+    "`no_change` was added 2026-11-27 (#273): under opt-in `[verify] require_change = true`, a",
+    "write-capable role (holding write or edit) that ends with an unchanged worktree is handed back",
+    "once and then stops on the refusal floor (code 4, exit 2) instead of recording `answered`."
   ],
   "stop_reason": {
     "answered": "the model stopped calling tools of its own accord",
@@ -53,8 +57,9 @@
     "tamper": "a tool call, or something between calls, changed gnomon's own records and gnomon did not make the change; the turn stops with a refusal (3) and a record_tamper record",
     "in_progress": "the turn had not ended when the record was written; only on a partial record (record_state: partial), which is what a SIGKILL leaves",
     "killed": "SIGINT, SIGTERM or SIGHUP ended the process mid-turn and the record was flushed first; stop_detail.signal names the signal, and the record is apparatus_failure (11)",
-    "deadline": "gnomon task --deadline (or GNOMON_DEADLINE) was given and the turn reached the deadline less its margin, so it stopped itself: the call in flight aborted, the record final, the trail sealed; on the refusal floor a step_wall lands on (exit 2), with stop_detail.deadline, budget_ms and margin_ms"
+    "deadline": "gnomon task --deadline (or GNOMON_DEADLINE) was given and the turn reached the deadline less its margin, so it stopped itself: the call in flight aborted, the record final, the trail sealed; on the refusal floor a step_wall lands on (exit 2), with stop_detail.deadline, budget_ms and margin_ms",
+    "no_change": "opt-in [verify] require_change = true: a write-capable role (holding write or edit) ended with an unchanged worktree after one hand-back (or immediately when offered no tools); lands on the refusal floor (code 4, exit 2)"
   },
-  "expected_count": 14,
+  "expected_count": 15,
   "not_a_bucket": "stop_reason is a separate axis from the outcome bucket. The bucket says WHAT happened; this says why the loop stopped. Nothing here maps to result/refusal/apparatus_failure, and a reader combining them is producing a composite verdict this project refuses to publish."
 }
