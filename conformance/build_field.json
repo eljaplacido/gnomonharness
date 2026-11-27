@@ -56,5 +56,30 @@
     "end with a bare '+' — a missing revision is said, never implied",
     "claim a commit for a tree with uncommitted changes",
     "name a commit of a repository other than gnomon's own"
-  ]
+  ],
+  "manifest_build": {
+    "format": "<semver>+<revision>",
+    "resolution_order": [
+      {
+        "rule": "GNOMON_BUILD",
+        "when": "the environment variable is set and non-blank",
+        "revision": "its verbatim value"
+      },
+      {
+        "rule": "GNOMON_BUILD_file",
+        "when": "a non-blank GNOMON_BUILD file sits beside the gnomon-surface binary",
+        "revision": "its trimmed contents"
+      },
+      {
+        "rule": "git",
+        "when": "the binary's checkout or hashed directory sits inside gnomon's own checkout (top-level holds packages/gnomon-core/src/build.ts)",
+        "revision": "<short sha>, suffixed -dirty when the worktree has uncommitted changes"
+      },
+      {
+        "rule": "local",
+        "when": "nothing above applies (including any foreign git repository)",
+        "revision": "local"
+      }
+    ]
+  }
 }

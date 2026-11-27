@@ -452,13 +452,54 @@ fn safe_git(dir: &Path, args: &[&str]) -> Option<String> {
 
 /// The revision this manifest was produced at. See cmd_manifest for why.
 fn resolve_revision(dir: &Path) -> String {
-    if let Ok(stamped) = std::env::var("GNOMON_BUILD") {
-        let stamped = stamped.trim().to_string();
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf));
+    let env_build = std::env::var("GNOMON_BUILD").ok();
+    resolve_revision_with(dir, exe_dir.as_deref(), env_build.as_deref())
+}
+
+/// Resolution order (matches `conformance/build_field.json`):
+///   1. `GNOMON_BUILD` environment variable (non-blank).
+///   2. `GNOMON_BUILD` file next to the binary (shipped by release archives
+///      and `scripts/install.{sh,ps1}`).
+///   3. `git_revision` of the binary's checkout or `dir`, ONLY when that repo
+///      is gnomon's own checkout (its top-level holds
+///      `packages/gnomon-core/src/build.ts`). Never names another repo's commit.
+///   4. `"local"`, said plainly rather than guessing.
+fn resolve_revision_with(dir: &Path, exe_dir: Option<&Path>, env_build: Option<&str>) -> String {
+    if let Some(stamped) = env_build {
+        let stamped = stamped.trim();
         if !stamped.is_empty() {
-            return stamped;
+            return stamped.to_string();
         }
     }
-    git_revision(dir)
+    if let Some(bin_dir) = exe_dir {
+        if let Ok(text) = fs::read_to_string(bin_dir.join("GNOMON_BUILD")) {
+            let stamped = text.trim();
+            if !stamped.is_empty() {
+                return stamped.to_string();
+            }
+        }
+        if let Some(rev) = gnomon_git_revision(bin_dir) {
+            return rev;
+        }
+    }
+    if let Some(rev) = gnomon_git_revision(dir) {
+        return rev;
+    }
+    "local".to_string()
+}
+
+/// `git_revision(dir)` ONLY when `dir` sits inside gnomon's own checkout.
+/// A foreign project repository must never stamp its commit as gnomon's build.
+fn gnomon_git_revision(dir: &Path) -> Option<String> {
+    let top = safe_git(dir, &["rev-parse", "--show-toplevel"])?;
+    if !Path::new(&top).join("packages/gnomon-core/src/build.ts").is_file() {
+        return None;
+    }
+    let rev = git_revision(dir);
+    if rev == "local" { None } else { Some(rev) }
 }
 
 /// The short HEAD of the repository holding `dir`, `-dirty` when its tree is.
@@ -494,11 +535,11 @@ fn cmd_manifest(dir: &Path) {
     //
     // Resolution order, most trustworthy first, matching the harness field on
     // the TypeScript side so the two agree:
-    //   1. GNOMON_BUILD, stamped by a release. The only form that survives a
-    //      binary shipped without its repository.
-    //   2. `git rev-parse --short HEAD` in the directory being hashed, with a
-    //      `-dirty` suffix when that tree has uncommitted changes -- a build
-    //      from an edited tree must not claim to be the commit it sits on.
+    //   1. GNOMON_BUILD (env var, or the GNOMON_BUILD file shipped beside the
+    //      installed binary by release archives / install scripts).
+    //   2. `git rev-parse --short HEAD` (with `-dirty`), ONLY in gnomon's own
+    //      checkout (holding `packages/gnomon-core/src/build.ts`) — never in a
+    //      foreign project repository (#239, conformance/build_field.json).
     //   3. `local`, said plainly. A wrong provenance string is worse than an
     //      absent one, because it is the kind of thing a reader believes.
     let build = format!("{}+{}", VERSION, resolve_revision(dir));
@@ -1283,5 +1324,72 @@ mod tests {
             assert_eq!(actual.path, expected.path, "Path mismatch for {}", actual.path);
             assert_eq!(actual.sha256, expected.sha256, "Hash mismatch for {}", actual.path);
         }
+    }
+
+    fn init_foreign_repo() -> (TempDir, PathBuf, String) {
+        let tmp = TempDir::new().unwrap();
+        let repo = tmp.path().join("user-project");
+        fs::create_dir_all(repo.join(".gnomon")).unwrap();
+        fs::write(repo.join(".gnomon/config.toml"), "[defaults]\n").unwrap();
+        let git = |args: &[&str]| -> String {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+                .args(args)
+                .current_dir(&repo)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?} failed");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        git(&["init", "-q"]);
+        git(&["add", "-A"]);
+        git(&["commit", "-qm", "user commit"]);
+        let sha = git(&["rev-parse", "--short", "HEAD"]);
+        (tmp, repo, sha)
+    }
+
+    #[test]
+    fn resolve_revision_never_names_a_foreign_repository() {
+        let (tmp, repo, foreign_sha) = init_foreign_repo();
+        let installed_bin = tmp.path().join("installed-bin");
+        fs::create_dir_all(&installed_bin).unwrap();
+        let rev = resolve_revision_with(&repo.join(".gnomon"), Some(&installed_bin), None);
+        assert_eq!(rev, "local", "must fall back to local outside gnomon's own checkout");
+        assert!(
+            !rev.contains(&foreign_sha),
+            "manifest build must never name a foreign project's commit ({foreign_sha}): got {rev}"
+        );
+    }
+
+    #[test]
+    fn resolve_revision_reads_gnomon_build_file_beside_binary() {
+        let (tmp, repo, _) = init_foreign_repo();
+        let installed_bin = tmp.path().join("installed-bin");
+        fs::create_dir_all(&installed_bin).unwrap();
+        fs::write(installed_bin.join("GNOMON_BUILD"), "v0.6.8-abc1234\n").unwrap();
+        assert_eq!(
+            resolve_revision_with(&repo.join(".gnomon"), Some(&installed_bin), None),
+            "v0.6.8-abc1234"
+        );
+        // Env var takes precedence over the adjacent file.
+        assert_eq!(
+            resolve_revision_with(&repo.join(".gnomon"), Some(&installed_bin), Some("ci-override")),
+            "ci-override"
+        );
+    }
+
+    #[test]
+    fn resolve_revision_uses_gnomon_checkout_over_foreign_dir() {
+        let (_tmp, repo, foreign_sha) = init_foreign_repo();
+        let gnomon_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent().unwrap().parent().unwrap()
+            .to_path_buf();
+        let rev = resolve_revision_with(&repo.join(".gnomon"), Some(&gnomon_root), None);
+        assert_ne!(rev, "local", "gnomon's own checkout should resolve its git revision");
+        assert!(
+            !rev.starts_with(&foreign_sha),
+            "must report gnomon's revision, not the foreign repo's ({foreign_sha}): got {rev}"
+        );
     }
 }

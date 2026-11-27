@@ -5,7 +5,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { join } from "node:path";
 import { existsSync, mkdirSync, writeFileSync, rmSync, readdirSync } from "node:fs";
-import { centre, BANNER_WIDTH } from "./tui.js";
+import { centre, BANNER_WIDTH, paint } from "./tui.js";
 
 const FIXTURE_DIR = join(__dirname, "../../../conformance/fixture_tree");
 
@@ -141,5 +141,22 @@ describe("banner geometry", () => {
   it("does not truncate text wider than the box", () => {
     const long = "x".repeat(BANNER_WIDTH + 6);
     expect(centre(long, BANNER_WIDTH)).toBe(long);
+  });
+
+  it("honours NO_COLOR by omitting ANSI escape sequences (#239)", () => {
+    const saved = process.env.NO_COLOR;
+    try {
+      process.env.NO_COLOR = "1";
+      const plain = paint("cyan", "gnomon — TUI");
+      expect(plain).toBe("gnomon — TUI");
+      expect(plain).not.toMatch(/\x1b\[/);
+
+      delete process.env.NO_COLOR;
+      const coloured = paint("cyan", "gnomon — TUI");
+      expect(coloured).toContain("\x1b[36m");
+    } finally {
+      if (saved === undefined) delete process.env.NO_COLOR;
+      else process.env.NO_COLOR = saved;
+    }
   });
 });

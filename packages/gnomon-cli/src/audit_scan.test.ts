@@ -145,6 +145,19 @@ describe("gnomon audit scan: the command", () => {
     expect(JSON.parse(gone.stdout).error).toMatch(/no such file/);
   });
 
+  it("exits 0 with an empty report on an initialized project that has no .gnomon-audit/ yet", () => {
+    const d = dir();
+    mkdirSync(join(d, ".gnomon"), { recursive: true });
+    const r = run(["--dir", d, "--json"]);
+    expect(r.status).toBe(0);
+    const doc = JSON.parse(r.stdout);
+    expect(doc.schema).toBe(AUDIT_SCAN_SCHEMA);
+    expect(doc.trails).toEqual([]);
+    expect(doc.findings).toEqual([]);
+    expect(doc.exit).toBe(0);
+    for (const k of FIXTURE.report_keys.required) expect(doc, k).toHaveProperty(k);
+  });
+
   it("scanning only reads: the trail is byte-identical afterwards", () => {
     const d = dir();
     const p = join(d, "t.jsonl");
