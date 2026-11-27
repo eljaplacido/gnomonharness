@@ -33,6 +33,20 @@
 
 ### Fixed
 
+- **Manifest `build` provenance in user projects (#239).** `gnomon-surface`
+  `resolve_revision` now checks `GNOMON_BUILD` (env var, then a `GNOMON_BUILD`
+  file shipped beside the binary by release archives and installers) and only
+  queries `git` when the binary's checkout or target directory is gnomon's own
+  repository (holding `packages/gnomon-core/src/build.ts`), falling back to
+  `local` otherwise — never stamping a user project's commit SHA as gnomon's
+  build (`conformance/build_field.json`).
+- **`gnomon tui` honours `NO_COLOR` (#239).** `paint()` omits ANSI escapes and
+  the header skips `console.clear()` when `NO_COLOR` is set.
+- **`gnomon audit scan` on freshly initialized projects.** Running
+  `gnomon audit scan` with no explicit path inside a project that has `.gnomon/`
+  but no `.gnomon-audit/` yet now returns a clean empty `gnomon.audit_scan/1`
+  report (exit 0) instead of failing with exit 10; explicit missing paths still
+  fail closed with exit 10.
 - Claude behind a LiteLLM proxy (`replay_reasoning = true`): the streamed
   `thinking_blocks` (with signatures) are kept verbatim and replayed on the
   assistant message to the same url and model, and tool-call-only turns that

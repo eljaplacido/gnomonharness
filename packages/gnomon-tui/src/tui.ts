@@ -151,9 +151,14 @@ const COLORS = {
   bgGray: `${ESC}100m`,
 };
 
+export function paint(color: keyof typeof COLORS, text: string): string {
+  if (process.env.NO_COLOR) return text;
+  return `${COLORS[color]}${text}${COLORS.reset}`;
+}
+
 function c(color: string, text: string): string {
   const key = color as keyof typeof COLORS;
-  return `${COLORS[key]}${text}${COLORS.reset}`;
+  return paint(key, text);
 }
 
 function bucketColor(bucket: Bucket): string {
@@ -345,7 +350,9 @@ export function readRows(parsed: unknown): { kind: SessionKind; steps: DisplaySt
 
 /** Render the TUI header */
 function renderHeader(): void {
-  console.clear();
+  if (!process.env.NO_COLOR && process.stdout.isTTY) {
+    console.clear();
+  }
   // Centred against the border rather than padded by hand. Hand-counted
   // padding drifts the moment the title changes — and it had: the right edge
   // sat 13 columns inside the corner. Colour is applied after centring

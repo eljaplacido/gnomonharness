@@ -1501,14 +1501,30 @@ async function cmdAudit(args: CliArgs): Promise<void> {
   // The trajectory scan (audit_scan.ts): offline, over trails named on the
   // command line, so it needs no surface and loads none.
   if (args.subcommand === "scan") {
-    const { scanPath, formatScan, AUDIT_SCAN_SCHEMA, AUDIT_SCAN_EXIT, SEVERITIES } = await import("./audit_scan.js");
+    const { scanPath, formatScan, AUDIT_SCAN_SCHEMA, AUDIT_SCAN_EXIT, SEVERITIES, SCAN_LIMITS } = await import("./audit_scan.js");
     const min = args.flags["min-severity"];
     if (min !== undefined && !(SEVERITIES as readonly string[]).includes(min)) {
       process.exit(commandError(args, AUDIT_SCAN_SCHEMA, `--min-severity ${min}: use one of ${SEVERITIES.join(", ")}.`, AUDIT_SCAN_EXIT.couldNotRun));
     }
     try {
-      const target = args.positional[0] ?? join(projectRoot(args), ".gnomon-audit");
-      const report = scanPath(target, { minSeverity: min as (typeof SEVERITIES)[number] | undefined });
+      const explicit = args.positional[0];
+      const root = projectRoot(args);
+      const target = explicit ?? join(root, ".gnomon-audit");
+      const report =
+        !explicit && !existsSync(target) && existsSync(join(root, ".gnomon"))
+          ? {
+              schema: AUDIT_SCAN_SCHEMA as typeof AUDIT_SCAN_SCHEMA,
+              path: target,
+              min_severity: (min as (typeof SEVERITIES)[number] | undefined) ?? "low",
+              trails: [],
+              skipped: [],
+              findings: [],
+              by_rule: {},
+              by_severity: {},
+              limits: SCAN_LIMITS,
+              exit: AUDIT_SCAN_EXIT.clean,
+            }
+          : scanPath(target, { minSeverity: min as (typeof SEVERITIES)[number] | undefined });
       if (args.json) console.log(JSON.stringify(report, null, 2));
       else for (const l of formatScan(report)) console.log(l);
       if (report.exit !== 0) process.exit(report.exit);
