@@ -29,6 +29,7 @@ import {
   recomputeManifest,
   resolveExec,
   routeRole,
+  surfaceFindingsFor,
   type GnomonConfig,
   type TrustOptions,
 } from "gnomon-core";
@@ -208,6 +209,23 @@ export async function runDoctor(opts: { dir: string }, deps: DoctorDeps): Promis
     }
     const rolesPath = join(gnomonDir, "roles.toml");
     provenance = readProvenance(existsSync(rolesPath) ? readFileSync(rolesPath, "utf-8") : undefined);
+    if (declared) {
+      // Shared surface-usability check with `gnomon task` (#272, #274):
+      // every fatal finding that makes `task` refuse the surface, plus any
+      // role whose listed tools are undeclared in tools.toml, is a doctor
+      // `problem` (exit 1) with the same message and fix.
+      for (const p of surfaceFindingsFor(declared)) {
+        const undeclaredTools = p.where.endsWith("] tools") && p.problem.includes("not declared in tools.toml");
+        if (p.fatal || undeclaredTools) {
+          add({
+            kind: "surface",
+            severity: "problem",
+            message: `${p.where}: ${p.problem}`,
+            fix: p.fix,
+          });
+        }
+      }
+    }
     if (declared && probe.hardware.os === "win32") {
       // #216: Windows has no OS sandbox, so under exec = "os" bash refuses every
       // command here (fail closed; that stays). A note, not a problem: the

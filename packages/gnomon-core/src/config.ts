@@ -4248,6 +4248,39 @@ for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
   });
 }
 
+// A role whose `tools` list names tools not declared in tools.toml (or a
+// surface with no tools.toml at all) is silently offered none of them (#274).
+{
+  const declaredList = Array.isArray(config.tools?.tools) ? config.tools.tools : [];
+  const declaredToolNames = new Set(declaredList.map((t) => t.name));
+  const hasDir = typeof config.gnomonDir === "string" && config.gnomonDir !== "";
+  const noToolsFile = hasDir && !existsSync(join(config.gnomonDir, "tools.toml")) && declaredToolNames.size === 0;
+  if (hasDir || declaredToolNames.size > 0) {
+    for (const [roleName, rawRole] of Object.entries(config.roles ?? {})) {
+      const listed = (rawRole as RoleDef | undefined)?.tools;
+      if (!Array.isArray(listed) || listed.length === 0) continue;
+      const missing = listed.filter(
+        (name) => typeof name === "string" && !name.startsWith("mcp__") && name !== "job" && !declaredToolNames.has(name)
+      );
+      if (missing.length === 0) continue;
+      const offeredAny = listed.some(
+        (name) => typeof name === "string" && (name.startsWith("mcp__") || name === "job" || declaredToolNames.has(name))
+      );
+      problems.push({
+        where: `.gnomon/roles.toml [roles.${roleName}] tools`,
+        problem:
+          `${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} not declared in tools.toml` +
+          (noToolsFile ? " (there is no tools.toml)" : "") +
+          (offeredAny ? ", so those tools are not offered to this role." : ", so this role is offered no tools."),
+        fix: noToolsFile
+          ? "Add .gnomon/tools.toml declaring the tools this role uses (run `gnomon init` in a scratch directory to see the default tools.toml)."
+          : `Declare ${missing.join(", ")} as [[tools]] in .gnomon/tools.toml, or remove ${missing.length === 1 ? "it" : "them"} from [roles.${roleName}] tools.`,
+        fatal: false,
+      });
+    }
+  }
+}
+
 // A granted extra root that is absolute, or that is not there, is worth
 // saying out loud. Neither is fatal -- a grant that resolves nowhere simply
 // grants nothing, which is the safe direction -- but both mean the surface

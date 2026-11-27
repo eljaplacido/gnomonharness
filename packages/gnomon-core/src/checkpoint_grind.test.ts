@@ -235,8 +235,9 @@ function trail(root: string): Array<Record<string, any>> {
     .flatMap((f) => readFileSync(join(dir, f), "utf-8").split("\n").filter(Boolean).map((l) => JSON.parse(l)));
 }
 
-/** The check script: "1 passed" and exit 0 while out.txt says good, else "0 passed" and exit 1. */
-const CHECK_SH = `if grep -q good out.txt 2>/dev/null; then echo "1 passed"; exit 0; else echo "0 passed"; exit 1; fi\n`;
+/** The check script: "1 passed" and exit 0 while out.txt says good, else "0 passed" and exit 1.
+ *  Uses pure POSIX shell built-ins (no external grep fork) so Windows Git Bash stays fast. */
+const CHECK_SH = `v=""; [ -f out.txt ] && read -r v < out.txt; case "$v" in *good*) echo "1 passed"; exit 0;; *) echo "0 passed"; exit 1;; esac\n`;
 
 /**
  * A scripted run. Each request moves the script clock on by `stepPct` of a
@@ -399,18 +400,23 @@ describe("in a run under --deadline", () => {
   });
 
   it("the deadline's self-stop after the continuation is judged too: worse, so restored", async () => {
-    // A real 6 s deadline, margin 600 ms: the model breaks the file and keeps
-    // the shell busy until the stop.
+    // A real deadline with 10% margin: the model breaks the file and keeps
+    // the shell busy until the stop. Windows Git Bash process-tree kill + check
+    // spawn needs more than 450 ms, so give win32 a larger budget/margin while
+    // keeping POSIX at 6 s.
+    const win = process.platform === "win32";
+    const realMs = win ? 18_000 : 6_000;
+    const marginMs = win ? 1_800 : 600;
     const r = await run(
-      'continue_after_answer = true\ncheckpoint_check = "sh check.sh"\ndeadline_margin_ms = 600\n',
+      `continue_after_answer = true\ncheckpoint_check = "sh check.sh"\ndeadline_margin_ms = ${marginMs}\n`,
       [WRITE_GOOD, { answer: "first" }, { bash: "printf bad > out.txt; sleep 30" }, { bash: "sleep 30" }, { bash: "sleep 30" }, { bash: "sleep 30" }],
-      { realMs: 6_000 }
+      { realMs }
     );
     expect(r.rec.stop_reason).toBe("deadline");
     expect(r.events.map((e) => e.event)).toEqual(["checkpoint", "checkpoint_restored"]);
     expect(r.events[1]).toMatchObject({ how: "deadline", verified: true });
     expect(readFileSync(join(r.root, "out.txt"), "utf-8")).toBe("good");
-  }, 20_000);
+  }, 30_000);
 });
 
 

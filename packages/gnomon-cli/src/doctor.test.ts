@@ -251,3 +251,30 @@ describe("the --json document (schema gnomon.doctor/1)", () => {
     expect(Object.keys(fixture.exit_codes).map(Number)).toEqual(Object.values(DOCTOR_EXIT));
   });
 });
+
+describe("gnomon doctor: shared surface usability with gnomon task (#272, #274)", () => {
+  it("exits 1 with a surface problem when [audit] is declared in policy.toml (#272)", async () => {
+    const dir = tmpProject();
+    await setUp(dir, rtx4090());
+    const policy = join(dir, ".gnomon", "policy.toml");
+    writeFileSync(policy, readFileSync(policy, "utf-8") + "\n[audit]\nenabled = true\n");
+    const { report } = await runDoctor({ dir }, doctorDeps(rtx4090()));
+    expect(report.exit).toBe(DOCTOR_EXIT.attention);
+    const f = report.findings.find((x) => x.kind === "surface" && x.severity === "problem" && x.message.includes("[audit]"));
+    expect(f).toBeDefined();
+    expect(f!.message).toContain(".gnomon/policy.toml [audit]");
+    expect(f!.fix).toContain("config.toml");
+  });
+
+  it("exits 1 with a surface problem when tools.toml is missing for roles that list tools (#274)", async () => {
+    const dir = tmpProject();
+    await setUp(dir, rtx4090());
+    rmSync(join(dir, ".gnomon", "tools.toml"));
+    const { report } = await runDoctor({ dir }, doctorDeps(rtx4090()));
+    expect(report.exit).toBe(DOCTOR_EXIT.attention);
+    const f = report.findings.find((x) => x.kind === "surface" && x.severity === "problem" && x.message.includes("not declared in tools.toml"));
+    expect(f).toBeDefined();
+    expect(f!.message).toContain("there is no tools.toml");
+    expect(f!.message).toContain("offered no tools");
+  });
+});
