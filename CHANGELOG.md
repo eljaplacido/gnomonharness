@@ -29,6 +29,14 @@
 - **Opt-in `gnomon task --graph <file>`: a task graph with a check per node.** Nodes (`[nodes.<id>]`: `instruction`, `files` allow-list, `check`, optional `deps`, `role`) run in parallel clones of HEAD plus their deps' work, reusing `--attempts`' machinery (one surface hash, per-node `PORT`/`TMPDIR`, `[attempts]` budgets and `max_parallel`). A node is done only when its own check passes and it changed only its allowed files; a failing node gets one retry with the check's output, then its dependents are skipped while the rest continue. Done nodes are merged in dependency order and every check plus `[verify]` runs again on the merged tree; conflicts and post-merge failures are reported by node, never resolved. `--apply` applies the integrated change only when all of that passed. A node without a check refuses the run (exit 10). Audit reuses `attempt_event` with new event values and fields `node`, `nodes`, `paths`; `conformance/graph.json`, CONTRACTS section 64. Default (no flag) unchanged. `--attempts` now reads paths with `git -z` too, so a non-ASCII path no longer escapes its apply-time dirty check.
 ### Added
 
+- **Opt-in `[verify] require_change = true` and `stop_reason: "no_change"` (#273).**
+  A write-capable role (holding `write` or `edit`) whose turn ends with an
+  unchanged worktree is handed back once to carry out the work with its tools
+  instead of describing it; if the worktree is still unchanged (or the role was
+  offered no tools), the turn stops on the refusal floor (`code: 4`,
+  `bucket: "refusal"`, `stop_reason: "no_change"`, exit `2` on `gnomon task`)
+  instead of recording `result`/`answered`. Works with or without a `[verify]`
+  command; off by default so existing surfaces are unchanged.
 - **Post-quantum-ready audit signatures.** The `[audit.attest]` external-signer stdout cap is raised from 8 KiB to 128 KiB (still bounded) so ML-DSA-87, SLH-DSA-128s and SLH-DSA-256f signatures fit, base64 or hex. A public key or algorithm this Node cannot load (ML-DSA on Node 22) now reports `unverifiable` with "signature present, algorithm X not verifiable by this Node; verify with the signer's tool" instead of an opaque parse failure; where `node:crypto` has ML-DSA/SLH-DSA, heads verify in-process (feature-detected). Example OpenSSL 3.5 ML-DSA-65 signer in `docs/examples/pq-signer-openssl.sh`; GUIDE section on long-term evidence integrity. No new status strings or record shapes; Ed25519 defaults unchanged.
 
 ### Fixed

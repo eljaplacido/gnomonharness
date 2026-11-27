@@ -35,6 +35,7 @@ import {
   resolveBootstrap,
   defaultContextWindow,
   resolveVerify,
+  resolveVerifyRequireChange,
   detectVerifyCommand,
   resolveResilience,
   resolveExtraRoots,
@@ -5196,7 +5197,12 @@ export type StopReason =
   // the steps and the deadline. Harbor never signals the process it runs, so
   // a capped run killed from outside left only a partial record (TB1,
   // P2G41 2026-11-05, 29 of 29 capped cells).
-  | "deadline";
+  | "deadline"
+  // `no_change`: opt-in `[verify] require_change = true` (#273). A write-capable
+  // role (holding write or edit) ended with an unchanged worktree after one
+  // hand-back (or immediately when offered no tools). Lands on the refusal
+  // floor (code 4, exit 2) instead of recording `answered`
+  | "no_change";
 
 /**
  * Per-turn tallies. Every field is a count of something the loop already
@@ -6960,6 +6966,9 @@ async function agenticTurn(
   // (taskResilience); a session keeps the declared grace.
   const resilience = deps.unattended ? taskResilience(resolveResilience(config)) : resolveResilience(config);
   let verifyRounds = 0;
+  let noChangeHandedBack = false;
+  let noChangeStopped = false;
+  const requireChangeOn = resolveVerifyRequireChange(config);
   let turnUsage: TokenUsage | undefined;
   let code = 0;
   let steps = 0;
@@ -8789,6 +8798,56 @@ async function agenticTurn(
       // check is a new stage rather than another early `continue` somewhere
       // in the answer path. (A cut-off reply's re-ask and the idle nudge are
       // not here: they act before a turn has answered.)
+      const endRequireChange = async (): Promise<EndOfTurnHandBack | null> => {
+        // Opt-in `[verify] require_change = true` (#273): a write-capable role
+        // (holding write or edit) whose turn ends with an unchanged worktree is
+        // handed back once (unless it was offered no tools at all), then stops
+        // on the refusal floor as `stop_reason: "no_change"` (code 4, exit 2).
+        const declaredTools = Array.isArray(config.roles[role]?.tools) ? config.roles[role]!.tools! : [];
+        const writeCapable =
+          offered.has("write") ||
+          offered.has("edit") ||
+          declaredTools.includes("write") ||
+          declaredTools.includes("edit");
+        const changedSomething = touchedFiles || shellTouchedWorktree || shellMayHaveTouched;
+        if (
+          !requireChangeOn ||
+          !writeCapable ||
+          sub?.readOnly ||
+          result.code !== 0 ||
+          providerRefused ||
+          emptyTerminus ||
+          lastFinishReason === "length" ||
+          changedSomething
+        ) {
+          return null;
+        }
+        if (!noChangeHandedBack && offered.size > 0) {
+          noChangeHandedBack = true;
+          deps.progress.stop();
+          say(paint(deps.ui, "yellow", `  ⚙ verify — no files changed in the worktree; handing back once`));
+          toolLog.push("verify — no worktree change (handed back)");
+          return {
+            stage: "verify",
+            role: "user",
+            content:
+              "[gnomon] No files were changed in the worktree. Carry out the requested changes using your tools rather than describing them, then answer again.",
+          };
+        }
+        noChangeStopped = true;
+        deps.progress.stop();
+        warn(
+          paint(
+            deps.ui,
+            "yellow",
+            offered.size === 0
+              ? `  ⚙ verify — no files changed and this role was offered no tools; stopping as no_change`
+              : `  ⚙ verify — still no files changed after hand-back; stopping as no_change`
+          )
+        );
+        toolLog.push("verify — no worktree change (stopped as no_change)");
+        return null;
+      };
       const endVerify = async (): Promise<EndOfTurnHandBack | null> => {
         const gateApplies =
           verify !== null &&
@@ -9563,9 +9622,9 @@ async function agenticTurn(
         };
       };
       let endHandBack: EndOfTurnHandBack | null = null;
-      for (const stage of [endVerify, endTodoGate, endCompletionGate, endFinishGate, endCheckpoint]) {
+      for (const stage of [endRequireChange, endVerify, endTodoGate, endCompletionGate, endFinishGate, endCheckpoint]) {
         endHandBack = await stage();
-        if (endHandBack) break;
+        if (endHandBack || noChangeStopped) break;
       }
       if (endHandBack) {
         working.push({
@@ -9605,7 +9664,7 @@ async function agenticTurn(
       stampCitations(counters, result.content, workRootOf(state.config));
       return withEscalation({
         content: noteMarkupInAnswer(result.content, counters),
-        code: settle(code, result.code),
+        code: noChangeStopped ? settle(settle(code, result.code), 4) : settle(code, result.code),
         model: usedModel,
         endpoint: usedTarget.endpoint,
         endpoint_url: usedTarget.url,
@@ -9624,11 +9683,13 @@ async function agenticTurn(
           ? "provider_refusal"
           : mapBucket(result.code) === "apparatus_failure"
           ? "endpoint_error"
-          : emptyTerminus
-            ? "empty"
-            : lastFinishReason === "length"
-              ? "truncated"
-              : "answered",
+          : noChangeStopped
+            ? "no_change"
+            : emptyTerminus
+              ? "empty"
+              : lastFinishReason === "length"
+                ? "truncated"
+                : "answered",
         counters,
         modelCalls: measured(),
         surface_changed: surfaceChanges.length > 0 ? surfaceChanges : undefined,
