@@ -143,6 +143,17 @@ them as the project's reading of its own runs, not as a citable table.
 | **A done check before the final answer** | Opt-in. It made the final answer more honest (fewer "done" claims over unfinished or unverified work); it did not improve task outcomes |
 | **Hybrid: local-first with cloud rescue** (a cloud model takes over a stuck local turn; opt-in, `[roles.<name>.escalate]`) | An opt-in **cost mode**, not a default. Against cloud-only it spent about 23% of the cloud cost, at −0.07 hidden-test share; against local-only, +0.25 hidden-test share. Not the plan-in-the-cloud hybrid `gnomon setup` offers as an opt-in mode (`frontier_plan`), which showed no advantage over cloud-only (R3R, R4H) |
 
+### v0.6.8 live-model & scale campaigns (2026-11-27/28)
+
+Pinned to **`v0.6.8`** (`af786126c` / `f88b38b0a`), local `qwen3.6-35b` on NVIDIA GB10 (`llama-server :18080`, `$0` cloud spend), interleaved paired waves, GBS-REPORTING v0.2 validated via `benchmarks/kit/validate_reporting.py`. Zero apparatus failures across all 186 live LLM cells.
+
+| Claim | Evidence | Result |
+|---|---|---|
+| **CLI scaling (`100 → 25,000` tracked files)** | [B-SCALE-1](../benchmarks/results/scale-overhead-2026-11-27/) · `v0.6.8` | **O(1) hot-path latency** across `surface hash`, `guard Bash`, `guard Edit`, `audit scan`, and `migrate --check` (p95 **78–91 ms** at 25,000 files; floor is Node/CLI startup, not repo traversal). 350 runs, $0 |
+| **`edit_format = "hashline"` vs `"str_replace"`** | [E-HASHLINE](../benchmarks/results/v068-hashline-2026-11-28/) · `v0.6.8` (`f88b38b0a`) | **`worse` on `qwen3.6-35b` (keep `str_replace` as default).** 11 multi-hunk tasks × 3 paired waves (66/66 valid cells, 100% of edits routed through `edit`): full solves **36.4% vs 69.7%** (**−33.3 pp**, bootstrap 95% `[−60.6, −6.1]`, exact McNemar `1 vs 12`, **p = 0.0034**); hidden-test share **82.9% vs 96.0%** (**−13.1 pp**, sign-flip **p = 0.0234**). Mechanism: `hashline` hit **14/108 (13.0%)** `stale anchor`/`refused` errors vs **0/109 (0.0%)** for `str_replace` and used **+44.6% more input tokens** (`72,949 vs 50,433`). Also caught a telemetry gap: `counters.per_tool.edit.refusals` reported `0` while `tool_log` recorded the 14 errors |
+| **`[verify] require_change = true` (`#273`)** | [Regime A](../benchmarks/results/v068-reqchange-2026-11-28/) · [Regime B](../benchmarks/results/v068-reqchange-catch-2026-11-28/) · `v0.6.8` (`f88b38b0a`) | **eliminates silent unchanged `result` completions without interfering when edits happen.** Regime A (natural bugfix prompts, 8 tasks × 3 waves = 48 cells): model edited 24/24 in both arms -> zero interference (`70.8% vs 75.0%`, McNemar **p = 1.0000**; hidden share **−1.2 pp**, `non-inferior`). Regime B (catchable plan-first prompts, 6 tasks × 2 waves = 24 cells): silent `bucket == "result"` with unchanged worktree dropped **5/12 → 0/12**, all 5 converted on the single hand-back, full solves **33.3% → 83.3%** (**+50.0 pp**, exact McNemar `6 vs 0`, **p = 0.0312**, `better`) |
+| **Skill trial negative control (`ST0`)** | [st-2026-11](../benchmarks/results/st-2026-11/) · `v0.6.8` (`f88b38b0a`) | **zero false positives, but strict `false` (exit 2) not triggered on `qwen3.6-35b`.** Two 24-cell `gnomon skill trial skip-tests` runs (readable tests and opaque compressed fixtures; 48/48 valid cells, `0` apparatus failures): both returned **`meets_thresholds: "undetermined"` (exit 10)** — blocking acceptance under `require_trial = true` even when Run 2 showed a non-significant `+13.5%` output-token drop (`sign p = 0.7744`). `skip-tests.md` failed to reduce passes on `qwen3.6-35b` (`10/12 vs 8/12` and `12/12 vs 12/12`), so live separation of a *pass-degrading* skill (`meets_thresholds: false`, exit 2) remains open |
+
 ## Claims with no evidence
 
 Listed because omitting them would imply coverage that does not exist.
@@ -164,11 +175,12 @@ Listed because omitting them would imply coverage that does not exist.
   (#164) and governance levels (#167). No result for any of them is published
   here. They are opt-in and unproven.
 
-- **The opt-in capability levers shipped in `v0.6.6`–`v0.6.8`** —
-  `edit_format = "hashline"`, `[context]` retention (`#301`), `gnomon task
-  --attempts <k>`, `gnomon task --graph <file>`, `gnomon improve`, and `[verify]
-  require_change = true` (`#273`). Each has deterministic unit and conformance
-  coverage; none has a published live-model A/B task-completion measurement yet.
+- **Remaining unmeasured opt-in levers shipped in `v0.6.6`–`v0.6.8`** —
+  `[context]` retention (`#301`), `gnomon task --attempts <k>`, `gnomon task
+  --graph <file>`, and `gnomon improve` still have deterministic unit and
+  conformance coverage only, with no published live-model A/B measurement yet.
+  (`edit_format = "hashline"` and `[verify] require_change = true` moved to the
+  `v0.6.8` campaign table above on 2026-11-28.)
 
 - **Kernel & container containment (`[sandbox] exec = "os"` and `"docker"`):**
   *Corrected 2026-11-27:* this row previously stated `exec = "os"` (PR #156) was
