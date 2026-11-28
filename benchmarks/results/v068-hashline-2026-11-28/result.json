@@ -1,0 +1,212 @@
+{
+  "spec": "E-HASHLINE (benchmarks/results/v068-nextgen/PRE-REGISTRATION.md), GBS-REPORTING v0.2",
+  "level": "harness",
+  "result_type": "comparison",
+  "preregistration": {
+    "url": "benchmarks/results/v068-nextgen/PRE-REGISTRATION.md",
+    "commit": "af786126c"
+  },
+  "harness": {
+    "name": "gnomon",
+    "version": "0.6.8",
+    "build": "gnomon/0.6.8+f88b38b0a-dirty",
+    "commit": "f88b38b0a35cd3dc04614fdb3b059f84935f0904"
+  },
+  "harness_config_hash": {
+    "str_replace": [
+      "5e2470f6e0d810baeae23e1254efd9448f8737633b0ea54712be95d1f406a46a"
+    ],
+    "hashline": [
+      "28d22d9a7f60454f15d28e476fb9e6c667c3bd14278670fe3cf71996fb3f763e"
+    ]
+  },
+  "models": [
+    {
+      "id": "qwen3.6-35b",
+      "endpoint": "http://127.0.0.1:18080/v1/chat/completions",
+      "lane": "local",
+      "billing": "$0 (local llama-server)"
+    }
+  ],
+  "hardware": {
+    "platform": "Linux aarch64",
+    "os": "Linux-6.17.0-1014-nvidia-aarch64-with-glibc2.39",
+    "kernel": "6.17.0-1014-nvidia",
+    "node": "v22.22.2",
+    "python": "3.12.3",
+    "machine": "gx10 (NVIDIA GB10, local llama-server :18080)"
+  },
+  "apparatus": {
+    "runner": "benchmarks/v068-ab/run.mjs",
+    "suite": "hashline",
+    "tasks": [
+      "dup-handlers",
+      "repeated-guards",
+      "multi-file-rename",
+      "whitespace-table",
+      "state-machine-transitions",
+      "config-parser-edge",
+      "js-esm-refactor",
+      "sql-query-builder",
+      "ledger-rounding",
+      "csv-stream-escape",
+      "js-event-bus"
+    ],
+    "waves": 3,
+    "order": "interleaved, alternating arm order by wave",
+    "isolation": "fresh temp HOME, XDG_DATA_HOME, git repo per cell; hidden tests held outside workspace"
+  },
+  "n": {
+    "tasks": 11,
+    "waves": 3,
+    "arms": 2,
+    "trials_planned": 66,
+    "trials_run": 66
+  },
+  "validity": {
+    "pass": 35,
+    "fail": 31,
+    "timeout": 0,
+    "apparatus_failure": 0,
+    "excluded": 0,
+    "sum_equals_planned": true
+  },
+  "mde": "11 tasks x 3 paired waves (33 paired cells/arm); mechanism endpoint (edit refusal rate) directly resolvable; pass-rate MDE ~25-30pp at n=11 tasks",
+  "resolution": "n/a: comparison result (see mde and primary bootstrap/sign-flip 95% CIs)",
+  "primary": {
+    "contrast": "hashline - str_replace",
+    "solved": {
+      "a_mean": 0.36363636363636365,
+      "b_mean": 0.696969696969697,
+      "boot95": [
+        -0.6060606060606061,
+        -0.06060606060606062
+      ],
+      "est": -0.33333333333333337,
+      "mcnemar": {
+        "a_only": 1,
+        "b_only": 12,
+        "both": 11,
+        "neither": 9,
+        "p": 0.00341796875,
+        "pairs": 33
+      },
+      "n_tasks": 11,
+      "signflip95": [
+        -0.6666666668125,
+        7.22222068029928e-11
+      ],
+      "signflip_exact": true,
+      "signflip_p": 0.0625,
+      "tasks_neg": 5,
+      "tasks_pos": 1,
+      "tasks_zero": 5,
+      "verdict": "worse"
+    },
+    "hidden_share": {
+      "a_mean": 0.8291393939393938,
+      "b_mean": 0.9598484848484848,
+      "boot95": [
+        -0.22077878787878782,
+        -0.04670780303030309
+      ],
+      "est": -0.1307090909090909,
+      "n_tasks": 11,
+      "signflip95": [
+        -0.23456666673502272,
+        -0.02083333328957579
+      ],
+      "signflip_exact": true,
+      "signflip_p": 0.0234375,
+      "tasks_neg": 7,
+      "tasks_pos": 1,
+      "tasks_zero": 3,
+      "verdict": "worse"
+    },
+    "mechanism": {
+      "str_replace": {
+        "edit_calls": 109,
+        "edit_refusals_counter": 0,
+        "edit_tool_log_failures": 0,
+        "edit_tool_log_failure_rate": 0.0,
+        "cells_with_edit_refusal": 0,
+        "worktree_changed_cells": 33,
+        "false_result_no_change": 0,
+        "stop_reasons": {
+          "answered": 33
+        }
+      },
+      "hashline": {
+        "edit_calls": 108,
+        "edit_refusals_counter": 0,
+        "edit_tool_log_failures": 14,
+        "edit_tool_log_failure_rate": 0.1296,
+        "cells_with_edit_refusal": 0,
+        "worktree_changed_cells": 33,
+        "false_result_no_change": 0,
+        "stop_reasons": {
+          "answered": 33
+        }
+      }
+    }
+  },
+  "profile": "n/a: comparison result (not a profile study)",
+  "reliability": {
+    "per_arm_solve_rate": {
+      "str_replace": 0.697,
+      "hashline": 0.3636
+    },
+    "per_arm_hidden_share": {
+      "str_replace": 0.9598,
+      "hashline": 0.8291
+    }
+  },
+  "cost": {
+    "usd_total": 0.0,
+    "note": "Local llama-server inference ($0 cloud spend)",
+    "tokens": {
+      "str_replace": {
+        "tokens_in_total": 1664275,
+        "tokens_out_total": 80018,
+        "mean_tokens_in": 50433,
+        "mean_tokens_out": 2425
+      },
+      "hashline": {
+        "tokens_in_total": 2407326,
+        "tokens_out_total": 79375,
+        "mean_tokens_in": 72949,
+        "mean_tokens_out": 2405
+      }
+    }
+  },
+  "telemetry": {
+    "audit_enabled": true,
+    "audit_record": "metadata",
+    "audit_chain": true,
+    "mean_tool_steps": {
+      "str_replace": 13.73,
+      "hashline": 14.27
+    }
+  },
+  "latency": {
+    "mean_wall_s": {
+      "str_replace": 29.49,
+      "hashline": 33.19
+    },
+    "started_at": "2026-11-28T08:55:19.722Z",
+    "finished_at": "2026-11-28T09:29:50.634Z"
+  },
+  "incidents": [],
+  "deviations": [
+    "11 brownfield multi-hunk tasks (9 Python, 2 Node ESM) x 3 waves = 66 live cells (draft pre-registration targeted 24 tasks; scoped to 11 multi-hunk tasks to fit single-GPU local inference window).",
+    "Role omitted `write` and restricted `bash_allow` to unittest/node-test/ls so 100% of file edits route through `edit`, eliminating shell-edit confounding."
+  ],
+  "traces": {
+    "cells_csv": "benchmarks/results/v068-hashline-2026-11-28/cells.csv",
+    "cells_jsonl": "benchmarks/results/v068-hashline-2026-11-28/cells.jsonl",
+    "analysis_json": "benchmarks/results/v068-hashline-2026-11-28/analysis.json",
+    "analysis_txt": "benchmarks/results/v068-hashline-2026-11-28/analysis.txt"
+  },
+  "scope": "system",
+  "authorship": "author-run"
+}

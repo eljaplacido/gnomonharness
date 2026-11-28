@@ -1,6 +1,10 @@
 # Pre-registration (DRAFT) — `v0.6.8` Next-Gen Capability & Cost Campaigns
 
-**Status: DRAFT, written 2026-11-27. Nothing below has run.**  
+**Status: EXECUTED IN PART on 2026-11-28 against pinned `v0.6.8` (`f88b38b0a`).**
+- `E-HASHLINE`: **COMPLETE** — see [`../v068-hashline-2026-11-28/`](../v068-hashline-2026-11-28/) (`hashline` **worse** on `qwen3.6-35b`: −33.3 pp solves, McNemar `p = 0.0034`; `str_replace` retained as default).
+- `E-REQCHANGE`: **COMPLETE** — see [`../v068-reqchange-2026-11-28/`](../v068-reqchange-2026-11-28/) (Regime A natural prompts: idle, non-inferior) and [`../v068-reqchange-catch-2026-11-28/`](../v068-reqchange-catch-2026-11-28/) (Regime B catchable population: silent unchanged `result` **5/12 → 0/12**, solves **+50.0 pp**, McNemar `p = 0.0312`).
+- `E-CONTEXT` & `E-PARALLEL`: **PENDING** (not yet run).
+
 Follows [`docs/HARNESS-RESEARCH-RECONCILIATION.md`](../../../docs/HARNESS-RESEARCH-RECONCILIATION.md) §6: one `surface_hash` per hypothesis, `n >= 3` paired arms, dual **mechanism** (resolvable at `n=3`) and **score** endpoints, and strict separation of `apparatus_failure` from `refusal`/`result`.
 
 Before the first scored run, fill in every `TBD`, pin the exact `v0.6.8` release SHA (verified in `report.harness` and `manifest.build`), change the status line to `REGISTERED`, and commit on its own.

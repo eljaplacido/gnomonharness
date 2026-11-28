@@ -1,0 +1,206 @@
+{
+  "spec": "E-REQCHANGE Regime B catchable population (benchmarks/results/v068-nextgen/PRE-REGISTRATION.md), GBS-REPORTING v0.2",
+  "level": "harness",
+  "result_type": "comparison",
+  "preregistration": {
+    "url": "benchmarks/results/v068-nextgen/PRE-REGISTRATION.md",
+    "commit": "af786126c"
+  },
+  "harness": {
+    "name": "gnomon",
+    "version": "0.6.8",
+    "build": "gnomon/0.6.8+f88b38b0a-dirty",
+    "commit": "f88b38b0a35cd3dc04614fdb3b059f84935f0904"
+  },
+  "harness_config_hash": {
+    "off": [
+      "ec1a971107e492e056ab18c80df5e2fdd37662d64b1a48464743ecd5b4fc0015"
+    ],
+    "on": [
+      "8c2c3464580bbe961c23db081a0bc9e7ed483e008c02da99b7cfd2cc7a3c2a69"
+    ]
+  },
+  "models": [
+    {
+      "id": "qwen3.6-35b",
+      "endpoint": "http://127.0.0.1:18080/v1/chat/completions",
+      "lane": "local",
+      "billing": "$0 (local llama-server)"
+    }
+  ],
+  "hardware": {
+    "platform": "Linux aarch64",
+    "os": "Linux-6.17.0-1014-nvidia-aarch64-with-glibc2.39",
+    "kernel": "6.17.0-1014-nvidia",
+    "node": "v22.22.2",
+    "python": "3.12.3",
+    "machine": "gx10 (NVIDIA GB10, local llama-server :18080)"
+  },
+  "apparatus": {
+    "runner": "benchmarks/v068-ab/run.mjs",
+    "suite": "reqchange-catch",
+    "tasks": [
+      "rc-vip-discount-plan",
+      "rc-backoff-cap-plan",
+      "rc-slugify-hyphens-plan",
+      "rc-window-avg-plan",
+      "rc-token-mask-plan",
+      "rc-semver-sort-plan"
+    ],
+    "waves": 2,
+    "order": "interleaved, alternating arm order by wave",
+    "isolation": "fresh temp HOME, XDG_DATA_HOME, git repo per cell; hidden tests held outside workspace"
+  },
+  "n": {
+    "tasks": 6,
+    "waves": 2,
+    "arms": 2,
+    "trials_planned": 24,
+    "trials_run": 24
+  },
+  "validity": {
+    "pass": 14,
+    "fail": 10,
+    "timeout": 0,
+    "apparatus_failure": 0,
+    "excluded": 0,
+    "sum_equals_planned": true
+  },
+  "mde": "6 plan-first tasks x 2 paired waves (12 paired cells/arm); primary mechanism endpoint is hard contract check (false bucket=='result' with worktree_changed==0 drops to 0/12)",
+  "resolution": "n/a: comparison result (see mde and primary bootstrap/sign-flip 95% CIs)",
+  "primary": {
+    "contrast": "on - off",
+    "solved": {
+      "a_mean": 0.8333333333333334,
+      "b_mean": 0.3333333333333333,
+      "boot95": [
+        0.16666666666666666,
+        0.8333333333333334
+      ],
+      "est": 0.5,
+      "mcnemar": {
+        "a_only": 6,
+        "b_only": 0,
+        "both": 4,
+        "neither": 2,
+        "p": 0.03125,
+        "pairs": 12
+      },
+      "n_tasks": 6,
+      "signflip95": [
+        -1.5000004840656778e-10,
+        1.00000000045
+      ],
+      "signflip_exact": true,
+      "signflip_p": 0.25,
+      "tasks_neg": 0,
+      "tasks_pos": 3,
+      "tasks_zero": 3,
+      "verdict": "better"
+    },
+    "hidden_share": {
+      "a_mean": 0.9583333333333334,
+      "b_mean": 0.7291666666666666,
+      "boot95": [
+        0.041666666666666664,
+        0.4583333333333333
+      ],
+      "est": 0.22916666666666666,
+      "n_tasks": 6,
+      "signflip95": [
+        -6.875002353582925e-11,
+        0.7500000002937499
+      ],
+      "signflip_exact": true,
+      "signflip_p": 0.25,
+      "tasks_neg": 0,
+      "tasks_pos": 3,
+      "tasks_zero": 3,
+      "verdict": "non-inferior"
+    },
+    "mechanism": {
+      "off": {
+        "edit_calls": 9,
+        "edit_refusals_counter": 0,
+        "edit_tool_log_failures": 0,
+        "edit_tool_log_failure_rate": 0.0,
+        "cells_with_edit_refusal": 0,
+        "worktree_changed_cells": 7,
+        "false_result_no_change": 5,
+        "stop_reasons": {
+          "answered": 12
+        }
+      },
+      "on": {
+        "edit_calls": 13,
+        "edit_refusals_counter": 0,
+        "edit_tool_log_failures": 0,
+        "edit_tool_log_failure_rate": 0.0,
+        "cells_with_edit_refusal": 0,
+        "worktree_changed_cells": 12,
+        "false_result_no_change": 0,
+        "stop_reasons": {
+          "answered": 12
+        }
+      }
+    }
+  },
+  "profile": "n/a: comparison result (not a profile study)",
+  "reliability": {
+    "per_arm_solve_rate": {
+      "off": 0.3333,
+      "on": 0.8333
+    },
+    "per_arm_hidden_share": {
+      "off": 0.7292,
+      "on": 0.9583
+    }
+  },
+  "cost": {
+    "usd_total": 0.0,
+    "note": "Local llama-server inference ($0 cloud spend)",
+    "tokens": {
+      "off": {
+        "tokens_in_total": 260672,
+        "tokens_out_total": 13718,
+        "mean_tokens_in": 21723,
+        "mean_tokens_out": 1143
+      },
+      "on": {
+        "tokens_in_total": 229033,
+        "tokens_out_total": 11980,
+        "mean_tokens_in": 19086,
+        "mean_tokens_out": 998
+      }
+    }
+  },
+  "telemetry": {
+    "audit_enabled": true,
+    "audit_record": "metadata",
+    "audit_chain": true,
+    "mean_tool_steps": {
+      "off": 7.92,
+      "on": 7.75
+    }
+  },
+  "latency": {
+    "mean_wall_s": {
+      "off": 14.44,
+      "on": 13.56
+    },
+    "started_at": "2026-11-28T09:49:26.058Z",
+    "finished_at": "2026-11-28T09:55:02.959Z"
+  },
+  "incidents": [],
+  "deviations": [
+    "Companion catchable-population run where prompts invite diagnosis/plan-first prose unless the harness requires a file change, isolating the exact unchanged-worktree failure mode #273 targets."
+  ],
+  "traces": {
+    "cells_csv": "benchmarks/results/v068-reqchange-catch-2026-11-28/cells.csv",
+    "cells_jsonl": "benchmarks/results/v068-reqchange-catch-2026-11-28/cells.jsonl",
+    "analysis_json": "benchmarks/results/v068-reqchange-catch-2026-11-28/analysis.json",
+    "analysis_txt": "benchmarks/results/v068-reqchange-catch-2026-11-28/analysis.txt"
+  },
+  "scope": "system",
+  "authorship": "author-run"
+}

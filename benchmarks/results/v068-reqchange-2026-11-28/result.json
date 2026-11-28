@@ -1,0 +1,211 @@
+{
+  "spec": "E-REQCHANGE (benchmarks/results/v068-nextgen/PRE-REGISTRATION.md), GBS-REPORTING v0.2",
+  "level": "harness",
+  "result_type": "comparison",
+  "preregistration": {
+    "url": "benchmarks/results/v068-nextgen/PRE-REGISTRATION.md",
+    "commit": "af786126c"
+  },
+  "harness": {
+    "name": "gnomon",
+    "version": "0.6.8",
+    "build": "gnomon/0.6.8+f88b38b0a-dirty",
+    "commit": "f88b38b0a35cd3dc04614fdb3b059f84935f0904"
+  },
+  "harness_config_hash": {
+    "off": [
+      "ec1a971107e492e056ab18c80df5e2fdd37662d64b1a48464743ecd5b4fc0015"
+    ],
+    "on": [
+      "8c2c3464580bbe961c23db081a0bc9e7ed483e008c02da99b7cfd2cc7a3c2a69"
+    ]
+  },
+  "models": [
+    {
+      "id": "qwen3.6-35b",
+      "endpoint": "http://127.0.0.1:18080/v1/chat/completions",
+      "lane": "local",
+      "billing": "$0 (local llama-server)"
+    }
+  ],
+  "hardware": {
+    "platform": "Linux aarch64",
+    "os": "Linux-6.17.0-1014-nvidia-aarch64-with-glibc2.39",
+    "kernel": "6.17.0-1014-nvidia",
+    "node": "v22.22.2",
+    "python": "3.12.3",
+    "machine": "gx10 (NVIDIA GB10, local llama-server :18080)"
+  },
+  "apparatus": {
+    "runner": "benchmarks/v068-ab/run.mjs",
+    "suite": "reqchange",
+    "tasks": [
+      "rc-vip-discount",
+      "rc-backoff-cap",
+      "rc-slugify-hyphens",
+      "rc-window-avg",
+      "rc-token-mask",
+      "rc-semver-sort",
+      "rc-merge-intervals",
+      "rc-parse-duration"
+    ],
+    "waves": 3,
+    "order": "interleaved, alternating arm order by wave",
+    "isolation": "fresh temp HOME, XDG_DATA_HOME, git repo per cell; hidden tests held outside workspace"
+  },
+  "n": {
+    "tasks": 8,
+    "waves": 3,
+    "arms": 2,
+    "trials_planned": 48,
+    "trials_run": 48
+  },
+  "validity": {
+    "pass": 35,
+    "fail": 13,
+    "timeout": 0,
+    "apparatus_failure": 0,
+    "excluded": 0,
+    "sum_equals_planned": true
+  },
+  "mde": "8 tasks x 3 paired waves (24 paired cells/arm); primary mechanism endpoint is hard contract check (false bucket=='result' with worktree_changed==0 must drop to 0/24)",
+  "resolution": "n/a: comparison result (see mde and primary bootstrap/sign-flip 95% CIs)",
+  "primary": {
+    "contrast": "on - off",
+    "solved": {
+      "a_mean": 0.7083333333333334,
+      "b_mean": 0.75,
+      "boot95": [
+        -0.125,
+        0.0
+      ],
+      "est": -0.04166666666666667,
+      "mcnemar": {
+        "a_only": 0,
+        "b_only": 1,
+        "both": 17,
+        "neither": 6,
+        "p": 1.0,
+        "pairs": 24
+      },
+      "n_tasks": 8,
+      "signflip95": [
+        -0.1666666667083334,
+        1.6666685272440702e-11
+      ],
+      "signflip_exact": true,
+      "signflip_p": 1.0,
+      "tasks_neg": 1,
+      "tasks_pos": 0,
+      "tasks_zero": 7,
+      "verdict": "not shown"
+    },
+    "hidden_share": {
+      "a_mean": 0.8729166666666667,
+      "b_mean": 0.8854166666666666,
+      "boot95": [
+        -0.062499999999999986,
+        0.025000000000000036
+      ],
+      "est": -0.012499999999999983,
+      "n_tasks": 8,
+      "signflip95": [
+        -0.08333333335583332,
+        0.03333333334583338
+      ],
+      "signflip_exact": true,
+      "signflip_p": 1.0,
+      "tasks_neg": 1,
+      "tasks_pos": 1,
+      "tasks_zero": 6,
+      "verdict": "non-inferior"
+    },
+    "mechanism": {
+      "off": {
+        "edit_calls": 30,
+        "edit_refusals_counter": 0,
+        "edit_tool_log_failures": 0,
+        "edit_tool_log_failure_rate": 0.0,
+        "cells_with_edit_refusal": 0,
+        "worktree_changed_cells": 24,
+        "false_result_no_change": 0,
+        "stop_reasons": {
+          "answered": 22,
+          "stall": 1,
+          "deadline": 1
+        }
+      },
+      "on": {
+        "edit_calls": 26,
+        "edit_refusals_counter": 0,
+        "edit_tool_log_failures": 0,
+        "edit_tool_log_failure_rate": 0.0,
+        "cells_with_edit_refusal": 0,
+        "worktree_changed_cells": 24,
+        "false_result_no_change": 0,
+        "stop_reasons": {
+          "answered": 22,
+          "stall": 2
+        }
+      }
+    }
+  },
+  "profile": "n/a: comparison result (not a profile study)",
+  "reliability": {
+    "per_arm_solve_rate": {
+      "off": 0.75,
+      "on": 0.7083
+    },
+    "per_arm_hidden_share": {
+      "off": 0.8854,
+      "on": 0.8729
+    }
+  },
+  "cost": {
+    "usd_total": 0.0,
+    "note": "Local llama-server inference ($0 cloud spend)",
+    "tokens": {
+      "off": {
+        "tokens_in_total": 687493,
+        "tokens_out_total": 33109,
+        "mean_tokens_in": 28646,
+        "mean_tokens_out": 1380
+      },
+      "on": {
+        "tokens_in_total": 488103,
+        "tokens_out_total": 24514,
+        "mean_tokens_in": 20338,
+        "mean_tokens_out": 1021
+      }
+    }
+  },
+  "telemetry": {
+    "audit_enabled": true,
+    "audit_record": "metadata",
+    "audit_chain": true,
+    "mean_tool_steps": {
+      "off": 9.83,
+      "on": 8.38
+    }
+  },
+  "latency": {
+    "mean_wall_s": {
+      "off": 18.16,
+      "on": 13.53
+    },
+    "started_at": "2026-11-28T09:30:10.568Z",
+    "finished_at": "2026-11-28T09:42:52.943Z"
+  },
+  "incidents": [],
+  "deviations": [
+    "8 plan-tempting bugfix tasks x 3 waves = 48 live cells (draft pre-registration targeted 20 tasks; scoped to 8 tasks to fit single-GPU local inference window)."
+  ],
+  "traces": {
+    "cells_csv": "benchmarks/results/v068-reqchange-2026-11-28/cells.csv",
+    "cells_jsonl": "benchmarks/results/v068-reqchange-2026-11-28/cells.jsonl",
+    "analysis_json": "benchmarks/results/v068-reqchange-2026-11-28/analysis.json",
+    "analysis_txt": "benchmarks/results/v068-reqchange-2026-11-28/analysis.txt"
+  },
+  "scope": "system",
+  "authorship": "author-run"
+}
