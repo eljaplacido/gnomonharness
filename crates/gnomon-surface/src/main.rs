@@ -281,8 +281,27 @@ fn looks_like_git_dir(d: &Path) -> bool {
         && d.join("refs").is_dir()
 }
 
+/// Strip Windows `\\?\` verbatim drive prefix so Git for Windows receives
+/// normal drive paths in GIT_DIR / GIT_WORK_TREE (it mangles `\\?\D:\...`
+/// into `//?/D:/...` and rejects it in safe.directory checks).
+fn normalize_git_path(p: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(s) = p.to_str() {
+            if let Some(rest) = s.strip_prefix(r"\\?\") {
+                if !rest.starts_with("UNC\\") {
+                    return PathBuf::from(rest);
+                }
+            }
+        }
+    }
+    p
+}
+
 fn find_repository(dir: &Path) -> Result<Option<GitRepo>, String> {
-    let mut d = fs::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut d = normalize_git_path(
+        fs::canonicalize(dir).map_err(|e| format!("{}: {e}", dir.display()))?,
+    );
     loop {
         let dot = d.join(".git");
         if let Ok(meta) = fs::symlink_metadata(&dot) {
@@ -292,7 +311,7 @@ fn find_repository(dir: &Path) -> Result<Option<GitRepo>, String> {
             let git_dir = if meta.is_dir() {
                 dot.clone()
             } else if meta.file_type().is_symlink() {
-                fs::canonicalize(&dot).map_err(|e| format!("{}: {e}", dot.display()))?
+                normalize_git_path(fs::canonicalize(&dot).map_err(|e| format!("{}: {e}", dot.display()))?)
             } else if meta.is_file() {
                 let text = fs::read_to_string(&dot).map_err(|e| format!("{}: {e}", dot.display()))?;
                 let target = text
@@ -301,7 +320,9 @@ fn find_repository(dir: &Path) -> Result<Option<GitRepo>, String> {
                     .map(|t| t.trim().to_string())
                     .filter(|t| !t.is_empty())
                     .ok_or_else(|| format!("{} names no git dir", dot.display()))?;
-                fs::canonicalize(d.join(target)).map_err(|e| format!("{}: {e}", dot.display()))?
+                normalize_git_path(
+                    fs::canonicalize(d.join(target)).map_err(|e| format!("{}: {e}", dot.display()))?,
+                )
             } else {
                 return Err(format!("{} is neither a directory nor a gitdir file", dot.display()));
             };
@@ -314,7 +335,9 @@ fn find_repository(dir: &Path) -> Result<Option<GitRepo>, String> {
                     if t.is_empty() {
                         return Err("an empty commondir".into());
                     }
-                    fs::canonicalize(git_dir.join(t)).map_err(|e| format!("commondir: {e}"))?
+                    normalize_git_path(
+                        fs::canonicalize(git_dir.join(t)).map_err(|e| format!("commondir: {e}"))?,
+                    )
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => git_dir.clone(),
                 Err(e) => return Err(format!("commondir: {e}")),
@@ -494,8 +517,8 @@ fn resolve_revision_with(dir: &Path, exe_dir: Option<&Path>, env_build: Option<&
 /// `git_revision(dir)` ONLY when `dir` sits inside gnomon's own checkout.
 /// A foreign project repository must never stamp its commit as gnomon's build.
 fn gnomon_git_revision(dir: &Path) -> Option<String> {
-    let top = safe_git(dir, &["rev-parse", "--show-toplevel"])?;
-    if !Path::new(&top).join("packages/gnomon-core/src/build.ts").is_file() {
+    let repo = find_repository(dir).ok()??;
+    if !repo.work_tree.join("packages/gnomon-core/src/build.ts").is_file() {
         return None;
     }
     let rev = git_revision(dir);
