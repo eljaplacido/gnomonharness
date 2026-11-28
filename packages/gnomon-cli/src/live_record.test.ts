@@ -315,10 +315,16 @@ describe("the record changes nothing the model sees", () => {
     expect(kept.live).toMatchObject({ record_state: "final", stop_reason: "answered", tool_steps: 3 });
     expect(off.live).toBeNull();
 
+    // Git Bash on Windows CI runners occasionally emits a `/tmp` warning to stderr
+    // on one invocation and not the next; strip that runner noise before comparing.
+    const norm = (s: string) =>
+      process.platform === "win32"
+        ? s.replace(/\\n\\nstderr:\\nbash\.exe: warning: could not find \/tmp, please create!/g, "")
+        : s;
     const sha = (s: string) => createHash("sha256").update(s).digest("hex");
     expect(bodies.get("kept")).toHaveLength(4);
     // On a mismatch, show the first differing body itself (a hash says only that it differs).
-    const k = bodies.get("kept")!, o = bodies.get("off")!;
+    const k = bodies.get("kept")!.map(norm), o = bodies.get("off")!.map(norm);
     const i = k.findIndex((b, n) => b !== o[n]);
     if (i >= 0) expect(JSON.parse(k[i]!), `request ${i}`).toEqual(JSON.parse(o[i]!));
     expect(k.map(sha)).toEqual(o.map(sha));
